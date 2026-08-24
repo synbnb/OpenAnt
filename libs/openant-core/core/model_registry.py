@@ -40,6 +40,7 @@ _CONFIG_REL = Path("config") / "models.json"
 _SEARCH_LEVELS = 6
 _VALID_STATUS = frozenset({"current", "retired", "unknown"})
 _VALID_PROVIDERS = frozenset({"anthropic", "openai", "google", "bedrock", "openrouter"})
+_DEFAULT_CURRENCY = "USD"
 
 
 def _search_upward(start: Path) -> Path | None:
@@ -129,6 +130,44 @@ def pricing_map(provider: str) -> dict[str, dict[str, float]]:
             continue
         out[rec["id"]] = {"input": float(price["input"]), "output": float(price["output"])}
     return out
+
+
+def model_currency(model_id: str, provider: str | None = None) -> str:
+    """Return the registry currency for *model_id* (USD when unspecified).
+
+    Currency is deliberately metadata beside ``price`` rather than encoded in
+    the numeric rate.  Existing registry records therefore retain their USD
+    behavior, while a custom endpoint such as ``gpt-5.6-luna`` can be priced in
+    CNY without an exchange-rate guess.  A provider mismatch is treated as the
+    legacy USD default so a same-named model from another provider cannot borrow
+    a currency declaration accidentally.
+    """
+    record = find_model(model_id)
+    if record is None or (provider and record.get("provider") != provider):
+        return _DEFAULT_CURRENCY
+    currency = str(record.get("currency") or _DEFAULT_CURRENCY).strip().upper()
+    return currency or _DEFAULT_CURRENCY
+
+
+def pricing_entry(provider: str, model_id: str) -> dict | None:
+    """Return a priced model entry including its currency, or ``None``.
+
+    ``pricing_map`` intentionally keeps its historic two-key shape for adapter
+    compatibility.  New accounting paths use this richer lookup when they need
+    to preserve currency metadata.
+    """
+    for record in require_models():
+        if record.get("provider") != provider or record.get("id") != model_id:
+            continue
+        price = record.get("price")
+        if not price:
+            return None
+        return {
+            "input": float(price["input"]),
+            "output": float(price["output"]),
+            "currency": model_currency(model_id, provider),
+        }
+    return None
 
 
 def find_model(model_id: str) -> dict | None:

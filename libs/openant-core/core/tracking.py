@@ -26,6 +26,8 @@ def get_usage() -> UsageInfo:
         total_output_tokens=totals["total_output_tokens"],
         total_tokens=totals["total_tokens"],
         total_cost_usd=totals["total_cost_usd"],
+        total_cost_cny=totals.get("total_cost_cny", 0.0),
+        costs_by_currency=totals.get("costs_by_currency", {}),
     )
 
 
@@ -33,9 +35,14 @@ def log_usage(prefix: str = ""):
     """Log current usage summary to stderr."""
     usage = get_usage()
     label = f"{prefix}: " if prefix else ""
+    costs = []
+    for currency, amount in sorted(usage.costs_by_currency.items()):
+        symbol = {"USD": "$", "CNY": "¥"}.get(currency, f"{currency} ")
+        costs.append(f"{symbol}{amount:.4f}")
+    cost_text = " / ".join(costs) if costs else "$0.0000"
     print(
         f"  {label}{usage.total_calls} API calls, "
         f"{usage.total_tokens:,} tokens, "
-        f"${usage.total_cost_usd:.4f}",
+        f"{cost_text}",
         file=sys.stderr,
     )

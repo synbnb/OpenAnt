@@ -1,0 +1,108 @@
+请根据提供的流水线数据生成安全分析摘要报告。除代码路径、函数名、CWE 编号、模型名称、状态枚举和其他必须保持原样的技术标识外，所有说明文字、表头、章节标题和结论都必须使用简体中文。
+
+输入数据：
+{pipeline_data}
+
+OpenHarmony 平台上下文（如果存在）：
+{platform_context}
+
+输出格式：
+
+# {repository_name} 安全分析报告
+
+**仓库：** {url}
+**主要语言：** {repository.language}
+**提交：** {repository.commit_sha or "不可用"}
+**扫描模式：** {scan_mode_line}
+**分析日期：** {date}
+**应用类型：** {app_type}
+**处理级别：** {pipeline_stats.processing_level or "不可用"}
+
+## 结果概览
+
+| 判定 | 数量 |
+|------|------|
+| 存在漏洞 | {n} |
+| 安全 | {n} |
+| 受保护 | {n} |
+| 无法确定 | {n} |
+| 错误 | {n} |
+
+## 流水线统计
+
+- 已解析：从 {n} 个文件中解析出 {n} 个函数
+- 单元总数：{pipeline_stats.total_units}
+- 可达单元：{pipeline_stats.reachable_units}
+- 可达性警告：{pipeline_stats.reachability_warnings}
+- CodeQL 筛选后：{n} 个单元
+- 第一阶段分析：{n} 个单元
+- 第二阶段验证：{n} 个问题
+
+## 各阶段费用
+
+[根据 pipeline_stats.costs 生成。每个键代表一个阶段，包含 estimated、actual、units_requested、units_processed。]
+
+| 阶段 | 预计费用（USD） | 实际费用（USD） | 单元数 |
+|------|-----------------|-----------------|--------|
+| {step} | ${estimated} | ${actual} | {units_processed}/{units_requested} |
+| **合计** | **${sum_estimated}** | **${sum_actual}** | |
+
+## 各阶段耗时
+
+[根据 pipeline_stats.durations 生成。每个值为秒数，格式化为 X 分 Y 秒。]
+
+| 阶段 | 耗时 |
+|------|------|
+| {step} | {formatted_duration} |
+| **合计** | **{formatted_total}** |
+
+## 跳过的阶段
+
+[根据 pipeline_stats.skipped_steps 生成；如果为空，写“没有阶段被跳过”。]
+
+| 阶段 | 原因 |
+|------|------|
+| {step} | {reason} |
+
+## 已确认的问题
+
+[针对 stage2_verdict 为 confirmed 或 agreed 的 VULNERABLE 问题各生成一行。]
+[如果没有确认的问题，写“没有确认的安全问题”。]
+
+| 编号 | 问题 | 位置 | CWE | 验证方式 |
+|------|------|------|-----|----------|
+| 1 | {short_name} | {file:function} | CWE-{n} | {static|verified|dynamic} |
+
+## 已排除的误报
+
+[列出第二阶段拒绝的问题。]
+[如果没有误报，写“没有需要报告的误报”。]
+
+| 问题 | 第一阶段 | 第二阶段 | 原因 |
+|------|----------|----------|------|
+| {name} | {verdict} | {verdict} | {one_sentence_reason} |
+
+## 方法说明
+
+两阶段分析：
+1. 第一阶段：对筛选后的代码单元进行基于大模型的漏洞检测
+2. 第二阶段：模拟攻击者验证漏洞是否可以利用
+
+攻击者模型：{attacker_model}
+
+---
+
+规则：
+- 从输入数据填充所有占位符。
+- 即使数量为零，也要在表格中显示“0”。
+- “原因”列不超过 15 个词。
+- “验证方式”列：存在 dynamic_testing 时写“动态”；stage2_verdict 为 confirmed 或 agreed 时写“已验证”；其他情况写“静态”。
+- 语言取自 repository.language，提交取自 repository.commit_sha；缺失时写“不可用”。
+- 扫描模式根据顶层 diff 判断：缺失或 mode 不是 incremental 时写“完整扫描”；如果是 incremental，写出 base_sha、head_sha 前 8 位、scope 和 units_in_diff/units_total_parsed。
+- 当扫描模式为 incremental 时，在元数据后紧接着补充一段中文说明，明确只有覆盖变更的单元被分析，未变化单元沿用之前的判定。
+- 处理级别取自 pipeline_stats.processing_level；缺失时写“不可用”。
+- 当 reachability_filter_applied 为 true 时，在可达单元后说明裁剪数量和比例；为 false 时说明没有记录可达性筛选。
+- reachability_warnings 非空时逐条列出；为空时不要添加警告行。
+- 各阶段费用和耗时必须遍历输入数据计算合计。
+- skipped_steps 为空时写“没有阶段被跳过”。
+- 不要在模板之外添加评论或解释。

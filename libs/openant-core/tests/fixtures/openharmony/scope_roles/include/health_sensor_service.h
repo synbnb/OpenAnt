@@ -1,0 +1,6 @@
+#ifndef OPENANT_SCOPE_ROLES_HEALTH_SENSOR_SERVICE_H
+#define OPENANT_SCOPE_ROLES_HEALTH_SENSOR_SERVICE_H
+
+int EnableHealthSensor(int sensor_id);
+
+#endif

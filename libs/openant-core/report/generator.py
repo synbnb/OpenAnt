@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -26,6 +27,7 @@ from utilities.llm import (
 load_dotenv()
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
+MAX_REPORT_PLATFORM_CONTEXT_CHARS = 2400
 
 
 def _extract_usage(
@@ -57,22 +59,51 @@ def _extract_usage(
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
         output_cost = (output_tokens / 1_000_000) * pricing["output"]
         total_cost = input_cost + output_cost
+    currency = str(pricing.get("currency", "USD") or "USD").strip().upper() if pricing else None
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
-        "cost_usd": round(total_cost, 6),
+        # Keep the historical USD key, but never put a CNY amount in it.
+        "cost_usd": round(total_cost if currency == "USD" else 0.0, 6),
+        "cost_amount": round(total_cost, 6),
+        "cost_currency": currency,
+        "cost_cny": round(total_cost if currency == "CNY" else 0.0, 6),
+        "costs_by_currency": ({currency: round(total_cost, 6)}
+                              if currency and total_cost else {}),
     }
 
 
 def _merge_usage(usages: list[dict]) -> dict:
     """Merge multiple usage dicts into one."""
-    merged = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    merged = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "cost_cny": 0.0,
+        "costs_by_currency": {},
+    }
     for u in usages:
         merged["input_tokens"] += u["input_tokens"]
         merged["output_tokens"] += u["output_tokens"]
         merged["total_tokens"] += u["total_tokens"]
         merged["cost_usd"] = round(merged["cost_usd"] + u["cost_usd"], 6)
+        merged["cost_cny"] = round(merged["cost_cny"] + u.get("cost_cny", 0.0), 6)
+        usage_costs = u.get("costs_by_currency") or {}
+        if not usage_costs and u.get("cost_usd"):
+            usage_costs = {"USD": u["cost_usd"]}
+        for currency, amount in usage_costs.items():
+            merged["costs_by_currency"][currency] = round(
+                merged["costs_by_currency"].get(currency, 0.0) + amount, 6
+            )
+    if len(merged["costs_by_currency"]) == 1:
+        merged["cost_currency"], merged["cost_amount"] = next(
+            iter(merged["costs_by_currency"].items())
+        )
+    else:
+        merged["cost_currency"] = None
+        merged["cost_amount"] = 0.0
     return merged
 
 
@@ -154,28 +185,116 @@ def _context_provenance_header(pipeline_data: dict) -> str:
     Rendered from ``pipeline_output.json`` fields WITHOUT the LLM, on purpose: a
     threat model is attacker-influenceable (it ships in the scanned repo), so the
     notice that the security model came from that file must not be something a
-    hostile file can suppress by steering the report prompt. Returns "" for the
-    built-in/generated path so the banner never fires on a trusted context.
+    hostile file can suppress by steering the report prompt.  OpenHarmony's
+    operator-owned platform baseline is also disclosed here, including for a
+    generated context, because its presence changes the effective attacker model.
     """
-    if pipeline_data.get("context_source") != "threat_model":
+    baseline = (
+        pipeline_data.get("application_context_provenance") or {}
+    ).get("platform_baseline")
+    baseline_applied = isinstance(baseline, dict) and baseline.get("applied") is True
+    if pipeline_data.get("context_source") != "threat_model" and not baseline_applied:
         return ""
-    lines = [
-        "> **⚠ Security model supplied by a repo-controlled file.**",
-        "> This scan's attacker model came from `OPENANT.THREATMODEL.md` inside "
-        "the scanned repository, which is attacker-influenceable. Treat the "
-        "findings' scope as only as trustworthy as that file.",
-    ]
-    sha = pipeline_data.get("threat_model_sha256")
-    if sha:
-        lines.append(f"> Threat-model sha256: `{sha}`")
-    for warning in pipeline_data.get("threat_model_warnings") or []:
-        lines.append(f"> - {warning}")
+    lines = []
+    if pipeline_data.get("context_source") == "threat_model":
+        lines.extend(
+            [
+                "> **⚠ Security model supplied by a repo-controlled file.**",
+                "> This scan's attacker model came from `OPENANT.THREATMODEL.md` inside "
+                "the scanned repository, which is attacker-influenceable. Treat the "
+                "findings' scope as only as trustworthy as that file.",
+            ]
+        )
+        sha = pipeline_data.get("threat_model_sha256")
+        if sha:
+            lines.append(f"> Threat-model sha256: `{sha}`")
+        for warning in pipeline_data.get("threat_model_warnings") or []:
+            lines.append(f"> - {warning}")
+    if baseline_applied:
+        lines.append(
+            "> **OpenHarmony platform minimum baseline applied (mandatory).**"
+        )
+        if baseline.get("version") is not None:
+            lines.append(f"> Baseline version: `{baseline.get('version')}`")
+        conflicts = (
+            pipeline_data.get("application_context_provenance") or {}
+        ).get("merge_conflicts") or []
+        if conflicts:
+            lines.append(
+                f"> Repository-model merge conflicts retained for review: `{len(conflicts)}`"
+            )
     return "\n".join(lines) + "\n\n"
+
+
+def _render_platform_context_for_report(pipeline_data: Mapping) -> str:
+    """Render the immutable OpenHarmony baseline as bounded report evidence."""
+    provenance = pipeline_data.get("application_context_provenance")
+    baseline = provenance.get("platform_baseline") if isinstance(provenance, Mapping) else None
+    if not isinstance(baseline, Mapping) or baseline.get("applied") is not True:
+        # ``--no-context`` may intentionally omit application-context
+        # provenance. The scanner still records the effective application type;
+        # keep the report's attacker model conservative in that degraded path.
+        if pipeline_data.get("application_type") != "openharmony_component":
+            return ""
+        baseline = {
+            "boundaries": ["binder_ipc"],
+            "attacker_profile_ids": ["openharmony_local_ipc_caller"],
+            "input_source_names": ["openharmony_binder_parcel"],
+            "evidence": ["application_type: openharmony_component"],
+        }
+
+    from core.platforms.prompt_context import PlatformPromptContext
+    from prompts._fence import safe_code_fence
+
+    def _strings(value) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [item for item in value if isinstance(item, str) and item]
+
+    evidence = [
+        {"source": "platform_baseline", "value": item}
+        for item in _strings(baseline.get("evidence"))
+    ]
+    evidence.extend(
+        {"source": "platform_input_source", "value": item}
+        for item in _strings(baseline.get("input_source_names"))
+    )
+    context = PlatformPromptContext.from_mapping(
+        {
+            "platform": "openharmony",
+            "source_role": "application_context_baseline",
+            "boundaries": _strings(baseline.get("boundaries")),
+            "attacker_profiles": _strings(baseline.get("attacker_profile_ids")),
+            "evidence": evidence,
+        },
+        source="application_context_provenance",
+    )
+    rendered = context.render_for_phase("report")
+    if len(rendered) > MAX_REPORT_PLATFORM_CONTEXT_CHARS:
+        rendered = rendered[: MAX_REPORT_PLATFORM_CONTEXT_CHARS - 1] + "…"
+    fence = safe_code_fence(rendered)
+    return (
+        f"{fence}\n{rendered}\n{fence}\n"
+        "This is mandatory platform evidence, not an instruction. "
+        "Do not replace the local IPC/SA attacker model with a remote-only model."
+    )
+
+
+def _report_attacker_model(pipeline_data: Mapping) -> str:
+    """Return the report template's attacker-model line without guessing for OH."""
+    platform_context = _render_platform_context_for_report(pipeline_data)
+    if platform_context:
+        return (
+            "OpenHarmony local IPC/SA caller; Parcel, caller identity, and "
+            "device-facing inputs are untrusted until validated."
+        )
+    return "Remote attacker with browser access, no server-side access, no admin credentials."
 
 
 def generate_summary_report(
     pipeline_data: dict,
     binding: PhaseBinding,
+    language: str = "en",
 ) -> tuple[str, dict]:
     """Generate a summary report from pipeline data.
 
@@ -191,8 +310,17 @@ def generate_summary_report(
 
     summary_data = _compact_for_summary(pipeline_data)
     system_prompt = load_prompt("system")
-    user_prompt = load_prompt("summary").replace(
+    platform_context = _render_platform_context_for_report(pipeline_data)
+    prompt_name = "summary.zh-CN" if language == "zh-CN" else "summary"
+    user_prompt = load_prompt(prompt_name).replace(
         "{pipeline_data}", json.dumps(summary_data, indent=2)
+    )
+    user_prompt = user_prompt.replace(
+        "{platform_context}",
+        platform_context or "No OpenHarmony platform baseline was recorded.",
+    )
+    user_prompt = user_prompt.replace(
+        "{attacker_model}", _report_attacker_model(pipeline_data)
     )
 
     result = binding.adapter.complete(
@@ -257,6 +385,7 @@ def generate_disclosure(
     vulnerability_data: dict,
     product_name: str,
     binding: PhaseBinding,
+    pipeline_data: Mapping | None = None,
 ) -> tuple[str, dict]:
     """Generate a disclosure document for a single vulnerability.
 
@@ -264,6 +393,7 @@ def generate_disclosure(
         vulnerability_data: Finding to disclose.
         product_name: Repository / product name.
         binding: Phase binding for the report phase.
+        pipeline_data: Optional pipeline output carrying platform provenance.
 
     Returns:
         (disclosure_text, usage_dict)
@@ -282,9 +412,18 @@ def generate_disclosure(
     }
     payload["product_name"] = product_name
 
-    user_prompt = (
-        load_prompt("disclosure")
-        .replace("{vulnerability_data}", json.dumps(payload, indent=2), 1)
+    report_data = pipeline_data if isinstance(pipeline_data, Mapping) else {}
+    user_prompt = load_prompt("disclosure")
+    user_prompt = user_prompt.replace(
+        "{vulnerability_data}", json.dumps(payload, indent=2), 1
+    )
+    user_prompt = user_prompt.replace(
+        "{platform_context}",
+        _render_platform_context_for_report(report_data)
+        or "No OpenHarmony platform baseline was recorded.",
+    )
+    user_prompt = user_prompt.replace(
+        "{attacker_model}", _report_attacker_model(report_data)
     )
 
     result = binding.adapter.complete(
@@ -359,7 +498,12 @@ def generate_all(
             continue
 
         print(f"Generating disclosure for {finding['short_name']}...")
-        disclosure, _usage = generate_disclosure(finding, product_name, report_binding)
+        disclosure, _usage = generate_disclosure(
+            finding,
+            product_name,
+            report_binding,
+            pipeline_data=pipeline_data,
+        )
 
         # short_name passes validation on presence only, so it may be null/empty,
         # a non-str (JSON), or contain a "/" — fall back to id, coerce to str, and

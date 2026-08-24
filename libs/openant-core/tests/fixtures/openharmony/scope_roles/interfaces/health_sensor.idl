@@ -1,0 +1,3 @@
+interface IHealthSensorService {
+  EnableHealthSensor(int sensorId);
+}

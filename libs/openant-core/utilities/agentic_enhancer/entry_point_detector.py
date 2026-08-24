@@ -19,7 +19,36 @@ Usage:
 """
 
 import re
+import importlib.util
+import sys
+from pathlib import Path
 from typing import Dict, List, Set
+
+
+def _load_openharmony_detector_class():
+    """Load the platform detector in both package and source-file modes.
+
+    ``core.parser_adapter`` intentionally loads this module directly with
+    ``spec_from_file_location`` to avoid importing the optional LLM package.
+    A relative import works for normal package imports; the fallback keeps the
+    direct loading path dependency-light.
+    """
+    try:
+        from .openharmony_entry_point_detector import OpenHarmonyEntryPointDetector
+
+        return OpenHarmonyEntryPointDetector
+    except ImportError:
+        module_name = "_openant_openharmony_entry_point_detector"
+        loaded = sys.modules.get(module_name)
+        if loaded is None:
+            module_path = Path(__file__).with_name("openharmony_entry_point_detector.py")
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            if spec is None or spec.loader is None:
+                raise ImportError("OpenHarmony entry-point detector is unavailable")
+            loaded = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = loaded
+            spec.loader.exec_module(loaded)
+        return loaded.OpenHarmonyEntryPointDetector
 
 
 def _unit_type(func_data: Dict) -> str:
@@ -242,18 +271,34 @@ class EntryPointDetector:
         entry_point_details: Dict with details about why each is an entry point
     """
 
-    def __init__(self, functions: Dict, call_graph: Dict):
+    def __init__(
+        self,
+        functions: Dict,
+        call_graph: Dict,
+        platform: str = "generic",
+        file_evidence: Dict | None = None,
+    ):
         """
         Initialize the detector.
 
         Args:
             functions: Dict mapping func_id to function metadata
             call_graph: Forward call graph from CallGraphBuilder
+            platform: Optional platform-specific detector mode. ``generic``
+                preserves the historical detector behavior; ``openharmony``
+                enables native Binder, System Ability and HDF hooks.
         """
+        if platform not in {"auto", "generic", "openharmony"}:
+            raise ValueError("platform must be one of: auto, generic, openharmony")
         self.functions = functions
         self.call_graph = call_graph
+        self.platform = "generic" if platform == "auto" else platform
+        self.file_evidence = file_evidence or {}
         self.entry_points: Set[str] = set()
         self.entry_point_details: Dict[str, Dict] = {}
+        self._openharmony_detector = None
+        if self.platform == "openharmony":
+            self._openharmony_detector = _load_openharmony_detector_class()()
 
         # Compile regex patterns for efficiency
         self._decorator_patterns = [
@@ -277,10 +322,11 @@ class EntryPointDetector:
             Set of func_ids that are entry points
         """
         for func_id, func_data in self.functions.items():
-            reasons = self._get_entry_point_reasons(func_data)
+            platform_matches = self._get_platform_matches(func_data)
+            reasons = self._get_entry_point_reasons(func_data, platform_matches)
             if reasons:
                 self.entry_points.add(func_id)
-                self.entry_point_details[func_id] = {
+                details = {
                     'reasons': reasons,
                     'unit_type': _unit_type(func_data),
                     'name': func_data.get('name'),
@@ -297,10 +343,33 @@ class EntryPointDetector:
                     'non_runtime_main': _is_non_runtime_main(
                         func_data.get('file_path') or func_data.get('filePath') or ''),
                 }
+                if platform_matches:
+                    file_path = func_data.get('file_path') or func_data.get('filePath') or ''
+                    start_line = func_data.get('start_line') or func_data.get('startLine') or 0
+                    end_line = func_data.get('end_line') or func_data.get('endLine') or 0
+                    details['platform_evidence'] = [
+                        {
+                            **match,
+                            'file_path': file_path,
+                            'start_line': start_line,
+                            'end_line': end_line,
+                        }
+                        for match in platform_matches
+                    ]
+                self.entry_point_details[func_id] = details
 
         return self.entry_points
 
-    def _get_entry_point_reasons(self, func_data: Dict) -> List[str]:
+    def _get_platform_matches(self, func_data: Dict) -> List[Dict]:
+        if self._openharmony_detector is None:
+            return []
+        file_path = func_data.get("file_path") or func_data.get("filePath") or ""
+        evidence = self.file_evidence.get(str(file_path).replace("\\", "/"), [])
+        return self._openharmony_detector.detect(func_data, evidence)
+
+    def _get_entry_point_reasons(
+        self, func_data: Dict, platform_matches: List[Dict] | None = None
+    ) -> List[str]:
         """
         Determine why a function is an entry point.
 
@@ -357,6 +426,15 @@ class EntryPointDetector:
                 if pattern.search(code):
                     reasons.append('module_level_with_input')
                     break
+
+        for match in (
+            platform_matches
+            if platform_matches is not None
+            else self._get_platform_matches(func_data)
+        ):
+            reason = match.get('reason')
+            if reason:
+                reasons.append(reason)
 
         return reasons
 
@@ -452,7 +530,7 @@ def real_entry_point_ids(entry_points, functions):
 # to an INCIDENTAL match (code merely contains an input-reading pattern). A result
 # seeded ONLY by incidental matches is the library-blackout signature: the public
 # API was never a seed, so the BFS dropped the core.
-_STRUCTURAL_REASON_CATEGORIES = {"unit_type", "decorator", "name"}
+_STRUCTURAL_REASON_CATEGORIES = {"unit_type", "decorator", "name", "platform"}
 
 
 def _is_non_runtime_main(file_path: str) -> bool:

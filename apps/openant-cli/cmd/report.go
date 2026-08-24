@@ -56,7 +56,7 @@ func init() {
 	reportCmd.Flags().StringVar(&reportPipelineOutput, "pipeline-output", "", "Path to pipeline_output.json (for summary/disclosure)")
 	reportCmd.Flags().StringVar(&reportRepoName, "repo-name", "", "Repository name (used when auto-building pipeline_output)")
 	reportCmd.Flags().StringVar(&reportExtraDest, "copy-to", "", "Copy reports to an additional location")
-	reportCmd.Flags().StringVar(&reportLLMConfig, "llm-config", "", "Name of the llm-config in ~/.config/openant/config.json (defaults to the file's default_llm, or the built-in 'openant-default' if no config file exists).")
+	reportCmd.Flags().StringVar(&reportLLMConfig, "llm-config", "", "Name of the llm-config (resolved from OPENANT_CONFIG_FILE, project-local config/openant/config.json, or the legacy user config; defaults to the file's default_llm).")
 }
 
 // isInteractive returns true if stdin is a terminal and we're not in quiet mode.
@@ -208,9 +208,11 @@ func runReport(cmd *cobra.Command, args []string) {
 			}
 
 			data := map[string]any{
-				"output_path": outputPath,
-				"reskin_path": reskinPath,
-				"format":      "html",
+				"output_path":    outputPath,
+				"reskin_path":    reskinPath,
+				"zh_output_path": localizedReportPath(outputPath, "zh-CN"),
+				"zh_reskin_path": localizedReportPath(reskinPath, "zh-CN"),
+				"format":         "html",
 			}
 			if !jsonOutput {
 				output.PrintReportSummary(data)
@@ -335,44 +337,72 @@ func promptExtraLocation(scanDir string) (string, error) {
 // It calls Python's report-data subcommand to get pre-computed data,
 // then renders the HTML template.
 func runHTMLReport(rt *python.RuntimeInfo, resultsPath string, outputPath string) error {
-	// 1. Call Python report-data to get pre-computed JSON
-	pyArgs := buildReportDataArgs(resultsPath)
-
-	result, err := python.Invoke(rt.Path, pyArgs, "", quiet, resolvedAPIKey())
+	// Generate the existing English files and additive Chinese files. The two
+	// report-data calls intentionally use language-specific prompts so model-
+	// generated remediation guidance is not merely a translated heading.
+	englishData, err := loadReportData(rt, resultsPath, "en")
 	if err != nil {
-		return fmt.Errorf("report-data failed: %w", err)
+		return err
 	}
-	if result.Envelope.Status != "success" {
-		msg := "report-data returned error"
-		if len(result.Envelope.Errors) > 0 {
-			msg = result.Envelope.Errors[0]
-		}
-		return fmt.Errorf("%s", msg)
-	}
-
-	// 2. Marshal data back to JSON, then unmarshal into our struct
-	dataBytes, err := json.Marshal(result.Envelope.Data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal report data: %w", err)
-	}
-
-	var reportData report.ReportData
-	if err := json.Unmarshal(dataBytes, &reportData); err != nil {
-		return fmt.Errorf("failed to parse report data: %w", err)
-	}
-
-	// 3. Render HTML (original dark theme)
-	if err := report.GenerateOverview(reportData, outputPath); err != nil {
+	if err := report.GenerateOverview(englishData, outputPath); err != nil {
 		return fmt.Errorf("failed to render HTML: %w", err)
 	}
 
-	// 4. Render reskin HTML (Knostic light theme) alongside the original
+	// Render the English light theme alongside the original.
 	reskinPath := filepath.Join(filepath.Dir(outputPath), "report-reskin.html")
-	if err := report.GenerateReskin(reportData, reskinPath); err != nil {
+	if err := report.GenerateReskin(englishData, reskinPath); err != nil {
 		return fmt.Errorf("failed to render reskin HTML: %w", err)
 	}
 
+	zhData, err := loadReportData(rt, resultsPath, "zh-CN")
+	if err != nil {
+		return err
+	}
+	zhPath := localizedReportPath(outputPath, "zh-CN")
+	if err := report.GenerateOverviewLocalized(zhData, zhPath, "zh-CN"); err != nil {
+		return fmt.Errorf("failed to render Chinese HTML: %w", err)
+	}
+	zhReskinPath := localizedReportPath(reskinPath, "zh-CN")
+	if err := report.GenerateReskinLocalized(zhData, zhReskinPath, "zh-CN"); err != nil {
+		return fmt.Errorf("failed to render Chinese reskin HTML: %w", err)
+	}
+
 	return nil
+}
+
+// loadReportData invokes Python's display-data adapter for one report locale.
+func loadReportData(rt *python.RuntimeInfo, resultsPath, locale string) (report.ReportData, error) {
+	pyArgs := buildReportDataArgsForLanguage(resultsPath, locale)
+	result, err := python.Invoke(rt.Path, pyArgs, "", quiet, resolvedAPIKey())
+	if err != nil {
+		return report.ReportData{}, fmt.Errorf("report-data (%s) failed: %w", locale, err)
+	}
+	if result.Envelope.Status != "success" {
+		msg := fmt.Sprintf("report-data (%s) returned error", locale)
+		if len(result.Envelope.Errors) > 0 {
+			msg += ": " + result.Envelope.Errors[0]
+		}
+		return report.ReportData{}, fmt.Errorf("%s", msg)
+	}
+	dataBytes, err := json.Marshal(result.Envelope.Data)
+	if err != nil {
+		return report.ReportData{}, fmt.Errorf("marshal report data (%s): %w", locale, err)
+	}
+	var data report.ReportData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return report.ReportData{}, fmt.Errorf("parse report data (%s): %w", locale, err)
+	}
+	return data, nil
+}
+
+// localizedReportPath inserts a locale suffix before the extension so the
+// English path remains stable (report.html -> report.zh-CN.html).
+func localizedReportPath(path, locale string) string {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + "." + locale
+	}
+	return strings.TrimSuffix(path, ext) + "." + locale + ext
 }
 
 // runSARIFReport generates a SARIF 2.1.0 log using the Go renderer. Like
@@ -448,12 +478,19 @@ func buildReportArgs(resultsPath string, format string) []string {
 // the summary/disclosure formats — otherwise --llm-config is silently
 // ignored for HTML-report remediation.
 func buildReportDataArgs(resultsPath string) []string {
+	return buildReportDataArgsForLanguage(resultsPath, "en")
+}
+
+func buildReportDataArgsForLanguage(resultsPath, locale string) []string {
 	pyArgs := []string{"report-data", resultsPath}
 	if reportDataset != "" {
 		pyArgs = append(pyArgs, "--dataset", reportDataset)
 	}
 	if reportLLMConfig != "" {
 		pyArgs = append(pyArgs, "--llm-config", reportLLMConfig)
+	}
+	if locale != "" && locale != "en" {
+		pyArgs = append(pyArgs, "--language", locale)
 	}
 	return pyArgs
 }
@@ -469,35 +506,37 @@ func copyReportsToExtra(results []map[string]any, dest string) {
 	}
 
 	for _, data := range results {
-		srcPath, ok := data["output_path"].(string)
-		if !ok || srcPath == "" {
-			continue
-		}
-
-		info, err := os.Stat(srcPath)
-		if err != nil {
-			output.PrintError("Cannot access " + srcPath + ": " + err.Error())
-			continue
-		}
-
-		if info.IsDir() {
-			// Copy directory recursively
-			destDir := filepath.Join(dest, filepath.Base(srcPath))
-			if err := copyDir(srcPath, destDir); err != nil {
-				output.PrintError("Failed to copy " + srcPath + ": " + err.Error())
+		for _, key := range []string{"output_path", "reskin_path", "zh_output_path", "zh_reskin_path"} {
+			srcPath, ok := data[key].(string)
+			if !ok || srcPath == "" {
 				continue
 			}
-			cyan.Printf("  Copied: ")
-			fmt.Println(destDir)
-		} else {
-			// Copy single file
-			destFile := filepath.Join(dest, filepath.Base(srcPath))
-			if err := copyFile(srcPath, destFile); err != nil {
-				output.PrintError("Failed to copy " + srcPath + ": " + err.Error())
+
+			info, err := os.Stat(srcPath)
+			if err != nil {
+				output.PrintError("Cannot access " + srcPath + ": " + err.Error())
 				continue
 			}
-			cyan.Printf("  Copied: ")
-			fmt.Println(destFile)
+
+			if info.IsDir() {
+				// Copy directory recursively
+				destDir := filepath.Join(dest, filepath.Base(srcPath))
+				if err := copyDir(srcPath, destDir); err != nil {
+					output.PrintError("Failed to copy " + srcPath + ": " + err.Error())
+					continue
+				}
+				cyan.Printf("  Copied: ")
+				fmt.Println(destDir)
+			} else {
+				// Copy single file
+				destFile := filepath.Join(dest, filepath.Base(srcPath))
+				if err := copyFile(srcPath, destFile); err != nil {
+					output.PrintError("Failed to copy " + srcPath + ": " + err.Error())
+					continue
+				}
+				cyan.Printf("  Copied: ")
+				fmt.Println(destFile)
+			}
 		}
 	}
 }

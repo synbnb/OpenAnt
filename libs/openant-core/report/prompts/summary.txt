@@ -3,6 +3,9 @@ Generate a security analysis summary report from the provided pipeline data.
 INPUT DATA:
 {pipeline_data}
 
+OPENHARMONY PLATFORM CONTEXT (if present):
+{platform_context}
+
 OUTPUT FORMAT:
 
 # {repository_name} Security Analysis
@@ -86,7 +89,7 @@ Two-stage analysis:
 1. Stage 1: LLM-based vulnerability detection on filtered code units
 2. Stage 2: Attacker simulation to verify exploitability
 
-Attacker model: Remote attacker with browser access, no server-side access, no admin credentials.
+Attacker model: {attacker_model}
 
 ---
 

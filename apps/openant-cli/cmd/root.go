@@ -39,7 +39,7 @@ Commands:
   analyze           Run Stage 1 vulnerability detection
   verify            Run Stage 2 attacker simulation
   build-output      Assemble pipeline_output.json from verified results
-  dynamic-test      Docker-isolated exploit testing
+  dynamic-test      Docker testing or Claude Code task preparation
   report            Generate reports from analysis results
   config            Manage CLI configuration (API key, etc.)`,
 }
@@ -123,7 +123,7 @@ func requireAPIKey() string {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Run:  openant set-api-key <your-anthropic-api-key>")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Or author an `llm_providers` section in ~/.config/openant/config.json")
+	fmt.Fprintln(os.Stderr, "Or author an `llm_providers` section in OPENANT_CONFIG_FILE, project-local config/openant/config.json, or the legacy user config")
 	fmt.Fprintln(os.Stderr, "  (see docs/features/llm-providers/HOW_TO_ADD_AN_ADAPTER.md)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "You can get an Anthropic API key at https://console.anthropic.com/settings/keys")

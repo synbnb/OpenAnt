@@ -24,8 +24,9 @@ vulnerability report with false positive elimination.
 
 If no repository path is given, the active project is used (see: openant init).
 
-Dynamic testing runs by default and requires Docker. Use --skip-dynamic-test
-to opt out.
+Dynamic testing runs by default when requested and uses Docker. Use
+--dynamic-test-mode claude-code to prepare a Claude Code task workspace
+without Docker, or --skip-dynamic-test to opt out.
 
 Each step writes a {step}.report.json file with timing, cost, and metadata.
 A final scan.report.json aggregates all step reports.`,
@@ -36,6 +37,7 @@ A final scan.report.json aggregates all step reports.`,
 var (
 	scanOutput                      string
 	scanLanguage                    string
+	scanPlatform                    string
 	scanLevel                       string
 	scanVerify                      bool
 	scanNoContext                   bool
@@ -43,6 +45,7 @@ var (
 	scanEnhanceMode                 string
 	scanNoReport                    bool
 	scanSkipDynamicTest             bool
+	scanDynamicTestMode             string
 	scanLimit                       int
 	scanLLMConfig                   string
 	scanWorkers                     int
@@ -68,15 +71,17 @@ func init() {
 func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&scanOutput, "output", "o", "", "Output directory (default: project scan dir or temp dir)")
 	cmd.Flags().StringVarP(&scanLanguage, "language", "l", "", languages.FlagHelp())
+	cmd.Flags().StringVar(&scanPlatform, "platform", "auto", "Platform mode: auto, generic, openharmony")
 	cmd.Flags().StringVar(&scanLevel, "level", "reachable", "Processing level: all, reachable, codeql, exploitable")
 	cmd.Flags().BoolVar(&scanVerify, "verify", false, "Enable Stage 2 attacker simulation")
 	cmd.Flags().BoolVar(&scanNoContext, "no-context", false, "Skip application context generation")
 	cmd.Flags().BoolVar(&scanNoEnhance, "no-enhance", false, "Skip context enhancement step")
 	cmd.Flags().StringVar(&scanEnhanceMode, "enhance-mode", "agentic", "Enhancement mode: agentic (thorough) or single-shot (fast)")
 	cmd.Flags().BoolVar(&scanNoReport, "no-report", false, "Skip report generation")
-	cmd.Flags().BoolVar(&scanSkipDynamicTest, "skip-dynamic-test", false, "Skip Docker-isolated dynamic testing (default: run dynamic tests)")
+	cmd.Flags().BoolVar(&scanSkipDynamicTest, "skip-dynamic-test", false, "Skip dynamic testing (default: run selected dynamic-test mode)")
+	cmd.Flags().StringVar(&scanDynamicTestMode, "dynamic-test-mode", "docker", "Dynamic-test mode: docker or claude-code")
 	cmd.Flags().IntVar(&scanLimit, "limit", 0, "Max units to analyze (0 = no limit)")
-	cmd.Flags().StringVar(&scanLLMConfig, "llm-config", "", "Name of the llm-config in ~/.config/openant/config.json (defaults to the file's default_llm, or the built-in 'openant-default' if no config file exists).")
+	cmd.Flags().StringVar(&scanLLMConfig, "llm-config", "", "Name of the llm-config (resolved from OPENANT_CONFIG_FILE, project-local config/openant/config.json, or the legacy user config; defaults to the file's default_llm).")
 	cmd.Flags().IntVar(&scanWorkers, "workers", 8, "Number of parallel workers for LLM steps (default: 8)")
 	cmd.Flags().IntVar(&scanBackoff, "backoff", 30, "Seconds to wait when rate-limited (default: 30)")
 	cmd.Flags().BoolVar(&scanFull, "full", false, "Force full scan (rejects --incremental/--diff-base/--pr)")
@@ -90,11 +95,36 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&scanLibraryMode, "library-mode", false, "Seed the exported public API as reachability entry points, for a library whose public API is being dropped by the structural filter. Blunt: keeps most units — prefer letting fuzz/bin/route entry points seed reachability first.")
 }
 
+func validateScanPlatform(platform string) error {
+	switch platform {
+	case "auto", "generic", "openharmony":
+		return nil
+	default:
+		return fmt.Errorf("unsupported platform %q: choose auto, generic, or openharmony", platform)
+	}
+}
+
+func buildScanPyArgs(repoPath string) []string {
+	pyArgs := []string{"scan", repoPath}
+	if scanPlatform != "auto" {
+		pyArgs = append(pyArgs, "--platform", scanPlatform)
+	}
+	return pyArgs
+}
+
 func runScan(cmd *cobra.Command, args []string) {
+	if err := validateScanPlatform(scanPlatform); err != nil {
+		output.PrintError(err.Error())
+		os.Exit(2)
+	}
+	if err := validateDynamicTestMode(scanDynamicTestMode); err != nil {
+		output.PrintError(err.Error())
+		os.Exit(2)
+	}
 	// Fail-fast on missing Docker when dynamic-test will run, before we
 	// resolve the project, write meta.json, or shell to Python. Otherwise
 	// the user burns the whole pipeline only to error at the last step.
-	if !scanSkipDynamicTest {
+	if !scanSkipDynamicTest && scanDynamicTestMode == "docker" {
 		if err := checkDockerAvailable(); err != nil {
 			output.PrintError(err.Error())
 			os.Exit(2)
@@ -164,7 +194,7 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 
 	// Build Python CLI args
-	pyArgs := []string{"scan", repoPath}
+	pyArgs := buildScanPyArgs(repoPath)
 	if scanOutput != "" {
 		pyArgs = append(pyArgs, "--output", scanOutput)
 	}
@@ -191,6 +221,9 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 	if !scanSkipDynamicTest {
 		pyArgs = append(pyArgs, "--dynamic-test")
+		if scanDynamicTestMode != "docker" {
+			pyArgs = append(pyArgs, "--dynamic-test-mode", scanDynamicTestMode)
+		}
 	}
 	if scanLimit > 0 {
 		pyArgs = append(pyArgs, "--limit", fmt.Sprintf("%d", scanLimit))

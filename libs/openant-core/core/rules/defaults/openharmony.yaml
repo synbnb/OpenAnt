@@ -1,0 +1,22 @@
+schema_version: 1
+rules:
+  - id: OH-IPC-001
+    version: 1.0.0
+    title: Parcel read return value
+    description: Detect unchecked return values from IPC Parcel read operations.
+    platforms:
+      - openharmony
+    severity: high
+    detector: parcel_read_return_value
+    config:
+      read_methods:
+        - ReadInt32
+        - ReadUint32
+        - ReadInt64
+        - ReadUint64
+        - ReadString
+    references:
+      - security-skill-library://反序列化/check-read-return-value
+    tags:
+      - ipc
+      - parcel

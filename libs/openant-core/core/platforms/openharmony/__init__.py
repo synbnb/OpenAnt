@@ -1,0 +1,1 @@
+"""OpenHarmony platform adapter contracts."""

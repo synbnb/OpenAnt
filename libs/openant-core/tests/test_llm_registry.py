@@ -30,6 +30,11 @@ from utilities.llm import (
     with_llm_config,
     with_provider,
 )
+from utilities.llm.registry import (
+    CONFIG_FILE_ENV,
+    PROJECT_ROOT_ENV,
+    default_config_path,
+)
 
 
 def _all_phases_ref(provider: str, model: str) -> dict[str, PhaseRef]:
@@ -348,3 +353,50 @@ class TestLoadConfigFile:
         path.write_text("not json {{", encoding="utf-8")
         with pytest.raises(ConfigError):
             load_config_file(path)
+
+    def test_project_local_config_precedes_legacy_user_config(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "OpenAnt"
+        (root / "libs" / "openant-core").mkdir(parents=True)
+        (root / "config" / "openant").mkdir(parents=True)
+        (root / "libs" / "openant-core" / "pyproject.toml").write_text("{}\n", encoding="utf-8")
+        (root / "config" / "models.json").write_text("{}\n", encoding="utf-8")
+        local = root / "config" / "openant" / "config.json"
+        local.write_text(json.dumps({"default_llm": "project"}), encoding="utf-8")
+
+        legacy = tmp_path / "legacy" / "openant" / "config.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps({"default_llm": "legacy"}), encoding="utf-8")
+
+        monkeypatch.delenv(CONFIG_FILE_ENV, raising=False)
+        monkeypatch.setenv(PROJECT_ROOT_ENV, str(root))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "legacy"))
+
+        assert default_config_path() == local.resolve()
+        assert load_config_file().default_llm == "project"
+
+    def test_missing_project_file_falls_back_to_legacy_user_config(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "OpenAnt"
+        (root / "libs" / "openant-core").mkdir(parents=True)
+        (root / "config").mkdir(parents=True)
+        (root / "libs" / "openant-core" / "pyproject.toml").write_text("{}\n", encoding="utf-8")
+        (root / "config" / "models.json").write_text("{}\n", encoding="utf-8")
+
+        legacy_home = tmp_path / "legacy"
+        legacy = legacy_home / "openant" / "config.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps({"default_llm": "legacy"}), encoding="utf-8")
+
+        monkeypatch.delenv(CONFIG_FILE_ENV, raising=False)
+        monkeypatch.setenv(PROJECT_ROOT_ENV, str(root))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(legacy_home))
+
+        assert load_config_file().default_llm == "legacy"
+
+    def test_explicit_missing_config_does_not_fall_back(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv(CONFIG_FILE_ENV, str(tmp_path / "missing.json"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "legacy"))
+        legacy = tmp_path / "legacy" / "openant" / "config.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps({"default_llm": "legacy"}), encoding="utf-8")
+
+        assert load_config_file().default_llm == "openant-default"

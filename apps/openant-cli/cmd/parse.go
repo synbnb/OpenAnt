@@ -26,6 +26,7 @@ If no repository path is given, the active project is used (see: openant init).`
 var (
 	parseOutput      string
 	parseLanguage    string
+	parsePlatform    string
 	parseLevel       string
 	parseDiffBase    string
 	parsePR          int
@@ -37,6 +38,7 @@ var (
 func init() {
 	parseCmd.Flags().StringVarP(&parseOutput, "output", "o", "", "Output directory (default: project scan dir)")
 	parseCmd.Flags().StringVarP(&parseLanguage, "language", "l", "", languages.FlagHelp())
+	parseCmd.Flags().StringVar(&parsePlatform, "platform", "auto", "Platform mode: auto, generic, openharmony")
 	parseCmd.Flags().StringVar(&parseLevel, "level", "reachable", "Processing level: all, reachable, codeql, exploitable")
 	parseCmd.Flags().StringVar(&parseDiffBase, "diff-base", "", "Incremental mode: tag units overlapping diff vs this ref")
 	parseCmd.Flags().IntVar(&parsePR, "pr", 0, "Incremental mode against a GitHub PR number (mutex with --diff-base)")
@@ -56,6 +58,9 @@ func buildParsePyArgs(repoPath, outputDir, datasetName, language, level, manifes
 	if language != "auto" {
 		pyArgs = append(pyArgs, "--language", language)
 	}
+	if parsePlatform != "" && parsePlatform != "auto" {
+		pyArgs = append(pyArgs, "--platform", parsePlatform)
+	}
 	if level != "reachable" {
 		pyArgs = append(pyArgs, "--level", level)
 	}
@@ -72,6 +77,11 @@ func buildParsePyArgs(repoPath, outputDir, datasetName, language, level, manifes
 }
 
 func runParse(cmd *cobra.Command, args []string) {
+	if err := validateScanPlatform(parsePlatform); err != nil {
+		output.PrintError(err.Error())
+		os.Exit(2)
+	}
+
 	repoPath, ctx, err := resolveRepoArg(args)
 	if err != nil {
 		output.PrintError(err.Error())

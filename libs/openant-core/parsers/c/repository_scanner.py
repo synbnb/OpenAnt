@@ -32,6 +32,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 from utilities.file_io import read_json, write_json, open_utf8
 from core.repo_walk import walk_repository
+from core.platforms.openharmony.scope import (
+    ROLE_NAMES,
+    OpenHarmonyScopeClassifier,
+    SOURCE_SCOPES,
+)
 from utilities.file_io import safe_to_descend
 
 
@@ -45,6 +50,30 @@ class RepositoryScanner:
     def __init__(self, repo_path: str, options: Optional[Dict] = None):
         self.repo_path = Path(repo_path).resolve()
         options = options or {}
+
+        self.platform = options.get('platform', 'generic')
+        if self.platform not in {'auto', 'generic', 'openharmony'}:
+            raise ValueError('platform must be one of: auto, generic, openharmony')
+        self.skip_tests = options.get('skip_tests', False)
+        self.source_scope = None
+        self.scope_classifier = None
+        self._scope_walk_test_dirs = False
+        if self.platform == 'openharmony':
+            self.source_scope = options.get('source_scope')
+            if self.source_scope is None:
+                # ``--no-skip-tests`` is the legacy spelling of the broad
+                # research scope. Explicit source_scope remains authoritative.
+                self.source_scope = 'production' if self.skip_tests else 'all'
+            if self.source_scope not in SOURCE_SCOPES:
+                choices = ', '.join(SOURCE_SCOPES)
+                raise ValueError(f'source_scope must be one of: {choices}')
+            self.scope_classifier = OpenHarmonyScopeClassifier(
+                self.repo_path,
+                source_scope=self.source_scope,
+            )
+            # Traverse test/fuzz trees so their omission is counted rather than
+            # silently hidden by the legacy directory exclusion list.
+            self._scope_walk_test_dirs = 'exclude_patterns' not in options
 
         self.exclude_patterns: Set[str] = set(options.get('exclude_patterns', [
             '.git',
@@ -75,7 +104,6 @@ class RepositoryScanner:
             '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.hh',
         ]))
 
-        self.skip_tests = options.get('skip_tests', False)
         self.test_patterns = {'test/', 'tests/', 'fuzz/', '_test.c', '_test.cpp', 'test_'}
 
         self.stats = {
@@ -87,14 +115,40 @@ class RepositoryScanner:
         }
 
         self.files: List[Dict] = []
+        self._reset_scope_state()
+
+    def _reset_scope_state(self) -> None:
+        """Reset OpenHarmony-only coverage state before each scan."""
+        self._scope_role_counts = {role: 0 for role in ROLE_NAMES}
+        self._scope_unsupported_files: List[Dict] = []
+        self._scope_metadata_candidates: List[tuple[Path, str]] = []
+        self._scope_discovered_files = 0
+        self._scope_eligible_files = 0
+        self._scope_excluded_directories: Dict[str, int] = {}
 
     def should_exclude_directory(self, dir_name: str) -> bool:
         """Check if a directory should be excluded."""
+        if self._scope_walk_test_dirs and dir_name.lower() in {
+            'test', 'tests', 'testdata', 'fuzz', 'fuzztest', 'fuzz_tests',
+        }:
+            return False
         if dir_name in self.exclude_patterns:
+            if self.scope_classifier is not None:
+                self._scope_excluded_directories[dir_name] = (
+                    self._scope_excluded_directories.get(dir_name, 0) + 1
+                )
             return True
         if dir_name.startswith('.') or dir_name.startswith('_'):
+            if self.scope_classifier is not None:
+                self._scope_excluded_directories[dir_name] = (
+                    self._scope_excluded_directories.get(dir_name, 0) + 1
+                )
             return True
         if dir_name.startswith('cmake-build-'):
+            if self.scope_classifier is not None:
+                self._scope_excluded_directories[dir_name] = (
+                    self._scope_excluded_directories.get(dir_name, 0) + 1
+                )
             return True
         return False
 
@@ -144,17 +198,42 @@ class RepositoryScanner:
         tests, and what a record looks like.
         """
         def _on_file(entry: Path, entry_relative: str) -> None:
-            if not self.is_source_file(entry.name):
-                return
-            if self.skip_tests and self.is_test_file(entry_relative):
-                self.stats['test_files_skipped'] += 1
-                return
+            role = None
+            if self.scope_classifier is not None:
+                role = self.scope_classifier.classify(entry_relative)
+                self._scope_role_counts[role] += 1
+                self._scope_discovered_files += 1
+                if role == 'build_metadata':
+                    self._scope_metadata_candidates.append((entry, entry_relative))
+                if not self.is_source_file(entry.name):
+                    if role == 'unsupported_source' and len(self._scope_unsupported_files) < 100:
+                        self._scope_unsupported_files.append({
+                            'path': entry_relative,
+                            'role': role,
+                            'extension': os.path.splitext(entry.name)[1].lower(),
+                        })
+                    return
+                if not self.scope_classifier.accepts(role):
+                    skipped = self.stats.setdefault('scope_files_skipped_by_role', {})
+                    skipped[role] = skipped.get(role, 0) + 1
+                    if role == 'test':
+                        self.stats['test_files_skipped'] += 1
+                    return
+                self._scope_eligible_files += 1
+            else:
+                if not self.is_source_file(entry.name):
+                    return
+                if self.skip_tests and self.is_test_file(entry_relative):
+                    self.stats['test_files_skipped'] += 1
+                    return
             try:
                 file_size = entry.stat().st_size
             except OSError:
                 file_size = 0
             record = {'path': entry_relative, 'size': file_size}
             record['extension'] = os.path.splitext(entry.name)[1].lower()
+            if role is not None:
+                record['role'] = role
             self.files.append(record)
             self.stats['total_files'] += 1
             self.stats['total_size_bytes'] += file_size
@@ -182,17 +261,36 @@ class RepositoryScanner:
             'directories_excluded': 0,
             'test_files_skipped': 0,
         }
+        self._reset_scope_state()
 
         self.scan_directory(self.repo_path)
 
         self.files.sort(key=lambda f: f['path'])
 
-        return {
+        result = {
             'repository': str(self.repo_path),
             'scan_time': datetime.now().isoformat(),
             'files': self.files,
             'statistics': self.stats,
         }
+        if self.scope_classifier is not None:
+            result['scope'] = {
+                'platform': 'openharmony',
+                'source_scope': self.source_scope,
+                'coverage': {
+                    'discovered_files': self._scope_discovered_files,
+                    'eligible_files': self._scope_eligible_files,
+                    'parsed_files': len(self.files),
+                    'unsupported_files': self._scope_unsupported_files,
+                    'parse_failures': [],
+                    'roles': self._scope_role_counts,
+                    'excluded_directories': self._scope_excluded_directories,
+                },
+                'build_metadata': self.scope_classifier.collect_build_metadata(
+                    self._scope_metadata_candidates,
+                ),
+            }
+        return result
 
 
 def main():

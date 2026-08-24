@@ -8,6 +8,7 @@ vulnerabilities from internal-only vulnerabilities.
 
 from typing import List, Optional
 
+from core.platforms.prompt_context import PlatformPromptContext
 from prompts._fence import safe_code_fence, collapse_inline
 
 
@@ -110,7 +111,9 @@ def get_user_prompt(
     is_entry_point: bool = False,
     reachable_from_entry: Optional[bool] = None,
     entry_point_path: Optional[List[str]] = None,
-    reaching_entry_point: Optional[str] = None
+    reaching_entry_point: Optional[str] = None,
+    language: Optional[str] = None,
+    platform_context: Optional[dict] = None,
 ) -> str:
     """
     Generate the initial user prompt for analysis.
@@ -125,6 +128,8 @@ def get_user_prompt(
         reachable_from_entry: Whether static analysis found a path from entry point
         entry_point_path: Call path from entry point to this function
         reaching_entry_point: The entry point func_id that can reach this
+        language: Source language used for an OpenHarmony code-fence info string
+        platform_context: Optional bounded OpenHarmony unit metadata
 
     Returns:
         Formatted prompt string
@@ -171,14 +176,29 @@ def get_user_prompt(
 """
     # else: reachable_from_entry is None, no reachability info available
 
+    normalized_platform_context = PlatformPromptContext.from_mapping(platform_context)
+    if normalized_platform_context.is_openharmony:
+        # The language is repository-controlled metadata. Collapse it before
+        # placing it on a Markdown fence line so it cannot forge prompt text.
+        fence_language = collapse_inline(language or "cpp") or "cpp"
+    else:
+        # Keep the historical generic prompt byte-for-byte shaped: it used a
+        # bare fence and did not expose a language label.
+        fence_language = ""
+
     code_fence = safe_code_fence(primary_code)
+    code_open_fence = f"{code_fence}{fence_language}"
+    rendered_platform_context = normalized_platform_context.render_for_phase("enhance")
+    platform_context_section = (
+        f"{rendered_platform_context}\n\n" if rendered_platform_context else ""
+    )
     return f"""## Code Unit to Analyze
 
 **ID:** `{unit_id}`
 **Type:** {unit_type}
 {reachability_section}
 ### Code (with static dependencies already included)
-{code_fence}
+{code_open_fence}
 {primary_code}
 {code_fence}
 
@@ -186,7 +206,7 @@ def get_user_prompt(
 **Functions this code calls:** {deps_str}
 **Functions that call this code:** {callers_str}
 
----
+{platform_context_section}---
 
 ## Your Task
 

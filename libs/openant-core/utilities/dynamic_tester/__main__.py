@@ -1,4 +1,4 @@
-"""CLI entry point: python -m utilities.dynamic_tester pipeline_output.json [--output-dir DIR]"""
+"""CLI entry point for Docker testing or Claude Code task preparation."""
 
 import argparse
 import sys
@@ -8,7 +8,7 @@ from utilities.dynamic_tester import run_dynamic_tests
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dynamic vulnerability testing using Docker containers",
+        description="Dynamic vulnerability testing using Docker or Claude Code",
     )
     parser.add_argument(
         "pipeline_output",
@@ -25,12 +25,41 @@ def main():
         default=3,
         help="Maximum retries per finding on ERROR status (default: 3)",
     )
+    parser.add_argument(
+        "--repo-path",
+        default=None,
+        help="Source repository path (required by claude-code mode)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["docker", "claude-code"],
+        default="docker",
+        help="Execution mode: docker (default) or claude-code",
+    )
 
     args = parser.parse_args()
+
+    if args.mode == "claude-code":
+        from core.dynamic_tester import run_tests
+
+        result = run_tests(
+            args.pipeline_output,
+            args.output_dir,
+            max_retries=args.max_retries,
+            repo_path=args.repo_path,
+            mode="claude-code",
+        )
+        print("Claude Code task prepared")
+        print(f"  Task workspace: {result.task_workspace}")
+        print(f"  Public tools:   {result.public_tool_library}")
+        print(f"  Candidates:     {result.findings_tested}")
+        print(f"  Launch:         {result.launch_command}")
+        return
 
     results = run_dynamic_tests(
         args.pipeline_output, args.output_dir,
         max_retries=args.max_retries,
+        repo_path=args.repo_path,
     )
 
     counts = {}

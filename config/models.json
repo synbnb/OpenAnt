@@ -1,5 +1,5 @@
 {
-  "_comment": "Provider-model registry: the single source of truth for model IDs and pricing, read by BOTH the Python engine (core/model_registry.py) and the Go CLI (internal/models). status is OpenAnt's shipped claim; source+retrieved are its provenance. price is null for any model that must not be auto-dispatched (retired/unknown) so it never resolves to a silent $0 in cost accounting. Prices are OpenAnt's shipped rates and are NOT verified against live provider pricing in the build environment — see each record's source. Recency of `retrieved` is an operational/CI concern, not asserted in the unit tests.",
+  "_comment": "Provider-model registry: the single source of truth for model IDs and pricing, read by BOTH the Python engine (core/model_registry.py) and the Go CLI (internal/models). status is OpenAnt's shipped claim; source+retrieved are its provenance. price is null for any model that must not be auto-dispatched (retired/unknown) so it never resolves to a silent zero in cost accounting. Prices are OpenAnt's shipped rates and are NOT verified against live provider pricing in the build environment — see each record's source. Prices default to USD unless a record declares another ISO currency. Recency of `retrieved` is an operational/CI concern, not asserted in the unit tests.",
   "schema_version": 1,
   "models": [
     {
@@ -127,6 +127,13 @@
       "price": {"input": 1.10, "output": 4.40},
       "source": "openant shipped pricing table (utilities/model_config.py); not re-verified against live OpenAI pricing",
       "retrieved": "2026-07-23"
+    },
+    {
+      "id": "gpt-5.6-luna", "provider": "openai", "status": "current",
+      "price": {"input": 0.812, "output": 4.872},
+      "currency": "CNY",
+      "source": "user-provided live OpenAI-compatible endpoint pricing (autodl-openai): input CNY 0.812/M tokens, output CNY 4.872/M tokens",
+      "retrieved": "2026-08-23"
     },
     {
       "id": "gemini-2.5-pro", "provider": "google", "status": "current",

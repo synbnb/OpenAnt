@@ -90,3 +90,10 @@ exclude = [
 # stanza it would not ship in the wheel and core/model_registry.require_models()
 # would fail loud — the same defect class that made every language vanish.
 "../../config/models.json" = "config/models.json"
+# Versioned security rule catalogs are runtime data, not Python modules.  Keep
+# the packaged default explicit so an installed wheel can discover the same
+# OpenHarmony rules as a checkout without shipping test fixtures or user files.
+"core/rules/defaults/openharmony.yaml" = "core/rules/defaults/openharmony.yaml"
+# Claude Code dynamic-test tasks use these Markdown templates at runtime. Keep
+# them in installed wheels as data rather than relying on a source checkout.
+"utilities/dynamic_tester/templates/claude_code" = "utilities/dynamic_tester/templates/claude_code"

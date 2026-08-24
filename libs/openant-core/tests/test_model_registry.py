@@ -84,6 +84,18 @@ def test_pricing_map_omits_null_priced_models():
             f"never emitted as a zero dict")
 
 
+def test_custom_openai_compatible_model_preserves_cny_currency():
+    record = mr.find_model("gpt-5.6-luna")
+    assert record is not None
+    assert record["price"] == {"input": 0.812, "output": 4.872}
+    assert mr.model_currency("gpt-5.6-luna", "openai") == "CNY"
+    assert mr.pricing_entry("openai", "gpt-5.6-luna") == {
+        "input": 0.812,
+        "output": 4.872,
+        "currency": "CNY",
+    }
+
+
 def test_configured_default_phase_models_resolve_to_non_retired():
     """The structural replacement for the eternal DEAD_MODEL_IDS list.
 

@@ -80,3 +80,14 @@ func TestPrintAnalyzeResult_VerifySkippedFallsBackToAnalyze(t *testing.T) {
 		t.Fatalf("verify-skipped path should fall back to the analysis summary, got:\n%q", out)
 	}
 }
+
+func TestFormatUsageCostUsesDeclaredCurrency(t *testing.T) {
+	usage := map[string]any{
+		"total_cost_usd":    0.0,
+		"total_cost_cny":    5.684,
+		"costs_by_currency": map[string]any{"CNY": 5.684},
+	}
+	if got := formatUsageCost(usage); got != "¥5.6840" {
+		t.Fatalf("formatUsageCost = %q, want ¥5.6840", got)
+	}
+}

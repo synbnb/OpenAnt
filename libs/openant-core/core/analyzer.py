@@ -565,6 +565,27 @@ def run_analysis(
     _summary_input_tokens = 0
     _summary_output_tokens = 0
     _summary_cost_usd = 0.0
+    _summary_cost_cny = 0.0
+    _summary_costs_by_currency = {}
+
+    def _accumulate_usage(usage):
+        """Accumulate token/cost data without collapsing CNY into USD."""
+        nonlocal _summary_input_tokens, _summary_output_tokens
+        nonlocal _summary_cost_usd, _summary_cost_cny
+        if not usage:
+            return
+        _summary_input_tokens += usage.get("input_tokens", 0)
+        _summary_output_tokens += usage.get("output_tokens", 0)
+        costs = usage.get("costs_by_currency") or {}
+        if not costs and usage.get("cost_usd"):
+            costs = {"USD": usage.get("cost_usd", 0.0)}
+        for currency, amount in costs.items():
+            _summary_costs_by_currency[currency] = (
+                _summary_costs_by_currency.get(currency, 0.0) + float(amount or 0)
+            )
+        _summary_cost_usd = _summary_costs_by_currency.get("USD", 0.0)
+        _summary_cost_cny = _summary_costs_by_currency.get("CNY", 0.0)
+
     for _uid, _cp in _existing.items():
         _r = _cp.get("result", {})
         if _r.get("verdict") == "ERROR" or _r.get("finding") == "error":
@@ -573,19 +594,22 @@ def run_analysis(
         else:
             _summary_completed += 1
         _cp_usage = _cp.get("usage", {})
-        _summary_input_tokens += _cp_usage.get("input_tokens", 0)
-        _summary_output_tokens += _cp_usage.get("output_tokens", 0)
-        _summary_cost_usd += _cp_usage.get("cost_usd", 0.0)
+        _accumulate_usage(_cp_usage)
 
     def _usage_dict():
         return {"input_tokens": _summary_input_tokens,
                 "output_tokens": _summary_output_tokens,
-                "cost_usd": round(_summary_cost_usd, 6)}
+                "cost_usd": round(_summary_cost_usd, 6),
+                "cost_cny": round(_summary_cost_cny, 6),
+                "costs_by_currency": {
+                    k: round(v, 6) for k, v in _summary_costs_by_currency.items()
+                }}
 
     # Inject prior usage into tracker so step_report captures the total
     if _summary_input_tokens or _summary_output_tokens:
         get_global_tracker().add_prior_usage(
-            _summary_input_tokens, _summary_output_tokens, _summary_cost_usd)
+            _summary_input_tokens, _summary_output_tokens, _summary_cost_usd,
+            costs_by_currency=_summary_costs_by_currency)
 
     # Write initial summary
     checkpoint.write_summary(total, _summary_completed, _summary_errors,
@@ -602,9 +626,7 @@ def run_analysis(
         else:
             _summary_completed += 1
         if usage:
-            _summary_input_tokens += usage.get("input_tokens", 0)
-            _summary_output_tokens += usage.get("output_tokens", 0)
-            _summary_cost_usd += usage.get("cost_usd", 0.0)
+            _accumulate_usage(usage)
         checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                  _summary_error_breakdown, phase="in_progress",
                                  usage=_usage_dict())
@@ -643,9 +665,7 @@ def run_analysis(
                 _summary_errors = max(0, _summary_errors - 1)
                 _summary_completed += 1
             retry_usage = out.get("usage", {})
-            _summary_input_tokens += retry_usage.get("input_tokens", 0)
-            _summary_output_tokens += retry_usage.get("output_tokens", 0)
-            _summary_cost_usd += retry_usage.get("cost_usd", 0.0)
+            _accumulate_usage(retry_usage)
             checkpoint.write_summary(total, _summary_completed, _summary_errors,
                                      _summary_error_breakdown, phase="in_progress",
                                      usage=_usage_dict())

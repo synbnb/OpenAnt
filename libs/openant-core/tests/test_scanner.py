@@ -229,6 +229,37 @@ def test_required_stage_failure_still_propagates(monkeypatch, tmp_path):
         )
 
 
+def test_scan_forwards_explicit_platform_to_parse(monkeypatch, tmp_path):
+    """An explicit platform selection must reach the parser stage, not only
+    the ScanResult envelope."""
+    _install_minimal_pipeline(monkeypatch)
+
+    import core.parser_adapter as parser_adapter
+
+    captured = {}
+    original_parse = parser_adapter.parse_repository
+
+    def _capture_parse(**kwargs):
+        captured.update(kwargs)
+        return original_parse(**kwargs)
+
+    monkeypatch.setattr(parser_adapter, "parse_repository", _capture_parse)
+    out = tmp_path / "out"
+    result = scanner_mod.scan_repository(
+        repo_path=str(tmp_path),
+        output_dir=str(out),
+        platform="openharmony",
+        generate_context=False,
+        enhance=False,
+        verify=False,
+        generate_report=False,
+        dynamic_test=False,
+    )
+
+    assert result.platform_selection == "openharmony"
+    assert captured["platform"] == "openharmony"
+
+
 # ---------------------------------------------------------------------------
 # Disambiguated skip reasons (ADDITIVE; bare list unchanged).
 # ---------------------------------------------------------------------------

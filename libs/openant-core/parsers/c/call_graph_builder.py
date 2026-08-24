@@ -110,6 +110,7 @@ class CallGraphBuilder:
         self.macros = extractor_output.get('macros', {})
         self.macro_aliases = extractor_output.get('macro_aliases', {})
         self.prototypes = extractor_output.get('prototypes', {})
+        self.platform = options.get('platform', 'generic')
         # class_name -> [direct base-class name, ...] for the inheritance walk in
         # member dispatch (bug [30]). Defaults to {} when the extractor output
         # predates base-class extraction, so resolution degrades to the [51]
@@ -135,6 +136,17 @@ class CallGraphBuilder:
         self.include_map: Dict[str, Set[str]] = {}
 
         self._build_indexes()
+
+        self.openharmony_file_evidence = {}
+        if self.platform == 'openharmony':
+            from utilities.agentic_enhancer.openharmony_entry_point_detector import (
+                collect_hdf_registration_evidence,
+            )
+
+            self.openharmony_file_evidence = collect_hdf_registration_evidence(
+                self.repo_path,
+                self.functions_by_file.keys(),
+            )
 
         # Parsers for re-parsing function bodies
         self.c_parser = Parser(C_LANGUAGE)
@@ -753,7 +765,7 @@ class CallGraphBuilder:
 
     def export(self) -> Dict:
         """Export the call graph data."""
-        return {
+        result = {
             'repository': self.repo_path,
             'functions': self.functions,
             'includes': self.includes,
@@ -764,6 +776,9 @@ class CallGraphBuilder:
             'reverse_call_graph': self.reverse_call_graph,
             'statistics': self.get_statistics(),
         }
+        if self.platform == 'openharmony':
+            result['openharmony_file_evidence'] = self.openharmony_file_evidence
+        return result
 
 
 def main():

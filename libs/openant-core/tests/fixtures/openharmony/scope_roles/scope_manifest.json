@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "fixture_id": "openharmony-c-scope-roles-v1",
+  "synthetic": true,
+  "description": "Synthetic C/C++ repository scope used to freeze current scanner coverage.",
+  "files": [
+    "BUILD.gn",
+    "bundle.json",
+    "entry/Main.ets",
+    "fuzz/health_sensor_service_fuzzer.cpp",
+    "include/health_sensor_service.h",
+    "interfaces/health_sensor.idl",
+    "services/health_sensor_service.cpp",
+    "src/latest_value.c",
+    "test_health_sensor.cpp",
+    "tests/health_sensor_service_test.cpp",
+    "vendor/third_party.cpp"
+  ],
+  "roles": {
+    "production": [
+      "include/health_sensor_service.h",
+      "services/health_sensor_service.cpp",
+      "src/latest_value.c"
+    ],
+    "test": ["test_health_sensor.cpp", "tests/health_sensor_service_test.cpp"],
+    "fuzz": ["fuzz/health_sensor_service_fuzzer.cpp"],
+    "build_metadata": ["BUILD.gn", "bundle.json"],
+    "unsupported_source": ["entry/Main.ets", "interfaces/health_sensor.idl"],
+    "vendor": ["vendor/third_party.cpp"]
+  }
+}

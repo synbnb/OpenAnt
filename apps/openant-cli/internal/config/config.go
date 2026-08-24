@@ -1,8 +1,9 @@
 // Package config handles persistent configuration for the OpenAnt CLI.
 //
-// Configuration is stored in ~/.config/openant/config.json (or
-// $XDG_CONFIG_HOME/openant/config.json on Linux). The file is created
-// with 0600 permissions since it may contain API keys.
+// Configuration is resolved from an explicit OPENANT_CONFIG_FILE, the
+// project-local config/openant/config.json, or the legacy user locations
+// ($XDG_CONFIG_HOME/openant/config.json and ~/.config/openant/config.json).
+// The file is created with 0600 permissions since it may contain API keys.
 package config
 
 import (
@@ -12,7 +13,22 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 )
+
+// ConfigFileEnv is an explicit configuration-file override. Relative paths
+// are resolved against the caller's current working directory.
+const ConfigFileEnv = "OPENANT_CONFIG_FILE"
+
+// ProjectRootEnv optionally identifies the trusted OpenAnt checkout that owns
+// project-local runtime files. It is useful when the binary is installed
+// outside the checkout (for example, a packaged launcher).
+const ProjectRootEnv = "OPENANT_PROJECT_ROOT"
+
+// ProjectConfigRelativePath is deliberately inside the OpenAnt checkout so a
+// packaged copy does not depend on /private/tmp or a user's home directory.
+const ProjectConfigRelativePath = "config/openant/config.json"
 
 // Config holds the persistent CLI configuration.
 //
@@ -36,7 +52,8 @@ type Config struct {
 	raw map[string]any
 }
 
-// configDir returns the base directory for openant config files.
+// configDir returns the legacy user directory for OpenAnt config files.
+// Project-local resolution is handled by Path/configCandidates below.
 // On macOS/Linux: $XDG_CONFIG_HOME/openant or ~/.config/openant
 // On Windows: %APPDATA%\openant
 func configDir() (string, error) {
@@ -67,8 +84,7 @@ func configDir() (string, error) {
 	return filepath.Join(dir, "openant"), nil
 }
 
-// Path returns the full path to the config file.
-func Path() (string, error) {
+func userConfigPath() (string, error) {
 	dir, err := configDir()
 	if err != nil {
 		return "", err
@@ -76,35 +92,169 @@ func Path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
+// Path returns the primary path used for configuration reads and writes.
+//
+// An explicit file wins. Otherwise a binary inside an OpenAnt checkout uses
+// the project-local path, making the checkout relocatable. Load still falls
+// back to legacy user config when the project-local file does not exist; Save
+// always targets this primary path so new credentials stay with the project.
+func Path() (string, error) {
+	if raw := strings.TrimSpace(os.Getenv(ConfigFileEnv)); raw != "" {
+		return absolutePath(raw)
+	}
+	root, err := ProjectRoot()
+	if err != nil {
+		return "", err
+	}
+	if root != "" {
+		return filepath.Join(root, filepath.FromSlash(ProjectConfigRelativePath)), nil
+	}
+	return userConfigPath()
+}
+
+// configCandidates returns existing-file lookup order. The explicit override
+// is authoritative: a typo should not silently select a different credential
+// file. For the portable default, project-local config wins over legacy user
+// locations, while the latter remain a migration/compatibility fallback.
+func configCandidates() ([]string, error) {
+	if raw := strings.TrimSpace(os.Getenv(ConfigFileEnv)); raw != "" {
+		path, err := absolutePath(raw)
+		if err != nil {
+			return nil, err
+		}
+		return []string{path}, nil
+	}
+
+	paths := make([]string, 0, 3)
+	root, err := ProjectRoot()
+	if err != nil {
+		return nil, err
+	}
+	if root != "" {
+		paths = append(paths, filepath.Join(root, filepath.FromSlash(ProjectConfigRelativePath)))
+	}
+	legacy, err := userConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range []string{legacy} {
+		duplicate := false
+		for _, existing := range paths {
+			if filepath.Clean(existing) == filepath.Clean(candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			paths = append(paths, candidate)
+		}
+	}
+	return paths, nil
+}
+
+// ResolvedPath returns the file that Load would read, or the primary Path
+// when no candidate exists yet. It is used to pass the exact choice to the
+// Python subprocess so Go and Python cannot drift to different config files.
+func ResolvedPath() (string, error) {
+	paths, err := configCandidates()
+	if err != nil {
+		return "", err
+	}
+	for _, path := range paths {
+		if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return Path()
+}
+
+// ProjectRoot finds the trusted OpenAnt checkout that owns project-local
+// files. It intentionally walks only from the selected executable (or an
+// explicit OPENANT_PROJECT_ROOT), never from the scanned repository's CWD.
+func ProjectRoot() (string, error) {
+	if raw := strings.TrimSpace(os.Getenv(ProjectRootEnv)); raw != "" {
+		root, err := absolutePath(raw)
+		if err != nil {
+			return "", err
+		}
+		if !isProjectRoot(root) {
+			return "", fmt.Errorf("%s=%q is not an OpenAnt project root (missing libs/openant-core/pyproject.toml or config/models.json)", ProjectRootEnv, root)
+		}
+		return root, nil
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		return "", nil
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(executable); evalErr == nil {
+		executable = resolved
+	}
+	dir := filepath.Dir(executable)
+	for range 8 {
+		if isProjectRoot(dir) {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", nil
+}
+
+func absolutePath(raw string) (string, error) {
+	path, err := filepath.Abs(raw)
+	if err != nil {
+		return "", fmt.Errorf("resolve configuration path %q: %w", raw, err)
+	}
+	return filepath.Clean(path), nil
+}
+
+func isProjectRoot(root string) bool {
+	return regularFile(filepath.Join(root, "libs", "openant-core", "pyproject.toml")) &&
+		regularFile(filepath.Join(root, "config", "models.json"))
+}
+
+func regularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // Load reads the config file. Returns an empty Config if the file
 // does not exist (not an error — first run).
 func Load() (*Config, error) {
-	path, err := Path()
+	paths, err := configCandidates()
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &Config{}, nil
+	for _, path := range paths {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read config: %w", readErr)
 		}
-		return nil, fmt.Errorf("failed to read config: %w", err)
+
+		// Parse once into the typed fields and once into a generic map
+		// so v2 keys (llm_providers / llm_configs / default_llm /
+		// $schema_version) survive a Load → Save round-trip.
+		var cfg Config
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse config at %s: %w", path, err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err == nil {
+			cfg.raw = raw
+		}
+
+		return &cfg, nil
 	}
 
-	// Parse once into the typed fields and once into a generic map
-	// so v2 keys (llm_providers / llm_configs / default_llm /
-	// $schema_version) survive a Load → Save round-trip.
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config at %s: %w", path, err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err == nil {
-		cfg.raw = raw
-	}
-
-	return &cfg, nil
+	return &Config{}, nil
 }
 
 // Save writes the config to disk with restricted permissions.
@@ -259,6 +409,71 @@ type ProviderEntry struct {
 type LLMPhaseRef struct {
 	Provider string
 	Model    string
+}
+
+// LLMPhaseSummary is the non-secret view of one phase binding in an
+// llm-config. It is used by the Web UI to explain which provider/model will
+// actually run without exposing provider credentials.
+type LLMPhaseSummary struct {
+	Phase    string
+	Provider string
+	Model    string
+}
+
+// DefaultLLMName returns the configured default llm-config name. The Python
+// side uses the same fallback when the field is absent, so keeping the
+// fallback here makes the Go Web UI describe the same selection.
+func (c *Config) DefaultLLMName() string {
+	if c != nil && c.raw != nil {
+		if name, ok := c.raw["default_llm"].(string); ok && strings.TrimSpace(name) != "" {
+			return name
+		}
+	}
+	return "openant-default"
+}
+
+// LLMPhaseSummaries returns the phase bindings authored for name in the v2
+// config. The built-in openant-default config is defined by Python and has no
+// raw JSON entry, so it deliberately returns an empty slice here.
+//
+// Results are sorted by phase name to keep Web output deterministic even
+// though JSON objects are decoded into Go maps.
+func (c *Config) LLMPhaseSummaries(name string) []LLMPhaseSummary {
+	if c == nil || c.raw == nil || name == "" || name == "openant-default" {
+		return nil
+	}
+	llmConfigs, ok := c.raw["llm_configs"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawConfig, ok := llmConfigs[name].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	result := make([]LLMPhaseSummary, 0, len(rawConfig))
+	for phase, rawRef := range rawConfig {
+		ref, ok := rawRef.(map[string]any)
+		if !ok {
+			continue
+		}
+		provider, _ := ref["provider"].(string)
+		model, _ := ref["model"].(string)
+		provider = strings.TrimSpace(provider)
+		model = strings.TrimSpace(model)
+		if provider == "" {
+			continue
+		}
+		result = append(result, LLMPhaseSummary{
+			Phase:    phase,
+			Provider: provider,
+			Model:    model,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Phase < result[j].Phase
+	})
+	return result
 }
 
 // GetProvider returns the provider entry currently authored under

@@ -43,6 +43,7 @@ from .agentic_enhancer import (
 )
 from .rate_limiter import get_rate_limiter, is_rate_limit_error, is_retryable_error
 from .file_io import read_json, write_json
+from core.platforms.prompt_context import PlatformPromptContext
 
 # Avoid circular import — import checkpoint at usage site
 _StepCheckpoint = None
@@ -142,7 +143,9 @@ def get_context_enhancement_prompt(
     class_name: Optional[str],
     static_deps: list[str],
     static_callers: list[str],
-    context_functions: list[dict]
+    context_functions: list[dict],
+    language: str | None = None,
+    platform_context: dict | None = None,
 ) -> str:
     """
     Generate a prompt for the LLM to enhance function context.
@@ -156,8 +159,28 @@ def get_context_enhancement_prompt(
         static_deps: Dependencies identified by static analysis
         static_callers: Callers identified by static analysis
         context_functions: Other functions in the same file
+        language: Source language for platform-aware code fences. Generic
+            callers retain the historical JavaScript/TypeScript prompt.
+        platform_context: Optional bounded OpenHarmony unit metadata.
     """
     from prompts._fence import safe_code_fence
+
+    normalized_platform_context = PlatformPromptContext.from_mapping(platform_context)
+    if normalized_platform_context.is_openharmony:
+        from prompts._fence import collapse_inline
+
+        language_label = collapse_inline(language or "cpp") or "cpp"
+        fence_language = language_label
+    else:
+        # Preserve the historical generic prose and fence language exactly.
+        language_label = "JavaScript/TypeScript"
+        fence_language = "javascript"
+
+    platform_context_section = ""
+    rendered_platform_context = normalized_platform_context.render_for_phase("enhance")
+    if rendered_platform_context:
+        platform_context_section = f"{rendered_platform_context}\n\n"
+
     deps_list = "\n".join(f"- {d}" for d in static_deps) if static_deps else "- None identified"
     callers_list = "\n".join(f"- {c}" for c in static_callers) if static_callers else "- None identified"
 
@@ -170,11 +193,11 @@ def get_context_enhancement_prompt(
             if len(f.get('code', '')) > 200:
                 code_preview += '...'
             _pf = safe_code_fence(code_preview)
-            context_section += f"{_pf}javascript\n{code_preview}\n{_pf}\n\n"
+            context_section += f"{_pf}{fence_language}\n{code_preview}\n{_pf}\n\n"
     else:
         context_section = "## Other Functions in Same File\nNo other functions in file.\n"
 
-    return f"""You are analyzing a JavaScript/TypeScript function to identify all relevant context needed for security analysis.
+    return f"""You are analyzing a {language_label} function to identify all relevant context needed for security analysis.
 
 ## Target Function
 **ID:** `{function_id}`
@@ -182,7 +205,7 @@ def get_context_enhancement_prompt(
 **Type:** {unit_type}
 {f'**Class:** {class_name}' if class_name else ''}
 
-{safe_code_fence(function_code)}javascript
+{safe_code_fence(function_code)}{fence_language}
 {function_code}
 {safe_code_fence(function_code)}
 
@@ -195,7 +218,7 @@ def get_context_enhancement_prompt(
 
 {context_section}
 
-## Your Task
+{platform_context_section}## Your Task
 Analyze this function and identify:
 
 1. **Missing Dependencies**: Functions called in the code that static analysis missed
@@ -297,6 +320,10 @@ class ContextEnhancer:
         function_code = code_section.get("primary_code", "")
         unit_type = unit.get("unit_type", "function")
         class_name = code_section.get("primary_origin", {}).get("class_name")
+        language = unit.get("language")
+        platform_context = unit.get("platform_context")
+        if platform_context is None:
+            platform_context = unit.get("platformContext")
 
         # Get static analysis results
         static_deps = unit.get("metadata", {}).get("direct_calls", [])
@@ -326,7 +353,9 @@ class ContextEnhancer:
             class_name=class_name,
             static_deps=static_deps,
             static_callers=static_callers,
-            context_functions=context_functions
+            context_functions=context_functions,
+            language=language,
+            platform_context=platform_context,
         )
 
         try:
@@ -629,6 +658,37 @@ class ContextEnhancer:
         _summary_input_tokens = 0
         _summary_output_tokens = 0
         _summary_cost_usd = 0.0
+        _summary_cost_cny = 0.0
+        _summary_costs_by_currency = {}
+
+        def _accumulate_summary_usage(usage):
+            """Keep checkpoint summaries honest for non-USD model rates."""
+            nonlocal _summary_input_tokens, _summary_output_tokens
+            nonlocal _summary_cost_usd, _summary_cost_cny
+            if not usage:
+                return
+            _summary_input_tokens += usage.get("input_tokens", 0)
+            _summary_output_tokens += usage.get("output_tokens", 0)
+            costs = usage.get("costs_by_currency") or {}
+            if not costs and usage.get("cost_usd"):
+                costs = {"USD": usage.get("cost_usd", 0.0)}
+            for currency, amount in costs.items():
+                _summary_costs_by_currency[currency] = (
+                    _summary_costs_by_currency.get(currency, 0.0) + float(amount or 0)
+                )
+            _summary_cost_usd = _summary_costs_by_currency.get("USD", 0.0)
+            _summary_cost_cny = _summary_costs_by_currency.get("CNY", 0.0)
+
+        def _summary_usage_dict():
+            return {
+                "input_tokens": _summary_input_tokens,
+                "output_tokens": _summary_output_tokens,
+                "cost_usd": round(_summary_cost_usd, 6),
+                "cost_cny": round(_summary_cost_cny, 6),
+                "costs_by_currency": {
+                    k: round(v, 6) for k, v in _summary_costs_by_currency.items()
+                },
+            }
 
         if checkpoint_dir:
             SC = _get_step_checkpoint()
@@ -646,9 +706,7 @@ class ContextEnhancer:
                     cp_data = read_json(cp_file)
                     # Sum usage from all existing checkpoints (completed + errored)
                     cp_usage = cp_data.get("usage", {})
-                    _summary_input_tokens += cp_usage.get("input_tokens", 0)
-                    _summary_output_tokens += cp_usage.get("output_tokens", 0)
-                    _summary_cost_usd += cp_usage.get("cost_usd", 0.0)
+                    _accumulate_summary_usage(cp_usage)
                     # Count errors for non-completed units
                     if uid not in processed_ids and cp_data.get("agent_context", {}).get("error"):
                         _summary_errors += 1
@@ -660,14 +718,13 @@ class ContextEnhancer:
 
             _summary_cp.write_summary(total, _summary_completed, _summary_errors,
                                       _summary_error_breakdown, phase="in_progress",
-                                      usage={"input_tokens": _summary_input_tokens,
-                                             "output_tokens": _summary_output_tokens,
-                                             "cost_usd": round(_summary_cost_usd, 6)})
+                                      usage=_summary_usage_dict())
 
             # Inject prior usage into tracker so step_report captures the total
             if _summary_input_tokens or _summary_output_tokens:
                 self.tracker.add_prior_usage(
-                    _summary_input_tokens, _summary_output_tokens, _summary_cost_usd)
+                    _summary_input_tokens, _summary_output_tokens, _summary_cost_usd,
+                    costs_by_currency=_summary_costs_by_currency)
 
         remaining = total - len(processed_ids)
         self._log("info", f"Enhancing {remaining} units with agentic analysis ({len(processed_ids)} already done)", units=remaining)
@@ -747,14 +804,10 @@ class ContextEnhancer:
                 _summary_completed += 1
             # Accumulate per-unit usage
             meta = unit.get("agent_context", {}).get("agent_metadata", {})
-            _summary_input_tokens += meta.get("input_tokens", 0)
-            _summary_output_tokens += meta.get("output_tokens", 0)
-            _summary_cost_usd += meta.get("cost_usd", 0.0)
+            _accumulate_summary_usage(meta)
             _summary_cp.write_summary(total, _summary_completed, _summary_errors,
                                       _summary_error_breakdown, phase="in_progress",
-                                      usage={"input_tokens": _summary_input_tokens,
-                                             "output_tokens": _summary_output_tokens,
-                                             "cost_usd": round(_summary_cost_usd, 6)})
+                                      usage=_summary_usage_dict())
 
         if workers <= 1:
             # Sequential mode
@@ -829,15 +882,11 @@ class ContextEnhancer:
                     # The error was already counted in _update_summary during initial pass
                 # Accumulate retry usage
                 meta = unit.get("agent_context", {}).get("agent_metadata", {})
-                _summary_input_tokens += meta.get("input_tokens", 0)
-                _summary_output_tokens += meta.get("output_tokens", 0)
-                _summary_cost_usd += meta.get("cost_usd", 0.0)
+                _accumulate_summary_usage(meta)
                 if _summary_cp is not None:
                     _summary_cp.write_summary(total, _summary_completed, _summary_errors,
                                               _summary_error_breakdown, phase="in_progress",
-                                              usage={"input_tokens": _summary_input_tokens,
-                                                     "output_tokens": _summary_output_tokens,
-                                                     "cost_usd": round(_summary_cost_usd, 6)})
+                                              usage=_summary_usage_dict())
 
                 # Save checkpoint (overwrite error with result)
                 if checkpoint_dir:
@@ -855,9 +904,7 @@ class ContextEnhancer:
         if _summary_cp is not None:
             _summary_cp.write_summary(total, _summary_completed, _summary_errors,
                                       _summary_error_breakdown, phase="done",
-                                      usage={"input_tokens": _summary_input_tokens,
-                                             "output_tokens": _summary_output_tokens,
-                                             "cost_usd": round(_summary_cost_usd, 6)})
+                                      usage=_summary_usage_dict())
 
         # Compute stats from all units (including previously checkpointed ones)
         agentic_stats = self._compute_agentic_stats(units)
@@ -926,6 +973,10 @@ class ContextEnhancer:
                 "input_tokens": meta.get("input_tokens", 0),
                 "output_tokens": meta.get("output_tokens", 0),
                 "cost_usd": meta.get("cost_usd", 0.0),
+                "cost_cny": meta.get("cost_cny", 0.0),
+                "cost_amount": meta.get("cost_amount", 0.0),
+                "cost_currency": meta.get("cost_currency"),
+                "costs_by_currency": meta.get("costs_by_currency", {}),
             }
         write_json(filepath, cp_data)
 

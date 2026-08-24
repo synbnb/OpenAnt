@@ -23,13 +23,21 @@ def _fmt_duration(seconds: float) -> str:
     return f"{h}h{m:02d}m"
 
 
-def _fmt_cost(usd: float) -> str:
-    """Format cost in dollars."""
-    if usd < 0.01:
-        return f"${usd:.4f}"
-    if usd < 10:
-        return f"${usd:.2f}"
-    return f"${usd:,.2f}"
+def _fmt_costs(costs: dict[str, float]) -> str:
+    """Format declared-currency costs without implicit conversion."""
+    if not costs:
+        return "$0.0000"
+    symbols = {"USD": "$", "CNY": "¥"}
+    parts = []
+    for currency, amount in sorted(costs.items()):
+        symbol = symbols.get(currency, currency + " ")
+        if amount < 0.01:
+            parts.append(f"{symbol}{amount:.4f}")
+        elif amount < 10:
+            parts.append(f"{symbol}{amount:.2f}")
+        else:
+            parts.append(f"{symbol}{amount:,.2f}")
+    return " / ".join(parts)
 
 
 class ProgressReporter:
@@ -61,7 +69,7 @@ class ProgressReporter:
         self.start_time = time.monotonic()
         self.completed = completed
         self._lock = threading.Lock()
-        self._last_cost = self._get_cost()  # snapshot for per-unit delta
+        self._last_costs = self._get_costs()  # snapshot for per-unit deltas
 
         # Width for the counter so alignment stays consistent
         self._width = len(str(total))
@@ -73,12 +81,16 @@ class ProgressReporter:
             ten_pct = max(1, total // 10)
             self._summary_interval = min(50, ten_pct)
 
-    def _get_cost(self) -> float:
-        """Get current cumulative cost from the tracker."""
+    def _get_costs(self) -> dict[str, float]:
+        """Get current cumulative per-currency costs from the tracker."""
         if not self.tracker:
-            return 0.0
+            return {}
         totals = self.tracker.get_totals()
-        return totals.get("total_cost_usd", 0.0)
+        costs = totals.get("costs_by_currency") or {}
+        if costs:
+            return {str(k): float(v or 0) for k, v in costs.items()}
+        usd = totals.get("total_cost_usd", 0.0)
+        return {"USD": usd} if usd else {}
 
     def _estimate_remaining(self, elapsed: float) -> str:
         """Estimate time remaining based on average per-unit time."""
@@ -110,9 +122,13 @@ class ProgressReporter:
             self.completed += 1
             elapsed = time.monotonic() - self.start_time
             eta = self._estimate_remaining(elapsed)
-            total_cost = self._get_cost()
-            unit_cost = total_cost - self._last_cost
-            self._last_cost = total_cost
+            total_costs = self._get_costs()
+            currencies = set(self._last_costs) | set(total_costs)
+            unit_costs = {
+                currency: total_costs.get(currency, 0.0) - self._last_costs.get(currency, 0.0)
+                for currency in currencies
+            }
+            self._last_costs = total_costs
 
             # Truncate label if too long
             if len(unit_label) > 50:
@@ -129,7 +145,7 @@ class ProgressReporter:
             if unit_elapsed > 0:
                 parts.append(f"{unit_elapsed:.1f}s")
 
-            meta = f"(elapsed {_fmt_duration(elapsed)}, ETA {eta}, {_fmt_cost(unit_cost)})"
+            meta = f"(elapsed {_fmt_duration(elapsed)}, ETA {eta}, {_fmt_costs(unit_costs)})"
             parts.append(meta)
 
             line = "  ".join(parts)
@@ -140,9 +156,9 @@ class ProgressReporter:
                 self.completed % self._summary_interval == 0
                 and self.completed < self.total
             ):
-                self._print_summary(elapsed, total_cost)
+                self._print_summary(elapsed, total_costs)
 
-    def _print_summary(self, elapsed: float, cost: float) -> None:
+    def _print_summary(self, elapsed: float, costs: dict[str, float]) -> None:
         """Print a highlighted summary line."""
         pct = (self.completed / self.total) * 100
         avg = elapsed / self.completed if self.completed else 0
@@ -154,7 +170,7 @@ class ProgressReporter:
             f"avg {avg:.1f}s/unit | "
             f"elapsed {_fmt_duration(elapsed)} | "
             f"ETA {eta} | "
-            f"cost {_fmt_cost(cost)}"
+            f"cost {_fmt_costs(costs)}"
             f" ---"
         )
         print(line, file=sys.stderr, flush=True)
@@ -163,13 +179,13 @@ class ProgressReporter:
         """Print a final summary line when the step is done."""
         with self._lock:
             elapsed = time.monotonic() - self.start_time
-            cost = self._get_cost()
+            costs = self._get_costs()
             avg = elapsed / self.completed if self.completed else 0
 
             line = (
                 f"[{self.step_name}] Done: "
                 f"{self.completed}/{self.total} units in {_fmt_duration(elapsed)} | "
                 f"avg {avg:.1f}s/unit | "
-                f"cost {_fmt_cost(cost)}"
+                f"cost {_fmt_costs(costs)}"
             )
             print(line, file=sys.stderr, flush=True)

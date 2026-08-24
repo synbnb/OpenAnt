@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -42,9 +43,20 @@ const (
 
 // jobMeta is the on-disk metadata written immediately on job creation.
 type jobMeta struct {
-	ID        string    `json:"id"`
-	Repo      string    `json:"repo"`
-	StartedAt time.Time `json:"started_at"`
+	ID                          string    `json:"id"`
+	Repo                        string    `json:"repo"`
+	StartedAt                   time.Time `json:"started_at"`
+	Platform                    string    `json:"platform,omitempty"`
+	LLMReachability             bool      `json:"llm_reachability,omitempty"`
+	LLMReachabilityMaxCodeBytes int       `json:"llm_reachability_max_code_bytes,omitempty"`
+	DynamicTest                 bool      `json:"dynamic_test,omitempty"`
+	DynamicTestMode             string    `json:"dynamic_test_mode,omitempty"`
+	TaskWorkspace               string    `json:"task_workspace,omitempty"`
+	PublicToolLibrary           string    `json:"public_tool_library,omitempty"`
+	TaskManifestPath            string    `json:"task_manifest_path,omitempty"`
+	CandidateManifest           string    `json:"candidate_manifest,omitempty"`
+	LaunchCommand               string    `json:"launch_command,omitempty"`
+	CandidateCount              int       `json:"candidate_count,omitempty"`
 }
 
 // Job represents a single scan job.
@@ -58,18 +70,26 @@ type Job struct {
 	logBytes        int  // total bytes buffered, to bound memory (see addLog)
 	logCapped       bool // true once a line/byte limit was hit; no more appends
 	ReportPath      string
+	ReportPathZH    string
 	SummaryPath     string
+	SummaryPathZH   string
 	DisclosurePaths []string
 	Cancel          context.CancelFunc
 
 	// Internal scan parameters (not exposed via API)
-	apiKey      string
-	languages   []string
-	libraryMode bool
-	verify      bool
-	dynamicTest bool
-	ctx         context.Context
-	done        chan struct{} // closed by runJob after it stops touching the job dir
+	apiKey                      string
+	languages                   []string
+	platform                    string
+	libraryMode                 bool
+	verify                      bool
+	llmReachability             bool
+	llmReachabilityMaxCodeBytes int
+	dynamicTest                 bool
+	dynamicTestMode             string
+	claudeTask                  *claudeTaskInfo
+	claude                      *claudeSession
+	ctx                         context.Context
+	done                        chan struct{} // closed by runJob after it stops touching the job dir
 }
 
 func (j *Job) addLog(line string) {
@@ -96,12 +116,14 @@ func (j *Job) addLog(line string) {
 	j.LogBuf = append(j.LogBuf, line)
 }
 
-func (j *Job) setDone(reportPath, summaryPath string, disclosurePaths []string) {
+func (j *Job) setDone(reportPath, summaryPath, reportPathZH, summaryPathZH string, disclosurePaths []string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.Status = StatusDone
 	j.ReportPath = reportPath
+	j.ReportPathZH = reportPathZH
 	j.SummaryPath = summaryPath
+	j.SummaryPathZH = summaryPathZH
 	j.DisclosurePaths = disclosurePaths
 }
 
@@ -173,6 +195,7 @@ type Server struct {
 	mgr            *manager
 	tmplIndex      *template.Template
 	tmplScan       *template.Template
+	tmplArtifact   *template.Template
 	tmplSum        *template.Template
 	tmplDisclosure *template.Template
 	sem            chan struct{}
@@ -193,6 +216,10 @@ func New(pythonPath, outDir string) (*Server, error) {
 	tmplScan, err := template.ParseFS(uifiles.FS, "scan.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse scan.html: %w", err)
+	}
+	tmplArtifact, err := template.ParseFS(uifiles.FS, "artifact-view.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse artifact-view.html: %w", err)
 	}
 	tmplSum, err := template.ParseFS(uifiles.FS, "summary.html")
 	if err != nil {
@@ -216,6 +243,7 @@ func New(pythonPath, outDir string) (*Server, error) {
 		mgr:            newManager(outDir),
 		tmplIndex:      tmplIndex,
 		tmplScan:       tmplScan,
+		tmplArtifact:   tmplArtifact,
 		tmplSum:        tmplSum,
 		tmplDisclosure: tmplDisclosure,
 		sem:            make(chan struct{}, 4),
@@ -252,6 +280,28 @@ func (s *Server) recoverJobs() {
 			if json.Unmarshal(data, &m) == nil {
 				job.Repo = m.Repo
 				job.StartedAt = m.StartedAt
+				job.platform = m.Platform
+				job.llmReachability = m.LLMReachability
+				job.llmReachabilityMaxCodeBytes = m.LLMReachabilityMaxCodeBytes
+				if job.llmReachabilityMaxCodeBytes == 0 {
+					job.llmReachabilityMaxCodeBytes = defaultLLMReachabilityMaxCodeBytes
+				}
+				job.dynamicTest = m.DynamicTest
+				job.dynamicTestMode = m.DynamicTestMode
+				if job.dynamicTestMode == "" && job.dynamicTest {
+					job.dynamicTestMode = "docker"
+				}
+				if m.TaskWorkspace != "" {
+					job.claudeTask = &claudeTaskInfo{
+						Mode:              job.dynamicTestMode,
+						TaskWorkspace:     m.TaskWorkspace,
+						PublicToolLibrary: m.PublicToolLibrary,
+						TaskManifestPath:  m.TaskManifestPath,
+						CandidateManifest: m.CandidateManifest,
+						LaunchCommand:     m.LaunchCommand,
+						CandidateCount:    m.CandidateCount,
+					}
+				}
 			}
 		}
 
@@ -265,18 +315,31 @@ func (s *Server) recoverJobs() {
 			}
 		}
 
-		// Determine status from presence of report.html.
+		// Determine status from presence of the stable English report path.
 		reportPath := filepath.Join(jobDir, "report.html")
 		if _, err := os.Stat(reportPath); err == nil {
 			job.Status = StatusDone
 			job.ReportPath = reportPath
+			zhReportPath := filepath.Join(jobDir, "report.zh-CN.html")
+			if isRegularNoSymlink(jobDir, zhReportPath) {
+				job.ReportPathZH = zhReportPath
+			}
 			// Look for summary.
 			for _, sp := range []string{
 				filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"),
 				filepath.Join(jobDir, "SUMMARY_REPORT.md"),
 			} {
-				if _, err := os.Stat(sp); err == nil {
+				if isRegularNoSymlink(jobDir, sp) {
 					job.SummaryPath = sp
+					break
+				}
+			}
+			for _, sp := range []string{
+				filepath.Join(jobDir, "report", "SUMMARY_REPORT.zh-CN.md"),
+				filepath.Join(jobDir, "SUMMARY_REPORT.zh-CN.md"),
+			} {
+				if isRegularNoSymlink(jobDir, sp) {
+					job.SummaryPathZH = sp
 					break
 				}
 			}
@@ -336,10 +399,22 @@ func inferRepoURL(jobDir string) string {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /repositories", s.handleRepositories)
 	mux.HandleFunc("POST /scan", s.handleStartScan)
 	mux.HandleFunc("GET /assets/{name}", s.handleAsset)
 	mux.HandleFunc("GET /scan/{id}", s.handleScanPage)
 	mux.HandleFunc("GET /scan/{id}/logs", s.handleScanLogs)
+	mux.HandleFunc("GET /scan/{id}/pipeline", s.handlePipeline)
+	mux.HandleFunc("GET /scan/{id}/claude", s.handleClaudeInfo)
+	mux.HandleFunc("GET /scan/{id}/claude/events", s.handleClaudeEvents)
+	mux.HandleFunc("POST /scan/{id}/claude/message", s.handleClaudeMessage)
+	mux.HandleFunc("POST /scan/{id}/claude/stop", s.handleClaudeStop)
+	mux.HandleFunc("GET /scan/{id}/claude/files", s.handleClaudeFiles)
+	mux.HandleFunc("GET /scan/{id}/claude/file", s.handleClaudeFile)
+	mux.HandleFunc("GET /scan/{id}/artifacts", s.handleArtifacts)
+	mux.HandleFunc("GET /scan/{id}/artifact/{name}", s.handleArtifact)
+	mux.HandleFunc("GET /scan/{id}/artifact-view/{name}", s.handleArtifactView)
+	mux.HandleFunc("GET /scan/{id}/explore/{name}", s.handleExploreArtifact)
 	mux.HandleFunc("GET /report/{id}", s.handleReport)
 	mux.HandleFunc("GET /summary/{id}", s.handleSummary)
 	mux.HandleFunc("GET /disclosures/{id}", s.handleDisclosureList)
@@ -377,6 +452,236 @@ func securityHeaders(h http.Handler) http.Handler {
 var supportedLanguages = map[string]bool{
 	"c": true, "go": true, "javascript": true, "php": true, "python": true,
 	"ruby": true, "rust": true, "swift": true, "zig": true,
+}
+
+var supportedPlatforms = map[string]bool{
+	"auto":        true,
+	"generic":     true,
+	"openharmony": true,
+}
+
+const (
+	defaultLLMReachabilityMaxCodeBytes = 1500
+	minLLMReachabilityMaxCodeBytes     = 256
+	maxLLMReachabilityMaxCodeBytes     = 32768
+)
+
+// normalizeLLMReachabilityMaxCodeBytes keeps the Web option within a bounded
+// range. The reachability stage reviews the whole repository, so an
+// unbounded value could multiply prompt size and model cost unexpectedly.
+func normalizeLLMReachabilityMaxCodeBytes(raw string) (int, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultLLMReachabilityMaxCodeBytes, true
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minLLMReachabilityMaxCodeBytes || parsed > maxLLMReachabilityMaxCodeBytes {
+		return 0, false
+	}
+	return parsed, true
+}
+
+// normalizePlatform validates the Web UI's platform selector. Empty input
+// preserves the historical scanner default (auto), while unknown values are
+// rejected before any job state or child process is created.
+func normalizePlatform(raw string) (string, bool) {
+	platform := strings.TrimSpace(raw)
+	if platform == "" {
+		platform = "auto"
+	}
+	return platform, supportedPlatforms[platform]
+}
+
+func platformArgs(raw string) []string {
+	platform, ok := normalizePlatform(raw)
+	if !ok || platform == "auto" {
+		return nil
+	}
+	return []string{"--platform", platform}
+}
+
+// repositoryOption is the server-owned repository catalog entry exposed to
+// the Web UI. value is intentionally unexported: browsers receive an opaque
+// ID and label, while POST /scan resolves the ID back to this trusted value on
+// the server side.
+type repositoryOption struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Source string `json:"source"`
+
+	value     string
+	priority  int
+	startedAt time.Time
+}
+
+type repositoriesResponse struct {
+	Repositories []repositoryOption `json:"repositories"`
+}
+
+func isCloneURL(repo string) bool {
+	return strings.HasPrefix(repo, "https://") ||
+		strings.HasPrefix(repo, "http://") ||
+		strings.HasPrefix(repo, "git@")
+}
+
+func repositoryIdentity(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if isCloneURL(repo) {
+		return repo
+	}
+	if abs, err := filepath.Abs(repo); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(repo)
+}
+
+func repositoryOptionID(repo string) string {
+	sum := sha256.Sum256([]byte(repositoryIdentity(repo)))
+	return "repo-" + hex.EncodeToString(sum[:12])
+}
+
+// usableRepositoryValue mirrors the values the Web scanner can actually
+// consume. HTTP(S) URLs with embedded credentials are rejected because the
+// value is persisted in job metadata and logs. Local entries must still be
+// existing directories when they enter the catalog.
+func usableRepositoryValue(raw string) bool {
+	repo := strings.TrimSpace(raw)
+	if repo == "" || strings.HasPrefix(repo, "-") {
+		return false
+	}
+	if strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") {
+		u, err := url.Parse(repo)
+		return err == nil && u.User == nil
+	}
+	if isCloneURL(repo) {
+		return true
+	}
+	if strings.HasPrefix(repo, "ssh://") {
+		return false
+	}
+	info, err := os.Stat(repo)
+	return err == nil && info.IsDir()
+}
+
+func addRepositoryOption(options *[]repositoryOption, seen map[string]struct{}, source, label, value string, priority int, startedAt time.Time) {
+	value = strings.TrimSpace(value)
+	if !usableRepositoryValue(value) {
+		return
+	}
+	identity := repositoryIdentity(value)
+	if _, exists := seen[identity]; exists {
+		return
+	}
+	seen[identity] = struct{}{}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = value
+	}
+	*options = append(*options, repositoryOption{
+		ID:        repositoryOptionID(value),
+		Label:     label,
+		Source:    source,
+		value:     value,
+		priority:  priority,
+		startedAt: startedAt,
+	})
+}
+
+// sourceCodeRepositoryOptions discovers the independent Git repositories kept
+// under the project-local source_code_base directory. Only direct child
+// directories with their own .git metadata are eligible; this avoids treating
+// arbitrary documentation/build directories or nested project files as scan
+// targets. Symlinked children and symlinked .git metadata are skipped so a
+// catalog entry cannot silently point outside the project-local corpus.
+func sourceCodeRepositoryOptions(options *[]repositoryOption, seen map[string]struct{}) {
+	root, err := config.SourceCodeBaseDir()
+	if err != nil || root == "" {
+		return
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		repoPath := filepath.Join(root, entry.Name())
+		gitMetadata, err := os.Lstat(filepath.Join(repoPath, ".git"))
+		if err != nil || gitMetadata.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if !gitMetadata.IsDir() && !gitMetadata.Mode().IsRegular() {
+			continue
+		}
+		addRepositoryOption(options, seen, "source_code_base", "Project source — "+entry.Name(), repoPath, -1, time.Time{})
+	}
+}
+
+func (s *Server) repositoryOptions() []repositoryOption {
+	options := make([]repositoryOption, 0)
+	seen := make(map[string]struct{})
+
+	// The project-local corpus is the most portable source of repositories: it
+	// travels with an OpenAnt checkout and does not depend on ~/.openant state.
+	sourceCodeRepositoryOptions(&options, seen)
+
+	// Initialized projects are the most stable choices and therefore appear
+	// first. A remote project normally has a local clone path; if that clone was
+	// removed, fall back to its credential-free origin URL so the normal clone
+	// path can recreate it.
+	if names, err := config.ListProjects(); err == nil {
+		sort.Strings(names)
+		for _, name := range names {
+			project, err := config.LoadProject(name)
+			if err != nil || project == nil {
+				continue
+			}
+			value := strings.TrimSpace(project.RepoPath)
+			if !usableRepositoryValue(value) {
+				value = strings.TrimSpace(project.RepoURL)
+			}
+			label := project.Name
+			if label == "" {
+				label = name
+			}
+			addRepositoryOption(&options, seen, "project", label+" — "+value, value, 0, time.Time{})
+		}
+	}
+
+	// Recent jobs provide a useful history even when the user never ran
+	// `openant init`. The manager already orders jobs newest-first.
+	for _, job := range s.mgr.all() {
+		job.mu.Lock()
+		repo := job.Repo
+		startedAt := job.StartedAt
+		job.mu.Unlock()
+		addRepositoryOption(&options, seen, "recent", "Recent scan — "+repo, repo, 1, startedAt)
+	}
+
+	sort.SliceStable(options, func(i, j int) bool {
+		if options[i].priority != options[j].priority {
+			return options[i].priority < options[j].priority
+		}
+		if options[i].priority == 1 && !options[i].startedAt.Equal(options[j].startedAt) {
+			return options[i].startedAt.After(options[j].startedAt)
+		}
+		return options[i].Label < options[j].Label
+	})
+	return options
+}
+
+func (s *Server) resolveRepositoryID(id string) (string, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", false
+	}
+	for _, option := range s.repositoryOptions() {
+		if option.ID == id {
+			return option.value, true
+		}
+	}
+	return "", false
 }
 
 // jobIDRe matches the hex job IDs randomID produces; used to reject any other
@@ -452,41 +757,1128 @@ func (s *Server) WaitShutdown() { <-s.shutdownDone }
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 type jobView struct {
-	ID         string
-	Repo       string
-	StartedAt  string
-	Status     string
-	HasReport  bool
-	HasSummary bool
+	ID           string
+	Repo         string
+	StartedAt    string
+	Status       string
+	HasReport    bool
+	HasReportZH  bool
+	HasSummary   bool
+	HasSummaryZH bool
+}
+
+// pipelineStepSpec describes the stable order shown by the web UI.  The
+// scanner writes one {step}.report.json file for completed stages; stages
+// without a report are projected from the live Job state below.
+type pipelineStepSpec struct {
+	ID          string
+	Label       string
+	Description string
+	Inputs      []string
+	Outputs     []string
+	Optional    bool
+}
+
+var pipelineStepSpecs = []pipelineStepSpec{
+	{
+		ID:          "parse",
+		Label:       "Parse",
+		Description: "Discover eligible source files, extract functions, and build native call relationships.",
+		Inputs:      []string{"repository source", "platform selection", "language selection"},
+		Outputs:     []string{"platform profile", "parsed dataset", "native analyzer output", "call-graph index"},
+	},
+	{
+		ID:          "app-context",
+		Label:       "App Context",
+		Description: "Build the application threat model and platform-aware security context used by later LLM stages.",
+		Inputs:      []string{"repository evidence", "platform profile"},
+		Outputs:     []string{"application security context"},
+	},
+	{
+		ID:          "llm-reachability",
+		Label:       "LLM Reachability",
+		Description: "Use an optional model pass to add likely entry points or external-input signals missed by structural detection.",
+		Inputs:      []string{"full parsed dataset", "application context"},
+		Outputs:     []string{"LLM reachability signals", "promoted entry points"},
+		Optional:    true,
+	},
+	{
+		ID:          "enhance",
+		Label:       "Enhance",
+		Description: "Attach callers, callees, semantic context, platform boundaries, and security guards to analysis units.",
+		Inputs:      []string{"parsed dataset", "application context", "reachability signals"},
+		Outputs:     []string{"enhanced dataset"},
+	},
+	{
+		ID:          "analyze",
+		Label:       "Analyze",
+		Description: "Run the primary LLM vulnerability analysis on the selected code units.",
+		Inputs:      []string{"enhanced dataset", "application context", "analysis prompts"},
+		Outputs:     []string{"candidate security findings"},
+	},
+	{
+		ID:          "verify",
+		Label:       "Verify",
+		Description: "Simulate an attacker path for candidate findings and reject unsupported or non-exploitable claims.",
+		Inputs:      []string{"candidate findings", "source context", "threat model"},
+		Outputs:     []string{"verified findings"},
+		Optional:    true,
+	},
+	{
+		ID:          "build-output",
+		Label:       "Build Output",
+		Description: "Normalize analysis and verification results into the stable pipeline output schema.",
+		Inputs:      []string{"analysis results", "verification results"},
+		Outputs:     []string{"pipeline output"},
+	},
+	{
+		ID:          "dynamic-test",
+		Label:       "Dynamic Test",
+		Description: "Optionally validate candidate findings with Docker isolation or an interactive Claude Code task workspace.",
+		Inputs:      []string{"pipeline findings", "target runtime", "selected execution mode"},
+		Outputs:     []string{"dynamic-test task/results", "dynamic-test report"},
+		Optional:    true,
+	},
+	{
+		ID:          "report",
+		Label:       "Report",
+		Description: "Generate human-readable summary, HTML, and disclosure reports from the final findings.",
+		Inputs:      []string{"pipeline output", "dynamic-test evidence"},
+		Outputs:     []string{"aggregate scan report", "HTML report", "summary", "disclosure reports"},
+	},
+}
+
+type pipelineStepView struct {
+	ID              string             `json:"id"`
+	Label           string             `json:"label"`
+	Description     string             `json:"description"`
+	Inputs          []string           `json:"inputs"`
+	Outputs         []string           `json:"outputs"`
+	Optional        bool               `json:"optional"`
+	Status          string             `json:"status"`
+	Timestamp       string             `json:"timestamp,omitempty"`
+	DurationSeconds *float64           `json:"duration_seconds,omitempty"`
+	CostUSD         *float64           `json:"cost_usd,omitempty"`
+	CostCNY         *float64           `json:"cost_cny,omitempty"`
+	CostAmount      *float64           `json:"cost_amount,omitempty"`
+	CostCurrency    string             `json:"cost_currency,omitempty"`
+	CostsByCurrency map[string]float64 `json:"costs_by_currency,omitempty"`
+	TokenUsage      map[string]int     `json:"token_usage,omitempty"`
+	Summary         map[string]any     `json:"summary,omitempty"`
+	Errors          []string           `json:"errors,omitempty"`
+}
+
+type pipelineView struct {
+	ID          string             `json:"id"`
+	Repo        string             `json:"repo"`
+	StartedAt   time.Time          `json:"started_at"`
+	Status      string             `json:"status"`
+	Platform    string             `json:"platform,omitempty"`
+	CurrentStep string             `json:"current_step,omitempty"`
+	Steps       []pipelineStepView `json:"steps"`
+}
+
+type pipelineReportFile struct {
+	Step            string             `json:"step"`
+	Status          string             `json:"status"`
+	Timestamp       string             `json:"timestamp"`
+	DurationSeconds float64            `json:"duration_seconds"`
+	CostUSD         float64            `json:"cost_usd"`
+	CostCNY         float64            `json:"cost_cny"`
+	CostAmount      float64            `json:"cost_amount"`
+	CostCurrency    string             `json:"cost_currency"`
+	CostsByCurrency map[string]float64 `json:"costs_by_currency"`
+	TokenUsage      map[string]int     `json:"token_usage"`
+	Summary         map[string]any     `json:"summary"`
+	Errors          []string           `json:"errors"`
+}
+
+const maxPipelineReportBytes = 2 << 20
+
+// requestedPipelineStep reflects the Web UI's invocation choices. Optional
+// stages are marked not_requested only when the corresponding form option was
+// not selected.
+func requestedPipelineStep(id string, verify, llmReachability, dynamicTest bool) bool {
+	switch id {
+	case "llm-reachability":
+		return llmReachability
+	case "verify":
+		return verify
+	case "dynamic-test":
+		return dynamicTest
+	default:
+		return true
+	}
+}
+
+func normalizePipelineStatus(status string) string {
+	switch status {
+	case "success", "skipped", "error", "running", "pending":
+		return status
+	default:
+		return "error"
+	}
+}
+
+func readPipelineReport(jobDir string, spec pipelineStepSpec) (*pipelineReportFile, bool, error) {
+	path := filepath.Join(jobDir, spec.ID+".report.json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	f, fi, err := openRegularInRoot(jobDir, path)
+	if err != nil {
+		return nil, true, err
+	}
+	defer f.Close()
+	if fi.Size() > maxPipelineReportBytes {
+		return nil, true, fmt.Errorf("stage report exceeds %d bytes", maxPipelineReportBytes)
+	}
+	var report pipelineReportFile
+	if err := json.NewDecoder(f).Decode(&report); err != nil {
+		return nil, true, err
+	}
+	return &report, true, nil
+}
+
+func pipelineStepFromLog(line string) string {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "[parse]") || strings.Contains(lower, "parsing repository"):
+		return "parse"
+	case strings.Contains(lower, "[app-context]") || strings.Contains(lower, "application context"):
+		return "app-context"
+	case strings.Contains(lower, "[llm-reachability]") || strings.Contains(lower, "llm reachability"):
+		return "llm-reachability"
+	case strings.Contains(lower, "[enhance]") || strings.Contains(lower, "context enhancement"):
+		return "enhance"
+	case strings.Contains(lower, "[analyze]") || strings.Contains(lower, "[detect]") || strings.Contains(lower, "vulnerability analysis"):
+		return "analyze"
+	case strings.Contains(lower, "[verify]") || strings.Contains(lower, "verification"):
+		return "verify"
+	case strings.Contains(lower, "[build-output]") || strings.Contains(lower, "building pipeline_output"):
+		return "build-output"
+	case strings.Contains(lower, "[dynamic-test]") || strings.Contains(lower, "dynamic test"):
+		return "dynamic-test"
+	case strings.Contains(lower, "[report]") || strings.Contains(lower, "generating reports"):
+		return "report"
+	default:
+		return ""
+	}
+}
+
+func (s *Server) pipelineView(job *Job) pipelineView {
+	job.mu.Lock()
+	status := job.Status
+	logs := append([]string(nil), job.LogBuf...)
+	verify := job.verify
+	llmReachability := job.llmReachability
+	dynamicTest := job.dynamicTest
+	dynamicTestMode := job.dynamicTestMode
+	claudeStatus := ""
+	if job.claude != nil {
+		claudeStatus, _, _ = job.claude.snapshot()
+	}
+	view := pipelineView{
+		ID:        job.ID,
+		Repo:      job.Repo,
+		StartedAt: job.StartedAt,
+		Status:    status,
+		Platform:  job.platform,
+	}
+	job.mu.Unlock()
+
+	for i := len(logs) - 1; i >= 0; i-- {
+		if step := pipelineStepFromLog(logs[i]); step != "" {
+			view.CurrentStep = step
+			break
+		}
+	}
+
+	jobDir := filepath.Join(s.outDir, job.ID)
+	view.Steps = make([]pipelineStepView, 0, len(pipelineStepSpecs))
+	for _, spec := range pipelineStepSpecs {
+		step := pipelineStepView{
+			ID:          spec.ID,
+			Label:       spec.Label,
+			Description: spec.Description,
+			Inputs:      append([]string(nil), spec.Inputs...),
+			Outputs:     append([]string(nil), spec.Outputs...),
+			Optional:    spec.Optional,
+			Status:      "pending",
+		}
+		report, exists, err := readPipelineReport(jobDir, spec)
+		if err != nil {
+			step.Status = "error"
+			step.Errors = []string{fmt.Sprintf("read stage report: %v", err)}
+		} else if exists {
+			step.Status = normalizePipelineStatus(report.Status)
+			step.Timestamp = report.Timestamp
+			step.DurationSeconds = &report.DurationSeconds
+			step.CostUSD = &report.CostUSD
+			step.CostCNY = &report.CostCNY
+			step.CostAmount = &report.CostAmount
+			step.CostCurrency = report.CostCurrency
+			step.CostsByCurrency = report.CostsByCurrency
+			step.TokenUsage = report.TokenUsage
+			step.Summary = report.Summary
+			step.Errors = report.Errors
+		} else if !requestedPipelineStep(spec.ID, verify, llmReachability, dynamicTest) {
+			step.Status = "not_requested"
+		} else if status == StatusRunning && view.CurrentStep == spec.ID {
+			step.Status = "running"
+		} else if status == StatusError && view.CurrentStep == spec.ID {
+			step.Status = "error"
+		}
+		if spec.ID == "dynamic-test" && dynamicTest && dynamicTestMode == "claude-code" {
+			switch claudeStatus {
+			case claudeStatusPrepared, claudeStatusStarting, claudeStatusRunning:
+				step.Status = "running"
+			case claudeStatusBlocked, claudeStatusError:
+				step.Status = "error"
+				step.Errors = append(step.Errors, "Claude Code 会话未能运行："+claudeStatus)
+			}
+		}
+		view.Steps = append(view.Steps, step)
+	}
+	return view
+}
+
+func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	job, ok := s.mgr.get(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(s.pipelineView(job))
+}
+
+// artifactSpec is the server-owned allowlist of scan outputs that may be
+// inspected through the Web UI.  It intentionally excludes the cloned
+// repository, arbitrary paths, logs (which have a dedicated SSE endpoint),
+// and report/disclosure files (which have dedicated renderers).
+type artifactSpec struct {
+	Name        string
+	Label       string
+	Category    string
+	Stage       string
+	Description string
+}
+
+var scanArtifactSpecs = []artifactSpec{
+	{Name: "parse.report.json", Label: "Parse stage report", Category: "stage-report", Stage: "parse", Description: "Execution status, duration, summary counters, token usage, and errors recorded for source parsing."},
+	{Name: "app-context.report.json", Label: "Application context stage report", Category: "stage-report", Stage: "app-context", Description: "Execution record for application classification and threat-model construction."},
+	{Name: "llm-reachability.report.json", Label: "LLM reachability stage report", Category: "stage-report", Stage: "llm-reachability", Description: "Execution record for the optional model-assisted reachability review."},
+	{Name: "enhance.report.json", Label: "Enhancement stage report", Category: "stage-report", Stage: "enhance", Description: "Execution record for adding callers, callees, semantic context, and platform security signals."},
+	{Name: "analyze.report.json", Label: "Analysis stage report", Category: "stage-report", Stage: "analyze", Description: "Execution record for primary LLM vulnerability detection, including model usage and errors."},
+	{Name: "verify.report.json", Label: "Verification stage report", Category: "stage-report", Stage: "verify", Description: "Execution record for attacker-path verification and false-positive reduction."},
+	{Name: "build-output.report.json", Label: "Build-output stage report", Category: "stage-report", Stage: "build-output", Description: "Execution record for converting stage results into the stable pipeline output format."},
+	{Name: "dynamic-test.report.json", Label: "Dynamic-test stage report", Category: "stage-report", Stage: "dynamic-test", Description: "Execution record for Docker observations or the Claude Code task workspace and session."},
+	{Name: "report-data.report.json", Label: "Report-data stage report", Category: "stage-report", Stage: "report", Description: "Execution record for assembling report data and remediation guidance."},
+	{Name: "report.report.json", Label: "Report stage report", Category: "stage-report", Stage: "report", Description: "Execution record for final HTML, summary, and disclosure report generation."},
+	{Name: "scan.report.json", Label: "Aggregate scan report", Category: "stage-report", Stage: "report", Description: "Cross-stage execution summary with overall status, cumulative model usage, cost, and errors."},
+	{Name: "platform_profile.json", Label: "OpenHarmony platform profile", Category: "platform", Stage: "parse", Description: "Detected OpenHarmony components, languages, build metadata, platform boundaries, and source coverage evidence."},
+	{Name: "application_context.json", Label: "Application security context", Category: "context", Stage: "app-context", Description: "Threat model describing application purpose, attacker profiles, trust boundaries, input sources, and vulnerability criteria."},
+	{Name: "dataset.json", Label: "Parsed dataset", Category: "dataset", Stage: "parse", Description: "Function-level analysis units produced from source code, including origin locations and direct call relationships."},
+	{Name: "dataset_enhanced.json", Label: "Enhanced dataset", Category: "dataset", Stage: "enhance", Description: "Analysis units after caller, callee, semantic, platform, and guard context has been attached."},
+	{Name: "analyzer_output.json", Label: "Native analyzer output", Category: "graph", Stage: "parse", Description: "Native parser output containing function definitions, source locations, code, forward calls, and reverse calls."},
+	{Name: "call_graph.json", Label: "Raw call-graph index", Category: "graph", Stage: "parse", Description: "Native call-graph index containing functions, forward edges, reverse edges, and graph statistics."},
+	{Name: "call_graphs.json", Label: "Call-graph index", Category: "graph", Stage: "parse", Description: "Language-to-file index locating the call graph generated for each parsed language."},
+	{Name: "llm_reachability.json", Label: "LLM reachability signals", Category: "reachability", Stage: "llm-reachability", Description: "Model-proposed entry-point, external-input, and cross-process signals with confidence and application results."},
+	{Name: "results.json", Label: "Stage 1 analysis results", Category: "results", Stage: "analyze", Description: "Candidate vulnerabilities emitted by the primary analysis before attacker-path verification."},
+	{Name: "results_verified.json", Label: "Stage 2 verified results", Category: "results", Stage: "verify", Description: "Candidate findings annotated with verification verdicts, exploit paths, confidence, and rejection reasons."},
+	{Name: "dynamic_test_results.json", Label: "Dynamic-test results", Category: "dynamic-test", Stage: "dynamic-test", Description: "Structured observations from isolated runtime checks for selected findings."},
+	{Name: "dynamic_test_results.md", Label: "Dynamic-test report", Category: "dynamic-test", Stage: "dynamic-test", Description: "Human-readable account of dynamic-test setup, execution, observations, and limitations."},
+	{Name: "pipeline_results.json", Label: "Pipeline stage results", Category: "results", Stage: "build-output", Description: "Intermediate pipeline result containing stage success and stage-level outputs."},
+	{Name: "scan_results.json", Label: "Raw scan results", Category: "results", Stage: "parse", Description: "Raw scan result containing scanned files, scope, counters, and scan time."},
+	{Name: "pipeline_output.json", Label: "Pipeline output", Category: "results", Stage: "build-output", Description: "Stable normalized finding set consumed by dynamic testing and final report generation."},
+}
+
+var scanArtifactSpecByName = func() map[string]artifactSpec {
+	byName := make(map[string]artifactSpec, len(scanArtifactSpecs))
+	for _, spec := range scanArtifactSpecs {
+		byName[spec.Name] = spec
+	}
+	return byName
+}()
+
+const maxArtifactBytes = 8 << 20
+
+type artifactView struct {
+	Name        string    `json:"name"`
+	Label       string    `json:"label"`
+	Category    string    `json:"category"`
+	Stage       string    `json:"stage"`
+	Description string    `json:"description"`
+	Size        int64     `json:"size"`
+	ModifiedAt  time.Time `json:"modified_at"`
+	ContentType string    `json:"content_type"`
+	URL         string    `json:"url"`
+}
+
+func artifactContentType(name string) string {
+	if strings.HasSuffix(name, ".json") {
+		return "application/json; charset=utf-8"
+	}
+	if strings.HasSuffix(name, ".md") {
+		return "text/markdown; charset=utf-8"
+	}
+	return "application/octet-stream"
+}
+
+func (s *Server) listArtifacts(jobID string) []artifactView {
+	jobDir := filepath.Join(s.outDir, jobID)
+	artifacts := make([]artifactView, 0, len(scanArtifactSpecs))
+	for _, spec := range scanArtifactSpecs {
+		path := filepath.Join(jobDir, spec.Name)
+		if !isRegularNoSymlink(jobDir, path) {
+			continue
+		}
+		fi, err := os.Stat(path)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		artifacts = append(artifacts, artifactView{
+			Name:        spec.Name,
+			Label:       spec.Label,
+			Category:    spec.Category,
+			Stage:       spec.Stage,
+			Description: spec.Description,
+			Size:        fi.Size(),
+			ModifiedAt:  fi.ModTime().UTC(),
+			ContentType: artifactContentType(spec.Name),
+			URL:         "/scan/" + jobID + "/artifact/" + spec.Name,
+		})
+	}
+	return artifacts
+}
+
+func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.mgr.get(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(s.listArtifacts(id))
+}
+
+func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.mgr.get(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	name := r.PathValue("name")
+	spec, ok := scanArtifactSpecByName[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	jobDir := filepath.Join(s.outDir, id)
+	path := filepath.Join(jobDir, spec.Name)
+	f, fi, err := openRegularInRoot(jobDir, path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	if fi.Size() > maxArtifactBytes {
+		http.Error(w, "artifact is too large to view", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	w.Header().Set("Content-Type", artifactContentType(spec.Name))
+	w.Header().Set("Content-Disposition", `inline; filename="`+spec.Name+`"`)
+	http.ServeContent(w, r, spec.Name, fi.ModTime(), f)
+}
+
+// artifactPageData is intentionally metadata-only. The standalone viewer
+// fetches the allow-listed artifact through handleArtifact, so the HTML page
+// never embeds potentially large or untrusted JSON into the template.
+type artifactPageData struct {
+	ID          string
+	Name        string
+	Label       string
+	Stage       string
+	Description string
+}
+
+// handleArtifactView serves the independent child-window shell used by the
+// scan page's friendly-view action. It shares the same allowlist and regular
+// file checks as the raw artifact endpoint; C2 will add artifact-specific
+// Chinese field forms inside this shell.
+func (s *Server) handleArtifactView(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.mgr.get(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	name := r.PathValue("name")
+	spec, ok := scanArtifactSpecByName[name]
+	if !ok || !strings.HasSuffix(spec.Name, ".json") {
+		http.NotFound(w, r)
+		return
+	}
+	jobDir := filepath.Join(s.outDir, id)
+	path := filepath.Join(jobDir, spec.Name)
+	if !isRegularNoSymlink(jobDir, path) {
+		http.NotFound(w, r)
+		return
+	}
+	if s.tmplArtifact == nil {
+		http.Error(w, "artifact viewer is unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	data := artifactPageData{
+		ID:          id,
+		Name:        spec.Name,
+		Label:       spec.Label,
+		Stage:       spec.Stage,
+		Description: spec.Description,
+	}
+	if err := s.tmplArtifact.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// explorerItemView is the lightweight row returned by the structured browser.
+// The full object is fetched only when the user selects a row, which keeps the
+// page responsive for large analyzer_output.json files.
+type explorerItemView struct {
+	ID        string         `json:"id"`
+	Label     string         `json:"label"`
+	File      string         `json:"file,omitempty"`
+	StartLine int            `json:"start_line,omitempty"`
+	EndLine   int            `json:"end_line,omitempty"`
+	Summary   map[string]any `json:"summary,omitempty"`
+}
+
+type explorerView struct {
+	Artifact             string             `json:"artifact"`
+	Kind                 string             `json:"kind"`
+	CollectionKey        string             `json:"collection_key,omitempty"`
+	Query                string             `json:"query,omitempty"`
+	Offset               int                `json:"offset,omitempty"`
+	Limit                int                `json:"limit,omitempty"`
+	Total                int                `json:"total,omitempty"`
+	NextOffset           *int               `json:"next_offset,omitempty"`
+	ItemID               string             `json:"item_id,omitempty"`
+	AvailableCollections []string           `json:"available_collections,omitempty"`
+	Items                []explorerItemView `json:"items,omitempty"`
+	Item                 any                `json:"item,omitempty"`
+	Data                 any                `json:"data,omitempty"`
+	RootSummary          map[string]any     `json:"root_summary,omitempty"`
+	AvailableFields      []string           `json:"available_fields,omitempty"`
+}
+
+const (
+	defaultExplorerLimit = 40
+	maxExplorerLimit     = 200
+	maxExplorerQuery     = 256
+	maxExplorerItemID    = 2048
+)
+
+type explorerFilters struct {
+	Query          string
+	Language       string
+	UnitType       string
+	Verdict        string
+	Classification string
+	EntryPoint     *bool
+	Reachable      *bool
+}
+
+func parseExplorerFilters(r *http.Request) (explorerFilters, int, int, error) {
+	q := r.URL.Query()
+	filters := explorerFilters{
+		Query:          strings.TrimSpace(q.Get("q")),
+		Language:       strings.TrimSpace(q.Get("language")),
+		UnitType:       strings.TrimSpace(q.Get("unit_type")),
+		Verdict:        strings.TrimSpace(q.Get("verdict")),
+		Classification: strings.TrimSpace(q.Get("classification")),
+	}
+	if len(filters.Query) > maxExplorerQuery || len(filters.Language) > maxExplorerQuery ||
+		len(filters.UnitType) > maxExplorerQuery || len(filters.Verdict) > maxExplorerQuery ||
+		len(filters.Classification) > maxExplorerQuery {
+		return explorerFilters{}, 0, 0, fmt.Errorf("explorer query is too long")
+	}
+	parseBool := func(name string) (*bool, error) {
+		value := strings.TrimSpace(q.Get(name))
+		if value == "" {
+			return nil, nil
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s must be true or false", name)
+		}
+		return &parsed, nil
+	}
+	var err error
+	if filters.EntryPoint, err = parseBool("entry_point"); err != nil {
+		return explorerFilters{}, 0, 0, err
+	}
+	if filters.Reachable, err = parseBool("reachable"); err != nil {
+		return explorerFilters{}, 0, 0, err
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(q.Get("offset")); raw != "" {
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			return explorerFilters{}, 0, 0, fmt.Errorf("offset must be a non-negative integer")
+		}
+	}
+	limit := defaultExplorerLimit
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > maxExplorerLimit {
+			return explorerFilters{}, 0, 0, fmt.Errorf("limit must be between 1 and %d", maxExplorerLimit)
+		}
+	}
+	return filters, offset, limit, nil
+}
+
+func mapString(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := value[key]; ok {
+			if text, ok := raw.(string); ok {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func mapBool(value map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		if raw, ok := value[key]; ok {
+			if flag, ok := raw.(bool); ok {
+				return flag, true
+			}
+		}
+	}
+	return false, false
+}
+
+func mapInt(value map[string]any, keys ...string) int {
+	for _, key := range keys {
+		if raw, ok := value[key]; ok {
+			switch number := raw.(type) {
+			case float64:
+				return int(number)
+			case int:
+				return number
+			}
+		}
+	}
+	return 0
+}
+
+func explorerItemID(index int, key string, value any) string {
+	if key != "" {
+		return key
+	}
+	if object, ok := value.(map[string]any); ok {
+		for _, field := range []string{"id", "unit_id", "route_key", "function_id", "name"} {
+			if text := mapString(object, field); text != "" {
+				return text
+			}
+		}
+	}
+	return fmt.Sprintf("index:%d", index)
+}
+
+func explorerLabel(artifact, id string, value any) string {
+	if object, ok := value.(map[string]any); ok {
+		switch artifact {
+		case "dataset.json":
+			if name := mapString(object, "id"); name != "" {
+				return name
+			}
+		case "analyzer_output.json":
+			if name := mapString(object, "name"); name != "" {
+				return name
+			}
+		case "results.json", "results_verified.json":
+			if finding := mapString(object, "finding", "verdict"); finding != "" {
+				return finding
+			}
+		}
+	}
+	return id
+}
+
+func explorerLocation(artifact string, value any) (string, int, int) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return "", 0, 0
+	}
+	if artifact == "dataset.json" {
+		if code, ok := object["code"].(map[string]any); ok {
+			if origin, ok := code["primary_origin"].(map[string]any); ok {
+				return mapString(origin, "file_path", "filePath"), mapInt(origin, "start_line", "startLine"), mapInt(origin, "end_line", "endLine")
+			}
+		}
+	}
+	return mapString(object, "filePath", "file_path", "file"), mapInt(object, "startLine", "start_line"), mapInt(object, "endLine", "end_line")
+}
+
+func explorerSummary(artifact string, value any) map[string]any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	summary := make(map[string]any)
+	copyField := func(output, input string) {
+		if raw, ok := object[input]; ok {
+			summary[output] = raw
+		}
+	}
+	switch artifact {
+	case "dataset.json":
+		copyField("language", "language")
+		copyField("unit_type", "unit_type")
+		copyField("reachable", "reachable")
+		copyField("is_entry_point", "is_entry_point")
+		copyField("direct_calls", "direct_calls")
+		if metadata, ok := object["metadata"].(map[string]any); ok {
+			summary["is_exported"] = metadata["is_exported"]
+		}
+	case "analyzer_output.json":
+		copyField("language", "language")
+		copyField("unit_type", "unitType")
+		copyField("class", "className")
+		copyField("is_exported", "isExported")
+		copyField("direct_calls", "direct_calls")
+	case "results.json", "results_verified.json":
+		copyField("verdict", "verdict")
+		copyField("confidence", "confidence")
+		copyField("cwe", "cwe_id")
+		copyField("classification", "security_classification")
+	}
+	return summary
+}
+
+func explorerMatches(artifact string, id string, value any, filters explorerFilters) bool {
+	object, _ := value.(map[string]any)
+	searchable, _ := json.Marshal(value)
+	if filters.Query != "" {
+		needle := strings.ToLower(filters.Query)
+		if !strings.Contains(strings.ToLower(id+" "+string(searchable)), needle) {
+			return false
+		}
+	}
+	if object == nil {
+		return filters.Language == "" && filters.UnitType == "" && filters.Verdict == "" && filters.Classification == "" && filters.EntryPoint == nil && filters.Reachable == nil
+	}
+	if filters.Language != "" && !strings.EqualFold(filters.Language, mapString(object, "language")) {
+		return false
+	}
+	if filters.UnitType != "" && !strings.EqualFold(filters.UnitType, mapString(object, "unit_type", "unitType")) {
+		return false
+	}
+	if filters.Verdict != "" && !strings.EqualFold(filters.Verdict, mapString(object, "verdict")) {
+		return false
+	}
+	if filters.Classification != "" && !strings.EqualFold(filters.Classification, mapString(object, "security_classification", "classification")) {
+		return false
+	}
+	if filters.EntryPoint != nil {
+		flag, present := mapBool(object, "is_entry_point", "isEntryPoint")
+		if !present || flag != *filters.EntryPoint {
+			return false
+		}
+	}
+	if filters.Reachable != nil {
+		flag, present := mapBool(object, "reachable", "reachable_from_entry")
+		if !present || flag != *filters.Reachable {
+			return false
+		}
+	}
+	return true
+}
+
+type explorerCollectionItem struct {
+	ID    string
+	Value any
+}
+
+func explorerCollection(artifact string, data any, requested string) (string, []explorerCollectionItem, bool) {
+	object, ok := data.(map[string]any)
+	if !ok {
+		return "", nil, false
+	}
+	keys := []string{"units", "functions", "call_graph", "reverse_call_graph", "results", "findings", "signals"}
+	if requested != "" {
+		keys = []string{requested}
+	}
+	for _, key := range keys {
+		if artifact == "analyzer_output.json" && key != "functions" {
+			if key != "call_graph" && key != "reverse_call_graph" {
+				continue
+			}
+		}
+		if artifact == "dataset.json" && key != "units" {
+			continue
+		}
+		if values, ok := object[key].([]any); ok {
+			items := make([]explorerCollectionItem, 0, len(values))
+			for index, value := range values {
+				items = append(items, explorerCollectionItem{ID: explorerItemID(index, "", value), Value: value})
+			}
+			return key, items, true
+		}
+		if values, ok := object[key].(map[string]any); ok {
+			keys := make([]string, 0, len(values))
+			for id := range values {
+				keys = append(keys, id)
+			}
+			sort.Strings(keys)
+			items := make([]explorerCollectionItem, 0, len(keys))
+			for _, id := range keys {
+				items = append(items, explorerCollectionItem{ID: explorerItemID(0, id, values[id]), Value: values[id]})
+			}
+			return key, items, true
+		}
+	}
+	return "", nil, false
+}
+
+func explorerCollectionKeys(artifact string, data any) []string {
+	object, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0)
+	for _, key := range []string{"units", "functions", "call_graph", "reverse_call_graph", "results", "findings", "signals"} {
+		if _, ok := object[key]; !ok {
+			continue
+		}
+		if artifact == "analyzer_output.json" && key != "functions" && key != "call_graph" && key != "reverse_call_graph" {
+			continue
+		}
+		if artifact == "dataset.json" && key != "units" {
+			continue
+		}
+		switch object[key].(type) {
+		case []any, map[string]any:
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func explorerRootSummary(artifact, collectionKey string, collectionKeys []string, data any) map[string]any {
+	object, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	collectionSet := make(map[string]struct{}, len(collectionKeys))
+	for _, key := range collectionKeys {
+		collectionSet[key] = struct{}{}
+	}
+	summary := make(map[string]any)
+	for key, value := range object {
+		if key == collectionKey {
+			continue
+		}
+		// Collection fields are exposed through their own paginated view. Do not
+		// duplicate potentially large maps/arrays in every response.
+		if _, isCollection := collectionSet[key]; isCollection {
+			continue
+		}
+		summary[key] = value
+	}
+	return summary
+}
+
+func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.mgr.get(id); !ok {
+		http.NotFound(w, r)
+		return
+	}
+	name := r.PathValue("name")
+	spec, ok := scanArtifactSpecByName[name]
+	if !ok || !strings.HasSuffix(spec.Name, ".json") {
+		http.NotFound(w, r)
+		return
+	}
+	filters, offset, limit, err := parseExplorerFilters(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jobDir := filepath.Join(s.outDir, id)
+	path := filepath.Join(jobDir, spec.Name)
+	f, fi, err := openRegularInRoot(jobDir, path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	if fi.Size() > maxArtifactBytes {
+		http.Error(w, "artifact is too large to explore", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var data any
+	decoder := json.NewDecoder(io.LimitReader(f, maxArtifactBytes+1))
+	if err := decoder.Decode(&data); err != nil {
+		http.Error(w, "artifact is not valid JSON", http.StatusUnprocessableEntity)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		http.Error(w, "artifact contains trailing data", http.StatusUnprocessableEntity)
+		return
+	}
+
+	requestedCollection := strings.TrimSpace(r.URL.Query().Get("collection"))
+	if len(requestedCollection) > maxExplorerQuery {
+		http.Error(w, "collection name is too long", http.StatusBadRequest)
+		return
+	}
+	availableCollections := explorerCollectionKeys(name, data)
+	if requestedCollection != "" {
+		found := false
+		for _, key := range availableCollections {
+			if key == requestedCollection {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "unknown explorer collection", http.StatusBadRequest)
+			return
+		}
+	}
+	collectionKey, collection, isCollection := explorerCollection(name, data, requestedCollection)
+	view := explorerView{
+		Artifact:             name,
+		Kind:                 "json",
+		Query:                filters.Query,
+		Offset:               offset,
+		Limit:                limit,
+		AvailableFields:      nil,
+		AvailableCollections: availableCollections,
+	}
+	if !isCollection {
+		view.Data = data
+		if object, ok := data.(map[string]any); ok {
+			keys := make([]string, 0, len(object))
+			for key := range object {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			view.AvailableFields = keys
+		}
+	} else {
+		view.Kind = "collection"
+		view.CollectionKey = collectionKey
+		view.RootSummary = explorerRootSummary(name, collectionKey, availableCollections, data)
+		filtered := make([]explorerCollectionItem, 0, len(collection))
+		for _, candidate := range collection {
+			if explorerMatches(name, candidate.ID, candidate.Value, filters) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		view.Total = len(filtered)
+		if offset > len(filtered) {
+			offset = len(filtered)
+			view.Offset = offset
+		}
+		end := offset + limit
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		itemID := strings.TrimSpace(r.URL.Query().Get("item"))
+		if len(itemID) > maxExplorerItemID {
+			http.Error(w, "item id is too long", http.StatusBadRequest)
+			return
+		}
+		if itemID != "" {
+			for _, candidate := range filtered {
+				if candidate.ID == itemID {
+					view.ItemID = itemID
+					view.Item = candidate.Value
+					break
+				}
+			}
+			if view.Item == nil {
+				http.NotFound(w, r)
+				return
+			}
+		} else {
+			view.Items = make([]explorerItemView, 0, end-offset)
+			for _, candidate := range filtered[offset:end] {
+				file, start, finish := explorerLocation(name, candidate.Value)
+				view.Items = append(view.Items, explorerItemView{
+					ID: candidate.ID, Label: explorerLabel(name, candidate.ID, candidate.Value),
+					File: file, StartLine: start, EndLine: finish,
+					Summary: explorerSummary(name, candidate.Value),
+				})
+			}
+			if end < len(filtered) {
+				next := end
+				view.NextOffset = &next
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(view)
+}
+
+type llmProviderView struct {
+	Name             string
+	Type             string
+	BaseURL          string
+	CredentialStatus string
+}
+
+type llmPhaseView struct {
+	Phase    string
+	Provider string
+	Model    string
+}
+
+// llmStatusView deliberately contains only provider metadata and credential
+// presence. API-key values never leave the process and are not rendered into
+// the HTML response.
+type llmStatusView struct {
+	Available      bool
+	ConfigName     string
+	Providers      []llmProviderView
+	Phases         []llmPhaseView
+	ShowLegacyKey  bool
+	CredentialHint string
 }
 
 type indexData struct {
 	Jobs         []*jobView
-	HasAPIKey    bool // whether a key is configured; the key VALUE is never sent to the page
-	APIKeySource string
+	Repositories []repositoryOption
+	LLM          llmStatusView
 	CSRF         string
+}
+
+func llmCredentialEnvVars(providerType string) []string {
+	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case "anthropic":
+		return []string{"ANTHROPIC_API_KEY"}
+	case "openai":
+		return []string{"OPENAI_API_KEY"}
+	case "openrouter":
+		return []string{"OPENROUTER_API_KEY"}
+	case "google":
+		return []string{"GOOGLE_API_KEY", "GEMINI_API_KEY"}
+	default:
+		return nil
+	}
+}
+
+func llmCredentialStatus(entry config.ProviderEntry, providerType string) string {
+	if entry.APIKey != "" {
+		return "configured in config.json"
+	}
+	for _, envName := range llmCredentialEnvVars(providerType) {
+		if os.Getenv(envName) != "" {
+			return "configured via " + envName
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(providerType), "bedrock") {
+		return "uses AWS credential chain"
+	}
+	return "not detected"
+}
+
+func buildLLMStatus(cfg *config.Config) llmStatusView {
+	status := llmStatusView{
+		Available:     true, // the built-in openant-default config is always available
+		ConfigName:    "openant-default",
+		ShowLegacyKey: true,
+	}
+	if cfg == nil {
+		status.Providers = []llmProviderView{{
+			Name:             "anthropic",
+			Type:             "anthropic",
+			CredentialStatus: llmCredentialStatus(config.ProviderEntry{}, "anthropic"),
+		}}
+		status.CredentialHint = "Legacy mode: configure an Anthropic key with openant set-api-key, or enter a key for this scan."
+		return status
+	}
+
+	status.ConfigName = cfg.DefaultLLMName()
+	status.ShowLegacyKey = !cfg.HasV2Providers()
+	if !cfg.HasV2Providers() {
+		status.Providers = []llmProviderView{{
+			Name:             "anthropic",
+			Type:             "anthropic",
+			CredentialStatus: llmCredentialStatus(config.ProviderEntry{APIKey: cfg.APIKey}, "anthropic"),
+		}}
+		status.CredentialHint = "Legacy mode: configure an Anthropic key with openant set-api-key, or enter a key for this scan."
+		return status
+	}
+
+	status.CredentialHint = "Credentials are loaded from the provider configuration or its environment variable; secrets are never shown here."
+	phaseSummaries := cfg.LLMPhaseSummaries(status.ConfigName)
+	providerNames := make(map[string]struct{})
+	for _, phase := range phaseSummaries {
+		status.Phases = append(status.Phases, llmPhaseView{
+			Phase:    phase.Phase,
+			Provider: phase.Provider,
+			Model:    phase.Model,
+		})
+		providerNames[phase.Provider] = struct{}{}
+	}
+	// The built-in config is defined in Python rather than config.json. If a
+	// v2 file exists but leaves default_llm at that built-in, still show the
+	// provider that will actually be used.
+	if len(providerNames) == 0 && status.ConfigName == "openant-default" {
+		providerNames["anthropic"] = struct{}{}
+	}
+	names := make([]string, 0, len(providerNames))
+	for name := range providerNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry, found := cfg.GetProvider(name)
+		providerType := entry.Type
+		if !found && name == "anthropic" {
+			providerType = "anthropic"
+		}
+		if providerType == "" {
+			providerType = "custom"
+		}
+		status.Providers = append(status.Providers, llmProviderView{
+			Name:             name,
+			Type:             providerType,
+			BaseURL:          entry.BaseURL,
+			CredentialStatus: llmCredentialStatus(entry, providerType),
+		})
+	}
+	return status
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := config.Load()
-	apiKey := ""
-	apiKeySource := ""
-	if cfg != nil && !cfg.HasV2Providers() && cfg.APIKey != "" {
-		apiKey = cfg.APIKey
-		apiKeySource = "~/.config/openant/config.json"
-	}
 
 	jobs := s.mgr.all()
 	views := make([]*jobView, 0, len(jobs))
 	for _, j := range jobs {
 		j.mu.Lock()
 		v := &jobView{
-			ID:         j.ID,
-			Repo:       j.Repo,
-			StartedAt:  j.StartedAt.Format("2006-01-02 15:04:05"),
-			Status:     j.Status,
-			HasReport:  j.ReportPath != "",
-			HasSummary: j.SummaryPath != "",
+			ID:           j.ID,
+			Repo:         j.Repo,
+			StartedAt:    j.StartedAt.Format("2006-01-02 15:04:05"),
+			Status:       j.Status,
+			HasReport:    j.ReportPath != "",
+			HasReportZH:  j.ReportPathZH != "",
+			HasSummary:   j.SummaryPath != "",
+			HasSummaryZH: j.SummaryPathZH != "",
 		}
 		j.mu.Unlock()
 		views = append(views, v)
@@ -494,14 +1886,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	d := indexData{
 		Jobs:         views,
-		HasAPIKey:    apiKey != "",
-		APIKeySource: apiKeySource,
+		Repositories: s.repositoryOptions(),
+		LLM:          buildLLMStatus(cfg),
 		CSRF:         s.csrfToken,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmplIndex.Execute(w, d); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(repositoriesResponse{Repositories: s.repositoryOptions()})
 }
 
 // hostHeaderIsLoopback reports whether the request's Host is a loopback name.
@@ -528,15 +1925,22 @@ func hostHeaderIsLoopback(r *http.Request) bool {
 
 // sameOriginOK guards state-changing requests against CSRF: the Host must be
 // loopback (also enforced globally by the middleware) and any Origin/
-// Sec-Fetch-Site present must be same-origin.
+// Sec-Fetch-Site present must be same-origin. Some browser contexts submit a
+// normal same-origin form with the opaque Origin value "null"; that value is
+// accepted only when Fetch Metadata independently reports same-origin. A null
+// Origin without that corroborating signal remains rejected.
 func sameOriginOK(r *http.Request) bool {
 	if !hostHeaderIsLoopback(r) {
 		return false
 	}
-	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs == "cross-site" || sfs == "cross-origin" {
+	sfs := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+	if sfs == "cross-site" || sfs == "cross-origin" {
 		return false
 	}
-	if origin := r.Header.Get("Origin"); origin != "" {
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		if origin == "null" {
+			return sfs == "same-origin"
+		}
 		u, err := url.Parse(origin)
 		if err != nil || u.Host != r.Host {
 			return false
@@ -577,9 +1981,20 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repoID := strings.TrimSpace(r.FormValue("repo_id"))
 	repo := strings.TrimSpace(r.FormValue("repo"))
+	if repoID != "" {
+		resolved, ok := s.resolveRepositoryID(repoID)
+		if !ok {
+			http.Error(w, "unknown or stale repository selection", http.StatusBadRequest)
+			return
+		}
+		// The opaque catalog ID wins over any concurrently tampered free-form
+		// value. Manual input is used only when repo_id is empty.
+		repo = resolved
+	}
 	if repo == "" {
-		http.Error(w, "repo is required", http.StatusBadRequest)
+		http.Error(w, "repository selection or repo path is required", http.StatusBadRequest)
 		return
 	}
 	if strings.HasPrefix(repo, "-") {
@@ -606,6 +2021,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	platform, ok := normalizePlatform(r.FormValue("platform"))
+	if !ok {
+		http.Error(w, "unsupported platform", http.StatusBadRequest)
+		return
+	}
 	libraryMode := r.FormValue("library_mode") == "on"
 	apiKey := r.FormValue("api_key")
 	if apiKey == "" {
@@ -616,7 +2036,30 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	verify := r.FormValue("verify") == "on"
+	llmReachability := r.FormValue("llm_reachability") == "on"
+	llmReachabilityMaxCodeBytes := defaultLLMReachabilityMaxCodeBytes
+	if llmReachability {
+		var valid bool
+		llmReachabilityMaxCodeBytes, valid = normalizeLLMReachabilityMaxCodeBytes(r.FormValue("llm_reachability_max_code_bytes"))
+		if !valid {
+			http.Error(w, fmt.Sprintf("llm reachability code size must be between %d and %d bytes", minLLMReachabilityMaxCodeBytes, maxLLMReachabilityMaxCodeBytes), http.StatusBadRequest)
+			return
+		}
+	}
 	dynamicTest := r.FormValue("dynamic_test") == "on"
+	dynamicTestMode := strings.TrimSpace(r.FormValue("dynamic_test_mode"))
+	if dynamicTestMode == "" {
+		dynamicTestMode = "docker"
+	}
+	if dynamicTestMode != "docker" && dynamicTestMode != "claude-code" {
+		http.Error(w, "unsupported dynamic test mode", http.StatusBadRequest)
+		return
+	}
+	if !dynamicTest {
+		// The selector is only meaningful when the dynamic stage is enabled. A
+		// stale browser value must not alter the normal static pipeline.
+		dynamicTestMode = "docker"
+	}
 
 	// Gate new work at shutdown BEFORE creating any disk/manager state, and
 	// register with the WaitGroup under drainMu so wg.Add can never race the
@@ -647,25 +2090,36 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write meta.json immediately.
-	meta := jobMeta{ID: id, Repo: repo, StartedAt: time.Now().UTC()}
+	meta := jobMeta{
+		ID: id, Repo: repo, StartedAt: time.Now().UTC(), Platform: platform,
+		DynamicTest: dynamicTest, DynamicTestMode: dynamicTestMode,
+	}
+	if llmReachability {
+		meta.LLMReachability = true
+		meta.LLMReachabilityMaxCodeBytes = llmReachabilityMaxCodeBytes
+	}
 	if data, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(filepath.Join(jobDir, "meta.json"), data, 0640)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &Job{
-		ID:          id,
-		Repo:        repo,
-		StartedAt:   meta.StartedAt,
-		Status:      StatusRunning,
-		Cancel:      cancel,
-		ctx:         ctx,
-		apiKey:      apiKey,
-		languages:   languages,
-		libraryMode: libraryMode,
-		verify:      verify,
-		dynamicTest: dynamicTest,
-		done:        make(chan struct{}),
+		ID:                          id,
+		Repo:                        repo,
+		StartedAt:                   meta.StartedAt,
+		Status:                      StatusRunning,
+		Cancel:                      cancel,
+		ctx:                         ctx,
+		apiKey:                      apiKey,
+		languages:                   languages,
+		platform:                    platform,
+		libraryMode:                 libraryMode,
+		verify:                      verify,
+		llmReachability:             llmReachability,
+		llmReachabilityMaxCodeBytes: llmReachabilityMaxCodeBytes,
+		dynamicTest:                 dynamicTest,
+		dynamicTestMode:             dynamicTestMode,
+		done:                        make(chan struct{}),
 	}
 	s.mgr.add(job)
 	go s.runJob(job)
@@ -791,6 +2245,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	job.mu.Lock()
 	rp := job.ReportPath
+	if r.URL.Query().Get("lang") == "zh-CN" {
+		rp = job.ReportPathZH
+	}
 	job.mu.Unlock()
 	if rp == "" {
 		http.NotFound(w, r)
@@ -819,6 +2276,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	job.mu.Lock()
 	sp := job.SummaryPath
+	if r.URL.Query().Get("lang") == "zh-CN" {
+		sp = job.SummaryPathZH
+	}
 	job.mu.Unlock()
 	if sp == "" {
 		http.NotFound(w, r)
@@ -847,9 +2307,24 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 type disclosureInfo struct {
-	Name  string `json:"name"`
-	Label string `json:"label"`
-	URL   string `json:"url"`
+	Name              string `json:"name"`
+	Label             string `json:"label"`
+	URL               string `json:"url"`
+	VulnerabilityType string `json:"vulnerability_type,omitempty"`
+	FilePath          string `json:"file_path,omitempty"`
+	Function          string `json:"function,omitempty"`
+	Summary           string `json:"summary,omitempty"`
+}
+
+// disclosureMetadata contains the small, list-friendly explanation extracted
+// from a generated disclosure markdown file. The full markdown remains
+// available through the existing disclosure URL.
+type disclosureMetadata struct {
+	Label             string
+	VulnerabilityType string
+	FilePath          string
+	Function          string
+	Summary           string
 }
 
 func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
@@ -867,14 +2342,19 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 	infos := make([]disclosureInfo, 0, len(paths))
 	for _, p := range paths {
 		name := filepath.Base(p)
-		label := disclosureTitleFromFile(p)
+		metadata := disclosureMetadataFromFile(p)
+		label := metadata.Label
 		if label == "" {
 			label = disclosureLabel(name)
 		}
 		infos = append(infos, disclosureInfo{
-			Name:  name,
-			Label: label,
-			URL:   "/disclosure/" + id + "/" + name,
+			Name:              name,
+			Label:             label,
+			URL:               "/disclosure/" + id + "/" + name,
+			VulnerabilityType: metadata.VulnerabilityType,
+			FilePath:          metadata.FilePath,
+			Function:          metadata.Function,
+			Summary:           metadata.Summary,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -980,6 +2460,136 @@ func disclosureTitleFromFile(path string) string {
 // disclosureLabel converts a disclosure filename to a human-readable label.
 // e.g. "DISCLOSURE_01_SQL_INJECTION.md" → "Sql Injection"
 var reDisclosurePrefix = regexp.MustCompile(`(?i)^DISCLOSURE_\d+_`)
+
+var (
+	reDisclosureCodePath       = regexp.MustCompile("(?m)^`([^`\\n]+)`:\\s*$")
+	reDisclosureFunction       = regexp.MustCompile(`(?s)\b([A-Za-z_~][A-Za-z0-9_:~]*)\s*\([^;{}]*\)\s*(?:const\b[^{}]*)?\{`)
+	reDisclosurePythonFunction = regexp.MustCompile(`(?m)^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+)
+
+// disclosureMetadataFromFile reads a bounded amount of a report and extracts
+// only presentation metadata. It uses the same symlink protections as the
+// existing title reader so a malformed report cannot make the UI read a host
+// file through a planted link.
+func disclosureMetadataFromFile(path string) disclosureMetadata {
+	if lfi, err := os.Lstat(path); err != nil || lfi.Mode()&os.ModeSymlink != 0 || !lfi.Mode().IsRegular() {
+		return disclosureMetadata{}
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow, 0)
+	if err != nil {
+		return disclosureMetadata{}
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 512<<10))
+	if err != nil {
+		return disclosureMetadata{}
+	}
+	return parseDisclosureMetadata(string(data))
+}
+
+func parseDisclosureMetadata(markdown string) disclosureMetadata {
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
+	metadata := disclosureMetadata{
+		Label: disclosureTitleFromMarkdown(markdown),
+	}
+	for _, line := range strings.Split(markdown, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "**Type:**") {
+			metadata.VulnerabilityType = strings.TrimSpace(strings.TrimPrefix(trimmed, "**Type:**"))
+			break
+		}
+	}
+
+	summary := disclosureMarkdownSection(markdown, "## Summary")
+	metadata.Summary = disclosureCompactText(summary, 360)
+	vulnerableCode := disclosureMarkdownSection(markdown, "## Vulnerable Code")
+	if match := reDisclosureCodePath.FindStringSubmatch(vulnerableCode); len(match) == 2 {
+		metadata.FilePath = strings.TrimSpace(match[1])
+	}
+	code := disclosureFirstCodeFence(vulnerableCode)
+	metadata.Function = disclosureFunctionName(code)
+	return metadata
+}
+
+func disclosureTitleFromMarkdown(markdown string) string {
+	for _, line := range strings.Split(markdown, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		title := strings.TrimSpace(strings.TrimLeft(line, "#"))
+		for _, prefix := range []string{"Security Disclosure: ", "Security Disclosure:"} {
+			if strings.HasPrefix(title, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(title, prefix))
+			}
+		}
+		return title
+	}
+	return ""
+}
+
+func disclosureMarkdownSection(markdown, heading string) string {
+	start := strings.Index(markdown, heading)
+	if start < 0 {
+		return ""
+	}
+	section := markdown[start+len(heading):]
+	if next := strings.Index(section, "\n## "); next >= 0 {
+		section = section[:next]
+	}
+	return strings.TrimSpace(section)
+}
+
+func disclosureFirstCodeFence(markdown string) string {
+	start := strings.Index(markdown, "```")
+	if start < 0 {
+		return ""
+	}
+	contentStart := strings.Index(markdown[start+3:], "\n")
+	if contentStart < 0 {
+		return ""
+	}
+	contentStart += start + 3 + 1
+	end := strings.Index(markdown[contentStart:], "```")
+	if end < 0 {
+		return ""
+	}
+	return markdown[contentStart : contentStart+end]
+}
+
+func disclosureFunctionName(code string) string {
+	for _, match := range reDisclosureFunction.FindAllStringSubmatch(code, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		name := match[1]
+		switch name {
+		case "if", "for", "while", "switch", "catch":
+			continue
+		default:
+			return name
+		}
+	}
+	if match := reDisclosurePythonFunction.FindStringSubmatch(code); len(match) == 2 {
+		return match[1]
+	}
+	return ""
+}
+
+func disclosureCompactText(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if maxRunes <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
+}
 
 func disclosureLabel(filename string) string {
 	name := strings.TrimSuffix(filename, ".md")
@@ -1133,11 +2743,32 @@ func (s *Server) runJob(job *Job) {
 	} else if len(job.languages) > 1 {
 		args = append(args, "--languages", strings.Join(job.languages, ","))
 	}
+	// The historical Web UI invocation used the scanner's implicit auto mode.
+	// Keep that exact argv for auto, while allowing an explicit generic or
+	// OpenHarmony selection to reach the Python CLI.
+	args = append(args, platformArgs(job.platform)...)
 	if job.verify {
 		args = append(args, "--verify")
 	}
+	if job.llmReachability {
+		args = append(args, "--llm-reachability")
+		maxCodeBytes := job.llmReachabilityMaxCodeBytes
+		if maxCodeBytes == 0 {
+			maxCodeBytes = defaultLLMReachabilityMaxCodeBytes
+		}
+		if maxCodeBytes != defaultLLMReachabilityMaxCodeBytes {
+			args = append(args, "--llm-reachability-max-code-bytes", strconv.Itoa(maxCodeBytes))
+		}
+	}
 	if job.dynamicTest {
-		args = append(args, "--dynamic-test")
+		if job.dynamicTestMode == "claude-code" {
+			// Claude Code needs a live pause between static analysis and report
+			// generation. The Web runner prepares the task and resumes reporting
+			// after the PTY session ends.
+			args = append(args, "--no-report")
+		} else {
+			args = append(args, "--dynamic-test")
+		}
 	}
 	if job.libraryMode {
 		args = append(args, "--library-mode")
@@ -1176,6 +2807,21 @@ func (s *Server) runJob(job *Job) {
 	// Patch pipeline_output.json with the original repo URL.
 	patchPipelineOutput(outDir, job.Repo, job.addLog)
 
+	if job.dynamicTest && job.dynamicTestMode == "claude-code" {
+		job.addLog("[dynamic-test] Preparing Claude Code task workspace…")
+		if err := s.prepareAndRunClaudeCode(job, outDir, localPath); err != nil {
+			if job.ctx.Err() != nil {
+				return
+			}
+			job.addLog("[dynamic-test] Task preparation failed: " + err.Error())
+			job.setError()
+			return
+		}
+		if job.ctx.Err() != nil {
+			return
+		}
+	}
+
 	// Locate or generate report.html.
 	reportPath := filepath.Join(outDir, "report.html")
 	if !fileExists(reportPath) {
@@ -1192,9 +2838,10 @@ func (s *Server) runJob(job *Job) {
 			}
 		}
 	}
+	reportPathZH := localizedOutputPath(reportPath, "zh-CN")
 
-	// If still missing, try explicit report generation (non-fatal).
-	if !fileExists(reportPath) {
+	// If either locale is missing, try explicit report generation (non-fatal).
+	if !fileExists(reportPath) || !fileExists(reportPathZH) {
 		if err := s.generateHTMLReport(job.ctx, outDir, reportPath, job.apiKey, job.addLog); err != nil {
 			if job.ctx.Err() != nil {
 				return
@@ -1229,7 +2876,7 @@ func (s *Server) runJob(job *Job) {
 	if summaryPath == "" {
 		// Non-fatal — requires API key / LLM.
 		sp := filepath.Join(outDir, "SUMMARY_REPORT.md")
-		if err := s.generateSummary(job.ctx, outDir, sp, job.apiKey, job.addLog); err != nil {
+		if err := s.generateSummaryLocalized(job.ctx, outDir, sp, job.apiKey, job.addLog, "en"); err != nil {
 			if job.ctx.Err() != nil {
 				return
 			}
@@ -1239,9 +2886,30 @@ func (s *Server) runJob(job *Job) {
 		}
 	}
 
-	disclosurePaths := findDisclosures(outDir)
+	// Always attempt the additive Chinese summary after the English path is
+	// available. A failure is non-fatal: the English report remains usable and
+	// the scan is still recorded as completed.
+	summaryPathZH := ""
+	if summaryPath != "" {
+		candidate := localizedOutputPath(summaryPath, "zh-CN")
+		if fileExists(candidate) {
+			summaryPathZH = candidate
+		} else if err := s.generateSummaryLocalized(job.ctx, outDir, candidate, job.apiKey, job.addLog, "zh-CN"); err != nil {
+			if job.ctx.Err() != nil {
+				return
+			}
+			job.addLog("[report] Warning: Chinese summary not generated: " + err.Error())
+		} else {
+			summaryPathZH = candidate
+		}
+	}
 
-	job.setDone(reportPath, summaryPath, disclosurePaths)
+	disclosurePaths := findDisclosures(outDir)
+	if !fileExists(reportPathZH) {
+		reportPathZH = ""
+	}
+
+	job.setDone(reportPath, summaryPath, reportPathZH, summaryPathZH, disclosurePaths)
 }
 
 // envelopeErrors extracts the errors[] from the CLI's JSON result envelope,
@@ -1610,62 +3278,93 @@ func (s *Server) generateHTMLReport(ctx context.Context, outDir, reportPath, api
 	if resultsPath == "" {
 		return fmt.Errorf("no results file found in %s", outDir)
 	}
-
-	args := []string{"report-data", resultsPath}
-	if ds := findDatasetFile(outDir); ds != "" {
-		args = append(args, "--dataset", ds)
-	}
-
-	onLog("[report] Generating HTML report…")
-	stdout, exitCode, err := python.InvokeCtxCapture(ctx, s.pythonPath, args, "", apiKey, func(line string) {
-		onLog("[report] " + line)
-	})
-	if err != nil {
-		return err
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("report-data exited with code %d", exitCode)
-	}
-
-	// Parse the JSON envelope that Python writes to stdout.
-	var envelope types.Envelope
-	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
-		return fmt.Errorf("parse report-data output: %w", err)
-	}
-	if envelope.Status != "success" {
-		if len(envelope.Errors) > 0 {
-			return fmt.Errorf("report-data: %s", envelope.Errors[0])
+	reportPathZH := localizedOutputPath(reportPath, "zh-CN")
+	for _, locale := range []string{"en", "zh-CN"} {
+		outputPath := reportPath
+		if locale == "zh-CN" {
+			outputPath = reportPathZH
 		}
-		return fmt.Errorf("report-data returned status %q", envelope.Status)
-	}
+		if fileExists(outputPath) {
+			continue
+		}
 
-	// Re-marshal then unmarshal into ReportData (same as report.go does).
-	dataBytes, err := json.Marshal(envelope.Data)
-	if err != nil {
-		return fmt.Errorf("marshal report data: %w", err)
-	}
-	var reportData report.ReportData
-	if err := json.Unmarshal(dataBytes, &reportData); err != nil {
-		return fmt.Errorf("parse report data: %w", err)
-	}
+		args := []string{"report-data", resultsPath}
+		if ds := findDatasetFile(outDir); ds != "" {
+			args = append(args, "--dataset", ds)
+		}
+		if locale != "en" {
+			args = append(args, "--language", locale)
+		}
 
-	return report.GenerateReskin(reportData, reportPath)
+		onLog("[report] Generating HTML report (" + locale + ")…")
+		stdout, exitCode, err := python.InvokeCtxCapture(ctx, s.pythonPath, args, "", apiKey, func(line string) {
+			onLog("[report] " + line)
+		})
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("report-data (%s) exited with code %d", locale, exitCode)
+		}
+
+		var envelope types.Envelope
+		if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
+			return fmt.Errorf("parse report-data (%s) output: %w", locale, err)
+		}
+		if envelope.Status != "success" {
+			if len(envelope.Errors) > 0 {
+				return fmt.Errorf("report-data (%s): %s", locale, envelope.Errors[0])
+			}
+			return fmt.Errorf("report-data (%s) returned status %q", locale, envelope.Status)
+		}
+
+		dataBytes, err := json.Marshal(envelope.Data)
+		if err != nil {
+			return fmt.Errorf("marshal report data (%s): %w", locale, err)
+		}
+		var reportData report.ReportData
+		if err := json.Unmarshal(dataBytes, &reportData); err != nil {
+			return fmt.Errorf("parse report data (%s): %w", locale, err)
+		}
+		reportData.Locale = locale
+		if err := report.GenerateReskinLocalized(reportData, outputPath, locale); err != nil {
+			return fmt.Errorf("render HTML (%s): %w", locale, err)
+		}
+	}
+	return nil
+}
+
+// localizedOutputPath inserts a locale suffix before the extension while
+// keeping the historical English filename stable.
+func localizedOutputPath(path, locale string) string {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + "." + locale
+	}
+	return strings.TrimSuffix(path, ext) + "." + locale + ext
 }
 
 // generateSummary runs `python -m openant report --format summary` to produce
 // SUMMARY_REPORT.md.  This step makes LLM calls so it requires an API key.
 func (s *Server) generateSummary(ctx context.Context, outDir, outputPath, apiKey string, onLog func(string)) error {
+	return s.generateSummaryLocalized(ctx, outDir, outputPath, apiKey, onLog, "en")
+}
+
+func (s *Server) generateSummaryLocalized(ctx context.Context, outDir, outputPath, apiKey string, onLog func(string), locale string) error {
 	resultsPath := findResultsFile(outDir)
 	if resultsPath == "" {
 		return fmt.Errorf("no results file found in %s", outDir)
 	}
 
 	args := []string{"report", resultsPath, "--format", "summary", "--output", outputPath}
+	if locale != "" && locale != "en" {
+		args = append(args, "--language", locale)
+	}
 	if po := filepath.Join(outDir, "pipeline_output.json"); fileExists(po) {
 		args = append(args, "--pipeline-output", po)
 	}
 
-	onLog("[report] Generating Markdown summary…")
+	onLog("[report] Generating Markdown summary (" + locale + ")…")
 	exitCode, err := python.InvokeCtx(ctx, s.pythonPath, args, "", apiKey, func(line string) {
 		onLog("[report] " + line)
 	})

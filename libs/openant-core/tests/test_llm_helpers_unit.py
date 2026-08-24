@@ -108,6 +108,13 @@ class TestLookupPricing:
         out = lookup_pricing(_binding(_AdapterWithPricing(), model="claude-future-7"))
         assert out is None
 
+    def test_non_usd_registry_model_includes_currency(self):
+        adapter = _AdapterWithPricing()
+        adapter.pricing["gpt-5.6-luna"] = {"input": 0.812, "output": 4.872}
+        adapter.name = "openai"
+        out = lookup_pricing(_binding(adapter, model="gpt-5.6-luna"))
+        assert out == {"input": 0.812, "output": 4.872, "currency": "CNY"}
+
     def test_adapter_without_pricing_attr_returns_none(self):
         # Issue #65 §9: omitting `pricing` is conformant. ``getattr``
         # must default cleanly to ``{}`` so the lookup falls through

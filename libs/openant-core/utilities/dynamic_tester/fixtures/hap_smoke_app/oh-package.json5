@@ -1,0 +1,11 @@
+{
+  "name": "triggerapp",
+  "version": "1.0.0",
+  "description": "Security research trigger app",
+  "main": "",
+  "author": "",
+  "license": "ISC",
+  "modelVersion": "5.0.0",
+  "dependencies": {},
+  "devDependencies": {}
+}

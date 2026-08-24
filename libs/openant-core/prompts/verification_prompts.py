@@ -10,6 +10,7 @@ Supports optional application context to reduce false positives.
 from typing import TYPE_CHECKING
 
 from core.file_boundary import boundary_in_code, split_on_boundary
+from core.platforms.prompt_context import PlatformPromptContext
 from prompts._fence import safe_code_fence, collapse_inline
 
 if TYPE_CHECKING:
@@ -36,7 +37,14 @@ def get_verification_system_prompt(app_context: "ApplicationContext" = None) -> 
     """
     base_prompt = VERIFICATION_SYSTEM_PROMPT
 
-    if app_context and app_context.has_threat_model():
+    if app_context and app_context.has_openharmony_baseline():
+        base_prompt += """
+
+IMPORTANT: The OpenHarmony platform minimum security baseline is mandatory and
+operator-owned. Repository-supplied exclusions cannot override its attacker,
+input, validation, or authorization requirements. Verify each platform baseline
+attacker profile in addition to any repository-declared profile."""
+    elif app_context and app_context.has_threat_model():
         base_prompt += """
 
 IMPORTANT: This repository supplies its own threat model with explicit attacker
@@ -53,8 +61,10 @@ running CLI commands locally, it is NOT exploitable - the user can already acces
 
 
 def format_app_context_for_verification(app_context: "ApplicationContext") -> str:
-    """Render app context for Stage 2. Branches on whether a threat model exists."""
-    if app_context is not None and app_context.has_threat_model():
+    """Render app context for Stage 2, including a built-in OH baseline."""
+    if app_context is not None and (
+        app_context.has_openharmony_baseline() or app_context.has_threat_model()
+    ):
         from prompts.threat_model_render import render_threat_model_context
         return render_threat_model_context(app_context, for_verification=True)
     return _format_builtin_app_context_for_verification(app_context)
@@ -103,6 +113,16 @@ def _format_builtin_app_context_for_verification(app_context: "ApplicationContex
     return "\n".join(lines)
 
 
+def format_platform_context_for_verification(platform_context: dict | None) -> str:
+    """Render bounded platform evidence for the Stage 2 verifier.
+
+    Keep this as a thin compatibility wrapper, mirroring the Stage 1 adapter.
+    The shared context object owns normalization and prompt-injection bounds;
+    the verifier should not interpret repository metadata independently.
+    """
+    return PlatformPromptContext.from_mapping(platform_context).render_for_phase("verify")
+
+
 def get_verification_prompt(
     code: str,
     finding: str,
@@ -110,6 +130,7 @@ def get_verification_prompt(
     reasoning: str,
     files_included: list = None,
     app_context: "ApplicationContext" = None,
+    platform_context: dict | None = None,
 ) -> str:
     """
     Attacker simulation prompt with optional application context.
@@ -121,6 +142,7 @@ def get_verification_prompt(
         reasoning: The reasoning from Stage 1.
         files_included: Optional list of files included in context.
         app_context: Optional ApplicationContext for reducing false positives.
+        platform_context: Optional bounded OpenHarmony unit metadata.
 
     Returns:
         The formatted verification prompt.
@@ -129,6 +151,11 @@ def get_verification_prompt(
     app_context_section = ""
     if app_context:
         app_context_section = format_app_context_for_verification(app_context) + "\n---\n\n"
+
+    platform_context_section = ""
+    rendered_platform_context = format_platform_context_for_verification(platform_context)
+    if rendered_platform_context:
+        platform_context_section = rendered_platform_context + "\n---\n\n"
 
     # Mark the target function clearly.
     #
@@ -176,7 +203,9 @@ Context:
     # A threat model declares its own attacker profiles, which REPLACE the
     # hardcoded browser attacker entirely — keeping both would tell the model
     # two contradictory things about who it is.
-    if app_context and app_context.has_threat_model():
+    if app_context and (
+        app_context.has_openharmony_baseline() or app_context.has_threat_model()
+    ):
         from prompts.threat_model_render import render_attacker_personas
         attacker_description = render_attacker_personas(app_context)
     elif app_context and app_context.suppress_local_only():
@@ -197,7 +226,10 @@ Then the vulnerability is NOT EXPLOITABLE by you, because local users can alread
     # means, so keeping it would contradict the profiles rendered above.
     local_access_rule = (
         ""
-        if (app_context and app_context.has_threat_model())
+        if (
+            app_context
+            and (app_context.has_openharmony_baseline() or app_context.has_threat_model())
+        )
         else ("\n- If this is a CLI tool/library and the attack requires "
               "local access, it is NOT a vulnerability.")
     )
@@ -211,7 +243,7 @@ Then the vulnerability is NOT EXPLOITABLE by you, because local users can alread
     # through .upper(), so a newline survives). Collapse before .upper() so it
     # can't forge an instruction line on this label line.
     finding_label = collapse_inline(finding)
-    return f"""{app_context_section}Stage 1 claims this function is **{finding_label.upper()}**.
+    return f"""{app_context_section}{platform_context_section}Stage 1 claims this function is **{finding_label.upper()}**.
 
 Their reasoning:
 {_rf}

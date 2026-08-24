@@ -59,6 +59,15 @@ func TestSameOriginOKRejections(t *testing.T) {
 	if !sameOriginOK(mk("127.0.0.1:8080", "same-origin", "http://127.0.0.1:8080")) {
 		t.Error("legitimate same-origin request wrongly rejected")
 	}
+	if !sameOriginOK(mk("127.0.0.1:8080", "same-origin", "null")) {
+		t.Error("opaque null Origin with same-origin Fetch Metadata wrongly rejected")
+	}
+	if sameOriginOK(mk("127.0.0.1:8080", "cross-site", "null")) {
+		t.Error("opaque null Origin with cross-site Fetch Metadata accepted")
+	}
+	if sameOriginOK(mk("127.0.0.1:8080", "", "null")) {
+		t.Error("opaque null Origin without Fetch Metadata accepted")
+	}
 }
 
 // An http(s) repo URL carrying userinfo must be rejected (it would be logged

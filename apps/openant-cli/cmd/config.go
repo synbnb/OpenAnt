@@ -16,7 +16,8 @@ var configCmd = &cobra.Command{
 	Short: "Manage CLI configuration",
 	Long: `View and update OpenAnt CLI settings.
 
-Configuration is stored in ~/.config/openant/config.json.
+Configuration is stored in the project-local config/openant/config.json when
+running from an OpenAnt checkout, or in the legacy user config directory.
 
 Examples:
   openant config set api-key        Set your Anthropic API key (interactive)

@@ -176,7 +176,7 @@ class TestReportCliBindingDispatch:
 
         captured = {}
 
-        def _fake_disclosure(vuln, product_name, passed_binding):
+        def _fake_disclosure(vuln, product_name, passed_binding, **_kwargs):
             captured["binding"] = passed_binding
             captured["product_name"] = product_name
             return ("# disclosure", {"cost_usd": 0.0, "total_tokens": 0})

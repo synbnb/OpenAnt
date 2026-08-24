@@ -236,6 +236,50 @@ func TestGetProviderReturnsTypedEntry(t *testing.T) {
 	}
 }
 
+func TestDefaultLLMNameAndPhaseSummaries(t *testing.T) {
+	withConfigJSON(t, `{
+  "default_llm": "openharmony-live-gpt",
+  "llm_configs": {
+    "openharmony-live-gpt": {
+      "verify": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "analyze": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "malformed": "ignored"
+    }
+  }
+}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.DefaultLLMName(); got != "openharmony-live-gpt" {
+		t.Fatalf("DefaultLLMName = %q, want openharmony-live-gpt", got)
+	}
+	phases := cfg.LLMPhaseSummaries(cfg.DefaultLLMName())
+	if len(phases) != 2 {
+		t.Fatalf("LLMPhaseSummaries returned %d entries, want 2: %#v", len(phases), phases)
+	}
+	if phases[0].Phase != "analyze" || phases[1].Phase != "verify" {
+		t.Fatalf("phase order = %#v, want analyze then verify", phases)
+	}
+	if phases[0].Provider != "autodl-openai" || phases[0].Model != "gpt-5.6-luna" {
+		t.Fatalf("phase binding = %#v, want autodl-openai/gpt-5.6-luna", phases[0])
+	}
+}
+
+func TestDefaultLLMNameFallsBackToBuiltin(t *testing.T) {
+	withConfigJSON(t, `{}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.DefaultLLMName(); got != "openant-default" {
+		t.Fatalf("DefaultLLMName = %q, want openant-default", got)
+	}
+	if got := cfg.LLMPhaseSummaries("openant-default"); got != nil {
+		t.Fatalf("built-in phase summaries = %#v, want nil", got)
+	}
+}
+
 func TestLLMConfigExistsAndNames(t *testing.T) {
 	withConfigJSON(t, `{
   "$schema_version": 2,

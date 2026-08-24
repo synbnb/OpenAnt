@@ -69,6 +69,20 @@ def _normalize_result(result: dict) -> dict:
     return result
 
 
+def _unit_language(unit: dict) -> str:
+    """Return a normalized unit language while preserving legacy fallback."""
+    language = unit.get("language")
+    if not isinstance(language, str) or not language.strip():
+        metadata = unit.get("metadata")
+        if isinstance(metadata, dict):
+            language = metadata.get("language")
+    if not isinstance(language, str) or not language.strip():
+        return "code"
+    aliases = {"c++": "cpp", "cc": "cpp", "cxx": "cpp"}
+    normalized = language.strip().lower()
+    return aliases.get(normalized, normalized)
+
+
 def parse_response(response: str) -> dict:
     """Parse JSON response from Claude."""
     # Try to extract JSON from response
@@ -241,8 +255,10 @@ def analyze_unit(
         route_key = unit.get("id", "unknown")
         handler = route_key.split(":")[-1] if ":" in route_key else route_key
 
-    # Language defaults to "code" for generic code block formatting
-    language = "code"
+    # New units carry their source language; old datasets keep the generic
+    # code-fence fallback instead of being reinterpreted during migration.
+    language = _unit_language(unit)
+    platform_context = unit.get("platform_context")
 
     # Proactively enhance context if reviewer is enabled
     context_enhanced = False
@@ -270,7 +286,8 @@ def analyze_unit(
         files_included=files_included,
         security_classification=security_classification,
         classification_reasoning=classification_reasoning,
-        app_context=app_context
+        app_context=app_context,
+        platform_context=platform_context,
     )
 
     # Call the configured analyze-phase model with the threat-model system prompt.

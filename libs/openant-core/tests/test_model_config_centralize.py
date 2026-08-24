@@ -163,6 +163,7 @@ _EXPECTED_OPENAI = {
     "o3": {"input": 2.00, "output": 8.00},
     "o3-mini": {"input": 1.10, "output": 4.40},
     "o4-mini": {"input": 1.10, "output": 4.40},
+    "gpt-5.6-luna": {"input": 0.812, "output": 4.872},
 }
 _EXPECTED_GOOGLE = {
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},

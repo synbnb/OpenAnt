@@ -4,7 +4,8 @@ This module knows nothing about adapters. It deals purely in parsed
 JSON shapes and validation. The registry (``registry.py``) consumes
 these types to instantiate adapters.
 
-Schema v2 lives at ``~/.config/openant/config.json``::
+Schema v2 is resolved from ``OPENANT_CONFIG_FILE``, the project-local
+``config/openant/config.json``, or the legacy user config directory::
 
     {
       "$schema_version": 2,

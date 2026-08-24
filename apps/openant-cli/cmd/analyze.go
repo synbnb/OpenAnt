@@ -48,7 +48,7 @@ func init() {
 	analyzeCmd.Flags().BoolVar(&analyzeExploitOnly, "exploitable-only", false, "Analyze only units classified as exploitable (strict, use after parser entry point fixes)")
 	analyzeCmd.MarkFlagsMutuallyExclusive("exploitable-all", "exploitable-only")
 	analyzeCmd.Flags().IntVar(&analyzeLimit, "limit", 0, "Max units to analyze (0 = no limit)")
-	analyzeCmd.Flags().StringVar(&analyzeLLMConfig, "llm-config", "", "Name of the llm-config in ~/.config/openant/config.json (defaults to the file's default_llm, or the built-in 'openant-default' if no config file exists).")
+	analyzeCmd.Flags().StringVar(&analyzeLLMConfig, "llm-config", "", "Name of the llm-config (resolved from OPENANT_CONFIG_FILE, project-local config/openant/config.json, or the legacy user config; defaults to the file's default_llm).")
 	analyzeCmd.Flags().IntVar(&analyzeWorkers, "workers", 8, "Number of parallel workers for LLM steps (default: 8)")
 	analyzeCmd.Flags().StringVar(&analyzeCheckpoint, "checkpoint", "", "Path to checkpoint directory for save/resume")
 	analyzeCmd.Flags().IntVar(&analyzeBackoff, "backoff", 30, "Seconds to wait when rate-limited (default: 30)")

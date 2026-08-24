@@ -1,0 +1,7 @@
+group("health_sensor_service") {
+  deps = [ ":health_sensor_service" ]
+}
+
+ohos_shared_library("health_sensor_service") {
+  sources = [ "services/health_sensor_service.cpp" ]
+}

@@ -41,7 +41,7 @@ import sys
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Set
+from typing import Any, Dict, Set
 
 # Add parent directory to path so utilities/ imports resolve when this script
 # is invoked as a subprocess by core/parser_adapter.py (cwd may not include it).
@@ -49,12 +49,99 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from utilities.file_io import open_utf8, read_json, run_utf8, write_json
 from utilities.context_enhancer import ContextEnhancer
 from utilities.agentic_enhancer import EntryPointDetector, ReachabilityAnalyzer, blackout_warning, library_seed_ids
+from core.platforms.openharmony.reachability import (
+    build_semantic_reachability_overlay,
+    merge_reachability_graph,
+)
 
 # Local imports
 from repository_scanner import RepositoryScanner
 from function_extractor import FunctionExtractor
 from call_graph_builder import CallGraphBuilder
 from unit_generator import UnitGenerator
+
+
+def _build_openharmony_unit_context(repo_path: str, scan_result: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Adapt scanner scope/build inventory to the unit-context contract."""
+    scope = scan_result.get('scope')
+    if not isinstance(scope, dict) or scope.get('platform') != 'openharmony':
+        return None
+
+    file_roles = {
+        item.get('path'): item.get('role')
+        for item in scan_result.get('files', [])
+        if isinstance(item, dict) and item.get('path') and item.get('role')
+    }
+    build_metadata = scope.get('build_metadata')
+    if not isinstance(build_metadata, dict):
+        build_metadata = {}
+
+    components = []
+    for item in build_metadata.get('bundle_manifests', []):
+        if not isinstance(item, dict):
+            continue
+        name = item.get('component') or item.get('name')
+        if name:
+            components.append({'name': name, 'manifest_path': item.get('path', '')})
+
+    # Prefer the detailed, read-only GN parser so a group target without
+    # sources is not incorrectly attached to every source in the BUILD.gn.
+    targets = []
+    try:
+        from core.platforms.openharmony.gn import OpenHarmonyGNParser
+
+        targets = OpenHarmonyGNParser().collect(repo_path).to_dict().get('targets', [])
+    except (OSError, UnicodeError, ValueError):
+        targets = []
+    if not targets:
+        for item in build_metadata.get('build_files', []):
+            if not isinstance(item, dict):
+                continue
+            names = [name for name in item.get('targets', []) if isinstance(name, str) and name]
+            sources = item.get('sources', [])
+            target_sources = sources if len(names) == 1 and isinstance(sources, list) else []
+            for name in names:
+                if isinstance(name, str) and name:
+                    targets.append(
+                        {
+                            'name': name,
+                            'path': item.get('path', ''),
+                            'sources': target_sources,
+                        }
+                    )
+
+    return {
+        'platform': 'openharmony',
+        'source_scope': scope.get('source_scope'),
+        'file_roles': file_roles,
+        'components': components,
+        'targets': targets,
+        'boundaries': [],
+    }
+
+
+def _build_openharmony_semantic_graph(
+    repo_path: str,
+    extract_result: Dict[str, Any],
+    call_graph_result: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    """Resolve bounded IDL/native IPC evidence for Unit context assembly."""
+    try:
+        from core.platforms.openharmony.idl import OpenHarmonyIDLParser
+        from core.platforms.openharmony.ipc_graph import OpenHarmonyIPCResolver
+
+        idl_result = OpenHarmonyIDLParser().collect(repo_path).to_dict()
+        if not idl_result.get('files') or not idl_result.get('interfaces'):
+            return None
+        return OpenHarmonyIPCResolver().resolve(
+            idl_result,
+            extract_result,
+            call_graph=call_graph_result,
+        ).to_dict()
+    except (OSError, UnicodeError, TypeError, ValueError):
+        # Semantic enrichment is optional.  A malformed IDL must not prevent
+        # the ordinary C/C++ parser pipeline from producing a dataset.
+        return None
 
 
 class ProcessingLevel(Enum):
@@ -88,8 +175,11 @@ class CPipelineTest:
         skip_tests: bool = False,
         depth: int = 3,
         name: str = None,
-        library_mode: bool = False
+        library_mode: bool = False,
+        platform: str = 'auto',
     ):
+        if platform not in {'auto', 'generic', 'openharmony'}:
+            raise ValueError('platform must be one of: auto, generic, openharmony')
         self.repo_path = os.path.abspath(repo_path)
         self.output_dir = output_dir or os.path.join(os.path.dirname(__file__), 'test_output')
         self.parser_dir = os.path.dirname(os.path.abspath(__file__))
@@ -100,11 +190,13 @@ class CPipelineTest:
         self.depth = depth
         self.dataset_name = name
         self.library_mode = library_mode
+        self.platform = platform
 
         # Pipeline artifacts
         self.scan_results_file = None
         self.analyzer_output_file = None
         self.dataset_file = None
+        self.semantic_graph_file = None
 
         # Reachability data
         self.entry_points: Set[str] = set()
@@ -133,6 +225,7 @@ class CPipelineTest:
         """Run the full C/C++ parser pipeline (scan, extract, call graph, generate)."""
         self.dataset_file = os.path.join(self.output_dir, 'dataset.json')
         self.analyzer_output_file = os.path.join(self.output_dir, 'analyzer_output.json')
+        self.semantic_graph_file = None
 
         print("=" * 60)
         print("STAGE: c_parser_pipeline")
@@ -144,7 +237,10 @@ class CPipelineTest:
         try:
             # Stage 1: Scan
             print("  [1/4] Scanning repository for C/C++ files...")
-            scanner_options = {'skip_tests': self.skip_tests}
+            scanner_options = {
+                'skip_tests': self.skip_tests,
+                'platform': self.platform,
+            }
             scanner = RepositoryScanner(self.repo_path, scanner_options)
             scan_result = scanner.scan()
             file_count = scan_result['statistics']['total_files']
@@ -170,7 +266,10 @@ class CPipelineTest:
 
             # Stage 3: Build call graph
             print("  [3/4] Building call graph...")
-            builder = CallGraphBuilder(extract_result, {'max_depth': self.depth})
+            builder = CallGraphBuilder(
+                extract_result,
+                {'max_depth': self.depth, 'platform': self.platform},
+            )
             builder.build_call_graph()
             graph_result = builder.export()
             graph_stats = graph_result['statistics']
@@ -182,8 +281,37 @@ class CPipelineTest:
             opts = {'max_depth': self.depth}
             if self.dataset_name:
                 opts['dataset_name'] = self.dataset_name
+            if self.platform == 'openharmony':
+                platform_context = _build_openharmony_unit_context(
+                    self.repo_path, scan_result
+                )
+                if platform_context is not None:
+                    opts['platform_context'] = platform_context
+                semantic_graph = _build_openharmony_semantic_graph(
+                    self.repo_path,
+                    extract_result,
+                    graph_result,
+                )
+                if semantic_graph is not None:
+                    opts['semantic_graph'] = semantic_graph
+                    self.semantic_graph_file = os.path.join(
+                        self.output_dir, 'semantic_graph.json'
+                    )
+                    write_json(self.semantic_graph_file, semantic_graph)
             generator = UnitGenerator(graph_result, opts)
             dataset = generator.generate_units()
+            if self.platform == 'openharmony' and scan_result.get('scope'):
+                dataset.setdefault('metadata', {})['openharmony_scope'] = scan_result['scope']
+                dataset.setdefault('metadata', {})['openharmony_unit_context'] = {
+                    'platform': 'openharmony',
+                    'source_scope': scan_result['scope'].get('source_scope'),
+                }
+                if self.semantic_graph_file:
+                    dataset.setdefault('metadata', {})['openharmony_semantic_graph'] = {
+                        'path': 'semantic_graph.json',
+                        'edge_count': len(semantic_graph.get('edges', [])),
+                        'orphan_count': len(semantic_graph.get('orphans', [])),
+                    }
             unit_count = dataset['statistics']['total_units']
             print(f"         Generated {unit_count} units")
             print(f"         Enhanced: {dataset['statistics']['units_enhanced']}")
@@ -197,8 +325,8 @@ class CPipelineTest:
             write_json(self.analyzer_output_file, analyzer_output)
 
             # Write call graph for post-LLM reachability re-filtering
-            call_graph_file = os.path.join(self.output_dir, 'call_graph.json')
-            write_json(call_graph_file, graph_result)
+            self.call_graph_file = os.path.join(self.output_dir, 'call_graph.json')
+            write_json(self.call_graph_file, graph_result)
 
             elapsed = (datetime.now() - start_time).total_seconds()
 
@@ -291,7 +419,14 @@ class CPipelineTest:
                     reverse_call_graph[unit_id] = direct_callers
 
             # Detect entry points
-            detector = EntryPointDetector(normalized_functions, call_graph)
+            detector = EntryPointDetector(
+                normalized_functions,
+                call_graph,
+                platform=self.platform,
+                file_evidence=read_json(self.call_graph_file).get(
+                    'openharmony_file_evidence', {}
+                ) if self.platform == 'openharmony' else None,
+            )
             self.entry_points = detector.detect_entry_points()
 
             # Library-mode: a library's entry surface is its exported public API,
@@ -301,13 +436,88 @@ class CPipelineTest:
             if self.library_mode:
                 self.entry_points = self.entry_points | library_seed_ids(normalized_functions)
 
-            # Build reachability
-            reachability = ReachabilityAnalyzer(
+            # Build the native result first.  OpenHarmony semantic IPC edges
+            # are an additive overlay used only for this reachability pass; the
+            # detector and the persisted native call graph remain unchanged.
+            native_reachability = ReachabilityAnalyzer(
                 functions=normalized_functions,
                 reverse_call_graph=reverse_call_graph,
                 entry_points=self.entry_points
             )
+            native_reachable_units = native_reachability.get_all_reachable()
+            reachability_reverse_call_graph = reverse_call_graph
+            semantic_overlay_metadata = None
+            if self.platform == 'openharmony':
+                semantic_overlay = {
+                    'enabled': False,
+                    'candidate_edges': 0,
+                    'edges_added': 0,
+                    'edge_kinds': [],
+                    'monotonicity_violation': False,
+                }
+                semantic_path = self.semantic_graph_file or os.path.join(
+                    self.output_dir, 'semantic_graph.json'
+                )
+                if semantic_path and os.path.exists(semantic_path):
+                    try:
+                        semantic_graph = read_json(semantic_path)
+                        overlay = build_semantic_reachability_overlay(
+                            semantic_graph,
+                            normalized_functions.keys(),
+                        )
+                        _, reachability_reverse_call_graph = merge_reachability_graph(
+                            call_graph,
+                            reverse_call_graph,
+                            overlay,
+                        )
+                        native_pairs = {
+                            (caller, callee)
+                            for callee, callers in reverse_call_graph.items()
+                            for caller in callers
+                        }
+                        edges_added = sum(
+                            1
+                            for edge in overlay.get('edges', [])
+                            if (
+                                edge.get('source_id'), edge.get('target_id')
+                            ) not in native_pairs
+                        )
+                        semantic_overlay = {
+                            'enabled': bool(overlay.get('edges')),
+                            'candidate_edges': overlay.get('candidate_edges', 0),
+                            'edges_added': edges_added,
+                            'edge_kinds': overlay.get('edge_kinds', []),
+                            'ignored_edge_count': overlay.get('ignored_edge_count', 0),
+                            'invalid_endpoint_count': overlay.get(
+                                'invalid_endpoint_count', 0
+                            ),
+                            'monotonicity_violation': False,
+                        }
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        print(
+                            f"  [Warning] Ignoring malformed semantic graph: {exc}",
+                            file=sys.stderr,
+                        )
+                        reachability_reverse_call_graph = reverse_call_graph
+                semantic_overlay_metadata = semantic_overlay
+
+            # Build the combined reachability result.  Since the merged graph
+            # contains every native reverse edge, this set must be a superset
+            # of the native result; keep the native set defensively if an
+            # unexpected resolver/graph shape ever violates that invariant.
+            reachability = ReachabilityAnalyzer(
+                functions=normalized_functions,
+                reverse_call_graph=reachability_reverse_call_graph,
+                entry_points=self.entry_points
+            )
             self.reachable_units = reachability.get_all_reachable()
+            monotonicity_violation = not native_reachable_units.issubset(
+                self.reachable_units
+            )
+            if monotonicity_violation:
+                self.reachable_units |= native_reachable_units
+            if semantic_overlay_metadata is not None:
+                semantic_overlay_metadata['monotonicity_violation'] = monotonicity_violation
 
             units = dataset.get("units", [])
             original_count = len(units)
@@ -333,13 +543,23 @@ class CPipelineTest:
 
             dataset["units"] = filtered_units
             dataset["metadata"] = dataset.get("metadata", {})
-            dataset["metadata"]["reachability_filter"] = {
+            filter_metadata = {
                 "original_units": original_count,
                 "entry_points": len(self.entry_points),
                 "reachable_units": len(filtered_units),
                 "filtered_out": original_count - len(filtered_units),
                 "reduction_percentage": round((1 - len(filtered_units) / original_count) * 100, 1) if original_count > 0 else 0
             }
+            if semantic_overlay_metadata is not None:
+                unit_ids = {u.get('id', '') for u in units}
+                native_unit_ids = native_reachable_units & unit_ids
+                combined_unit_ids = self.reachable_units & unit_ids
+                filter_metadata['native_reachable_units'] = len(native_unit_ids)
+                filter_metadata['semantic_reachable_added'] = len(
+                    combined_unit_ids - native_unit_ids
+                )
+                filter_metadata['semantic_overlay'] = semantic_overlay_metadata
+            dataset["metadata"]["reachability_filter"] = filter_metadata
 
             _blackout = blackout_warning(detector.entry_point_details, original_count,
                                          len(filtered_units),
@@ -1042,6 +1262,12 @@ Examples:
         help='Skip test files'
     )
     parser.add_argument(
+        '--platform',
+        choices=['auto', 'generic', 'openharmony'],
+        default='auto',
+        help='Platform mode: auto, generic, openharmony',
+    )
+    parser.add_argument(
         '--depth', '-d',
         type=int,
         default=3,
@@ -1079,7 +1305,8 @@ Examples:
         skip_tests=args.skip_tests,
         depth=args.depth,
         name=args.name,
-        library_mode=args.library_mode
+        library_mode=args.library_mode,
+        platform=args.platform,
     )
     results = pipeline.run_full_pipeline()
 

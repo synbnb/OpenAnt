@@ -45,8 +45,23 @@ func RenderOverview(data ReportData, w io.Writer) error {
 	return overviewTmpl.Execute(w, data)
 }
 
+// RenderOverviewLocalized renders the overview theme in the requested
+// language. The report payload remains language-neutral; only deterministic
+// labels and the document language are localized here.
+func RenderOverviewLocalized(data ReportData, w io.Writer, locale string) error {
+	data.Locale = locale
+	return overviewTmpl.Execute(w, data)
+}
+
 // GenerateOverview renders the HTML overview report to a file.
 func GenerateOverview(data ReportData, outputPath string) error {
+	return generateToFile(overviewTmpl, data, outputPath)
+}
+
+// GenerateOverviewLocalized renders the overview theme in the requested
+// language.
+func GenerateOverviewLocalized(data ReportData, outputPath, locale string) error {
+	data.Locale = locale
 	return generateToFile(overviewTmpl, data, outputPath)
 }
 
@@ -55,8 +70,22 @@ func RenderReskin(data ReportData, w io.Writer) error {
 	return reskinTmpl.Execute(w, data)
 }
 
+// RenderReskinLocalized renders the light report theme in the requested
+// language.
+func RenderReskinLocalized(data ReportData, w io.Writer, locale string) error {
+	data.Locale = locale
+	return reskinTmpl.Execute(w, data)
+}
+
 // GenerateReskin renders the Knostic-themed HTML report to a file.
 func GenerateReskin(data ReportData, outputPath string) error {
+	return generateToFile(reskinTmpl, data, outputPath)
+}
+
+// GenerateReskinLocalized renders the light report theme in the requested
+// language.
+func GenerateReskinLocalized(data ReportData, outputPath, locale string) error {
+	data.Locale = locale
 	return generateToFile(reskinTmpl, data, outputPath)
 }
 

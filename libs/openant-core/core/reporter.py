@@ -245,6 +245,7 @@ def build_pipeline_output(
     context_source: str = "none",
     threat_model_sha256: str | None = None,
     threat_model_warnings: list | None = None,
+    application_context_provenance: dict | None = None,
     skipped_steps: list | None = None,
     skipped_step_reasons: dict | None = None,
 ) -> tuple[str, int]:
@@ -273,6 +274,8 @@ def build_pipeline_output(
             hash.
         threat_model_warnings: over-permissive-model warnings to surface in the
             artifact + report header; ``None``/empty when there are none.
+        application_context_provenance: effective application-context provenance,
+            including the immutable OpenHarmony baseline and merge conflicts.
 
     Returns:
         A ``(output_path, findings_count)`` tuple: the *output_path* written
@@ -457,8 +460,14 @@ def build_pipeline_output(
     if step_reports:
         for sr in step_reports:
             step = sr.get("step", "unknown")
-            if sr.get("cost_usd"):
-                costs[step] = {"actual": sr["cost_usd"]}
+            stage_costs = sr.get("costs_by_currency") or {}
+            if not stage_costs and sr.get("cost_usd"):
+                stage_costs = {"USD": sr["cost_usd"]}
+            if stage_costs:
+                costs[step] = {
+                    "actual": stage_costs.get("USD", 0.0),
+                    "by_currency": stage_costs,
+                }
             if sr.get("duration_seconds"):
                 durations[step] = sr["duration_seconds"]
 
@@ -544,6 +553,11 @@ def build_pipeline_output(
         # Over-permissive-model warnings (previously stderr-only). Emitted as a
         # list so the report header can render them; empty list when none.
         "threat_model_warnings": list(threat_model_warnings or []),
+        **(
+            {"application_context_provenance": application_context_provenance}
+            if application_context_provenance
+            else {}
+        ),
         "pipeline_stats": {
             "total_units": total_units,
             "reachable_units": reachable_units,
@@ -679,6 +693,7 @@ def generate_summary_report(
     results_path: str,
     output_path: str,
     llm_config_name: str | None = None,
+    language: str = "en",
 ) -> ReportResult:
     """Generate LLM-based summary report (Markdown).
 
@@ -690,6 +705,8 @@ def generate_summary_report(
         llm_config_name: Name of the llm-config to use. ``None`` falls
             through to the file's ``default_llm`` (or the built-in
             ``openant-default``).
+        language: Report language. ``en`` keeps the existing English output;
+            ``zh-CN`` uses the Chinese summary prompt.
 
     Returns:
         ReportResult with the output path and usage info.
@@ -731,14 +748,22 @@ def generate_summary_report(
     registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
     probe_registry_or_raise(registry)
     report_binding = registry.get("report")
-    report_text, usage = _generate_summary(pipeline_data, report_binding)
+    # Keep the historical two-argument call for English so downstream test
+    # doubles and integrations that wrap the generator remain source
+    # compatible. The optional language is only forwarded when requested.
+    if language == "en":
+        report_text, usage = _generate_summary(pipeline_data, report_binding)
+    else:
+        report_text, usage = _generate_summary(
+            pipeline_data, report_binding, language=language
+        )
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open_utf8(output_path, "w") as f:
         f.write(report_text)
 
     print(f"  Summary report: {output_path}", file=sys.stderr)
-    print(f"  Cost: ${usage['cost_usd']:.4f} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
+    print(f"  Cost: {_format_usage_cost(usage)} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(usage, report_binding)
@@ -851,7 +876,12 @@ def generate_disclosure_docs(
 
         def _one(args):
             i, finding = args
-            disclosure_text, usage = _generate_disclosure(finding, product_name, report_binding)
+            disclosure_text, usage = _generate_disclosure(
+                finding,
+                product_name,
+                report_binding,
+                pipeline_data=pipeline_data,
+            )
             filename = f"DISCLOSURE_{i:02d}_{safe_disclosure_filename(finding['short_name'])}.md"
             filepath = os.path.join(output_dir, filename)
             with open_utf8(filepath, "w") as f:
@@ -877,7 +907,7 @@ def generate_disclosure_docs(
     merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
 
     print(f"  Disclosures: {count} files in {output_dir}", file=sys.stderr)
-    print(f"  Cost: ${merged_usage['cost_usd']:.4f} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
+    print(f"  Cost: {_format_usage_cost(merged_usage)} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up
     _record_usage_in_tracker(merged_usage, report_binding)
@@ -918,4 +948,20 @@ def _usage_to_info(usage: dict):
         total_output_tokens=usage.get("output_tokens", 0),
         total_tokens=usage.get("total_tokens", 0),
         total_cost_usd=usage.get("cost_usd", 0.0),
+        total_cost_cny=usage.get("cost_cny", 0.0),
+        costs_by_currency=usage.get("costs_by_currency", {}),
+    )
+
+
+def _format_usage_cost(usage: dict) -> str:
+    """Format usage costs by declared currency for CLI stderr."""
+    costs = usage.get("costs_by_currency") or {}
+    if not costs and usage.get("cost_usd"):
+        costs = {"USD": usage["cost_usd"]}
+    if not costs:
+        return "$0.0000"
+    symbols = {"USD": "$", "CNY": "¥"}
+    return " / ".join(
+        f"{symbols.get(currency, currency + ' ')}{float(amount):.4f}"
+        for currency, amount in sorted(costs.items())
     )

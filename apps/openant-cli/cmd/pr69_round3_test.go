@@ -93,6 +93,26 @@ func TestBuildReportDataArgs_OmitsLLMConfigWhenBlank(t *testing.T) {
 	}
 }
 
+func TestLocalizedReportPathAndChineseReportDataArgs(t *testing.T) {
+	if got := localizedReportPath("/tmp/report.html", "zh-CN"); got != "/tmp/report.zh-CN.html" {
+		t.Fatalf("localized report path = %q", got)
+	}
+	if got := localizedReportPath("/tmp/report", "zh-CN"); got != "/tmp/report.zh-CN" {
+		t.Fatalf("localized extensionless path = %q", got)
+	}
+
+	origDataset, origLLM := reportDataset, reportLLMConfig
+	t.Cleanup(func() {
+		reportDataset, reportLLMConfig = origDataset, origLLM
+	})
+	reportDataset = "/tmp/dataset.json"
+	reportLLMConfig = ""
+	args := buildReportDataArgsForLanguage("/tmp/results.json", "zh-CN")
+	if !argsContainPair(args, "--language", "zh-CN") {
+		t.Fatalf("Chinese language flag not forwarded: %v", args)
+	}
+}
+
 // argsContainPair reports whether flag immediately followed by val appears in args.
 func argsContainPair(args []string, flag, val string) bool {
 	for i := 0; i+1 < len(args); i++ {

@@ -356,13 +356,33 @@ class FindingVerifier:
             suffix = " ".join(f"{k}={v}" for k, v in extras.items() if v is not None)
             print(f"    {msg} {suffix}" if suffix else f"    {msg}")
 
+    def _platform_context_for_route(self, route_key: str):
+        """Return static platform metadata for one indexed function.
+
+        Analyzer output historically used camelCase (``platformContext``),
+        while dataset units use snake_case.  Accept both forms so Stage 2 can
+        read current and migrated analyzer outputs without changing the
+        repository index contract.  The prompt renderer performs the actual
+        allow-listing and bounds checks.
+        """
+        if not isinstance(route_key, str) or not route_key:
+            return None
+        function = self.index.get_function(route_key)
+        if not isinstance(function, dict):
+            return None
+        context = function.get("platformContext")
+        if context is None:
+            context = function.get("platform_context")
+        return context
+
     def verify_result(
         self,
         code: str,
         finding: str,
         attack_vector: str,
         reasoning: str,
-        files_included: list = None
+        files_included: list = None,
+        platform_context: dict | None = None,
     ) -> VerificationResult:
         """
         Validate a Stage 1 assessment with exploit path tracing.
@@ -373,6 +393,7 @@ class FindingVerifier:
             attack_vector: Stage 1's attack vector
             reasoning: Stage 1's reasoning
             files_included: Optional list of files in context
+            platform_context: Optional bounded OpenHarmony unit metadata
 
         Returns:
             VerificationResult with verdict, exploit path, and explanation
@@ -383,7 +404,8 @@ class FindingVerifier:
             attack_vector=attack_vector,
             reasoning=reasoning,
             files_included=files_included,
-            app_context=self.app_context
+            app_context=self.app_context,
+            platform_context=platform_context,
         )
 
         # Get system prompt with app context if available
@@ -727,12 +749,21 @@ class FindingVerifier:
         detail = ""
         try:
             code = code_by_route.get(route_key, "")
+            # Prefer static analyzer metadata over result fields, because the
+            # result itself contains model-controlled values.  Both values are
+            # still normalized by PlatformPromptContext before rendering.
+            platform_context = self._platform_context_for_route(route_key)
+            if platform_context is None:
+                platform_context = result.get("platformContext")
+            if platform_context is None:
+                platform_context = result.get("platform_context")
             verification = self.verify_result(
                 code=code,
                 finding=stage1_finding,
                 attack_vector=result.get("attack_vector"),
                 reasoning=result.get("reasoning", ""),
-                files_included=result.get("files_included", [])
+                files_included=result.get("files_included", []),
+                platform_context=platform_context,
             )
 
             result["verification"] = verification.to_dict()

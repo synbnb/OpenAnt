@@ -72,7 +72,8 @@ aws bedrock list-inference-profiles --query 'inferenceProfileSummaries[].inferen
 
 The `openant setup llm` wizard offers `bedrock` (leave the API key BLANK — it
 uses the AWS credential chain; the wizard skips the key probe accordingly), or
-add it to `~/.config/openant/config.json` by hand. Note the provider entry has
+add it to the resolved OpenAnt config file by hand (`config/openant/config.json`
+inside a checkout; `OPENANT_CONFIG_FILE` can override it). Note the provider entry has
 **no `api_key`** — a complete single-provider example (all seven
 pipeline phases are required):
 

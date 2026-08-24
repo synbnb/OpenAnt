@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "fixture_id": "openharmony-c-scope-roles-v1",
+  "synthetic": true,
+  "scanner": "parsers.c.repository_scanner.RepositoryScanner",
+  "observations": {
+    "skip_tests_false": {
+      "files": [
+        {"path": "include/health_sensor_service.h", "extension": ".h"},
+        {"path": "services/health_sensor_service.cpp", "extension": ".cpp"},
+        {"path": "src/latest_value.c", "extension": ".c"},
+        {"path": "test_health_sensor.cpp", "extension": ".cpp"}
+      ],
+      "statistics": {
+        "total_files": 4,
+        "directories_scanned": 6,
+        "directories_excluded": 3,
+        "test_files_skipped": 0
+      }
+    },
+    "skip_tests_true": {
+      "files": [
+        {"path": "include/health_sensor_service.h", "extension": ".h"},
+        {"path": "services/health_sensor_service.cpp", "extension": ".cpp"},
+        {"path": "src/latest_value.c", "extension": ".c"}
+      ],
+      "statistics": {
+        "total_files": 3,
+        "directories_scanned": 6,
+        "directories_excluded": 3,
+        "test_files_skipped": 1
+      }
+    }
+  },
+  "coverage_gaps": {
+    "directory_pruning_hides_roles": ["fuzz", "tests", "vendor"],
+    "filename_test_visible_without_skip_tests": "test_health_sensor.cpp",
+    "filename_test_skipped_with_skip_tests": "test_health_sensor.cpp",
+    "build_metadata_not_c_source_records": ["BUILD.gn", "bundle.json"],
+    "unsupported_extensions_not_c_source_records": [
+      "entry/Main.ets",
+      "interfaces/health_sensor.idl"
+    ],
+    "no_role_field_in_records": true
+  }
+}

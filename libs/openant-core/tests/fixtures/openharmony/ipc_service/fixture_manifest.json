@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "fixture_id": "openharmony-ipc-service-v1",
+  "synthetic": true,
+  "description": "Minimal guarded Binder IPC flow for deterministic OpenHarmony tests.",
+  "files": [
+    "BUILD.gn",
+    "bundle.json",
+    "frameworks/health_sensor_service_proxy.cpp",
+    "interfaces/i_health_sensor_service.h",
+    "services/health_sensor_service_stub.cpp"
+  ],
+  "platform_signals": {
+    "bundle_manifest": "bundle.json",
+    "gn_target": "ohos_shared_library",
+    "namespace_ohos": "namespace OHOS",
+    "message_parcel": "MessageParcel",
+    "binder_stub": "OnRemoteRequest",
+    "calling_token": "GetCallingTokenID",
+    "access_token_permission": "VerifyAccessToken"
+  },
+  "ipc_flow": {
+    "descriptor": "ohos.openant.fixture.IHealthSensorService",
+    "transaction_code": "ENABLE_SENSOR",
+    "proxy_method": "EnableSensor",
+    "stub_entry": "OnRemoteRequest",
+    "handler": "EnableSensorInner",
+    "parcel_fields": [
+      "uint32",
+      "int64"
+    ],
+    "guards": [
+      "interface_token",
+      "permission"
+    ]
+  },
+  "anchors": {
+    "bundle_component": {
+      "file": "bundle.json",
+      "line": 5,
+      "contains": "openant_ipc_fixture"
+    },
+    "gn_target": {
+      "file": "BUILD.gn",
+      "line": 2,
+      "contains": "ohos_shared_library"
+    },
+    "ohos_namespace": {
+      "file": "interfaces/i_health_sensor_service.h",
+      "line": 7,
+      "contains": "namespace OHOS"
+    },
+    "transaction_code": {
+      "file": "interfaces/i_health_sensor_service.h",
+      "line": 13,
+      "contains": "ENABLE_SENSOR = 1"
+    },
+    "interface_descriptor": {
+      "file": "interfaces/i_health_sensor_service.h",
+      "line": 18,
+      "contains": "ohos.openant.fixture.IHealthSensorService"
+    },
+    "proxy_method": {
+      "file": "frameworks/health_sensor_service_proxy.cpp",
+      "line": 10,
+      "contains": "HealthSensorServiceProxy::EnableSensor"
+    },
+    "proxy_interface_token": {
+      "file": "frameworks/health_sensor_service_proxy.cpp",
+      "line": 15,
+      "contains": "WriteInterfaceToken"
+    },
+    "proxy_parcel_fields": {
+      "file": "frameworks/health_sensor_service_proxy.cpp",
+      "line": 18,
+      "contains": "WriteUint32(sensorId)"
+    },
+    "proxy_transaction": {
+      "file": "frameworks/health_sensor_service_proxy.cpp",
+      "line": 21,
+      "contains": "SendRequest(IHealthSensorService::ENABLE_SENSOR"
+    },
+    "dispatch_mapping": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 13,
+      "contains": "handlers_[IHealthSensorService::ENABLE_SENSOR]"
+    },
+    "stub_entry": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 17,
+      "contains": "HealthSensorServiceStub::OnRemoteRequest"
+    },
+    "stub_interface_token": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 20,
+      "contains": "ReadInterfaceToken"
+    },
+    "stub_dispatch": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 29,
+      "contains": "handler->second"
+    },
+    "handler_parcel_uint32": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 36,
+      "contains": "ReadUint32"
+    },
+    "handler_parcel_int64": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 37,
+      "contains": "ReadInt64"
+    },
+    "calling_token": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 38,
+      "contains": "GetCallingTokenID"
+    },
+    "permission_guard": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 39,
+      "contains": "VerifyAccessToken"
+    },
+    "guarded_sink": {
+      "file": "services/health_sensor_service_stub.cpp",
+      "line": 44,
+      "contains": "EnableSensor(sensorId, samplingPeriodNs)"
+    }
+  }
+}

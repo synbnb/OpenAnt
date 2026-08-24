@@ -113,6 +113,7 @@ def parse_repository(
     diff_manifest: str | None = None,
     fresh: bool = False,
     library_mode: bool = False,
+    platform: str = "auto",
 ) -> ParseResult:
     """Parse a repository into an OpenAnt dataset.
 
@@ -131,6 +132,8 @@ def parse_repository(
             other artifacts in output_dir (e.g. analyzer outputs) are preserved.
         library_mode: If True, seed the public API surface as reachability
             entry points (opt-in, union-only).
+        platform: Platform mode. Explicit values are consumed by the C parser;
+            other language parsers retain their existing argv contract.
 
     Returns:
         ParseResult with paths to generated files and stats.
@@ -139,6 +142,9 @@ def parse_repository(
         ValueError: If language can't be detected or is unsupported.
         RuntimeError: If the parser subprocess fails.
     """
+    if platform not in {"auto", "generic", "openharmony"}:
+        raise ValueError(f"Unsupported platform: {platform}")
+
     repo_path = os.path.abspath(repo_path)
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -169,7 +175,18 @@ def parse_repository(
             f"Supported: {', '.join(supported_languages())}"
         ) from None
 
-    result = parser(repo_path, output_dir, processing_level, skip_tests, name, library_mode)
+    parser_kwargs = {}
+    if language == "c" and platform != "auto":
+        parser_kwargs["platform"] = platform
+    result = parser(
+        repo_path,
+        output_dir,
+        processing_level,
+        skip_tests,
+        name,
+        library_mode,
+        **parser_kwargs,
+    )
 
     _maybe_apply_diff_filter(result, output_dir, diff_manifest)
     return result
@@ -231,6 +248,7 @@ def parse_repository_multi(
     fresh: bool = False,
     library_mode: bool = False,
     strict: bool = False,
+    platform: str = "auto",
 ) -> list[LanguageParseOutcome]:
     """Parse a repository once per language into per-language directories.
 
@@ -262,6 +280,7 @@ def parse_repository_multi(
         fresh: Delete each language's existing dataset.json first.
         library_mode: Seed the public API surface as entry points.
         strict: Re-raise the first per-language failure instead of continuing.
+        platform: Platform mode forwarded to the C parser when explicit.
 
     Returns:
         One :class:`LanguageParseOutcome` per requested language, in order.
@@ -272,6 +291,8 @@ def parse_repository_multi(
     """
     if not languages:
         raise ValueError("parse_repository_multi requires at least one language")
+    if platform not in {"auto", "generic", "openharmony"}:
+        raise ValueError(f"Unsupported platform: {platform}")
 
     repo_path = os.path.abspath(repo_path)
     run_dir = os.path.abspath(run_dir)
@@ -292,6 +313,7 @@ def parse_repository_multi(
                 name=name,
                 fresh=fresh,
                 library_mode=library_mode,
+                platform=platform,
             )
         except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
             # Deliberately NOT a bare `except Exception`: a KeyboardInterrupt or
@@ -411,6 +433,7 @@ def apply_reachability_filter(
     processing_level: str,
     extra_entry_points: "set[str] | None" = None,
     library_mode: bool = False,
+    platform: str = "generic",
 ) -> dict:
     """Filter dataset units to only those reachable from entry points.
 
@@ -434,6 +457,8 @@ def apply_reachability_filter(
         output_dir: Directory containing call_graph.json from the parser.
         processing_level: One of "reachable", "codeql", "exploitable".
         extra_entry_points: Additional unit IDs to seed the BFS (e.g. from LLM).
+        platform: Platform-specific entry-point mode. Defaults to generic for
+            backward compatibility; ``openharmony`` enables native hooks.
 
     Returns:
         The (possibly filtered) dataset dict.
@@ -449,6 +474,9 @@ def apply_reachability_filter(
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
+
+    if platform not in {"auto", "generic", "openharmony"}:
+        raise ValueError("platform must be one of: auto, generic, openharmony")
 
     _epd = _load_module("entry_point_detector", "entry_point_detector.py")
     _ra = _load_module("reachability_analyzer", "reachability_analyzer.py")
@@ -475,7 +503,14 @@ def apply_reachability_filter(
     reverse_call_graph = call_graph_data.get("reverse_call_graph", {})
 
     # Detect entry points structurally, then seed with any extras (e.g. LLM-promoted).
-    detector = EntryPointDetector(functions, call_graph)
+    detector = EntryPointDetector(
+        functions,
+        call_graph,
+        platform=platform,
+        file_evidence=call_graph_data.get("openharmony_file_evidence", {})
+        if platform == "openharmony"
+        else None,
+    )
     entry_points = detector.detect_entry_points()
     if extra_entry_points:
         entry_points = entry_points | extra_entry_points
@@ -517,13 +552,88 @@ def apply_reachability_filter(
         }
         return dataset
 
-    # Compute reachable set (BFS forward from entry points)
-    reachability = ReachabilityAnalyzer(
+    # Compute the native result first.  OpenHarmony semantic IPC edges are an
+    # additive, in-memory overlay; the persisted native call graph remains the
+    # source of truth for ordinary call-graph consumers.
+    native_reachability = ReachabilityAnalyzer(
         functions=functions,
         reverse_call_graph=reverse_call_graph,
         entry_points=entry_points,
     )
+    native_reachable_ids = native_reachability.get_all_reachable()
+    reachability_reverse_call_graph = reverse_call_graph
+    semantic_overlay_metadata = None
+
+    if platform == "openharmony":
+        semantic_overlay_metadata = {
+            "enabled": False,
+            "candidate_edges": 0,
+            "edges_added": 0,
+            "edge_kinds": [],
+            "monotonicity_violation": False,
+        }
+        semantic_graph_path = os.path.join(output_dir, "semantic_graph.json")
+        if os.path.exists(semantic_graph_path):
+            try:
+                from core.platforms.openharmony.reachability import (
+                    build_semantic_reachability_overlay,
+                    merge_reachability_graph,
+                )
+
+                semantic_graph = read_json(semantic_graph_path)
+                overlay = build_semantic_reachability_overlay(
+                    semantic_graph,
+                    functions.keys(),
+                )
+                _, reachability_reverse_call_graph = merge_reachability_graph(
+                    call_graph,
+                    reverse_call_graph,
+                    overlay,
+                )
+                native_pairs = {
+                    (caller, callee)
+                    for callee, callers in reverse_call_graph.items()
+                    for caller in callers
+                }
+                edges_added = sum(
+                    1
+                    for edge in overlay.get("edges", [])
+                    if (edge.get("source_id"), edge.get("target_id"))
+                    not in native_pairs
+                )
+                semantic_overlay_metadata.update(
+                    {
+                        "enabled": bool(overlay.get("edges")),
+                        "candidate_edges": overlay.get("candidate_edges", 0),
+                        "edges_added": edges_added,
+                        "edge_kinds": overlay.get("edge_kinds", []),
+                        "ignored_edge_count": overlay.get("ignored_edge_count", 0),
+                        "invalid_endpoint_count": overlay.get(
+                            "invalid_endpoint_count", 0
+                        ),
+                    }
+                )
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                print(
+                    f"  [Warning] Ignoring malformed semantic graph: {exc}",
+                    file=sys.stderr,
+                )
+                reachability_reverse_call_graph = reverse_call_graph
+
+    # BFS over the native graph plus any validated semantic overlay.
+    reachability = ReachabilityAnalyzer(
+        functions=functions,
+        reverse_call_graph=reachability_reverse_call_graph,
+        entry_points=entry_points,
+    )
     reachable_ids = reachability.get_all_reachable()
+    monotonicity_violation = not native_reachable_ids.issubset(reachable_ids)
+    if monotonicity_violation:
+        # Defensive fallback: a semantic resolver must never cause native units
+        # to disappear, even if a future graph adapter changes the BFS input.
+        reachable_ids |= native_reachable_ids
+    if semantic_overlay_metadata is not None:
+        semantic_overlay_metadata["monotonicity_violation"] = monotonicity_violation
 
     # Filter dataset units and stamp reachability tags
     filtered_units = []
@@ -545,13 +655,23 @@ def apply_reachability_filter(
         if original_count > 0
         else 0
     )
-    dataset.setdefault("metadata", {})["reachability_filter"] = {
+    filter_metadata = {
         "original_units": original_count,
         "entry_points": len(entry_points),
         "reachable_units": len(filtered_units),
         "filtered_out": original_count - len(filtered_units),
         "reduction_percentage": reduction_pct,
     }
+    if semantic_overlay_metadata is not None:
+        unit_ids = {u.get("id", "") for u in units}
+        native_unit_ids = native_reachable_ids & unit_ids
+        combined_unit_ids = reachable_ids & unit_ids
+        filter_metadata["native_reachable_units"] = len(native_unit_ids)
+        filter_metadata["semantic_reachable_added"] = len(
+            combined_unit_ids - native_unit_ids
+        )
+        filter_metadata["semantic_overlay"] = semantic_overlay_metadata
+    dataset.setdefault("metadata", {})["reachability_filter"] = filter_metadata
 
     print(f"  Entry points detected: {len(entry_points)}", file=sys.stderr)
     print(
@@ -604,7 +724,7 @@ _apply_reachability_filter = apply_reachability_filter
 # Python parser
 # ---------------------------------------------------------------------------
 
-def _parse_python(repo_path: str, output_dir: str, processing_level: str, skip_tests: bool = True, name: str = None, library_mode: bool = False) -> ParseResult:
+def _parse_python(repo_path: str, output_dir: str, processing_level: str, skip_tests: bool = True, name: str = None, library_mode: bool = False, platform: str = "auto") -> ParseResult:
     """Invoke the Python parser.
 
     The Python parser has a clean `parse_repository()` function that we can
@@ -632,8 +752,13 @@ def _parse_python(repo_path: str, output_dir: str, processing_level: str, skip_t
 
     # Apply reachability filter if processing_level requires it
     if processing_level != "all":
-        dataset = _apply_reachability_filter(dataset, output_dir, processing_level,
-                                             library_mode=library_mode)
+        dataset = _apply_reachability_filter(
+            dataset,
+            output_dir,
+            processing_level,
+            library_mode=library_mode,
+            platform=platform,
+        )
 
     # Write outputs
     write_json(dataset_path, dataset)
@@ -762,6 +887,7 @@ def _parse_via_subprocess(
     skip_tests: bool = True,
     name: str = None,
     library_mode: bool = False,
+    platform: str = "auto",
 ) -> ParseResult:
     """Invoke a language's parser as a subprocess.
 
@@ -769,6 +895,7 @@ def _parse_via_subprocess(
 
         <script> <repo_path> --output <dir> --processing-level <level>
                  [--name N] [--skip-tests] [--library-mode]
+                 [--platform P]  # C parser only
 
     and writes the same artifact set into *output_dir*. This used to be six
     near-identical function bodies (javascript, go, c, ruby, php, zig) that
@@ -788,6 +915,7 @@ def _parse_via_subprocess(
         skip_tests: Exclude test files from parsing.
         name: Dataset name override.
         library_mode: Seed the public API surface as reachability entry points.
+        platform: Platform mode; only the C parser script receives this flag.
 
     Returns:
         ParseResult for this language.
@@ -796,6 +924,9 @@ def _parse_via_subprocess(
         RuntimeError: If the parser subprocess exits non-zero.
         ValueError: If the language has no registered subprocess parser.
     """
+    if platform not in {"auto", "generic", "openharmony"}:
+        raise ValueError(f"Unsupported platform: {platform}")
+
     spec = load_registry().get(language)
     if spec is None or spec.parser_mode != "subprocess":
         raise ValueError(f"No subprocess parser registered for language: {language}")
@@ -822,6 +953,8 @@ def _parse_via_subprocess(
         cmd.append("--skip-tests")
     if library_mode:
         cmd.append("--library-mode")
+    if language == "c" and platform != "auto":
+        cmd.extend(["--platform", platform])
 
     result = subprocess.run(
         cmd,
@@ -843,6 +976,15 @@ def _parse_via_subprocess(
         data = read_json(dataset_path)
         units_count = len(data.get("units", []))
 
+    platform_coverage = None
+    if language == "c" and platform != "auto":
+        scan_results_path = os.path.join(output_dir, "scan_results.json")
+        if os.path.exists(scan_results_path):
+            scan_payload = read_json(scan_results_path)
+            scope = scan_payload.get("scope")
+            if isinstance(scope, dict):
+                platform_coverage = scope
+
     print(f"  {language} parser complete: {units_count} units", file=sys.stderr)
 
     return ParseResult(
@@ -851,6 +993,8 @@ def _parse_via_subprocess(
         units_count=units_count,
         language=language,
         processing_level=processing_level,
+        platform_coverage=platform_coverage,
+        platform_selection=platform if platform != "auto" else None,
     )
 
 

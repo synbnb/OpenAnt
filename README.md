@@ -73,7 +73,7 @@ OpenAnt routes each pipeline phase through a configurable (provider, model) pair
 openant setup llm
 ```
 
-You name the config (e.g. `my-llm`), pick a provider per pipeline phase (any of the shipped adapters below), enter its API key once per provider (Bedrock uses the AWS credential chain instead — leave the key blank), and the wizard probes each unique provider+model pair with a 1-token request before writing `~/.config/openant/config.json`. Run a scan against it with `--llm-config`:
+You name the config (e.g. `my-llm`), pick a provider per pipeline phase (any of the shipped adapters below), enter its API key once per provider (Bedrock uses the AWS credential chain instead — leave the key blank), and the wizard probes each unique provider+model pair with a 1-token request before writing the resolved OpenAnt config file (project-local `config/openant/config.json` in a checkout). Run a scan against it with `--llm-config`:
 
 ```bash
 openant scan /path/to/repo --llm-config my-llm
@@ -106,7 +106,7 @@ This uses the built-in `openant-default` config (compiled into the binary, no `c
 
 #### Hand-authored config
 
-The wizard writes `~/.config/openant/config.json` for you, but you can edit it directly too. Every llm-config must list all seven pipeline phases:
+The wizard writes the resolved OpenAnt config file for you (project-local `config/openant/config.json` in a checkout), but you can edit it directly too. Every llm-config must list all seven pipeline phases:
 
 ```json
 {
@@ -151,7 +151,8 @@ If none yield Python 3.11+, the command exits with an error pointing at [python.
 
 OpenAnt creates two directories:
 
-- **`~/.config/openant/`** — CLI configuration (`config.json`). Stores your API key, active project, and preferences. File permissions are restricted to `0600`.
+- **`config/openant/`** — project-local CLI configuration (`config.json`). The real file is ignored by Git and must remain `0600`; `config.example.json` is the safe delivery template. `OPENANT_CONFIG_FILE` can override the path explicitly.
+- **`~/.config/openant/`** — legacy user configuration fallback for installations outside an OpenAnt checkout.
 - **`~/.openant/`** — Project data. Each initialized project gets a workspace under `~/.openant/projects/<org>/<repo>/` containing `project.json` and a `scans/` directory with per-commit outputs.
 
 ## Analyzing a project

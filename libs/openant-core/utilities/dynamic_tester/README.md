@@ -1,10 +1,17 @@
 # Dynamic Tester
 
-Bridges OpenAnt's static analysis pipeline and confirmed exploitability by running Docker-isolated dynamic exploit tests against every finding.
+Bridges OpenAnt's static analysis pipeline and dynamic verification. It now
+supports two explicitly selected modes:
+
+- `docker` — the original self-managed, Docker-isolated dynamic tester;
+- `claude-code` — a task-package mode that gives Claude Code the source tree,
+  static artifacts, OpenHarmony tools and a reusable Skill. OpenAnt does not
+  start Docker or Claude Code in this mode.
 
 ## Overview
 
-The dynamic tester takes `pipeline_output.json` — the output of OpenAnt's static analysis pipeline (Stages 1 and 2) — and for each finding:
+The Docker mode takes `pipeline_output.json` — the output of OpenAnt's static
+analysis pipeline (Stages 1 and 2) — and for each finding:
 
 1. Sends the finding to Claude Sonnet, which generates a self-contained Docker test (Dockerfile + test script + dependencies)
 2. Builds and runs the test in an isolated Docker container
@@ -14,15 +21,58 @@ The dynamic tester takes `pipeline_output.json` — the output of OpenAnt's stat
 
 This adds a `DYNAMIC_TESTED` step to the pipeline, between `VERIFIED` (Stage 2) and `REPORTED`.
 
+The Claude Code mode stops at an auditable task boundary. It selects the same
+`DYNAMIC_TESTABLE` candidates, but instead of generating a Docker test it
+creates:
+
+```text
+<run-root>/
+├── task/
+│   ├── CLAUDE.md
+│   ├── TASK.md
+│   ├── task_manifest.json
+│   ├── context/
+│   │   ├── pipeline_output.json
+│   │   ├── candidate_manifest.json
+│   │   ├── artifact_manifest.json
+│   │   ├── source_code.json
+│   │   └── static_artifacts/
+│   ├── source_code -> <real repository>
+│   ├── .claude/skills/openant-openharmony-dynamic/SKILL.md
+│   └── results/
+└── openharmony-public-tools/
+    ├── README.zh-CN.md
+    ├── toolchain-manifest.json
+    └── bin/ (hdc, hvigorw, node, hap-sign-tool.jar)
+```
+
+The tool links point to the project-local Command Line Tools installation;
+the 6GB SDK is not duplicated for every task. Private signing materials and
+API keys are never copied. The generated launch command is printed for the
+operator:
+
+```bash
+cd <run-root>/task && claude --dangerously-skip-permissions
+```
+
+Claude Code writes per-candidate `verdict.json`, `notes.md`, `commands.jsonl`
+and evidence under `task/results/`. The current mode does not automatically
+merge those verdicts back into `dynamic_test_results.json`; that is a separate
+ingestion step after the operator reviews the task results.
+
 ## Prerequisites
 
-- **Docker Engine** must be installed and running
-- **Anthropic API key** in `.env` (used for Claude Sonnet test generation)
-- No additional Python packages required (uses `subprocess` for Docker CLI)
+- Docker mode: **Docker Engine** must be installed and running, plus the
+  configured OpenAnt provider/API key used for test generation.
+- Claude Code mode: **Claude Code** must be installed separately; OpenAnt only
+  prepares the task package and does not invoke it automatically.
+- OpenHarmony Claude tasks additionally need a project-local Command Line Tools
+  installation and a connected development board when the task is executed.
+- No additional Python packages are required for the task-packaging path.
 
 ## Quick Start
 
-### Standalone CLI
+### Standalone CLI — Docker
 
 ```bash
 # Run against a pipeline output file
@@ -31,6 +81,20 @@ python -m utilities.dynamic_tester datasets/langchain/pipeline_output.json
 # Specify a custom output directory
 python -m utilities.dynamic_tester datasets/langchain/pipeline_output.json --output-dir /tmp/results
 ```
+
+### Standalone CLI — Claude Code task package
+
+```bash
+python -m openant dynamic-test \
+  /path/to/pipeline_output.json \
+  --mode claude-code \
+  --repo-path /path/to/source_code \
+  --output /path/to/claude-code-runs
+```
+
+The command returns the generated task directory, public tool library and the
+exact command to start Claude Code. It does not require Docker or an OpenAnt
+LLM API key.
 
 ### Python API
 
@@ -86,7 +150,7 @@ After running, two files are written to the output directory (defaults to the sa
 }
 ```
 
-## Architecture
+## Architecture — Docker mode
 
 ```
 pipeline_output.json
@@ -258,6 +322,31 @@ LLM-generated docker-compose files are post-processed by `_sanitize_compose()` t
 | Docker execution | Free (local) |
 | Autopilot budget default | $5.00 per repo (~25-30 findings) |
 | Autopilot cost rate | $0.15 per finding (for budget estimation) |
+
+## Architecture — Claude Code mode
+
+```text
+pipeline_output.json + scan artifacts + source repository
+                    │
+                    ▼
+       ClaudeCodeTaskBuilder (OpenAnt)
+                    │
+       ┌────────────┴────────────┐
+       ▼                         ▼
+ task/context/              ../openharmony-public-tools/
+ candidates + artifacts     hdc / hvigor / signing docs
+       │
+       ▼
+ Claude Code in task/ (no Docker)
+       │
+       ▼
+ task/results/<candidate>/verdict.json + evidence
+```
+
+The Skill includes the verified API 23 HAP path (`Bundle Manager` and
+`FaultLogger` public read-only calls), HAP build/sign/install/start/observe/
+force-stop steps, Native/HDC and IPC/SA guidance, and the rule that private
+`faultloggerd` sockets are not exposed through a TCP bridge.
 
 ## Autopilot Configuration
 

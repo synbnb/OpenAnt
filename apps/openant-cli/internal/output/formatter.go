@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/fatih/color"
@@ -108,11 +109,11 @@ func PrintScanSummary(data map[string]any) {
 	// Usage info
 	if usage, ok := data["usage"].(map[string]any); ok {
 		PrintHeader("Usage")
-		cost := floatFromAny(usage["total_cost_usd"])
+		cost := formatUsageCost(usage)
 		inputTokens := intFromAny(usage["total_input_tokens"])
 		outputTokens := intFromAny(usage["total_output_tokens"])
 
-		PrintKeyValue("Cost", fmt.Sprintf("$%.4f", cost))
+		PrintKeyValue("Cost", cost)
 		PrintKeyValue("Tokens", fmt.Sprintf("%d input / %d output", inputTokens, outputTokens))
 	}
 
@@ -230,9 +231,9 @@ func PrintReportSummary(data map[string]any) {
 		PrintKeyValue("Reskin", path)
 	}
 	if usage, ok := data["usage"].(map[string]any); ok {
-		cost := floatFromAny(usage["total_cost_usd"])
-		if cost > 0 {
-			PrintKeyValue("Cost", fmt.Sprintf("$%.4f", cost))
+		cost := formatUsageCost(usage)
+		if cost != "-" {
+			PrintKeyValue("Cost", cost)
 		}
 	}
 	fmt.Println()
@@ -303,6 +304,9 @@ func PrintVerifySummary(data map[string]any) {
 // PrintDynamicTestSummary outputs a formatted summary of dynamic test results.
 func PrintDynamicTestSummary(data map[string]any) {
 	PrintHeader("Dynamic Test Results")
+	if mode, ok := data["mode"].(string); ok && mode != "" {
+		PrintKeyValue("Mode", mode)
+	}
 
 	tested := intFromAny(data["findings_tested"])
 	confirmed := intFromAny(data["confirmed"])
@@ -331,6 +335,15 @@ func PrintDynamicTestSummary(data map[string]any) {
 
 	if path, ok := data["results_json_path"].(string); ok {
 		PrintKeyValue("Results", path)
+	}
+	if task, ok := data["task_workspace"].(string); ok && task != "" {
+		PrintKeyValue("Claude task", task)
+	}
+	if tools, ok := data["public_tool_library"].(string); ok && tools != "" {
+		PrintKeyValue("Public tools", tools)
+	}
+	if launch, ok := data["launch_command"].(string); ok && launch != "" {
+		PrintKeyValue("Launch", launch)
 	}
 	fmt.Println()
 }
@@ -410,11 +423,11 @@ func PrintScanSummaryV2(data map[string]any) {
 	// Usage info
 	if usage, ok := data["usage"].(map[string]any); ok {
 		PrintHeader("Usage")
-		cost := floatFromAny(usage["total_cost_usd"])
+		cost := formatUsageCost(usage)
 		inputTokens := intFromAny(usage["total_input_tokens"])
 		outputTokens := intFromAny(usage["total_output_tokens"])
 
-		PrintKeyValue("Cost", fmt.Sprintf("$%.4f", cost))
+		PrintKeyValue("Cost", cost)
 		PrintKeyValue("Tokens", fmt.Sprintf("%d input / %d output", inputTokens, outputTokens))
 	}
 
@@ -492,6 +505,41 @@ func shortSHA8(v any) string {
 		return "?"
 	}
 	return s
+}
+
+// formatUsageCost renders the additive multi-currency usage fields while
+// retaining compatibility with older envelopes that only contain
+// total_cost_usd.  No exchange-rate conversion is performed.
+func formatUsageCost(usage map[string]any) string {
+	if raw, ok := usage["costs_by_currency"].(map[string]any); ok && len(raw) > 0 {
+		currencies := make([]string, 0, len(raw))
+		for currency := range raw {
+			currencies = append(currencies, currency)
+		}
+		sort.Strings(currencies)
+		parts := make([]string, 0, len(currencies))
+		for _, currency := range currencies {
+			amount := floatFromAny(raw[currency])
+			if amount == 0 {
+				continue
+			}
+			symbol := map[string]string{"USD": "$", "CNY": "¥"}[currency]
+			if symbol == "" {
+				symbol = currency + " "
+			}
+			parts = append(parts, fmt.Sprintf("%s%.4f", symbol, amount))
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " / ")
+		}
+	}
+	if cny := floatFromAny(usage["total_cost_cny"]); cny != 0 {
+		return fmt.Sprintf("¥%.4f", cny)
+	}
+	if usd := floatFromAny(usage["total_cost_usd"]); usd != 0 {
+		return fmt.Sprintf("$%.4f", usd)
+	}
+	return "-"
 }
 
 // floatFromAny extracts a float64 from a JSON-decoded any value.

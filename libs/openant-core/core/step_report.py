@@ -44,8 +44,8 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
 
     start = time.monotonic()
 
-    # Snapshot starting cost so we can compute the delta
-    start_cost, start_tokens = _snapshot_usage()
+    # Snapshot starting costs so we can compute per-currency deltas.
+    start_costs, start_tokens = _snapshot_usage()
 
     try:
         yield report
@@ -59,8 +59,19 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
         report.duration_seconds = round(time.monotonic() - start, 2)
 
         # Capture cost delta
-        end_cost, end_tokens = _snapshot_usage()
-        report.cost_usd = round(end_cost - start_cost, 6)
+        end_costs, end_tokens = _snapshot_usage()
+        currencies = set(start_costs) | set(end_costs)
+        deltas = {
+            currency: round(end_costs.get(currency, 0.0) - start_costs.get(currency, 0.0), 6)
+            for currency in currencies
+        }
+        report.costs_by_currency = {k: v for k, v in deltas.items() if v}
+        report.cost_usd = report.costs_by_currency.get("USD", 0.0)
+        report.cost_cny = report.costs_by_currency.get("CNY", 0.0)
+        if len(report.costs_by_currency) == 1:
+            report.cost_currency, report.cost_amount = next(
+                iter(report.costs_by_currency.items())
+            )
         report.token_usage = {
             "input_tokens": end_tokens.get("input", 0) - start_tokens.get("input", 0),
             "output_tokens": end_tokens.get("output", 0) - start_tokens.get("output", 0),
@@ -70,23 +81,34 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
         report.write(output_dir)
         print(
             f"[{step}] Report: {output_dir}/{step}.report.json "
-            f"({report.duration_seconds}s, ${report.cost_usd:.4f})",
+            f"({report.duration_seconds}s, {_format_costs(report.costs_by_currency)})",
             file=sys.stderr,
         )
 
 
-def _snapshot_usage() -> tuple[float, dict]:
-    """Return (cost_usd, {input, output, total}) from the global tracker.
+def _snapshot_usage() -> tuple[dict, dict]:
+    """Return (costs_by_currency, {input, output, total}) from the tracker.
 
     Returns zeroes if the tracker isn't available (e.g. for local-only steps).
     """
     try:
         from core.tracking import get_usage
         usage = get_usage()
-        return usage.total_cost_usd, {
+        return dict(usage.costs_by_currency), {
             "input": usage.total_input_tokens,
             "output": usage.total_output_tokens,
             "total": usage.total_tokens,
         }
     except Exception:
-        return 0.0, {"input": 0, "output": 0, "total": 0}
+        return {}, {"input": 0, "output": 0, "total": 0}
+
+
+def _format_costs(costs: dict) -> str:
+    """Format a per-currency cost map for human-readable stderr output."""
+    if not costs:
+        return "$0.0000"
+    parts = []
+    for currency, amount in sorted(costs.items()):
+        symbol = {"USD": "$", "CNY": "¥"}.get(currency, f"{currency} ")
+        parts.append(f"{symbol}{amount:.4f}")
+    return " / ".join(parts)

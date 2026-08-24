@@ -3,6 +3,11 @@ Generate a security disclosure document from the provided vulnerability data.
 INPUT DATA:
 {vulnerability_data}
 
+OPENHARMONY PLATFORM CONTEXT (if present):
+{platform_context}
+
+Attacker model: {attacker_model}
+
 OUTPUT FORMAT:
 
 # Security Disclosure: {short_title}

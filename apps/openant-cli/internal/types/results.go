@@ -103,15 +103,24 @@ type VerifyData struct {
 
 // DynamicTestData is returned by the `dynamic-test` command.
 type DynamicTestData struct {
-	ResultsJSONPath string    `json:"results_json_path"`
-	ResultsMDPath   string    `json:"results_md_path"`
-	FindingsTested  int       `json:"findings_tested"`
-	Confirmed       int       `json:"confirmed"`
-	NotReproduced   int       `json:"not_reproduced"`
-	Blocked         int       `json:"blocked"`
-	Inconclusive    int       `json:"inconclusive"`
-	Errors          int       `json:"errors"`
-	Usage           UsageInfo `json:"usage"`
+	ResultsJSONPath string `json:"results_json_path"`
+	ResultsMDPath   string `json:"results_md_path"`
+	// Claude Code mode returns a prepared task workspace instead of Docker
+	// observations. These fields are additive so Docker consumers remain
+	// backwards compatible.
+	Mode              string    `json:"mode"`
+	TaskWorkspace     string    `json:"task_workspace"`
+	PublicToolLibrary string    `json:"public_tool_library"`
+	TaskManifestPath  string    `json:"task_manifest_path"`
+	CandidateManifest string    `json:"candidate_manifest"`
+	LaunchCommand     string    `json:"launch_command"`
+	FindingsTested    int       `json:"findings_tested"`
+	Confirmed         int       `json:"confirmed"`
+	NotReproduced     int       `json:"not_reproduced"`
+	Blocked           int       `json:"blocked"`
+	Inconclusive      int       `json:"inconclusive"`
+	Errors            int       `json:"errors"`
+	Usage             UsageInfo `json:"usage"`
 }
 
 // UsageInfo tracks token usage and cost.

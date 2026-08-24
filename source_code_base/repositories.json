@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "description": "OpenHarmony repositories placed in the project-local source corpus.",
+  "repositories": [
+    {"name": "ability_ability_runtime", "path": "ability_ability_runtime", "origin": "https://gitcode.com/openharmony/ability_ability_runtime.git"},
+    {"name": "ark_js_runtime", "path": "ark_js_runtime", "origin": "https://gitcode.com/openharmony/ark_js_runtime.git"},
+    {"name": "arkui_ace_engine", "path": "arkui_ace_engine", "origin": "https://gitcode.com/openharmony/arkui_ace_engine.git"},
+    {"name": "arkui_napi", "path": "arkui_napi", "origin": "https://gitcode.com/openharmony/arkui_napi.git"},
+    {"name": "arkweb_arkweb_cangjie_wrapper", "path": "arkweb_arkweb_cangjie_wrapper", "origin": "https://gitcode.com/openharmony/arkweb_arkweb_cangjie_wrapper.git"},
+    {"name": "communication_ipc", "path": "communication_ipc", "origin": "https://gitcode.com/openharmony/communication_ipc.git"},
+    {"name": "communication_netmanager_base", "path": "communication_netmanager_base", "origin": "https://gitcode.com/openharmony/communication_netmanager_base.git"},
+    {"name": "communication_wifi", "path": "communication_wifi", "origin": "https://gitcode.com/openharmony/communication_wifi.git"},
+    {"name": "distributeddatamgr_datamgr_service", "path": "distributeddatamgr_datamgr_service", "origin": "https://gitcode.com/openharmony/distributeddatamgr_datamgr_service.git"},
+    {"name": "drivers_hdf_core", "path": "drivers_hdf_core", "origin": "https://gitcode.com/openharmony/drivers_hdf_core.git"},
+    {"name": "drivers_interface", "path": "drivers_interface", "origin": "https://gitcode.com/openharmony/drivers_interface.git"},
+    {"name": "drivers_peripheral", "path": "drivers_peripheral", "origin": "https://gitcode.com/openharmony/drivers_peripheral.git"},
+    {"name": "filemanagement_dfs_service", "path": "filemanagement_dfs_service", "origin": "https://gitcode.com/openharmony/filemanagement_dfs_service.git"},
+    {"name": "filemanagement_storage_service", "path": "filemanagement_storage_service", "origin": "https://gitcode.com/openharmony/filemanagement_storage_service.git"},
+    {"name": "multimedia_audio_framework", "path": "multimedia_audio_framework", "origin": "https://gitcode.com/openharmony/multimedia_audio_framework.git"},
+    {"name": "multimedia_camera_framework", "path": "multimedia_camera_framework", "origin": "https://gitcode.com/openharmony/multimedia_camera_framework.git"},
+    {"name": "multimedia_video_processing_engine", "path": "multimedia_video_processing_engine", "origin": "https://gitcode.com/openharmony/multimedia_video_processing_engine.git"},
+    {"name": "security_certificate_manager", "path": "security_certificate_manager", "origin": "https://gitcode.com/openharmony/security_certificate_manager.git"},
+    {"name": "security_device_auth", "path": "security_device_auth", "origin": "https://gitcode.com/openharmony/security_device_auth.git"},
+    {"name": "sensors_medical_sensor", "path": "sensors_medical_sensor", "origin": "https://gitcode.com/openharmony/sensors_medical_sensor.git"},
+    {"name": "systemabilitymgr_samgr", "path": "systemabilitymgr_samgr", "origin": "https://gitcode.com/openharmony/systemabilitymgr_samgr.git"},
+    {"name": "window_window_manager", "path": "window_window_manager", "origin": "https://gitcode.com/openharmony/window_window_manager.git"}
+  ]
+}

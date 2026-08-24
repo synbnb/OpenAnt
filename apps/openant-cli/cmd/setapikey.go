@@ -54,7 +54,7 @@ terminal scrollback:
 
   openant set-api-key
 
-The key is stored in ~/.config/openant/config.json with restricted
+The key is stored in the resolved OpenAnt config file with restricted
 permissions (0600). This is required before running enhance, analyze,
 verify, or scan.
 

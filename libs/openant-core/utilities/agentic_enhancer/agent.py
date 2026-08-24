@@ -99,6 +99,9 @@ class AgentResult:
         input_tokens: int = 0,
         output_tokens: int = 0,
         cost_usd: float = 0.0,
+        cost_amount: float = 0.0,
+        cost_currency: Optional[str] = None,
+        cost_cny: float = 0.0,
     ):
         self.include_functions = include_functions
         self.usage_context = usage_context
@@ -113,6 +116,9 @@ class AgentResult:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.cost_usd = cost_usd
+        self.cost_amount = cost_amount
+        self.cost_currency = cost_currency
+        self.cost_cny = cost_cny
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -128,6 +134,14 @@ class AgentResult:
                 "input_tokens": self.input_tokens,
                 "output_tokens": self.output_tokens,
                 "cost_usd": self.cost_usd,
+                "cost_amount": self.cost_amount,
+                "cost_currency": self.cost_currency,
+                "cost_cny": self.cost_cny,
+                "costs_by_currency": (
+                    {self.cost_currency: self.cost_amount}
+                    if self.cost_currency and self.cost_amount
+                    else {}
+                ),
             },
             "reachability": {
                 "is_entry_point": self.is_entry_point,
@@ -190,7 +204,9 @@ class ContextAgent:
         unit_type: str,
         primary_code: str,
         static_deps: list[str],
-        static_callers: list[str]
+        static_callers: list[str],
+        language: Optional[str] = None,
+        platform_context: Optional[dict] = None,
     ) -> AgentResult:
         """
         Analyze a code unit to gather context.
@@ -201,6 +217,8 @@ class ContextAgent:
             primary_code: Code with static dependencies
             static_deps: Static analysis dependencies
             static_callers: Static analysis callers
+            language: Source language metadata for platform-aware prompts
+            platform_context: Optional bounded platform metadata for prompts
 
         Returns:
             AgentResult with gathered context
@@ -229,7 +247,9 @@ class ContextAgent:
             is_entry_point=is_entry_point,
             reachable_from_entry=reachable_from_entry,
             entry_point_path=entry_point_path,
-            reaching_entry_point=reaching_entry_point
+            reaching_entry_point=reaching_entry_point,
+            language=language,
+            platform_context=platform_context,
         )
 
         messages: list[Message] = [
@@ -311,6 +331,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     cost_usd=call_record.get("cost_usd", 0.0),
+                    cost_amount=call_record.get("cost_amount", 0.0),
+                    cost_currency=call_record.get("cost_currency"),
+                    cost_cny=call_record.get("cost_cny", 0.0),
                 )
 
             tool_results: list[ToolResultBlock] = []
@@ -381,6 +404,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     cost_usd=call_record.get("cost_usd", 0.0),
+                    cost_amount=call_record.get("cost_amount", 0.0),
+                    cost_currency=call_record.get("cost_currency"),
+                    cost_cny=call_record.get("cost_cny", 0.0),
                 )
 
             # If finish was called, return result
@@ -407,6 +433,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     cost_usd=call_record.get("cost_usd", 0.0),
+                    cost_amount=call_record.get("cost_amount", 0.0),
+                    cost_currency=call_record.get("cost_currency"),
+                    cost_cny=call_record.get("cost_cny", 0.0),
                 )
 
             # Add assistant message and tool results to conversation.
@@ -444,6 +473,9 @@ class ContextAgent:
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     cost_usd=call_record.get("cost_usd", 0.0),
+                    cost_amount=call_record.get("cost_amount", 0.0),
+                    cost_currency=call_record.get("cost_currency"),
+                    cost_cny=call_record.get("cost_cny", 0.0),
                 )
 
         # Max iterations reached
@@ -472,6 +504,9 @@ class ContextAgent:
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
             cost_usd=call_record.get("cost_usd", 0.0),
+            cost_amount=call_record.get("cost_amount", 0.0),
+            cost_currency=call_record.get("cost_currency"),
+            cost_cny=call_record.get("cost_cny", 0.0),
         )
 
 
@@ -515,6 +550,10 @@ def enhance_unit_with_agent(
     primary_code = code_section.get("primary_code", "")
     static_deps = unit.get("metadata", {}).get("direct_calls", [])
     static_callers = unit.get("metadata", {}).get("direct_callers", [])
+    language = unit.get("language")
+    platform_context = unit.get("platform_context")
+    if platform_context is None:
+        platform_context = unit.get("platformContext")
 
     # Run agent
     result = agent.analyze_unit(
@@ -522,7 +561,9 @@ def enhance_unit_with_agent(
         unit_type=unit_type,
         primary_code=primary_code,
         static_deps=static_deps,
-        static_callers=static_callers
+        static_callers=static_callers,
+        language=language,
+        platform_context=platform_context,
     )
 
     # Add result to unit

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..llm_client import TokenTracker, get_global_tracker
+from core.model_registry import model_currency
 from .adapter import Message, TextBlock
 from .registry import PhaseBinding
 
@@ -30,7 +31,18 @@ def lookup_pricing(binding: PhaseBinding) -> Optional[dict]:
     adapter has no entry lets the tracker emit its one-time
     unknown-model warning instead of guessing the rate.
     """
-    return getattr(binding.adapter, "pricing", {}).get(binding.model)
+    pricing = getattr(binding.adapter, "pricing", {}).get(binding.model)
+    if pricing is None:
+        return None
+
+    # Adapter pricing historically contains only input/output numbers.  Keep
+    # that exact shape for USD models and test doubles, but attach the registry
+    # currency for non-USD models so the tracker never labels CNY as dollars.
+    provider = getattr(binding.adapter, "name", None) or binding.provider_name
+    currency = model_currency(binding.model, provider)
+    if currency == "USD":
+        return pricing
+    return {**pricing, "currency": currency}
 
 
 def simple_text(

@@ -802,7 +802,9 @@ def main():
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json to use. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's `default_llm` (or the built-in "
             "`openant-default` when no config file exists)."
         ),

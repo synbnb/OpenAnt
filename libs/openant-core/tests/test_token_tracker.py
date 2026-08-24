@@ -74,3 +74,21 @@ class TestTokenTracker:
         result = tracker.record_call("claude-opus-4-8", 1_000_000, 1_000_000)
         # Opus: $15/M input, $75/M output
         assert result["cost_usd"] == 90.0
+
+    def test_cny_pricing_is_not_mislabelled_as_usd(self):
+        tracker = TokenTracker()
+        result = tracker.record_call(
+            "gpt-5.6-luna",
+            1_000_000,
+            1_000_000,
+            pricing={"input": 0.812, "output": 4.872, "currency": "CNY"},
+        )
+
+        assert result["cost_amount"] == 5.684
+        assert result["cost_currency"] == "CNY"
+        assert result["cost_cny"] == 5.684
+        assert result["cost_usd"] == 0.0
+        totals = tracker.get_totals()
+        assert totals["total_cost_usd"] == 0.0
+        assert totals["total_cost_cny"] == 5.684
+        assert totals["costs_by_currency"] == {"CNY": 5.684}

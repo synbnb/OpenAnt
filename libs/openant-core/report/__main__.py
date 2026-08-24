@@ -59,9 +59,16 @@ def cmd_summary(args):
     report_binding = _build_report_binding()
 
     print("Generating summary report...")
-    report, usage = generate_summary_report(pipeline_data, report_binding)
+    language = getattr(args, "language", "en") or "en"
+    if language == "en":
+        report, usage = generate_summary_report(pipeline_data, report_binding)
+    else:
+        report, usage = generate_summary_report(
+            pipeline_data, report_binding, language=language
+        )
 
-    output_path = Path(args.output) if args.output else Path("SUMMARY_REPORT.md")
+    default_name = "SUMMARY_REPORT.zh-CN.md" if language == "zh-CN" else "SUMMARY_REPORT.md"
+    output_path = Path(args.output) if args.output else Path(default_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open_utf8(output_path, "w") as f:
         f.write(report)
@@ -99,7 +106,12 @@ def cmd_disclosures(args):
             continue
 
         print(f"Generating disclosure for {finding['short_name']}...")
-        disclosure, _usage = generate_disclosure(finding, product_name, report_binding)
+        disclosure, _usage = generate_disclosure(
+            finding,
+            product_name,
+            report_binding,
+            pipeline_data=pipeline_data,
+        )
 
         # Coerce to str, fall back to id, and basename so a null/typed/traversal
         # short_name can't crash disclosure generation (mirrors report/generator.py).
@@ -135,6 +147,12 @@ def main():
     summary_parser = subparsers.add_parser("summary", help="Generate summary report")
     summary_parser.add_argument("input", help="Pipeline output JSON file")
     summary_parser.add_argument("-o", "--output", help="Output file (default: SUMMARY_REPORT.md)")
+    summary_parser.add_argument(
+        "--language",
+        choices=["en", "zh-CN"],
+        default="en",
+        help="Summary language (default: en).",
+    )
     summary_parser.set_defaults(func=cmd_summary)
 
     # disclosures command

@@ -1,13 +1,15 @@
 """Dynamic testing module for OpenAnt.
 
 Takes pipeline_output.json from the static analysis pipeline and dynamically
-tests all detected vulnerabilities using Docker containers.
+tests all detected vulnerabilities using Docker containers, or prepares a
+Claude Code task workspace when the ``claude-code`` mode is selected.
 
 Supports checkpoint/resume: each completed finding is saved to a per-unit
 checkpoint file so interrupted runs can resume automatically.
 
 Public API:
     run_dynamic_tests(pipeline_output_path, output_dir) -> list[DynamicTestResult]
+    create_claude_code_task(pipeline_output_path, output_dir, repo_path) -> dict
 """
 
 import json
@@ -19,6 +21,7 @@ from utilities.dynamic_tester.test_generator import generate_test, regenerate_te
 from utilities.dynamic_tester.docker_executor import run_single_container
 from utilities.dynamic_tester.result_collector import collect_result
 from utilities.dynamic_tester.reporter import generate_report
+from utilities.dynamic_tester.claude_code import create_claude_code_task
 from utilities.llm_client import get_global_tracker
 from utilities.llm import (
     PhaseRegistry,

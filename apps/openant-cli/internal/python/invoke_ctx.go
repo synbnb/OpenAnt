@@ -80,7 +80,7 @@ func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workD
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	cmd.Env = os.Environ()
+	cmd.Env = withConfigEnv(os.Environ())
 	if apiKey != "" {
 		cmd.Env = setEnv(cmd.Env, "ANTHROPIC_API_KEY", apiKey)
 	}

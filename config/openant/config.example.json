@@ -1,0 +1,21 @@
+{
+  "$schema_version": 2,
+  "default_llm": "openharmony-live-gpt",
+  "llm_providers": {
+    "autodl-openai": {
+      "type": "openai",
+      "base_url": "https://www.autodl.art/api/v1"
+    }
+  },
+  "llm_configs": {
+    "openharmony-live-gpt": {
+      "analyze": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "enhance": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "verify": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "report": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "dynamic_test": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "llm_reach": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
+      "app_context": {"provider": "autodl-openai", "model": "gpt-5.6-luna"}
+    }
+  }
+}

@@ -23,10 +23,13 @@ def run_tests(
     repo_path: str | None = None,
     registry=None,
     llm_config_name: str | None = None,
+    mode: str = "docker",
 ) -> DynamicTestStepResult:
-    """Run dynamic exploit tests on confirmed vulnerabilities.
+    """Run dynamic exploit tests or prepare a Claude Code task workspace.
 
-    Requires Docker to be installed and running.
+    ``docker`` preserves the existing isolated executor. ``claude-code`` does
+    not call an LLM or Docker from OpenAnt; it creates a task workspace that
+    the operator can open with Claude Code.
 
     Args:
         pipeline_output_path: Path to ``pipeline_output.json``.
@@ -35,6 +38,7 @@ def run_tests(
         registry: Pre-built PhaseRegistry passed down by the scanner.
             Standalone callers omit this and pay one config-load.
         llm_config_name: Name of the llm-config when registry is None.
+        mode: ``docker`` (default) or ``claude-code``.
 
     Returns:
         DynamicTestStepResult with counts and paths.
@@ -43,16 +47,42 @@ def run_tests(
         RuntimeError: If Docker is not available.
         FileNotFoundError: If pipeline_output_path doesn't exist.
     """
-    # Check Docker availability
+    if mode not in {"docker", "claude-code"}:
+        raise ValueError(f"unsupported dynamic-test mode: {mode!r}; choose docker or claude-code")
+
+    # Both modes need the static input, but Claude Code mode deliberately does
+    # not require Docker or an OpenAnt LLM configuration.
+    if not os.path.exists(pipeline_output_path):
+        raise FileNotFoundError(
+            f"pipeline_output.json not found: {pipeline_output_path}"
+        )
+
+    if mode == "claude-code":
+        from utilities.dynamic_tester.claude_code import create_claude_code_task
+
+        task = create_claude_code_task(
+            pipeline_output_path=pipeline_output_path,
+            output_dir=output_dir,
+            repo_path=repo_path,
+        )
+        task_workspace = task["task_workspace"]
+        return DynamicTestStepResult(
+            results_json_path=task["candidate_manifest"],
+            results_md_path=os.path.join(task_workspace, "TASK.md"),
+            mode="claude-code",
+            task_workspace=task_workspace,
+            public_tool_library=task["public_tool_library"],
+            task_manifest_path=os.path.join(task_workspace, "task_manifest.json"),
+            candidate_manifest=task["candidate_manifest"],
+            launch_command=task["launch_command"],
+            findings_tested=task["candidate_count"],
+        )
+
+    # Check Docker availability for the existing executor only.
     if not shutil.which("docker"):
         raise RuntimeError(
             "Docker is required for dynamic testing but was not found. "
             "Install Docker and ensure it is running."
-        )
-
-    if not os.path.exists(pipeline_output_path):
-        raise FileNotFoundError(
-            f"pipeline_output.json not found: {pipeline_output_path}"
         )
 
     os.makedirs(output_dir, exist_ok=True)

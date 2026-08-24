@@ -31,7 +31,9 @@ same `openai` SDK the OpenAI adapter ships with.
 ## Configuration
 
 The `openant setup llm` wizard offers `openrouter` (leave the base URL blank
-to use `https://openrouter.ai/api/v1`), or configure `~/.config/openant/config.json`
+to use `https://openrouter.ai/api/v1`), or configure the resolved OpenAnt config
+file (`config/openant/config.json` inside a checkout; `OPENANT_CONFIG_FILE` can
+override it)
 by hand. A complete single-provider example (all seven pipeline phases are
 required):
 

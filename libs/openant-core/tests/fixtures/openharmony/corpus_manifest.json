@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "external_root_env": "OPENHARMONY_CORPUS_ROOT",
+  "repositories": [
+    {
+      "name": "arkweb_arkweb_cangjie_wrapper",
+      "commit": "534acd4c3089d07c25e0638b9356553d4c80f127",
+      "phase": "phase_5_cangjie_ffi",
+      "source_counts": {
+        "cpp": 0,
+        "h": 0,
+        "c": 0,
+        "rs": 0,
+        "ets": 0,
+        "ts": 4,
+        "js": 2,
+        "cj": 25,
+        "idl": 0,
+        "build_gn": 4,
+        "gni": 0,
+        "bundle_json": 1
+      },
+      "expected_signals": [
+        "**/bundle.json",
+        "**/BUILD.gn",
+        "**/*.cj"
+      ]
+    },
+    {
+      "name": "communication_netmanager_base",
+      "commit": "2401a2287eb7e99fc400ea9801b9ebdcba9f8e3d",
+      "phase": "mvp_native_ipc",
+      "source_counts": {
+        "cpp": 628,
+        "h": 450,
+        "c": 7,
+        "rs": 68,
+        "ets": 4,
+        "ts": 5,
+        "js": 0,
+        "cj": 0,
+        "idl": 1,
+        "build_gn": 85,
+        "gni": 1,
+        "bundle_json": 1
+      },
+      "expected_signals": [
+        "**/bundle.json",
+        "**/BUILD.gn",
+        "**/*.idl",
+        "**/*.cpp",
+        "**/*.rs"
+      ]
+    },
+    {
+      "name": "communication_wifi",
+      "commit": "ac0e5205675ca17403f92107a8e0d89685c8dd51",
+      "phase": "phase_4_arkts_native_bridge",
+      "source_counts": {
+        "cpp": 595,
+        "h": 551,
+        "c": 22,
+        "rs": 0,
+        "ets": 209,
+        "ts": 19,
+        "js": 0,
+        "cj": 0,
+        "idl": 5,
+        "build_gn": 87,
+        "gni": 3,
+        "bundle_json": 1
+      },
+      "expected_signals": [
+        "**/bundle.json",
+        "**/BUILD.gn",
+        "**/*.idl",
+        "**/*.ets",
+        "**/*.cpp"
+      ]
+    },
+    {
+      "name": "drivers_peripheral",
+      "commit": "9aef209a5bd8e9dca05c2c736a5459ce44c5173a",
+      "phase": "phase_3_hdf",
+      "source_counts": {
+        "cpp": 1282,
+        "h": 1500,
+        "c": 247,
+        "rs": 0,
+        "ets": 0,
+        "ts": 0,
+        "js": 0,
+        "cj": 0,
+        "idl": 0,
+        "build_gn": 678,
+        "gni": 28,
+        "bundle_json": 39
+      },
+      "expected_signals": [
+        "**/bundle.json",
+        "**/BUILD.gn",
+        "**/*.cpp",
+        "**/*.c"
+      ]
+    },
+    {
+      "name": "sensors_medical_sensor",
+      "commit": "6f87daec8f0a91057336b0b243eee702bd8731e7",
+      "phase": "mvp_native_ipc",
+      "source_counts": {
+        "cpp": 33,
+        "h": 38,
+        "c": 0,
+        "rs": 0,
+        "ets": 0,
+        "ts": 1,
+        "js": 0,
+        "cj": 0,
+        "idl": 0,
+        "build_gn": 11,
+        "gni": 1,
+        "bundle_json": 1
+      },
+      "expected_signals": [
+        "**/bundle.json",
+        "**/BUILD.gn",
+        "**/*.cpp"
+      ]
+    }
+  ]
+}

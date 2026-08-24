@@ -6,8 +6,9 @@ implementations).
 
 Lifecycle at scan / step-verb time:
 
-1. ``load_config_file()`` reads ``~/.config/openant/config.json``
-   (or falls back to an empty file).
+1. ``load_config_file()`` resolves ``OPENANT_CONFIG_FILE`` first, then the
+   project-local ``config/openant/config.json``, then the legacy user config
+   locations (or falls back to an empty file).
 2. ``resolve_llm_config(cf, name)`` picks the active llm-config by
    name; falls through ``--llm-config`` flag → ``project.json``
    override → file ``default_llm`` → built-in ``openant-default``.
@@ -61,19 +62,85 @@ from .providers import get_adapter_class
 # ---------------------------------------------------------------------------
 
 
-def default_config_path() -> Path:
-    """Resolve the canonical config.json path.
+CONFIG_FILE_ENV = "OPENANT_CONFIG_FILE"
+PROJECT_ROOT_ENV = "OPENANT_PROJECT_ROOT"
+PROJECT_CONFIG_RELATIVE_PATH = Path("config/openant/config.json")
 
-    Mirrors the Go CLI: ``$XDG_CONFIG_HOME/openant/config.json``
-    when set, ``~/.config/openant/config.json`` otherwise. The Python
-    pipeline doesn't run on Windows for these code paths (the Go CLI
-    handles platform-specific paths and passes the file path in via
-    env), but we keep the Linux/macOS branch consistent.
+
+def _is_project_root(path: Path) -> bool:
+    return (
+        path.is_dir()
+        and (path / "libs" / "openant-core" / "pyproject.toml").is_file()
+        and (path / "config" / "models.json").is_file()
+    )
+
+
+def _project_root() -> Optional[Path]:
+    """Find the trusted checkout that owns project-local runtime files.
+
+    The search starts at the installed package location, not the scanned
+    repository's current working directory. A packaged launcher can provide
+    OPENANT_PROJECT_ROOT when the Python package is installed elsewhere.
     """
+    explicit = os.environ.get(PROJECT_ROOT_ENV, "").strip()
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if not _is_project_root(root):
+            raise ConfigError(
+                f"{PROJECT_ROOT_ENV}={str(root)!r} is not an OpenAnt project root "
+                "(missing libs/openant-core/pyproject.toml or config/models.json)"
+            )
+        return root
+
+    try:
+        package_path = Path(__file__).resolve()
+    except OSError:
+        return None
+    for candidate in package_path.parents:
+        if _is_project_root(candidate):
+            return candidate
+    return None
+
+
+def _user_config_path() -> Path:
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
     if xdg:
-        return Path(xdg) / "openant" / "config.json"
+        return Path(xdg).expanduser() / "openant" / "config.json"
     return Path.home() / ".config" / "openant" / "config.json"
+
+
+def _config_candidates() -> tuple[Path, ...]:
+    explicit = os.environ.get(CONFIG_FILE_ENV, "").strip()
+    if explicit:
+        # An explicit path is authoritative. If it is missing, return an
+        # empty config rather than silently reading a different credential file.
+        return (Path(explicit).expanduser().resolve(),)
+
+    candidates: list[Path] = []
+    root = _project_root()
+    if root is not None:
+        candidates.append(root / PROJECT_CONFIG_RELATIVE_PATH)
+    candidates.append(_user_config_path())
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        normalized = candidate.expanduser().resolve()
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+    return tuple(unique)
+
+
+def default_config_path() -> Path:
+    """Resolve the primary config.json path.
+
+    Mirrors the Go CLI: an explicit ``OPENANT_CONFIG_FILE`` wins, followed by
+    the project-local path and then the legacy user path. The project-root
+    check is anchored to this installed package or ``OPENANT_PROJECT_ROOT``;
+    the current working directory is deliberately not trusted.
+    """
+    return _config_candidates()[0]
 
 
 def load_config_file(path: Optional[Path] = None) -> ConfigFile:
@@ -82,14 +149,16 @@ def load_config_file(path: Optional[Path] = None) -> ConfigFile:
     Missing file is not an error — returns an empty ConfigFile so
     the caller can still resolve ``openant-default``.
     """
-    target = path or default_config_path()
-    if not target.exists():
-        return empty_config()
-    try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ConfigError(f"config.json at {target}: invalid JSON ({exc})") from exc
-    return parse_config(raw)
+    targets = (Path(path),) if path is not None else _config_candidates()
+    for target in targets:
+        if not target.exists():
+            continue
+        try:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"config.json at {target}: invalid JSON ({exc})") from exc
+        return parse_config(raw)
+    return empty_config()
 
 
 # ---------------------------------------------------------------------------

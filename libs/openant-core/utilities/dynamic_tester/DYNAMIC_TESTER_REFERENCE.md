@@ -4,7 +4,19 @@ Technical reference for AI coding assistants working on the dynamic testing modu
 
 **Module:** `utilities/dynamic_tester/`
 **Added:** February 2026
-**Purpose:** Bridges static analysis (Stage 2) and confirmed exploitability via Docker-isolated dynamic tests.
+**Purpose:** Bridges static analysis (Stage 2) and dynamic verification via either
+the original Docker executor or a Claude Code task workspace.
+
+## Execution modes
+
+| Mode | OpenAnt responsibility | Isolation/runner | Output |
+|---|---|---|---|
+| `docker` | Generate, build, run and classify each test | Docker sandbox | `dynamic_test_results.json` + Markdown report |
+| `claude-code` | Package candidates, source, artifacts, tools and Skill | Claude Code in a task directory; no Docker | `task_manifest.json`, `context/`, `results/` scaffold and launch command |
+
+Claude Code mode is intentionally a hand-off boundary in this first version.
+OpenAnt does not invoke Claude Code and does not automatically merge its
+reviewed `results/` back into `dynamic_test_results.json`.
 
 ## Position in Pipeline
 
@@ -22,6 +34,7 @@ State machine additions in `autopilot/state.py`:
 | File | Purpose | Key Functions/Classes |
 |------|---------|----------------------|
 | `__init__.py` | Public API | `run_dynamic_tests(pipeline_output_path, output_dir)` |
+| `claude_code.py` | Claude Code hand-off | `create_claude_code_task()` |
 | `__main__.py` | CLI entry | `python -m utilities.dynamic_tester <path>` |
 | `models.py` | Data models | `DynamicTestResult`, `TestEvidence`, `VALID_STATUSES` |
 | `test_generator.py` | LLM test gen | `generate_test()`, `regenerate_test()` |
@@ -32,6 +45,8 @@ State machine additions in `autopilot/state.py`:
 | `docker_templates/node.Dockerfile` | Base Node image | `node:20-slim` |
 | `docker_templates/go.Dockerfile` | Base Go image | `golang:1.22-alpine` |
 | `docker_templates/attacker_server.py` | Capture server | Port 9999, endpoints: `/health`, `/capture`, `/logs`, `/logs/clear` |
+| `templates/claude_code/SKILL.md` | OpenHarmony dynamic-testing Skill | HAP public API, Native/HDC, IPC/SA and evidence workflow |
+| `templates/claude_code/PUBLIC_TOOLS_README.zh-CN.md` | Public tool library guide | HDC, Hvigor, Node and HAP signing tool paths |
 
 ## Modified Existing Files
 

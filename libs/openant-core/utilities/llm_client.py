@@ -23,7 +23,7 @@ import importlib
 import sys
 import threading
 
-from core.model_registry import pricing_map
+from core.model_registry import pricing_entry, pricing_map
 
 
 # Pricing per million tokens. LEGACY fallback: issue #65 moved pricing onto
@@ -49,6 +49,33 @@ def __getattr__(name: str):
 
 _unknown_pricing_warned: set[str] = set()
 _unknown_pricing_lock = threading.Lock()
+
+
+def _normalise_currency(value: object) -> str:
+    """Return a safe ISO-like currency code for accounting metadata."""
+    currency = str(value or "USD").strip().upper()
+    return currency if currency.isalpha() and len(currency) == 3 else "USD"
+
+
+def pricing_entry_for_any_provider(model: str) -> dict | None:
+    """Find a priced registry record without a binding/provider hint.
+
+    This is only a compatibility fallback for old call sites.  Normal LLM
+    calls pass adapter-owned pricing through ``lookup_pricing`` and therefore
+    retain the exact provider association.
+    """
+    from core.model_registry import require_models
+
+    for record in require_models():
+        if record.get("id") != model or not record.get("price"):
+            continue
+        price = record["price"]
+        return {
+            "input": float(price["input"]),
+            "output": float(price["output"]),
+            "currency": record.get("currency", "USD"),
+        }
+    return None
 
 
 def _warn_unknown_pricing(model: str) -> None:
@@ -80,6 +107,8 @@ class TokenTracker:
             self.total_input_tokens = 0
             self.total_output_tokens = 0
             self.total_cost_usd = 0.0
+            self.total_cost_cny = 0.0
+            self.total_cost_by_currency = {}
 
     @property
     def total_tokens(self) -> int:
@@ -92,7 +121,7 @@ class TokenTracker:
         input_tokens: int,
         output_tokens: int,
         *,
-        pricing: dict[str, float] | None = None,
+        pricing: dict | None = None,
     ) -> dict:
         """
         Record a single LLM call.
@@ -101,7 +130,8 @@ class TokenTracker:
             model: Model identifier.
             input_tokens: Number of input tokens.
             output_tokens: Number of output tokens.
-            pricing: Optional ``{"input": $/Mtok, "output": $/Mtok}``
+            pricing: Optional ``{"input": rate/Mtok, "output": rate/Mtok,
+                "currency": "USD"}``
                 from the adapter that made the call. When provided,
                 this is authoritative — adapters own their rates per
                 issue #65. When omitted, we fall back to the legacy
@@ -116,6 +146,14 @@ class TokenTracker:
         """
         if pricing is None:
             pricing = pricing_map("anthropic").get(model)
+            if pricing is None:
+                # A few legacy/reporting call sites do not have a binding to
+                # pass through. Resolve a registry entry before treating the
+                # model as unknown, so a configured OpenAI-compatible model
+                # still receives its declared (possibly CNY) rate.
+                pricing = pricing_entry_for_any_provider(model)
+
+        currency = None
         if pricing is None:
             _warn_unknown_pricing(model)
             total_cost = 0.0
@@ -123,40 +161,88 @@ class TokenTracker:
             input_cost = (input_tokens / 1_000_000) * pricing["input"]
             output_cost = (output_tokens / 1_000_000) * pricing["output"]
             total_cost = input_cost + output_cost
+            currency = _normalise_currency(pricing.get("currency", "USD"))
 
         call_record = {
             "model": model,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost_usd": round(total_cost, 6)
+            # ``cost_usd`` remains for consumers of historical artifacts.  It
+            # is populated only for USD calls; non-USD calls use the explicit
+            # amount/currency fields below and cannot be mistaken for dollars.
+            "cost_usd": round(total_cost if currency == "USD" else 0.0, 6),
+            "cost_amount": round(total_cost, 6),
         }
+        if currency:
+            call_record["cost_currency"] = currency
+            if currency == "CNY":
+                call_record["cost_cny"] = round(total_cost, 6)
 
         # Update totals (thread-safe)
         with self._lock:
             self.calls.append(call_record)
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
-            self.total_cost_usd += total_cost
+            if currency:
+                self.total_cost_by_currency[currency] = (
+                    self.total_cost_by_currency.get(currency, 0.0) + total_cost
+                )
+                if currency == "USD":
+                    self.total_cost_usd += total_cost
+                elif currency == "CNY":
+                    self.total_cost_cny += total_cost
 
         # Accumulate to thread-local unit tracking if active
         tl = self._thread_local
         if hasattr(tl, "unit_input"):
             tl.unit_input += input_tokens
             tl.unit_output += output_tokens
-            tl.unit_cost += total_cost
+            tl.unit_cost += total_cost if currency == "USD" else 0.0
+            unit_costs = getattr(tl, "unit_costs", {})
+            if currency:
+                unit_costs[currency] = unit_costs.get(currency, 0.0) + total_cost
+            tl.unit_costs = unit_costs
 
         return call_record
 
-    def add_prior_usage(self, input_tokens: int, output_tokens: int, cost_usd: float):
+    def add_prior_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float = 0.0,
+        *,
+        currency: str = "USD",
+        cost_amount: float | None = None,
+        costs_by_currency: dict[str, float] | None = None,
+    ):
         """Inject usage from a prior run (e.g. restored checkpoints).
 
         This ensures step reports capture the total cost across all runs,
         not just the current run's API calls.
         """
+        if costs_by_currency:
+            prior_costs = {
+                _normalise_currency(k): float(v)
+                for k, v in costs_by_currency.items()
+                if v is not None
+            }
+        else:
+            prior_costs = {
+                _normalise_currency(currency): float(
+                    cost_usd if cost_amount is None else cost_amount
+                )
+            }
         with self._lock:
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
-            self.total_cost_usd += cost_usd
+            for prior_currency, amount in prior_costs.items():
+                self.total_cost_by_currency[prior_currency] = (
+                    self.total_cost_by_currency.get(prior_currency, 0.0) + amount
+                )
+                if prior_currency == "USD":
+                    self.total_cost_usd += amount
+                elif prior_currency == "CNY":
+                    self.total_cost_cny += amount
 
     def start_unit_tracking(self):
         """Start tracking usage for the current unit on this thread.
@@ -169,14 +255,26 @@ class TokenTracker:
         tl.unit_input = 0
         tl.unit_output = 0
         tl.unit_cost = 0.0
+        tl.unit_costs = {}
 
     def get_unit_usage(self) -> dict:
         """Return usage accumulated since ``start_unit_tracking()`` on this thread."""
         tl = self._thread_local
+        costs = {
+            currency: round(amount, 6)
+            for currency, amount in getattr(tl, "unit_costs", {}).items()
+        }
+        nonzero = {k: v for k, v in costs.items() if v}
+        cost_currency = next(iter(nonzero)) if len(nonzero) == 1 else None
+        cost_amount = next(iter(nonzero.values())) if cost_currency else 0.0
         return {
             "input_tokens": getattr(tl, "unit_input", 0),
             "output_tokens": getattr(tl, "unit_output", 0),
             "cost_usd": round(getattr(tl, "unit_cost", 0.0), 6),
+            "cost_cny": costs.get("CNY", 0.0),
+            "cost_amount": round(cost_amount, 6),
+            "cost_currency": cost_currency,
+            "costs_by_currency": costs,
         }
 
     def get_summary(self) -> dict:
@@ -193,6 +291,11 @@ class TokenTracker:
                 "total_output_tokens": self.total_output_tokens,
                 "total_tokens": self.total_input_tokens + self.total_output_tokens,
                 "total_cost_usd": round(self.total_cost_usd, 6),
+                "total_cost_cny": round(self.total_cost_cny, 6),
+                "costs_by_currency": {
+                    currency: round(amount, 6)
+                    for currency, amount in self.total_cost_by_currency.items()
+                },
                 "calls": list(self.calls),
             }
 
@@ -210,6 +313,11 @@ class TokenTracker:
                 "total_output_tokens": self.total_output_tokens,
                 "total_tokens": self.total_input_tokens + self.total_output_tokens,
                 "total_cost_usd": round(self.total_cost_usd, 6),
+                "total_cost_cny": round(self.total_cost_cny, 6),
+                "costs_by_currency": {
+                    currency: round(amount, 6)
+                    for currency, amount in self.total_cost_by_currency.items()
+                },
             }
 
 

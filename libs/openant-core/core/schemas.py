@@ -66,6 +66,16 @@ class ParseResult:
     # Recorded because a scan run under the WRONG security model looks
     # identical to a correct one unless the source is stated.
     context_source: str = "none"
+    # Optional, serialized platform-neutral profile.  Omitted from legacy JSON
+    # when absent so existing Go and downstream consumers keep the old shape.
+    platform_profile: dict | None = None
+    # Optional scope/coverage emitted by a platform-aware parser.  Kept
+    # separate from the profile because a parser may report coverage before a
+    # complete RepositoryProfile can be built.
+    platform_coverage: dict | None = None
+    # Explicit CLI platform mode. Omitted for the default ``auto`` mode so
+    # legacy parse JSON retains its previous shape.
+    platform_selection: str | None = None
 
     @property
     def degraded(self) -> bool:
@@ -77,6 +87,12 @@ class ParseResult:
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        if self.platform_profile is None:
+            d.pop("platform_profile")
+        if self.platform_coverage is None:
+            d.pop("platform_coverage")
+        if self.platform_selection is None:
+            d.pop("platform_selection")
         # ``degraded`` is a @property, which asdict() omits — include it explicitly so
         # the parse envelope carries it like ScanResult.to_dict does.
         d["degraded"] = self.degraded
@@ -91,6 +107,11 @@ class UsageInfo:
     total_output_tokens: int = 0
     total_tokens: int = 0
     total_cost_usd: float = 0.0
+    # Additive multi-currency accounting.  ``total_cost_usd`` remains for
+    # consumers of legacy artifacts; CNY and future currencies are never
+    # converted with an implicit exchange rate.
+    total_cost_cny: float = 0.0
+    costs_by_currency: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -202,6 +223,18 @@ class ScanResult:
     # is visible in the artifact, not only on stderr.
     threat_model_sha256: str | None = None
     threat_model_warnings: list = field(default_factory=list)
+    # Provenance for the effective application security context.  This is
+    # additive: legacy consumers can continue using context_source/sha while
+    # OpenHarmony scans disclose the immutable platform baseline and merge
+    # conflicts explicitly.
+    application_context_provenance: dict = field(default_factory=dict)
+    # Optional platform contract fields.  They are intentionally omitted from
+    # generic scan JSON until a platform adapter explicitly supplies them.
+    platform_profile: dict | None = None
+    platform_coverage: dict | None = None
+    # Requested platform mode. This is distinct from platform_profile, which
+    # appears only after a platform adapter has built a real profile.
+    platform_selection: str | None = None
 
     @property
     def degraded(self) -> bool:
@@ -212,7 +245,7 @@ class ScanResult:
         return bool(self.parse_errors)
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "output_dir": self.output_dir,
             "dataset_path": self.dataset_path,
             "enhanced_dataset_path": self.enhanced_dataset_path,
@@ -241,6 +274,15 @@ class ScanResult:
             "threat_model_warnings": self.threat_model_warnings,
             "degraded": self.degraded,
         }
+        if self.platform_profile is not None:
+            result["platform_profile"] = self.platform_profile
+        if self.platform_coverage is not None:
+            result["platform_coverage"] = self.platform_coverage
+        if self.platform_selection is not None:
+            result["platform_selection"] = self.platform_selection
+        if self.application_context_provenance:
+            result["application_context_provenance"] = self.application_context_provenance
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +355,12 @@ class DynamicTestStepResult:
     """Result of `open-ant dynamic-test`."""
     results_json_path: str
     results_md_path: str | None = None
+    mode: str = "docker"
+    task_workspace: str | None = None
+    public_tool_library: str | None = None
+    task_manifest_path: str | None = None
+    candidate_manifest: str | None = None
+    launch_command: str | None = None
     findings_tested: int = 0
     confirmed: int = 0
     not_reproduced: int = 0
@@ -340,6 +388,10 @@ class StepReport:
     timestamp: str = ""
     duration_seconds: float = 0.0
     cost_usd: float = 0.0
+    cost_cny: float = 0.0
+    cost_amount: float = 0.0
+    cost_currency: str | None = None
+    costs_by_currency: dict = field(default_factory=dict)
     token_usage: dict = field(default_factory=lambda: {
         "input_tokens": 0,
         "output_tokens": 0,

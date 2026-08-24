@@ -44,7 +44,7 @@ func init() {
 	enhanceCmd.Flags().StringVar(&enhanceCheckpoint, "checkpoint", "", "Path to save/resume checkpoint (agentic mode)")
 	enhanceCmd.Flags().IntVar(&enhanceWorkers, "workers", 8, "Number of parallel workers for LLM steps (default: 8)")
 	enhanceCmd.Flags().IntVar(&enhanceBackoff, "backoff", 30, "Seconds to wait when rate-limited (default: 30)")
-	enhanceCmd.Flags().StringVar(&enhanceLLMConfig, "llm-config", "", "Name of the llm-config in ~/.config/openant/config.json (defaults to the file's default_llm, or the built-in 'openant-default' if no config file exists).")
+	enhanceCmd.Flags().StringVar(&enhanceLLMConfig, "llm-config", "", "Name of the llm-config (resolved from OPENANT_CONFIG_FILE, project-local config/openant/config.json, or the legacy user config; defaults to the file's default_llm).")
 	enhanceCmd.Flags().IntVar(&enhanceLimit, "limit", 0, "Max units to enhance (0 = no limit)")
 }
 

@@ -4,6 +4,7 @@ package report
 import (
 	"fmt"
 	"html/template"
+	"sort"
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
@@ -12,23 +13,160 @@ import (
 // ReportData holds all pre-computed data needed to render the HTML overview report.
 // This struct maps 1:1 to the JSON output of the Python `report-data` subcommand.
 type ReportData struct {
-	Title             string         `json:"title"`
-	Timestamp         string         `json:"timestamp"`
-	RepoName          string         `json:"repo_name"`
-	CommitSHA         string         `json:"commit_sha"`
-	Language          string         `json:"language"`
-	RepoURL           string         `json:"repo_url"`
-	TotalDurationS    float64        `json:"total_duration_seconds"`
-	TotalCostUSD      float64        `json:"total_cost_usd"`
-	Stats             Stats          `json:"stats"`
-	UnitChart         ChartData      `json:"unit_chart"`
-	FileChart         ChartData      `json:"file_chart"`
-	RemediationHTML   string         `json:"remediation_html"`
-	Findings          []Finding      `json:"findings"`
-	FindingsByVerdict []FindingGroup `json:"findings_by_verdict"`
-	StepReports       []StepReport   `json:"step_reports"`
-	Categories        []Category     `json:"categories"`
-	Diff              *DiffInfo      `json:"diff,omitempty"`
+	Title             string             `json:"title"`
+	Timestamp         string             `json:"timestamp"`
+	RepoName          string             `json:"repo_name"`
+	CommitSHA         string             `json:"commit_sha"`
+	Language          string             `json:"language"`
+	RepoURL           string             `json:"repo_url"`
+	TotalDurationS    float64            `json:"total_duration_seconds"`
+	TotalCostUSD      float64            `json:"total_cost_usd"`
+	TotalCostCNY      float64            `json:"total_cost_cny"`
+	CostsByCurrency   map[string]float64 `json:"costs_by_currency"`
+	Stats             Stats              `json:"stats"`
+	UnitChart         ChartData          `json:"unit_chart"`
+	FileChart         ChartData          `json:"file_chart"`
+	RemediationHTML   string             `json:"remediation_html"`
+	Findings          []Finding          `json:"findings"`
+	FindingsByVerdict []FindingGroup     `json:"findings_by_verdict"`
+	StepReports       []StepReport       `json:"step_reports"`
+	Categories        []Category         `json:"categories"`
+	Diff              *DiffInfo          `json:"diff,omitempty"`
+	// Locale controls the language of the deterministic HTML template. It is
+	// deliberately excluded from JSON because report-data describes the scan,
+	// while the same payload can be rendered in more than one language.
+	Locale string `json:"-"`
+}
+
+var reportTextZH = map[string]string{
+	"Overview":                 "概览",
+	"Distribution":             "分布",
+	"Remediation":              "修复建议",
+	"Pipeline":                 "流水线",
+	"Findings":                 "问题",
+	"Repository":               "仓库",
+	"Incremental":              "增量扫描",
+	"Diff scope":               "变更范围",
+	"file(s) changed":          "个文件已变更",
+	"units":                    "个单元",
+	"Code Units":               "代码单元",
+	"Files":                    "文件",
+	"Vulnerable Units":         "存在漏洞的单元",
+	"Bypassable Units":         "可绕过的单元",
+	"Secure Units":             "安全单元",
+	"Distribution Overview":    "结果分布",
+	"By Code Unit":             "按代码单元",
+	"By File (Worst Verdict)":  "按文件（最严重判定）",
+	"Verdict Categories":       "判定类别",
+	"Category":                 "类别",
+	"Description":              "说明",
+	"Remediation Guidance":     "修复建议",
+	"Pipeline Costs & Timing":  "流水线费用与耗时",
+	"Step":                     "阶段",
+	"Duration":                 "耗时",
+	"Cost":                     "费用",
+	"Status":                   "状态",
+	"Total":                    "合计",
+	"All Findings":             "全部问题",
+	"Attack Vector":            "攻击向量",
+	"Analysis":                 "分析",
+	"Dynamic Test":             "动态测试",
+	"Security Analysis Report": "安全分析报告",
+	"Pie chart showing verdict distribution by code unit": "显示代码单元判定分布的饼图",
+	"Pie chart showing verdict distribution by file":      "显示文件判定分布的饼图",
+}
+
+var reportValueZH = map[string]string{
+	"vulnerable":       "存在漏洞",
+	"bypassable":       "可绕过",
+	"inconclusive":     "无法确定",
+	"protected":        "已保护",
+	"safe":             "安全",
+	"success":          "成功",
+	"error":            "失败",
+	"unknown":          "未知",
+	"confirmed":        "已确认",
+	"not reproduced":   "未复现",
+	"test error":       "测试错误",
+	"not tested":       "未测试",
+	"not_reproduced":   "未复现",
+	"blocked":          "已阻断",
+	"parse":            "源码解析",
+	"app-context":      "应用上下文",
+	"llm-reachability": "模型可达性",
+	"enhance":          "上下文增强",
+	"analyze":          "漏洞分析",
+	"verify":           "结果验证",
+	"build-output":     "汇总输出",
+	"dynamic-test":     "动态测试",
+	"report":           "报告生成",
+}
+
+// IsChinese reports whether the template should render simplified Chinese.
+func (d ReportData) IsChinese() bool { return d.Locale == "zh-CN" }
+
+// HTMLLang returns the document language attribute used by both HTML themes.
+func (d ReportData) HTMLLang() string {
+	if d.IsChinese() {
+		return "zh-CN"
+	}
+	return "en"
+}
+
+// T translates a deterministic template label. English intentionally returns
+// the key itself, keeping the existing English report output unchanged.
+func (d ReportData) T(key string) string {
+	if d.IsChinese() {
+		if value, ok := reportTextZH[key]; ok {
+			return value
+		}
+	}
+	return key
+}
+
+// Label translates verdict, stage, status, and dynamic-test labels emitted by
+// Python. Unknown values are preserved so newly added statuses remain visible.
+func (d ReportData) Label(value string) string {
+	if !d.IsChinese() {
+		return value
+	}
+	if translated, ok := reportValueZH[strings.ToLower(value)]; ok {
+		return translated
+	}
+	return value
+}
+
+// ChartLabels localizes the labels used by the client-side pie charts.
+func (d ReportData) ChartLabels(labels []string) []string {
+	if !d.IsChinese() {
+		return labels
+	}
+	localized := make([]string, len(labels))
+	for i, label := range labels {
+		localized[i] = d.Label(label)
+	}
+	return localized
+}
+
+// FindingCount formats a finding count without exposing English pluralization
+// rules in the templates.
+func (d ReportData) FindingCount(count int) string {
+	if d.IsChinese() {
+		return fmt.Sprintf("%d 个问题", count)
+	}
+	if count == 1 {
+		return "1 finding"
+	}
+	return fmt.Sprintf("%d findings", count)
+}
+
+// DisplayTitle uses the localized default title while preserving a custom
+// title supplied by a caller.
+func (d ReportData) DisplayTitle() string {
+	if d.IsChinese() && (d.Title == "" || d.Title == "Security Analysis Report") {
+		return d.T("Security Analysis Report")
+	}
+	return d.Title
 }
 
 // DiffInfo carries the incremental-scan range info to the report templates.
@@ -139,12 +277,38 @@ func (d ReportData) FormatDuration() string {
 	return strings.Join(parts, " ")
 }
 
-// FormatTotalCost returns TotalCostUSD as "$X.XX", or "-" if zero.
+// FormatTotalCost returns declared-currency totals without exchange-rate
+// conversion, or "-" if no cost was recorded.
 func (d ReportData) FormatTotalCost() string {
-	if d.TotalCostUSD <= 0 {
-		return "-"
+	if len(d.CostsByCurrency) > 0 {
+		currencies := make([]string, 0, len(d.CostsByCurrency))
+		for currency := range d.CostsByCurrency {
+			currencies = append(currencies, currency)
+		}
+		sort.Strings(currencies)
+		parts := make([]string, 0, len(currencies))
+		for _, currency := range currencies {
+			amount := d.CostsByCurrency[currency]
+			if amount == 0 {
+				continue
+			}
+			symbol := map[string]string{"USD": "$", "CNY": "¥"}[currency]
+			if symbol == "" {
+				symbol = currency + " "
+			}
+			parts = append(parts, fmt.Sprintf("%s%.2f", symbol, amount))
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " / ")
+		}
 	}
-	return fmt.Sprintf("$%.2f", d.TotalCostUSD)
+	if d.TotalCostCNY > 0 {
+		return fmt.Sprintf("¥%.2f", d.TotalCostCNY)
+	}
+	if d.TotalCostUSD > 0 {
+		return fmt.Sprintf("$%.2f", d.TotalCostUSD)
+	}
+	return "-"
 }
 
 // ShortCommit returns the first 10 characters of CommitSHA, or empty.

@@ -47,6 +47,9 @@ import sys
 from dataclasses import dataclass, asdict
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
+from core.platforms.prompt_context import PlatformPromptContext
+from prompts._fence import collapse_inline
+
 if TYPE_CHECKING:
     from utilities.llm import PhaseBinding
 
@@ -63,6 +66,10 @@ DEFAULT_BATCH_SIZE = 25
 DEFAULT_MAX_CODE_BYTES = 1500
 # Backward-compatible alias for any external caller importing the old name.
 MAX_CODE_BYTES = DEFAULT_MAX_CODE_BYTES
+# Reachability reviews units in batches, so keep the per-unit platform context
+# smaller than the shared renderer's general limit to avoid multiplying context
+# cost by the batch size.
+MAX_PLATFORM_CONTEXT_CHARS = 1_600
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +181,36 @@ def _unit_for_prompt(
     elif isinstance(code, str):
         code_blob = code
 
-    return {
+    projected = {
         "unit_id": unit.get("id", ""),
         "unit_type": unit.get("unit_type", "function"),
         "is_entry_point": bool(unit.get("is_entry_point", False)),
         "reachable": unit.get("reachable"),
         "code": _trim_code(code_blob, max_bytes=max_code_bytes),
     }
+
+    raw_platform_context = unit.get("platform_context")
+    if raw_platform_context is None:
+        raw_platform_context = unit.get("platformContext")
+    platform_context = PlatformPromptContext.from_mapping(raw_platform_context)
+    if not platform_context.is_openharmony:
+        return projected
+
+    raw_language = unit.get("language")
+    language = (
+        collapse_inline(raw_language)[:32]
+        if isinstance(raw_language, str) and raw_language
+        else "cpp"
+    )
+    projected["language"] = language or "cpp"
+
+    rendered_context = platform_context.render_for_phase("reachability")
+    if len(rendered_context) > MAX_PLATFORM_CONTEXT_CHARS:
+        rendered_context = (
+            rendered_context[: MAX_PLATFORM_CONTEXT_CHARS - 1] + "…"
+        )
+    projected["platform_context"] = rendered_context
+    return projected
 
 
 def build_prompt(

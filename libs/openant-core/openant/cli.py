@@ -72,6 +72,7 @@ def cmd_scan(args):
             repo_path=args.repo,
             output_dir=output_dir,
             language=args.language or "auto",
+            platform=getattr(args, "platform", "auto"),
             languages=_selection.selected if _selection else None,
             excluded_languages=dict(_selection.excluded) if _selection else None,
             strict_languages=getattr(args, "strict_languages", False),
@@ -85,6 +86,7 @@ def cmd_scan(args):
             enhance=not args.no_enhance,
             enhance_mode=args.enhance_mode,
             dynamic_test=args.dynamic_test,
+            dynamic_test_mode=getattr(args, "dynamic_test_mode", "docker"),
             workers=args.workers,
             backoff_seconds=args.backoff,
             repo_name=getattr(args, "repo_name", None),
@@ -168,11 +170,16 @@ def cmd_parse(args):
     output_dir = args.output or tempfile.mkdtemp(prefix="open_ant_parse_")
 
     try:
+        platform = getattr(args, "platform", "auto")
+        if platform not in {"auto", "generic", "openharmony"}:
+            raise ValueError(f"Unsupported platform: {platform}")
+        platform_kwargs = {"platform": platform} if platform != "auto" else {}
         with step_context("parse", output_dir, inputs={
             "repo_path": os.path.abspath(args.repo),
             "language": args.language or "auto",
             "processing_level": args.level,
             "skip_tests": not args.no_skip_tests,
+            "platform": platform,
         }) as ctx:
             selection = _select_languages_for(args)
 
@@ -196,6 +203,7 @@ def cmd_parse(args):
                     fresh=getattr(args, "fresh", False),
                     library_mode=getattr(args, "library_mode", False),
                     strict=getattr(args, "strict_languages", False),
+                    **platform_kwargs,
                 )
                 dataset_path = os.path.join(output_dir, "dataset.json")
                 analyzer_path = os.path.join(output_dir, "analyzer_output.json")
@@ -244,6 +252,7 @@ def cmd_parse(args):
                     diff_manifest=getattr(args, "diff_manifest", None),
                     fresh=getattr(args, "fresh", False),
                     library_mode=getattr(args, "library_mode", False),
+                    **platform_kwargs,
                 )
 
             # Attach exclusions on BOTH branches. The multi-language branch
@@ -252,6 +261,9 @@ def cmd_parse(args):
             # about selection policy.
             if selection is not None and not result.excluded_languages:
                 result.excluded_languages = dict(selection.excluded)
+
+            if platform != "auto":
+                result.platform_selection = platform
 
             ctx.summary = {
                 "total_units": result.units_count,
@@ -619,7 +631,7 @@ def cmd_build_output(args):
 
 
 def cmd_dynamic_test(args):
-    """Run Docker-isolated dynamic exploit testing."""
+    """Run Docker testing or prepare a Claude Code task workspace."""
     from core.dynamic_tester import run_tests
     from core.schemas import success, error
     from core.step_report import step_context
@@ -633,13 +645,16 @@ def cmd_dynamic_test(args):
         with step_context("dynamic-test", output_dir, inputs={
             "pipeline_output_path": os.path.abspath(args.pipeline_output),
             "max_retries": args.max_retries,
+            "mode": args.mode,
+            "repo_path": os.path.abspath(args.repo_path) if args.repo_path else None,
         }) as ctx:
             result = run_tests(
                 pipeline_output_path=args.pipeline_output,
                 output_dir=output_dir,
                 max_retries=args.max_retries,
-                repo_path=getattr(args, "repo_path", None),
+                repo_path=args.repo_path,
                 llm_config_name=args.llm_config,
+                mode=args.mode,
             )
 
             ctx.summary = {
@@ -649,10 +664,16 @@ def cmd_dynamic_test(args):
                 "blocked": result.blocked,
                 "inconclusive": result.inconclusive,
                 "errors": result.errors,
+                "mode": result.mode,
             }
             ctx.outputs = {
                 "results_json_path": result.results_json_path,
                 "results_md_path": result.results_md_path,
+                "task_workspace": result.task_workspace,
+                "public_tool_library": result.public_tool_library,
+                "task_manifest_path": result.task_manifest_path,
+                "candidate_manifest": result.candidate_manifest,
+                "launch_command": result.launch_command,
             }
 
         _output_json(success(result.to_dict()))
@@ -666,7 +687,7 @@ def cmd_dynamic_test(args):
         return 2
 
 
-def _default_report_output(results_path: str, fmt: str) -> str:
+def _default_report_output(results_path: str, fmt: str, language: str = "en") -> str:
     """Derive a sensible default output path based on format."""
     reports_dir = os.path.join(os.path.dirname(os.path.abspath(results_path)), "final-reports")
     defaults = {
@@ -675,7 +696,11 @@ def _default_report_output(results_path: str, fmt: str) -> str:
         "summary": os.path.join(reports_dir, "report.md"),
         "disclosure": os.path.join(reports_dir, "disclosures"),
     }
-    return defaults.get(fmt, os.path.join(reports_dir, "report"))
+    output = defaults.get(fmt, os.path.join(reports_dir, "report"))
+    if language == "zh-CN" and fmt == "summary":
+        root, ext = os.path.splitext(output)
+        output = f"{root}.zh-CN{ext}"
+    return output
 
 
 def cmd_report(args):
@@ -696,7 +721,8 @@ def cmd_report(args):
     from core.step_report import step_context
 
     fmt = args.format
-    output_path = args.output or _default_report_output(args.results, fmt)
+    language = getattr(args, "language", "en") or "en"
+    output_path = args.output or _default_report_output(args.results, fmt, language)
     output_dir = os.path.dirname(os.path.abspath(output_path))
 
     # Check if dynamic tests have been run (for summary/disclosure formats)
@@ -757,6 +783,7 @@ def cmd_report(args):
                 result = generate_summary_report(
                     pipeline_output_path, output_path,
                     llm_config_name=args.llm_config,
+                    language=language,
                 )
             elif fmt == "disclosure":
                 result = generate_disclosure_docs(
@@ -823,6 +850,8 @@ def cmd_report_data(args):
 
     results_path = args.results
     dataset_path = args.dataset
+    language = getattr(args, "language", "en") or "en"
+    is_zh_report = language == "zh-CN"
 
     if not dataset_path:
         _output_json(error("--dataset is required for report-data"))
@@ -834,6 +863,7 @@ def cmd_report_data(args):
         with step_context("report-data", results_dir, inputs={
             "results_path": os.path.abspath(results_path),
             "dataset_path": os.path.abspath(dataset_path),
+            "language": language,
         }) as ctx:
             # Load data
             experiment = read_json(results_path)
@@ -1031,7 +1061,11 @@ def cmd_report_data(args):
             actionable = [f for f in findings if f["verdict"] in ("vulnerable", "bypassable", "inconclusive")]
 
             if not actionable:
-                remediation_html = "<p>No vulnerabilities or security concerns found. All code units are either safe or properly protected.</p>"
+                remediation_html = (
+                    "<p>未发现漏洞或安全隐患。所有代码单元均为安全状态或已受到有效保护。</p>"
+                    if is_zh_report else
+                    "<p>No vulnerabilities or security concerns found. All code units are either safe or properly protected.</p>"
+                )
             else:
                 # attack_vector and analysis are untrusted Stage-1/2 LLM output.
                 # Interpolated raw they could inject prompt instructions (or a
@@ -1063,7 +1097,25 @@ def cmd_report_data(args):
 {_an}
 {_anf}
 """
-                prompt = f"""Analyze these security findings and provide:
+                prompt = (f"""请分析下面的安全问题，并使用简体中文输出：
+
+1. **安全状况概览**：用 2 到 3 句话概括整体安全状况。
+
+2. **按优先级排列的修复事项**：按高优先级、中优先级、低优先级分组。
+   每项说明：
+   - 要修复的内容
+   - 修复原因
+   - 具体修复方法
+   引用问题时必须使用原始编号和 # 前缀（例如 #4、#12、#13、#14）。
+   不要编造“72 小时内修复”等具体期限，只使用上述优先级。
+
+3. **快速改进项**：列出可以立即提升安全性的简单修复。
+
+请将结果格式化为 HTML（使用 <h3>、<p>、<ul>、<li>、<strong> 标签），不要包含 ```html 标记。
+
+## 待分析的问题：
+{findings_text}
+""" if is_zh_report else f"""Analyze these security findings and provide:
 
 1. **Executive Summary**: A brief overview of the security posture (2-3 sentences)
 
@@ -1081,7 +1133,7 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
 
 ## Findings to Analyze:
 {findings_text}
-"""
+""")
                 print("[Report] Generating remediation guidance (LLM)...", file=sys.stderr)
                 # The remediation-guidance call rides the report phase
                 # so a single ``--llm-config`` flips it together with
@@ -1109,12 +1161,19 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
             step_reports_data = []
             for sr in _load_step_reports(results_dir):
                 duration = sr.get("duration_seconds", 0)
-                cost = sr.get("cost_usd", 0)
+                stage_costs = sr.get("costs_by_currency") or {}
+                if not stage_costs and sr.get("cost_usd", 0):
+                    stage_costs = {"USD": sr.get("cost_usd", 0)}
                 if duration >= 60:
                     dur_str = f"{duration / 60:.1f}m"
                 else:
                     dur_str = f"{duration:.1f}s"
-                cost_str = f"${cost:.2f}" if cost > 0 else "-"
+                symbols = {"USD": "$", "CNY": "¥"}
+                cost_str = " / ".join(
+                    f"{symbols.get(currency, currency + ' ')}{float(amount):.2f}"
+                    for currency, amount in sorted(stage_costs.items())
+                    if float(amount or 0) > 0
+                ) or "-"
 
                 step_reports_data.append({
                     "step": sr.get("step", "unknown"),
@@ -1128,13 +1187,21 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
             step_reports_data.sort(key=lambda s: s.get("timestamp", ""))
 
             # --- Category descriptions (static) ---
-            categories = [
-                {"verdict": "vulnerable", "color": "#dc3545", "description": "Code contains an exploitable security vulnerability with no effective protection. Immediate remediation required."},
-                {"verdict": "bypassable", "color": "#fd7e14", "description": "Security controls exist but can be circumvented under certain conditions. Review and strengthen protections."},
-                {"verdict": "inconclusive", "color": "#6c757d", "description": "Security posture could not be determined. Manual review recommended to assess risk."},
-                {"verdict": "protected", "color": "#28a745", "description": "Code handles potentially dangerous operations but has effective security controls in place."},
-                {"verdict": "safe", "color": "#20c997", "description": "Code does not involve security-sensitive operations or poses no security risk."},
-            ]
+            categories = (
+                [
+                    {"verdict": "vulnerable", "color": "#dc3545", "description": "代码包含可被利用且没有有效防护的安全漏洞，需要立即修复。"},
+                    {"verdict": "bypassable", "color": "#fd7e14", "description": "代码存在安全控制，但在特定条件下可以被绕过，需要复核并加强防护。"},
+                    {"verdict": "inconclusive", "color": "#6c757d", "description": "无法确定代码的安全状态，建议人工复核风险。"},
+                    {"verdict": "protected", "color": "#28a745", "description": "代码处理潜在危险操作，但已有有效的安全控制。"},
+                    {"verdict": "safe", "color": "#20c997", "description": "代码不涉及安全敏感操作，或不存在已识别的安全风险。"},
+                ] if is_zh_report else [
+                    {"verdict": "vulnerable", "color": "#dc3545", "description": "Code contains an exploitable security vulnerability with no effective protection. Immediate remediation required."},
+                    {"verdict": "bypassable", "color": "#fd7e14", "description": "Security controls exist but can be circumvented under certain conditions. Review and strengthen protections."},
+                    {"verdict": "inconclusive", "color": "#6c757d", "description": "Security posture could not be determined. Manual review recommended to assess risk."},
+                    {"verdict": "protected", "color": "#28a745", "description": "Code handles potentially dangerous operations but has effective security controls in place."},
+                    {"verdict": "safe", "color": "#20c997", "description": "Code does not involve security-sensitive operations or poses no security risk."},
+                ]
+            )
 
             from datetime import datetime
 
@@ -1172,20 +1239,28 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
 
             # --- Totals from step reports ---
             total_duration_seconds = 0.0
-            total_cost_usd = 0.0
+            total_costs: dict[str, float] = {}
             for sr in _load_step_reports(results_dir):
                 total_duration_seconds += sr.get("duration_seconds", 0)
-                total_cost_usd += sr.get("cost_usd", 0)
+                stage_costs = sr.get("costs_by_currency") or {}
+                if not stage_costs and sr.get("cost_usd", 0):
+                    stage_costs = {"USD": sr.get("cost_usd", 0)}
+                for currency, amount in stage_costs.items():
+                    total_costs[currency] = total_costs.get(currency, 0.0) + float(amount or 0)
 
             report_data = {
-                "title": "Security Analysis Report",
+                "title": "安全分析报告" if is_zh_report else "Security Analysis Report",
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "repo_name": repo_name,
                 "commit_sha": commit_sha,
                 "language": language,
                 "repo_url": repo_url,
                 "total_duration_seconds": total_duration_seconds,
-                "total_cost_usd": total_cost_usd,
+                # Legacy consumers keep total_cost_usd; the additive map is
+                # authoritative when a scan uses CNY or multiple currencies.
+                "total_cost_usd": total_costs.get("USD", 0.0),
+                "total_cost_cny": total_costs.get("CNY", 0.0),
+                "costs_by_currency": total_costs,
                 "stats": stats,
                 "unit_chart": unit_chart,
                 "file_chart": file_chart,
@@ -1362,6 +1437,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Language (default: auto-detect)",
     )
     scan_p.add_argument(
+        "--platform",
+        choices=["auto", "generic", "openharmony"],
+        default="auto",
+        help="Platform mode (default: auto; openharmony enables supported parser scope metadata)",
+    )
+    scan_p.add_argument(
         "--languages",
         default=None,
         help=(
@@ -1417,6 +1498,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument("--no-report", action="store_true", help="Skip report generation")
     scan_p.add_argument("--dynamic-test", action="store_true",
                         help="Enable Docker-isolated dynamic testing (off by default)")
+    scan_p.add_argument(
+        "--dynamic-test-mode",
+        choices=["docker", "claude-code"],
+        default="docker",
+        help="Dynamic-test mode when --dynamic-test is enabled: docker or claude-code",
+    )
     scan_p.add_argument("--no-skip-tests", action="store_true", help="Include test files in parsing (default: tests are skipped)")
     scan_p.add_argument("--library-mode", action="store_true",
                         help="Seed the exported public API as entry points (for libraries with no main/route/CLI entry point)")
@@ -1425,7 +1512,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists). See "
             "docs/features/llm-providers/HOW_TO_ADD_AN_ADAPTER.md."
@@ -1475,6 +1564,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", *supported_languages()],
         default="auto",
         help="Language (default: auto-detect)",
+    )
+    parse_p.add_argument(
+        "--platform",
+        choices=["auto", "generic", "openharmony"],
+        default="auto",
+        help="Platform mode (default: auto; openharmony enables supported parser scope metadata)",
     )
     parse_p.add_argument(
         "--languages",
@@ -1548,7 +1643,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm."
         ),
     )
@@ -1578,7 +1675,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists)."
         ),
@@ -1605,7 +1704,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists)."
         ),
@@ -1635,7 +1736,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists)."
         ),
@@ -1657,19 +1760,30 @@ def build_parser() -> argparse.ArgumentParser:
     bo_p.set_defaults(func=cmd_build_output)
 
     # ---------------------------------------------------------------
-    # dynamic-test — Docker-isolated exploit testing
+    # dynamic-test — Docker or Claude Code dynamic testing
     # ---------------------------------------------------------------
-    dt_p = subparsers.add_parser("dynamic-test", help="Run dynamic exploit testing (requires Docker)")
+    dt_p = subparsers.add_parser(
+        "dynamic-test",
+        help="Run dynamic testing with Docker or prepare a Claude Code task workspace",
+    )
     dt_p.add_argument("pipeline_output", help="Path to pipeline_output.json")
     dt_p.add_argument("--output", "-o", help="Output directory (default: temp dir)")
-    dt_p.add_argument("--repo-path", help="Path to the repository root (for pre-staging source files into Docker build context)")
+    dt_p.add_argument("--repo-path", help="Path to the repository root (required by claude-code mode)")
+    dt_p.add_argument(
+        "--mode",
+        choices=["docker", "claude-code"],
+        default="docker",
+        help="Execution mode: docker (default) or claude-code task workspace",
+    )
     dt_p.add_argument("--max-retries", type=int, default=3,
                       help="Max retries per finding on error (default: 3)")
     dt_p.add_argument(
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists)."
         ),
@@ -1692,10 +1806,18 @@ def build_parser() -> argparse.ArgumentParser:
     report_p.add_argument("--repo-name", help="Repository name (used when auto-building pipeline_output)")
     report_p.add_argument("--output", "-o", help="Output path (default: derived from results path and format)")
     report_p.add_argument(
+        "--language",
+        choices=["en", "zh-CN"],
+        default="en",
+        help="Report language (default: en; summary supports en and zh-CN).",
+    )
+    report_p.add_argument(
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists). Used by "
             "the summary and disclosure formats; ignored for csv/html."
@@ -1710,10 +1832,18 @@ def build_parser() -> argparse.ArgumentParser:
     rd_p.add_argument("results", help="Path to results/experiment JSON")
     rd_p.add_argument("--dataset", required=True, help="Path to dataset JSON")
     rd_p.add_argument(
+        "--language",
+        choices=["en", "zh-CN"],
+        default="en",
+        help="Language for display labels and remediation guidance (default: en).",
+    )
+    rd_p.add_argument(
         "--llm-config",
         default=None,
         help=(
-            "Name of the llm-config in ~/.config/openant/config.json. "
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory. "
             "Defaults to the file's default_llm (or the built-in "
             "`openant-default` when no config file exists). Used by the "
             "HTML-report remediation guidance, which rides the report phase."
@@ -1746,7 +1876,11 @@ def build_parser() -> argparse.ArgumentParser:
     tm_p.add_argument("--output-md", help="Write here instead of the repo root")
     tm_p.add_argument(
         "--llm-config", default=None,
-        help="Name of the llm-config in ~/.config/openant/config.json",
+        help=(
+            "Name of the llm-config. Configuration is resolved from "
+            "OPENANT_CONFIG_FILE, project-local config/openant/config.json, "
+            "or the legacy user config directory."
+        ),
     )
     tm_p.set_defaults(func=cmd_threat_model)
 

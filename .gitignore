@@ -3,8 +3,10 @@ __pycache__/
 *.pyo
 .env
 .venv/
+.devtools/
 node_modules/
 apps/openant-cli/bin/
+/config/openant/config.json
 libs/openant-core/parsers/go/go_parser/go_parser
 libs/openant-core/parsers/javascript/.openant-npm-install.lock
 _docs/
@@ -14,3 +16,10 @@ docs/
 # Local-only scratch and generated artifacts (not part of the codebase)
 *knowledge-graph.*
 /bughunt-repros/
+
+# Local OpenHarmony dynamic-test toolchain and generated signing cache.
+# The toolchain remains physically inside OpenAnt for reproducible local runs,
+# but its multi-gigabyte binaries and private keystore must not be committed.
+libs/openant-core/utilities/dynamic_tester/toolchains/
+libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/.hvigor-user-home/
+libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/signing/*.p12

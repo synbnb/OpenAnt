@@ -107,7 +107,7 @@ func Invoke(pythonPath string, args []string, workDir string, quiet bool, apiKey
 	// Pass through environment (Python needs ANTHROPIC_API_KEY, etc.)
 	// If an API key is provided via flag or config, inject it into the
 	// subprocess environment so Python picks it up regardless of .env files.
-	cmd.Env = os.Environ()
+	cmd.Env = withConfigEnv(os.Environ())
 	if apiKey != "" {
 		cmd.Env = setEnv(cmd.Env, "ANTHROPIC_API_KEY", apiKey)
 	}

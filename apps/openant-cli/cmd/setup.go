@@ -81,7 +81,7 @@ var setupCmd = &cobra.Command{
 	Long: `Interactive wizards for first-time OpenAnt setup.
 
 Subcommands ask focused questions and write the answers to
-~/.config/openant/config.json. Useful for users who'd rather not
+the resolved OpenAnt config file. Useful for users who'd rather not
 hand-author the v2 config JSON.`,
 }
 
@@ -247,7 +247,7 @@ func runSetupLLM(cmd *cobra.Command, args []string) {
 
 func writeIntro(w io.Writer, cfg *config.Config) {
 	fmt.Fprintln(w, "OpenAnt LLM setup wizard")
-	fmt.Fprintln(w, "Creates a named llm-config in ~/.config/openant/config.json.")
+	fmt.Fprintln(w, "Creates a named llm-config in the resolved OpenAnt config file.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "The pipeline binds each phase to its configured (provider, model).")
 	fmt.Fprintln(w, "Phases:")

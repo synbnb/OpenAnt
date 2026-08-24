@@ -110,10 +110,47 @@ def partition_units_by_language(units: list[dict]) -> dict[str | None, list[dict
     return parts
 
 
+def _sync_platform_profile_file_counts(
+    result: ScanResult,
+    output_dir: str,
+) -> None:
+    """Copy parser file-count coverage into the persisted platform profile.
+
+    OpenHarmony profile detection runs before parsing, so its initial
+    ``CoverageReport`` necessarily starts at zero.  The platform-aware C
+    parser later reports the authoritative file counts in
+    ``platform_coverage.coverage``.  Keep this synchronization deliberately
+    narrow: only the three file-count fields are updated here; the profile's
+    detection evidence and build metadata remain unchanged.
+    """
+    profile = result.platform_profile
+    scope = result.platform_coverage
+    if not isinstance(profile, dict) or not isinstance(scope, dict):
+        return
+
+    coverage = scope.get("coverage")
+    if not isinstance(coverage, dict):
+        return
+
+    counts: dict[str, int] = {}
+    for field in ("discovered_files", "eligible_files", "parsed_files"):
+        value = coverage.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return
+        counts[field] = value
+
+    profile_coverage = profile.setdefault("coverage", {})
+    if not isinstance(profile_coverage, dict):
+        return
+    profile_coverage.update(counts)
+    write_json(os.path.join(output_dir, "platform_profile.json"), profile)
+
+
 def scan_repository(
     repo_path: str,
     output_dir: str,
     language: str = "auto",
+    platform: str = "auto",
     languages: list[str] | None = None,
     excluded_languages: dict[str, str] | None = None,
     strict_languages: bool = False,
@@ -127,6 +164,7 @@ def scan_repository(
     enhance: bool = True,
     enhance_mode: str = "agentic",
     dynamic_test: bool = False,
+    dynamic_test_mode: str = "docker",
     workers: int = 8,
     backoff_seconds: int = 30,
     repo_name: str | None = None,
@@ -147,13 +185,17 @@ def scan_repository(
     4. **Detect** — Stage 1 vulnerability detection
     5. **Verify** — Stage 2 attacker simulation (optional)
     6. **Build pipeline_output.json** — bridge format for reports + dynamic tests
-    7. **Dynamic Test** — Docker-isolated exploit testing (optional, off by default)
+    7. **Dynamic Test** — Docker-isolated testing or Claude Code task preparation (optional, off by default)
     8. **Report** — summary + disclosure documents (optional, merges dynamic test results)
 
     Args:
         repo_path: Path to the repository to scan.
         output_dir: Directory for all output files.
         language: ``"auto"``, ``"python"``, ``"javascript"``, ``"go"``, or ``"c"``.
+        platform: ``"auto"``, ``"generic"``, or ``"openharmony"``. Auto mode
+            promotes to OpenHarmony only when the local profile reaches its
+            confidence threshold; the effective C parser mode is then recorded
+            in the result and ``platform_profile.json``.
         languages: Optional explicit list of languages to parse. With more than
             one entry the parse fans out per language into ``<output_dir>/<lang>/``
             and the datasets are merged; every later stage still runs ONCE over
@@ -169,7 +211,9 @@ def scan_repository(
         limit: Max number of units to analyze.
         enhance: If True, run agentic/single-shot context enhancement.
         enhance_mode: ``"agentic"`` (thorough) or ``"single-shot"`` (fast).
-        dynamic_test: If True, run Docker-isolated dynamic testing (requires Docker).
+        dynamic_test: If True, run dynamic testing or prepare a Claude Code task.
+        dynamic_test_mode: ``"docker"`` (default) or ``"claude-code"``. Claude
+            Code mode prepares a task workspace and does not require Docker.
         workers: Number of parallel workers for LLM steps (default: 8).
         backoff_seconds: Seconds to wait when rate-limited (default: 30).
 
@@ -179,6 +223,12 @@ def scan_repository(
     repo_path = os.path.abspath(repo_path)
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
+
+    if dynamic_test_mode not in {"docker", "claude-code"}:
+        raise ValueError(
+            f"Unsupported dynamic test mode: {dynamic_test_mode!r}; "
+            "choose docker or claude-code"
+        )
 
     # Reset tracking
     tracking.reset_tracking()
@@ -201,7 +251,51 @@ def scan_repository(
     print(f"[Scan] LLM config: {registry.config_name}", file=sys.stderr)
     probe_registry_or_raise(registry)
 
-    result = ScanResult(output_dir=output_dir)
+    if platform not in {"auto", "generic", "openharmony"}:
+        raise ValueError(f"Unsupported platform: {platform}")
+
+    # Platform detection is an additive, fail-safe layer.  Explicit generic
+    # scans never inspect OpenHarmony metadata; auto scans only promote to the
+    # platform-aware C path when the profile builder reaches its confidence
+    # threshold.  A detector failure therefore cannot turn a generic scan into
+    # a failed scan or silently change its parser argv.
+    effective_platform = platform
+    platform_profile = None
+    platform_profile_path = None
+    if platform in {"auto", "openharmony"}:
+        try:
+            from core.platforms.openharmony.profile import OpenHarmonyProfileBuilder
+
+            detected_profile = OpenHarmonyProfileBuilder().build_from_repository(repo_path)
+        except Exception as exc:
+            detected_profile = None
+            print(
+                f"[Scan] OpenHarmony profile detection unavailable: {exc}; "
+                "continuing with the requested platform mode.",
+                file=sys.stderr,
+            )
+        if detected_profile is not None:
+            platform_profile = detected_profile.to_dict()
+            platform_profile_path = os.path.join(output_dir, "platform_profile.json")
+            write_json(platform_profile_path, platform_profile)
+            if platform == "auto":
+                effective_platform = "openharmony"
+            print(
+                f"[Scan] OpenHarmony profile: {platform_profile_path} "
+                f"(confidence={detected_profile.detection['confidence']:.2f})",
+                file=sys.stderr,
+            )
+
+    platform_kwargs = (
+        {"platform": effective_platform} if effective_platform != "auto" else {}
+    )
+    result = ScanResult(
+        output_dir=output_dir,
+        platform_profile=platform_profile,
+        platform_selection=(
+            effective_platform if effective_platform != "auto" else None
+        ),
+    )
     collected_step_reports: list[dict] = []
 
     # Count total steps for progress display
@@ -245,6 +339,8 @@ def scan_repository(
         "language": language,
         "processing_level": effective_parse_level,
         "skip_tests": skip_tests,
+        "platform": platform,
+        "effective_platform": effective_platform,
     }) as ctx:
         if languages and len(languages) > 1:
             # Fan out per language, then merge into the single dataset every
@@ -268,6 +364,7 @@ def scan_repository(
                 skip_tests=skip_tests,
                 library_mode=library_mode,
                 strict=strict_languages,
+                **platform_kwargs,
             )
             _dataset_path = os.path.join(output_dir, "dataset.json")
             _analyzer_path = os.path.join(output_dir, "analyzer_output.json")
@@ -304,6 +401,7 @@ def scan_repository(
                 skip_tests=skip_tests,
                 diff_manifest=diff_manifest,
                 library_mode=library_mode,
+                **platform_kwargs,
             )
 
         ctx.summary = {
@@ -334,6 +432,8 @@ def scan_repository(
     result.language_stats = getattr(parse_result, "language_stats", {}) or {}
     result.per_language = getattr(parse_result, "per_language", {}) or {}
     result.parse_errors = getattr(parse_result, "parse_errors", []) or []
+    result.platform_coverage = getattr(parse_result, "platform_coverage", None)
+    _sync_platform_profile_file_counts(result, output_dir)
     result.excluded_languages = dict(excluded_languages or {})
     collected_step_reports.append(_load_step_report(output_dir, "parse"))
 
@@ -364,10 +464,24 @@ def scan_repository(
             threat_model_ctx = load_threat_model(Path(repo_path))
 
             if threat_model_ctx is not None:
+                # A repository threat model supplies useful business context,
+                # but it cannot delete the OpenHarmony platform minimum.  The
+                # merge is deterministic and leaves its provenance on the
+                # serialized ApplicationContext and ScanResult.
+                from context.openharmony_context import merge_openharmony_context
+
+                threat_model_ctx = merge_openharmony_context(
+                    threat_model_ctx,
+                    platform_profile,
+                    force=effective_platform == "openharmony",
+                )
                 app_context_path = os.path.join(output_dir, "application_context.json")
                 save_context(threat_model_ctx, Path(app_context_path))
                 result.app_context_path = app_context_path
                 result.context_source = "threat_model"
+                result.application_context_provenance = dict(
+                    threat_model_ctx.context_provenance
+                )
                 # R5: carry the file's provenance (sha over raw bytes) and the
                 # previously discarded permissive-model warnings onto the result
                 # so both land in scan.report.json / pipeline_output.json rather
@@ -379,6 +493,7 @@ def scan_repository(
                 ctx.summary = {
                     "application_type": threat_model_ctx.application_type,
                     "context_source": "threat_model",
+                    "application_context_provenance": threat_model_ctx.context_provenance,
                 }
                 ctx.outputs = {"app_context_path": app_context_path}
                 print(
@@ -388,18 +503,53 @@ def scan_repository(
                 )
             else:
                 try:
-                    context = generate_application_context(
-                        Path(repo_path), registry.get("app_context")
+                    # Forward the already detected profile to the app-context
+                    # prompt. Explicit OpenHarmony selection still supplies a
+                    # minimal platform marker when detection is incomplete.
+                    app_context_profile = platform_profile
+                    if (
+                        app_context_profile is None
+                        and effective_platform == "openharmony"
+                    ):
+                        app_context_profile = {"platform": "openharmony"}
+                    generator_kwargs = (
+                        {"platform_profile": app_context_profile}
+                        if app_context_profile is not None
+                        else {}
                     )
+                    context = generate_application_context(
+                        Path(repo_path),
+                        registry.get("app_context"),
+                        **generator_kwargs,
+                    )
+                    if context is not None:
+                        # ``generate_application_context`` is duck-typed by
+                        # older integrations/tests.  Only the real
+                        # ApplicationContext can carry the additive baseline
+                        # fields; a legacy stub must keep the old path alive.
+                        from context.application_context import ApplicationContext
+
+                        if isinstance(context, ApplicationContext):
+                            from context.openharmony_context import merge_openharmony_context
+
+                            context = merge_openharmony_context(
+                                context,
+                                platform_profile,
+                                force=effective_platform == "openharmony",
+                            )
                     app_context_path = os.path.join(
                         output_dir, "application_context.json"
                     )
                     save_context(context, Path(app_context_path))
                     result.app_context_path = app_context_path
                     result.context_source = "generated"
+                    result.application_context_provenance = dict(
+                        getattr(context, "context_provenance", {}) or {}
+                    )
                     ctx.summary = {
                         "application_type": context.application_type,
                         "context_source": "generated",
+                        "application_context_provenance": result.application_context_provenance,
                     }
                     ctx.outputs = {"app_context_path": app_context_path}
                     print(f"  App type: {context.application_type}", file=sys.stderr)
@@ -588,6 +738,7 @@ def scan_repository(
                                     llm_promoted_ids, lang_units
                                 ),
                                 library_mode=library_mode,
+                                platform=effective_platform,
                             )
                             kept.extend(filtered.get("units", []))
                             _rf = (filtered.get("metadata") or {}).get(
@@ -949,12 +1100,17 @@ def scan_repository(
             language=result.language,
             application_type=(
                 app_context_path and _read_app_type(app_context_path)
-            ) or "web_app",
+            ) or (
+                "openharmony_component"
+                if effective_platform == "openharmony"
+                else "web_app"
+            ),
             processing_level=processing_level,
             step_reports=collected_step_reports,
             context_source=result.context_source,
             threat_model_sha256=result.threat_model_sha256,
             threat_model_warnings=result.threat_model_warnings,
+            application_context_provenance=result.application_context_provenance,
             # Authoritative skip data so pipeline_output.json reflects real
             # pipeline status (esp. a non-aborting verify failure) instead of
             # always reporting "nothing skipped". At this point (Step 6) all
@@ -974,17 +1130,22 @@ def scan_repository(
     # Step 7: Dynamic Test (optional, off by default)
     # ---------------------------------------------------------------
     if dynamic_test and has_findings:
-        if not shutil.which("docker"):
+        if dynamic_test_mode == "docker" and not shutil.which("docker"):
             print(_step_label("Skipping dynamic test (Docker not found)."),
                   file=sys.stderr)
             _record_skip(result, "dynamic-test", "docker_unavailable")
         else:
             from core.dynamic_tester import run_tests
 
-            print(_step_label("Running dynamic tests (Docker)..."), file=sys.stderr)
+            if dynamic_test_mode == "claude-code":
+                print(_step_label("Preparing Claude Code dynamic-test task..."), file=sys.stderr)
+            else:
+                print(_step_label("Running dynamic tests (Docker)..."), file=sys.stderr)
 
             with step_context("dynamic-test", output_dir, inputs={
                 "pipeline_output_path": pipeline_output_path,
+                "mode": dynamic_test_mode,
+                "repo_path": repo_path,
             }) as ctx:
                 # Dynamic test is OPTIONAL: a failure here must not discard
                 # completed work (step_context re-raises otherwise).
@@ -993,6 +1154,8 @@ def scan_repository(
                         pipeline_output_path=pipeline_output_path,
                         output_dir=output_dir,
                         registry=registry,
+                        repo_path=repo_path,
+                        mode=dynamic_test_mode,
                     )
 
                     ctx.summary = {
@@ -1002,16 +1165,25 @@ def scan_repository(
                         "blocked": dt_result.blocked,
                         "inconclusive": dt_result.inconclusive,
                         "errors": dt_result.errors,
+                        "mode": dt_result.mode,
                     }
                     ctx.outputs = {
                         "results_json_path": dt_result.results_json_path,
                         "results_md_path": dt_result.results_md_path,
+                        "task_workspace": dt_result.task_workspace,
+                        "public_tool_library": dt_result.public_tool_library,
+                        "task_manifest_path": dt_result.task_manifest_path,
+                        "candidate_manifest": dt_result.candidate_manifest,
+                        "launch_command": dt_result.launch_command,
                     }
 
                     result.dynamic_test_path = dt_result.results_json_path
 
-                    print(f"  Dynamic test: {dt_result.confirmed} confirmed, "
-                          f"{dt_result.not_reproduced} not reproduced", file=sys.stderr)
+                    if dynamic_test_mode == "claude-code":
+                        print(f"  Claude Code task: {dt_result.task_workspace}", file=sys.stderr)
+                    else:
+                        print(f"  Dynamic test: {dt_result.confirmed} confirmed, "
+                              f"{dt_result.not_reproduced} not reproduced", file=sys.stderr)
                 except Exception as e:
                     print(f"  WARNING: Dynamic test failed: {e}", file=sys.stderr)
                     print("  Continuing without dynamic-test results.", file=sys.stderr)
@@ -1250,7 +1422,17 @@ def _write_scan_report(
     step_reports: list[dict],
 ) -> str:
     """Write ``scan.report.json`` — the aggregate report for the full pipeline."""
-    total_cost = sum(sr.get("cost_usd", 0) for sr in step_reports)
+    costs_by_currency: dict[str, float] = {}
+    for sr in step_reports:
+        recorded = sr.get("costs_by_currency") or {}
+        if recorded:
+            for currency, amount in recorded.items():
+                costs_by_currency[currency] = costs_by_currency.get(currency, 0.0) + float(amount or 0)
+        elif sr.get("cost_usd", 0):
+            # Historical stage reports predate multi-currency fields.
+            costs_by_currency["USD"] = costs_by_currency.get("USD", 0.0) + float(sr.get("cost_usd", 0) or 0)
+    total_cost_usd = costs_by_currency.get("USD", 0.0)
+    total_cost_cny = costs_by_currency.get("CNY", 0.0)
     total_duration = sum(sr.get("duration_seconds", 0) for sr in step_reports)
     total_input = sum(
         sr.get("token_usage", {}).get("input_tokens", 0) for sr in step_reports
@@ -1288,9 +1470,20 @@ def _write_scan_report(
                 else {}
             ),
             "threat_model_warnings": result.threat_model_warnings,
+            "application_context_provenance": result.application_context_provenance,
             # Aggregate of what the walker refused (symlinks) or could not read
             # (directories), summed across languages from each scan-result file.
             "coverage": _collect_coverage(result),
+            **(
+                {"platform_profile": result.platform_profile}
+                if result.platform_profile is not None
+                else {}
+            ),
+            **(
+                {"platform_selection": result.platform_selection}
+                if result.platform_selection is not None
+                else {}
+            ),
         },
         inputs={"repo_path": result.output_dir.replace(os.path.abspath("."), ".")},
         outputs={
@@ -1301,8 +1494,23 @@ def _write_scan_report(
             "pipeline_output_path": result.pipeline_output_path,
             "summary_path": result.summary_path,
             "dynamic_test_path": result.dynamic_test_path,
+            **(
+                {
+                    "platform_profile_path": os.path.join(
+                        output_dir, "platform_profile.json"
+                    )
+                }
+                if result.platform_profile is not None
+                else {}
+            ),
         },
-        cost_usd=round(total_cost, 6),
+        cost_usd=round(total_cost_usd, 6),
+        cost_cny=round(total_cost_cny, 6),
+        cost_amount=(round(next(iter(costs_by_currency.values())), 6)
+                     if len(costs_by_currency) == 1 else 0.0),
+        cost_currency=(next(iter(costs_by_currency))
+                       if len(costs_by_currency) == 1 else None),
+        costs_by_currency={k: round(v, 6) for k, v in costs_by_currency.items()},
         duration_seconds=round(total_duration, 2),
         token_usage={
             "input_tokens": total_input,
@@ -1371,7 +1579,16 @@ def _print_summary(result: ScanResult) -> None:
         print(f"  Verified:       {result.metrics.verified} "
               f"({result.metrics.stage2_agreed} agreed, "
               f"{result.metrics.stage2_disagreed} disagreed)", file=sys.stderr)
-    print(f"  Cost:           ${result.usage.total_cost_usd:.4f}", file=sys.stderr)
+    costs = result.usage.costs_by_currency
+    if costs:
+        symbols = {"USD": "$", "CNY": "¥"}
+        formatted = " / ".join(
+            f"{symbols.get(currency, currency + ' ')}{amount:.4f}"
+            for currency, amount in sorted(costs.items())
+        )
+    else:
+        formatted = "$0.0000"
+    print(f"  Cost:           {formatted}", file=sys.stderr)
     print(f"  Output:         {result.output_dir}", file=sys.stderr)
     if result.skipped_steps:
         print(f"  Skipped:        {', '.join(result.skipped_steps)}", file=sys.stderr)
