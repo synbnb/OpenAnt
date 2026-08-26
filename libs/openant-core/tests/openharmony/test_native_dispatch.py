@@ -1,0 +1,219 @@
+"""Tests for the additive OpenHarmony native dispatch semantic graph."""
+
+from __future__ import annotations
+
+import copy
+import sys
+from pathlib import Path
+
+
+CORE_ROOT = Path(__file__).resolve().parents[2]
+if str(CORE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CORE_ROOT))
+
+from core.platforms.openharmony.native_dispatch import (  # noqa: E402
+    HANDLER_EDGE_KIND,
+    SERVICE_EDGE_KIND,
+    build_native_dispatch_graph,
+)
+from core.platforms.openharmony.reachability import (  # noqa: E402
+    build_semantic_reachability_overlay,
+)
+from parsers.c.unit_generator import UnitGenerator  # noqa: E402
+
+
+STUB_FILE = "services/health/health_stub.cpp"
+SERVICE_FILE = "services/health/health_service.cpp"
+STUB = f"{STUB_FILE}:HealthServiceStub::OnRemoteRequest"
+CONSTRUCTOR = f"{STUB_FILE}:HealthServiceStub::HealthServiceStub"
+ENABLE_INNER = f"{STUB_FILE}:HealthServiceStub::EnableInner"
+LIST_INNER = f"{STUB_FILE}:HealthServiceStub::ListInner"
+ENABLE = f"{SERVICE_FILE}:HealthService::Enable"
+LIST = f"{SERVICE_FILE}:HealthService::List"
+UNRELATED = f"other.cpp:Other::Enable"
+
+
+def _function(
+    name: str,
+    code: str,
+    *,
+    file_path: str,
+    start_line: int,
+    class_name: str | None = None,
+    unit_type: str = "method",
+) -> dict:
+    return {
+        "name": name,
+        "file_path": file_path,
+        "start_line": start_line,
+        "end_line": start_line + len(code.splitlines()) - 1,
+        "class_name": class_name,
+        "unit_type": unit_type,
+        "code": code,
+    }
+
+
+def _fixture() -> tuple[dict, dict]:
+    functions = {
+        CONSTRUCTOR: _function(
+            "HealthServiceStub::HealthServiceStub",
+            """HealthServiceStub::HealthServiceStub()
+{
+    baseFuncs_[ENABLE_CODE] = &HealthServiceStub::EnableInner;
+    baseFuncs_[LIST_CODE] = &HealthServiceStub::ListInner;
+}""",
+            file_path=STUB_FILE,
+            start_line=10,
+            class_name="HealthServiceStub",
+            unit_type="constructor",
+        ),
+        STUB: _function(
+            "HealthServiceStub::OnRemoteRequest",
+            """int32_t HealthServiceStub::OnRemoteRequest(uint32_t code)
+{
+    auto it = baseFuncs_.find(code);
+    auto member = it->second;
+    return (this->*member)(data, reply);
+}""",
+            file_path=STUB_FILE,
+            start_line=20,
+            class_name="HealthServiceStub",
+        ),
+        ENABLE_INNER: _function(
+            "HealthServiceStub::EnableInner",
+            """ErrCode HealthServiceStub::EnableInner(MessageParcel &data)
+{
+    return Enable(data.ReadUint32());
+}""",
+            file_path=STUB_FILE,
+            start_line=30,
+            class_name="HealthServiceStub",
+        ),
+        LIST_INNER: _function(
+            "HealthServiceStub::ListInner",
+            """ErrCode HealthServiceStub::ListInner(MessageParcel &data)
+{
+    std::vector<int> values(List());
+    return values.empty() ? 0 : 1;
+}""",
+            file_path=STUB_FILE,
+            start_line=40,
+            class_name="HealthServiceStub",
+        ),
+        # This declaration is the evidence that HealthService is a concrete
+        # implementation of the stub, not merely another same-named class.
+        "include/health_service.h:HealthService": _function(
+            "HealthService",
+            "class HealthService : public SystemAbility, public HealthServiceStub {\n};",
+            file_path="include/health_service.h",
+            start_line=5,
+            class_name=None,
+            unit_type="class",
+        ),
+        ENABLE: _function(
+            "HealthService::Enable",
+            "ErrCode HealthService::Enable(uint32_t value) { return value; }",
+            file_path=SERVICE_FILE,
+            start_line=50,
+            class_name="HealthService",
+        ),
+        LIST: _function(
+            "HealthService::List",
+            "std::vector<int> HealthService::List() { return {}; }",
+            file_path=SERVICE_FILE,
+            start_line=60,
+            class_name="HealthService",
+        ),
+        UNRELATED: _function(
+            "Other::Enable",
+            "int Other::Enable(uint32_t value) { return value; }",
+            file_path="other.cpp",
+            start_line=1,
+            class_name="Other",
+        ),
+    }
+    extract = {"repository": "/fixture", "functions": functions}
+    call_graph = {
+        "repository": "/fixture",
+        "functions": functions,
+        "call_graph": {STUB: []},
+        "reverse_call_graph": {},
+    }
+    return extract, call_graph
+
+
+def test_base_funcs_edges_recover_handler_and_concrete_service_method():
+    extract, call_graph = _fixture()
+    before = copy.deepcopy(call_graph)
+    graph = build_native_dispatch_graph(extract, call_graph)
+
+    assert graph is not None
+    assert call_graph == before
+    handler_edges = [edge for edge in graph.edges.values() if edge.kind == HANDLER_EDGE_KIND]
+    service_edges = [edge for edge in graph.edges.values() if edge.kind == SERVICE_EDGE_KIND]
+    assert {(edge.source_id, edge.target_id) for edge in handler_edges} == {
+        (f"function:{STUB}", f"function:{ENABLE_INNER}"),
+        (f"function:{STUB}", f"function:{LIST_INNER}"),
+    }
+    assert {(edge.source_id, edge.target_id) for edge in service_edges} == {
+        (f"function:{ENABLE_INNER}", f"function:{ENABLE}"),
+        (f"function:{LIST_INNER}", f"function:{LIST}"),
+    }
+    assert all(edge.evidence for edge in graph.edges.values())
+    enable_edge = next(edge for edge in handler_edges if edge.target_id.endswith(ENABLE_INNER))
+    assert enable_edge.attributes["dispatch_table"] == "baseFuncs_"
+    assert enable_edge.attributes["selector"] == "ENABLE_CODE"
+    service_edge = next(edge for edge in service_edges if edge.target_id.endswith(ENABLE))
+    assert any(item["source"] == "native_class_inheritance" for item in service_edge.evidence)
+    assert not any(edge.target_id.endswith(UNRELATED) for edge in graph.edges.values())
+
+
+def test_reachability_overlay_accepts_native_dispatch_edges_only_for_known_functions():
+    extract, call_graph = _fixture()
+    graph = build_native_dispatch_graph(extract, call_graph)
+    known = set(extract["functions"])
+
+    overlay = build_semantic_reachability_overlay(graph.to_dict(), known)
+    pairs = {(item["source_id"], item["target_id"]) for item in overlay["edges"]}
+    assert (STUB, ENABLE_INNER) in pairs
+    assert (ENABLE_INNER, ENABLE) in pairs
+    assert (STUB, LIST_INNER) in pairs
+    assert (LIST_INNER, LIST) in pairs
+    assert overlay["candidate_edges"] == 4
+    assert "native_dispatch_to_handler" in overlay["edge_kinds"]
+    assert "native_dispatch_to_service" in overlay["edge_kinds"]
+
+
+def test_native_dispatch_edges_are_available_to_unit_context_without_rewriting_native_graph():
+    extract, call_graph = _fixture()
+    graph = build_native_dispatch_graph(extract, call_graph)
+    generator = UnitGenerator(call_graph, {"semantic_graph": graph.to_dict()})
+
+    stub_unit = generator.create_unit(STUB, call_graph["functions"][STUB])
+    stub_context = stub_unit["metadata"]["context_functions"]
+    assert {item["id"] for item in stub_context} == {ENABLE_INNER, LIST_INNER}
+    assert all(item["edge_kinds"] == [HANDLER_EDGE_KIND] for item in stub_context)
+
+    handler_unit = generator.create_unit(
+        ENABLE_INNER, call_graph["functions"][ENABLE_INNER]
+    )
+    handler_context = handler_unit["metadata"]["context_functions"]
+    assert {item["id"] for item in handler_context} == {STUB, ENABLE}
+    assert any(
+        item["edge_kinds"] == [SERVICE_EDGE_KIND] for item in handler_context
+    )
+    assert any(
+        item["edge_kinds"] == [HANDLER_EDGE_KIND] for item in handler_context
+    )
+
+
+def test_non_base_function_table_does_not_create_native_dispatch_graph():
+    extract, call_graph = _fixture()
+    extract["functions"][CONSTRUCTOR]["code"] = extract["functions"][CONSTRUCTOR][
+        "code"
+    ].replace("baseFuncs_", "otherTable")
+    extract["functions"][STUB]["code"] = extract["functions"][STUB]["code"].replace(
+        "baseFuncs_", "otherTable"
+    )
+
+    assert build_native_dispatch_graph(extract, call_graph) is None

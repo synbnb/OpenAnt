@@ -124,24 +124,86 @@ def _build_openharmony_semantic_graph(
     repo_path: str,
     extract_result: Dict[str, Any],
     call_graph_result: Dict[str, Any] | None = None,
+    call_graph_diagnostics: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
-    """Resolve bounded IDL/native IPC evidence for Unit context assembly."""
+    """Resolve bounded IDL/native IPC evidence for Unit context assembly.
+
+    IDL edges and native member-function-table edges are independent evidence
+    sources.  When both are present they are merged into one semantic graph;
+    either source may be absent without disabling the other.
+    """
+    idl_graph = None
     try:
         from core.platforms.openharmony.idl import OpenHarmonyIDLParser
         from core.platforms.openharmony.ipc_graph import OpenHarmonyIPCResolver
 
         idl_result = OpenHarmonyIDLParser().collect(repo_path).to_dict()
-        if not idl_result.get('files') or not idl_result.get('interfaces'):
-            return None
-        return OpenHarmonyIPCResolver().resolve(
-            idl_result,
-            extract_result,
-            call_graph=call_graph_result,
-        ).to_dict()
+        if idl_result.get('files') and idl_result.get('interfaces'):
+            idl_graph = OpenHarmonyIPCResolver().resolve(
+                idl_result,
+                extract_result,
+                call_graph=call_graph_result,
+            )
     except (OSError, UnicodeError, TypeError, ValueError):
         # Semantic enrichment is optional.  A malformed IDL must not prevent
         # the ordinary C/C++ parser pipeline from producing a dataset.
-        return None
+        idl_graph = None
+
+    native_graph = None
+    try:
+        from core.platforms.openharmony.native_dispatch import (
+            build_native_dispatch_graph,
+            merge_semantic_graphs,
+        )
+
+        native_graph = build_native_dispatch_graph(
+            extract_result,
+            call_graph_result,
+            diagnostics=call_graph_diagnostics,
+        )
+        merged = merge_semantic_graphs(idl_graph, native_graph)
+        if merged is None:
+            return None
+        return merged.to_dict()
+    except (OSError, UnicodeError, TypeError, ValueError):
+        # Native dispatch enrichment is optional for the same reason as IDL
+        # enrichment.  Keep a successfully resolved IDL graph if its optional
+        # companion resolver cannot consume this repository.
+        return idl_graph.to_dict() if idl_graph is not None else None
+
+
+def _build_openharmony_call_graph_diagnostics(
+    extract_result: Dict[str, Any],
+    call_graph_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build optional indirect-call diagnostics without affecting parsing."""
+    try:
+        from core.platforms.openharmony.call_graph_diagnostics import (
+            build_call_graph_diagnostics,
+        )
+
+        return build_call_graph_diagnostics(extract_result, call_graph_result)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must degrade safely
+        return {
+            'schema_version': 1,
+            'platform': 'openharmony',
+            'status': 'failed',
+            'repository': extract_result.get('repository', ''),
+            'summary': {
+                'unresolved_call_sites': 0,
+                'dispatch_assignments': 0,
+                'candidate_edges': 0,
+                'unresolved_without_candidates': 0,
+                'orphan_assignments': 0,
+            },
+            'unresolved_call_sites': [],
+            'dispatch_assignments': [],
+            'orphans': [],
+            'error': {
+                'type': type(exc).__name__,
+                'message': str(exc),
+            },
+        }
 
 
 class ProcessingLevel(Enum):
@@ -197,6 +259,7 @@ class CPipelineTest:
         self.analyzer_output_file = None
         self.dataset_file = None
         self.semantic_graph_file = None
+        self.call_graph_residuals_file = None
 
         # Reachability data
         self.entry_points: Set[str] = set()
@@ -226,6 +289,7 @@ class CPipelineTest:
         self.dataset_file = os.path.join(self.output_dir, 'dataset.json')
         self.analyzer_output_file = os.path.join(self.output_dir, 'analyzer_output.json')
         self.semantic_graph_file = None
+        self.call_graph_residuals_file = None
 
         print("=" * 60)
         print("STAGE: c_parser_pipeline")
@@ -276,6 +340,26 @@ class CPipelineTest:
             print(f"         {graph_stats['total_edges']} edges, avg out-degree: {graph_stats['avg_out_degree']}")
             print(f"         {graph_stats['isolated_functions']} isolated functions")
 
+            call_graph_diagnostics = None
+            if self.platform == 'openharmony':
+                call_graph_diagnostics = _build_openharmony_call_graph_diagnostics(
+                    extract_result,
+                    graph_result,
+                )
+                self.call_graph_residuals_file = os.path.join(
+                    self.output_dir, 'call_graph_residuals.json'
+                )
+                write_json(
+                    self.call_graph_residuals_file,
+                    call_graph_diagnostics,
+                )
+                diagnostic_summary = call_graph_diagnostics.get('summary', {})
+                print(
+                    "         Indirect-call diagnostics: "
+                    f"{diagnostic_summary.get('unresolved_call_sites', 0)} residuals, "
+                    f"{diagnostic_summary.get('candidate_edges', 0)} candidates"
+                )
+
             # Stage 4: Generate units
             print("  [4/4] Generating dataset units...")
             opts = {'max_depth': self.depth}
@@ -291,6 +375,7 @@ class CPipelineTest:
                     self.repo_path,
                     extract_result,
                     graph_result,
+                    call_graph_diagnostics,
                 )
                 if semantic_graph is not None:
                     opts['semantic_graph'] = semantic_graph
@@ -311,6 +396,14 @@ class CPipelineTest:
                         'path': 'semantic_graph.json',
                         'edge_count': len(semantic_graph.get('edges', [])),
                         'orphan_count': len(semantic_graph.get('orphans', [])),
+                    }
+                if self.call_graph_residuals_file and call_graph_diagnostics:
+                    dataset.setdefault('metadata', {})[
+                        'openharmony_call_graph_diagnostics'
+                    ] = {
+                        'path': 'call_graph_residuals.json',
+                        'status': call_graph_diagnostics.get('status', 'unknown'),
+                        **call_graph_diagnostics.get('summary', {}),
                     }
             unit_count = dataset['statistics']['total_units']
             print(f"         Generated {unit_count} units")
@@ -338,6 +431,12 @@ class CPipelineTest:
                 'call_graph_edges': graph_stats['total_edges'],
                 'avg_out_degree': graph_stats['avg_out_degree'],
             }
+            if call_graph_diagnostics:
+                summary['call_graph_diagnostics'] = {
+                    'path': 'call_graph_residuals.json',
+                    'status': call_graph_diagnostics.get('status', 'unknown'),
+                    **call_graph_diagnostics.get('summary', {}),
+                }
 
             result = {
                 'success': True,

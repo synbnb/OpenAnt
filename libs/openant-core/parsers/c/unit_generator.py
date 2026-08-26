@@ -59,7 +59,13 @@ _GUARD_SIGNAL_PATTERNS = (
     ("system_app_check", re.compile(r"\b(?:IsSystemApp|IsSAsCalling)\b")),
 )
 _SEMANTIC_CONTEXT_EDGE_KINDS = frozenset(
-    {"proxy_to_transaction", "stub_to_transaction", "transaction_to_handler"}
+    {
+        "proxy_to_transaction",
+        "stub_to_transaction",
+        "transaction_to_handler",
+        "native_dispatch_to_handler",
+        "native_dispatch_to_service",
+    }
 )
 
 

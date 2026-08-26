@@ -19,6 +19,11 @@ SEMANTIC_REACHABILITY_EDGE_KINDS = frozenset(
         "proxy_to_transaction",
         "stub_to_transaction",
         "transaction_to_handler",
+        # Native member-function-table dispatch is an additive semantic
+        # relation.  It is accepted here only after the resolver has attached
+        # exact assignment/call-site evidence to the edge.
+        "native_dispatch_to_handler",
+        "native_dispatch_to_service",
     }
 )
 
