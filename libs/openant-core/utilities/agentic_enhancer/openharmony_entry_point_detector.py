@@ -52,6 +52,33 @@ _HDF_CALLBACK_RE = re.compile(
     r"\.\s*(?P<field>Bind|Init|Release)\s*=\s*"
     r"(?P<callback>[A-Za-z_]\w*)\b"
 )
+# Strong native receive primitives.  ``read()`` is deliberately excluded: in
+# OpenHarmony it is also widely used for files, pipes, and device nodes, so
+# treating every read as a socket boundary would create a large false-positive
+# seed set.  The regex is applied after comments and literals are masked.
+_SOCKET_CALL_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<primitive>accept4?|recv(?:from|msg)?|recvmmsg)\s*\("
+)
+_CPP_NON_CODE_RE = re.compile(
+    r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|"
+    r"'(?:\\.|[^'\\])*'",
+    re.DOTALL,
+)
+_SOCKET_KERNEL_CONTEXT_RE = re.compile(
+    r"\b(?:AF_NETLINK|NETLINK_[A-Z0-9_]+|sockaddr_nl|KOBJECT_UEVENT|"
+    r"uevent|netlink)\b",
+    re.IGNORECASE,
+)
+_SOCKET_LOCAL_CONTEXT_RE = re.compile(
+    r"\b(?:AF_UNIX|AF_LOCAL|sockaddr_un|SO_PEERCRED|socketpair|"
+    r"unix[_ ]socket|local[_ ]socket)\b",
+    re.IGNORECASE,
+)
+_SOCKET_NETWORK_CONTEXT_RE = re.compile(
+    r"\b(?:AF_INET6?|sockaddr_in6?|IPPROTO_(?:TCP|UDP)|"
+    r"(?:tcp|udp)[_ ]socket|inet[_ ]socket)\b",
+    re.IGNORECASE,
+)
 _ABILITY_CONTEXT_RE = re.compile(
     r"\b(?:AAFwk::)?Want(?:Params)?\b|\bSessionInfo\b|"
     r"\bAbilityTransactionCallbackInfo\b|\b(?:Ability|Extension)::On(?:Start|Stop|"
@@ -82,15 +109,19 @@ class OpenHarmonyEntryPointMatch:
     confidence: str
     evidence: str
     reason: str
+    details: Mapping[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "category": self.category,
             "matched": self.matched,
             "confidence": self.confidence,
             "evidence": self.evidence,
             "reason": self.reason,
         }
+        if self.details:
+            result.update(self.details)
+        return result
 
 
 class OpenHarmonyEntryPointDetector:
@@ -148,6 +179,10 @@ class OpenHarmonyEntryPointDetector:
                     evidence=f"function_name:{leaf}",
                 )
             )
+
+        socket_match = self._detect_socket_input(name, code, file_path, func_data)
+        if socket_match is not None:
+            matches.append(socket_match)
 
         if leaf in self._SA_LIFECYCLE_METHODS:
             # OnStart/OnStop are common in ordinary components, so require a
@@ -214,6 +249,72 @@ class OpenHarmonyEntryPointDetector:
                 )
 
         return [match.to_dict() for match in matches]
+
+    @staticmethod
+    def _detect_socket_input(
+        name: str,
+        code: str,
+        file_path: str,
+        func_data: Mapping[str, Any],
+    ) -> OpenHarmonyEntryPointMatch | None:
+        """Classify a function that directly receives bytes from a socket.
+
+        This is intentionally a seed detector, not a data-flow proof.  A
+        direct receive is enough to retain the function and its callees for
+        later security analysis; the trust classification remains explicit so
+        the LLM can distinguish Internet, local IPC-like, and kernel-originated
+        data.  Comments and string/character literals are masked to avoid
+        turning logging text or documentation into entry points.
+        """
+        if not code:
+            return None
+        masked = _CPP_NON_CODE_RE.sub(
+            lambda match: "".join("\n" if char == "\n" else " " for char in match.group(0)),
+            code,
+        )
+        calls = list(_SOCKET_CALL_RE.finditer(masked))
+        if not calls:
+            return None
+
+        context = f"{name}\n{file_path}\n{masked}"
+        if _SOCKET_KERNEL_CONTEXT_RE.search(context):
+            socket_kind, trust = "kernel_socket", "semi_trusted"
+        elif _SOCKET_LOCAL_CONTEXT_RE.search(context):
+            socket_kind, trust = "local_socket", "semi_trusted"
+        elif _SOCKET_NETWORK_CONTEXT_RE.search(context):
+            socket_kind, trust = "network_socket", "untrusted"
+        else:
+            # A direct receive is still an external-data boundary even when
+            # the address family is hidden behind a helper or build macro.
+            socket_kind, trust = "unknown_socket", "untrusted"
+
+        start_line = func_data.get("start_line", func_data.get("startLine", 1))
+        if not isinstance(start_line, int) or start_line < 1:
+            start_line = 1
+        socket_calls = []
+        for call in calls:
+            primitive = call.group("primitive")
+            line = start_line + masked.count("\n", 0, call.start())
+            socket_calls.append({"primitive": primitive, "line": line})
+        primitive_names = list(dict.fromkeys(item["primitive"] for item in socket_calls))
+        call_evidence = ",".join(
+            f"{item['primitive']}@{item['line']}" for item in socket_calls
+        )
+        return OpenHarmonyEntryPointMatch(
+            category="native_socket",
+            matched=",".join(primitive_names),
+            confidence="high",
+            evidence=(
+                f"socket_call:{call_evidence};socket_kind:{socket_kind};trust:{trust}"
+            ),
+            reason="platform:openharmony:native_socket",
+            details={
+                "socket_primitives": primitive_names,
+                "socket_calls": socket_calls,
+                "socket_kind": socket_kind,
+                "trust": trust,
+            },
+        )
 
     @staticmethod
     def _text(func_data: Mapping[str, Any], *keys: str) -> str:

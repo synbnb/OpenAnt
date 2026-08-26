@@ -239,6 +239,81 @@ def test_interface_token_read_alone_is_not_an_entry_point():
     assert matches == []
 
 
+def test_native_network_socket_receive_is_an_entry_point_with_evidence():
+    matches = _match(
+        {
+            "name": "ProxyServer::AcceptLoop",
+            "file_path": "services/netconnmanager/src/proxy.cpp",
+            "start_line": 100,
+            "code": (
+                "void ProxyServer::AcceptLoop() { sockaddr_in peer{}; "
+                "int fd = accept(serverFd, (sockaddr *)&peer, nullptr); "
+                "recv(fd, buffer, sizeof(buffer), 0); }"
+            ),
+        }
+    )
+
+    assert [match["category"] for match in matches] == ["native_socket"]
+    assert matches[0]["matched"] == "accept,recv"
+    assert matches[0]["socket_kind"] == "network_socket"
+    assert matches[0]["trust"] == "untrusted"
+    assert matches[0]["socket_calls"] == [
+        {"primitive": "accept", "line": 100},
+        {"primitive": "recv", "line": 100},
+    ]
+
+
+def test_native_local_socket_accept_is_semi_trusted():
+    matches = _match(
+        {
+            "name": "AcceptPipeSocket_",
+            "file_path": "services/loopevent/socket/le_socket.c",
+            "start_line": 170,
+            "code": (
+                "static int AcceptPipeSocket_(int serverFd) { "
+                "struct sockaddr_un clientAddr; "
+                "return accept(serverFd, (struct sockaddr *)&clientAddr, 0); }"
+            ),
+        }
+    )
+
+    assert matches[0]["socket_kind"] == "local_socket"
+    assert matches[0]["trust"] == "semi_trusted"
+
+
+def test_native_kernel_socket_receive_is_classified_separately():
+    matches = _match(
+        {
+            "name": "AudioSocketThread::AudioPnpReadUeventMsg",
+            "file_path": "services/audio_policy/audio_socket_thread.cpp",
+            "start_line": 130,
+            "code": (
+                "ssize_t AudioPnpReadUeventMsg(int fd) { sockaddr_nl addr{}; "
+                "msghdr msg{}; return recvmsg(fd, &msg, 0); }"
+            ),
+        }
+    )
+
+    assert matches[0]["socket_kind"] == "kernel_socket"
+    assert matches[0]["trust"] == "semi_trusted"
+
+
+def test_socket_words_in_comments_and_literals_do_not_seed_entry_point():
+    matches = _match(
+        {
+            "name": "Helper",
+            "file_path": "services/helper.cpp",
+            "code": (
+                '// recv(fd, buf, n, 0)\n'
+                'const char *text = "accept(fd, nullptr, nullptr)";\n'
+                "return read(fd, buf, n);"
+            ),
+        }
+    )
+
+    assert matches == []
+
+
 def test_generic_detector_keeps_openharmony_patterns_disabled():
     functions = {
         "services/stub.cpp:ServiceStub::OnRemoteRequest": {
