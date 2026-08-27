@@ -1,0 +1,519 @@
+"""Observation-only diagnostics for unresolved OpenHarmony C/C++ calls.
+
+The collector deliberately does not mutate the native call graph or emit
+semantic edges.  It records syntax-backed dispatch assignments and bounded
+candidate targets so later deterministic/LLM stages have auditable inputs.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, Mapping
+
+import tree_sitter_c as tsc
+import tree_sitter_cpp as tscpp
+from tree_sitter import Language, Parser
+
+
+SCHEMA_VERSION = 1
+CPP_EXTENSIONS = {".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".hh"}
+C_LANGUAGE = Language(tsc.language())
+CPP_LANGUAGE = Language(tscpp.language())
+
+
+def _node_text(node: Any, source: bytes) -> str:
+    return source[node.start_byte : node.end_byte].decode(
+        "utf-8", errors="replace"
+    )
+
+
+def _walk(root: Any):
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(node.children))
+
+
+def _source_line(function: Mapping[str, Any], node: Any) -> int:
+    start = function.get("start_line", function.get("startLine", 1))
+    if not isinstance(start, int) or start < 1:
+        start = 1
+    return start + node.start_point[0]
+
+
+def _mask_preserving_lines(code: str) -> str:
+    """Blank comments and literals without changing line offsets."""
+
+    def blank(match: re.Match[str]) -> str:
+        return "".join("\n" if char in "\r\n" else " " for char in match.group(0))
+
+    masked = re.sub(r"//[^\r\n]*|/\*.*?\*/", blank, code, flags=re.DOTALL)
+    return re.sub(r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')", blank, masked)
+
+
+def _selector_text(node: Any, source: bytes) -> str:
+    text = _node_text(node, source).strip()
+    if text.startswith("[") and text.endswith("]"):
+        return text[1:-1].strip()
+    return text
+
+
+def _target_resolution(
+    target_name: str,
+    owner_file: str,
+    functions: Mapping[str, Any],
+) -> tuple[str | None, str]:
+    matches = [
+        function_id
+        for function_id, function in functions.items()
+        if isinstance(function, Mapping) and function.get("name") == target_name
+    ]
+    if len(matches) == 1:
+        return matches[0], "exact_function_id"
+
+    same_file = [
+        function_id
+        for function_id in matches
+        if functions[function_id].get("file_path") == owner_file
+    ]
+    if len(same_file) == 1:
+        return same_file[0], "exact_function_id"
+    if matches:
+        return None, "ambiguous_target_function"
+    return None, "unknown_target_function"
+
+
+def _dispatch_assignment(
+    node: Any,
+    source: bytes,
+    function_id: str,
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if node.type != "assignment_expression":
+        return None
+    left = node.child_by_field_name("left")
+    right = node.child_by_field_name("right")
+    if left is None or right is None:
+        return None
+    if left.type != "subscript_expression":
+        return None
+
+    table_node = left.child_by_field_name("argument")
+    selector_node = left.child_by_field_name("indices")
+    if table_node is None or selector_node is None:
+        return None
+
+    table = _node_text(table_node, source).strip()
+    selector = _selector_text(selector_node, source)
+    target_name, value_kind = _dispatch_target(right, source)
+    if not table or not selector or not target_name:
+        return None
+
+    owner_file = str(function.get("file_path", ""))
+    target_id, resolution = _target_resolution(
+        target_name, owner_file, functions
+    )
+    line = _source_line(function, node)
+    expression = _node_text(node, source).strip()
+    value_text = _node_text(right, source).strip()
+    permissions = _permission_tokens(value_text, target_name, value_kind)
+    return {
+        "owner_function_id": function_id,
+        "owner_class": function.get("class_name"),
+        "file": owner_file,
+        "line": line,
+        "table": table,
+        "selector": selector,
+        "target_name": target_name,
+        "target_id": target_id,
+        "resolution": resolution,
+        "value_kind": value_kind,
+        "permissions": permissions,
+        "evidence": {
+            "file": owner_file,
+            "start_line": line,
+            "end_line": line,
+            "text": expression,
+            "value_kind": value_kind,
+            "permissions": permissions,
+        },
+    }
+
+
+def _dispatch_target(node: Any, source: bytes) -> tuple[str | None, str]:
+    """Extract a member-function target from a pointer or pair initializer.
+
+    C++ services use both ``table[key] = &Stub::Handler`` and
+    ``table[key] = {&Stub::Handler, metadata}``.  The latter is represented by
+    tree-sitter as an ``initializer_list`` whose first relevant descendant is
+    still a ``pointer_expression``.  Walking that structure keeps the rule
+    independent of the table's identifier and of the metadata type.
+    """
+    if node.type == "pointer_expression":
+        target_node = node.child_by_field_name("argument")
+        target_name = _node_text(target_node, source).strip() if target_node else ""
+        return (target_name if "::" in target_name else None, "member_function_pointer")
+    if node.type == "initializer_list":
+        for child in node.children:
+            target_name, value_kind = _dispatch_target(child, source)
+            if target_name:
+                return target_name, "member_function_pair"
+    return None, "unsupported"
+
+
+def _permission_tokens(value_text: str, target_name: str, value_kind: str) -> list[str]:
+    """Preserve qualified permission metadata from a pair initializer."""
+    if value_kind != "member_function_pair" or "," not in value_text:
+        return []
+    metadata = value_text.split(",", 1)[1]
+    target_parts = set(target_name.split("::"))
+    tokens = re.findall(r"(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*", metadata)
+    return sorted({token for token in tokens if token.rsplit("::", 1)[-1] not in target_parts})
+
+
+def _identifier(node: Any, source: bytes) -> str | None:
+    if node is None or node.type != "identifier":
+        return None
+    text = _node_text(node, source).strip()
+    return text if text.isidentifier() else None
+
+
+def _local_dispatch_flow(root: Any, source: bytes) -> tuple[dict[str, str], dict[str, str]]:
+    member_to_iterator: dict[str, str] = {}
+    iterator_to_table: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type != "init_declarator":
+            continue
+        variable = _identifier(node.child_by_field_name("declarator"), source)
+        value = node.child_by_field_name("value")
+        if not variable or value is None:
+            continue
+
+        if value.type == "field_expression":
+            field = value.child_by_field_name("field")
+            field_name = _node_text(field, source) if field is not None else ""
+            receiver_node = value.child_by_field_name("argument")
+            receiver = _identifier(receiver_node, source)
+            # ``it->second`` is a direct member-function value.  A
+            # permission-bearing pair uses ``it->second.first``; retain the
+            # iterator for both forms so the table can be recovered without
+            # knowing its identifier.
+            if field_name == "second" and receiver:
+                member_to_iterator[variable] = receiver
+            elif field_name == "first" and receiver_node is not None and receiver_node.type == "field_expression":
+                inner_field = receiver_node.child_by_field_name("field")
+                inner_receiver = _identifier(
+                    receiver_node.child_by_field_name("argument"), source
+                )
+                if (
+                    inner_receiver
+                    and inner_field is not None
+                    and _node_text(inner_field, source) == "second"
+                ):
+                    member_to_iterator[variable] = inner_receiver
+            continue
+
+        if value.type != "call_expression":
+            continue
+        called = value.child_by_field_name("function")
+        if called is None or called.type != "field_expression":
+            continue
+        table = _identifier(called.child_by_field_name("argument"), source)
+        field = called.child_by_field_name("field")
+        if table and field is not None and _node_text(field, source) == "find":
+            iterator_to_table[variable] = table
+    return member_to_iterator, iterator_to_table
+
+
+def _indirect_target(function_text: str) -> tuple[str | None, str, str] | None:
+    member_match = re.search(
+        r"(?:->\*|\.\*)\s*(?:\(\s*)?"
+        r"(?P<operand>[A-Za-z_]\w*(?:(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)|"
+        r"(?:\s*\[[^\[\]]*\]))*)",
+        function_text,
+    )
+    if member_match:
+        return (
+            member_match.group("operand").strip(),
+            "indirect_member_call",
+            "parenthesized_member_function_pointer",
+        )
+    pointer_match = re.search(r"\*\s*([A-Za-z_]\w*)", function_text)
+    if pointer_match:
+        return (
+            pointer_match.group(1),
+            "indirect_function_call",
+            "parenthesized_function_pointer",
+        )
+    return None
+
+
+def _lexical_member_pointer_calls(source: bytes) -> list[dict[str, str]]:
+    """Recover member-pointer calls that tree-sitter exposes as ERROR nodes.
+
+    Some tree-sitter C++ versions parse ``this->*(iterator->second)`` as an
+    error subtree rather than a call expression.  The token sequence is still
+    unambiguous, so a balanced, comment-masked scan supplies the same bounded
+    operand evidence without depending on a repository-specific table name.
+    """
+    text = source.decode("utf-8", errors="replace")
+    masked = _mask_preserving_lines(text)
+    results: list[dict[str, str]] = []
+    operand_re = re.compile(
+        r"[A-Za-z_]\w*(?:(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)|"
+        r"(?:\s*\[[^\[\]]*\]))*"
+    )
+    for operator in re.finditer(r"->\*|\.\*", masked):
+        rest = masked[operator.end() :]
+        leading = len(rest) - len(rest.lstrip())
+        rest = rest.lstrip()
+        wrapped = rest.startswith("(")
+        if wrapped:
+            depth = 0
+            end = None
+            for offset, char in enumerate(rest):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = offset
+                        break
+            if end is None:
+                continue
+            operand = rest[1:end].strip()
+            consumed = leading + end + 1
+        else:
+            match = operand_re.match(rest)
+            if match is None:
+                continue
+            operand = match.group(0).strip()
+            consumed = leading + match.end()
+        if not operand:
+            continue
+        after = masked[operator.end() + consumed :].lstrip()
+        # A member-pointer expression is invoked either as ``(...)(args)``
+        # or directly as ``... (args)``.  Require the following call token so
+        # member-pointer declarations are not reported as call sites.
+        if after.startswith(")"):
+            after = after[1:].lstrip()
+        if not after.startswith("("):
+            continue
+        line = masked.count("\n", 0, operator.start())
+        start = operator.start()
+        while start > 0 and masked[start - 1] not in "\n;{}":
+            start -= 1
+        expression = text[start : operator.end() + consumed].strip()
+        results.append(
+            {
+                "operand": operand,
+                "expression": expression,
+                "line": str(line),
+            }
+        )
+    return results
+
+
+def _dispatch_symbols(
+    operand: str,
+    member_to_iterator: Mapping[str, str],
+    iterator_to_table: Mapping[str, str],
+) -> tuple[str, str, str]:
+    """Resolve an indirect operand to (operand, iterator, table)."""
+    normalized = re.sub(r"\s+", "", operand)
+    if normalized in member_to_iterator:
+        iterator = member_to_iterator[normalized]
+        return normalized, iterator, iterator_to_table.get(iterator, "")
+
+    iterator_match = re.fullmatch(r"([A-Za-z_]\w*)->second(?:\.first)?", normalized)
+    if iterator_match:
+        iterator = iterator_match.group(1)
+        return normalized, iterator, iterator_to_table.get(iterator, "")
+
+    subscript_match = re.fullmatch(
+        r"([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*)\[[^\[\]]*\]",
+        normalized,
+    )
+    if subscript_match:
+        return normalized, "", subscript_match.group(1)
+    return normalized, "", ""
+
+
+def build_call_graph_diagnostics(
+    extract_result: Mapping[str, Any],
+    call_graph_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect syntax-backed residual calls without changing either input."""
+    functions = extract_result.get("functions", {})
+    if not isinstance(functions, Mapping):
+        functions = {}
+
+    c_parser = Parser(C_LANGUAGE)
+    cpp_parser = Parser(CPP_LANGUAGE)
+    parsed: dict[str, tuple[Any, bytes, Mapping[str, Any]]] = {}
+    assignments: list[dict[str, Any]] = []
+
+    for function_id, function in functions.items():
+        if not isinstance(function_id, str) or not isinstance(function, Mapping):
+            continue
+        code = function.get("code", "")
+        if not isinstance(code, str) or not code:
+            continue
+        source = code.encode("utf-8", errors="replace")
+        suffix = Path(str(function.get("file_path", ""))).suffix.lower()
+        parser = cpp_parser if suffix in CPP_EXTENSIONS else c_parser
+        root = parser.parse(source).root_node
+        parsed[function_id] = (root, source, function)
+        for node in _walk(root):
+            item = _dispatch_assignment(
+                node, source, function_id, function, functions
+            )
+            if item is not None:
+                assignments.append(item)
+
+    assignments.sort(
+        key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
+    )
+    sites: list[dict[str, Any]] = []
+    for function_id, (root, source, function) in parsed.items():
+        member_to_iterator, iterator_to_table = _local_dispatch_flow(root, source)
+        indirect_calls: list[dict[str, Any]] = []
+        seen_calls: set[tuple[str, int]] = set()
+        for node in _walk(root):
+            if node.type != "call_expression":
+                continue
+            called = node.child_by_field_name("function")
+            if called is None or called.type != "parenthesized_expression":
+                continue
+            target = _indirect_target(_node_text(called, source))
+            if target is None:
+                continue
+            target_variable, ast_kind, reason = target
+            line = _source_line(function, node)
+            key = (target_variable or "", line)
+            seen_calls.add(key)
+            indirect_calls.append(
+                {
+                    "target_variable": target_variable,
+                    "ast_kind": ast_kind,
+                    "reason": reason,
+                    "line": line,
+                    "expression": _node_text(node, source).strip(),
+                }
+            )
+
+        # Tree-sitter currently exposes some nested member-pointer calls as
+        # ERROR nodes.  Add only the balanced token-level observations that
+        # were not already captured by the AST traversal.
+        for lexical in _lexical_member_pointer_calls(source):
+            target_variable = lexical["operand"]
+            start_line = function.get("start_line", function.get("startLine", 1))
+            if not isinstance(start_line, int) or start_line < 1:
+                start_line = 1
+            line = start_line + int(lexical["line"])
+            key = (target_variable, line)
+            if key in seen_calls:
+                continue
+            seen_calls.add(key)
+            indirect_calls.append(
+                {
+                    "target_variable": target_variable,
+                    "ast_kind": "indirect_member_call",
+                    "reason": "member_pointer_expression_token_scan",
+                    "line": line,
+                    "expression": lexical["expression"],
+                }
+            )
+
+        for indirect in indirect_calls:
+            target_variable, iterator_variable, table = _dispatch_symbols(
+                indirect["target_variable"],
+                member_to_iterator,
+                iterator_to_table,
+            )
+            owner_class = function.get("class_name")
+
+            matched = [
+                item
+                for item in assignments
+                if table
+                and item["table"] == table
+                and item["target_id"]
+                and (
+                    not owner_class
+                    or not item.get("owner_class")
+                    or item.get("owner_class") == owner_class
+                )
+            ]
+            target_ids = list(dict.fromkeys(item["target_id"] for item in matched))
+            sites.append(
+                {
+                    "caller_id": function_id,
+                    "file": function.get("file_path", ""),
+                    "line": indirect["line"],
+                    "expression": indirect["expression"],
+                    "ast_kind": indirect["ast_kind"],
+                    "static_resolution": "unresolved",
+                    "reason": indirect["reason"],
+                    "symbols": {
+                        "target_variable": target_variable,
+                        "iterator_variable": iterator_variable,
+                        "dispatch_table": table,
+                    },
+                    "candidate_target_ids": target_ids,
+                    "candidates": [
+                        {
+                            "target_id": item["target_id"],
+                            "target_name": item["target_name"],
+                            "selector": item["selector"],
+                            "value_kind": item.get("value_kind", ""),
+                            "permissions": item.get("permissions", []),
+                            "evidence": item["evidence"],
+                        }
+                        for item in matched
+                    ],
+                }
+            )
+
+    sites.sort(key=lambda item: (item["file"], item["line"], item["caller_id"]))
+    orphans = [
+        {
+            "owner_function_id": item["owner_function_id"],
+            "file": item["file"],
+            "line": item["line"],
+            "table": item["table"],
+            "selector": item["selector"],
+            "target_name": item["target_name"],
+            "reason": item["resolution"],
+            "evidence": item["evidence"],
+        }
+        for item in assignments
+        if not item["target_id"]
+    ]
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "platform": "openharmony",
+        "status": "complete",
+        "repository": extract_result.get("repository", ""),
+        "summary": {
+            "unresolved_call_sites": len(sites),
+            "dispatch_assignments": len(assignments),
+            "candidate_edges": sum(
+                len(site["candidate_target_ids"]) for site in sites
+            ),
+            "unresolved_without_candidates": sum(
+                not site["candidate_target_ids"] for site in sites
+            ),
+            "orphan_assignments": len(orphans),
+        },
+        "unresolved_call_sites": sites,
+        "dispatch_assignments": assignments,
+        "orphans": orphans,
+    }
+
+
+__all__ = ["SCHEMA_VERSION", "build_call_graph_diagnostics"]

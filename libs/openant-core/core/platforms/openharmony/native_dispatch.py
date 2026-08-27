@@ -3,15 +3,16 @@
 OpenHarmony services often dispatch Binder transactions through a C++ member
 function table.  A native call-graph builder cannot recover the target of
 ``(this->*memberFunc)(...)`` from ordinary call syntax, even though the table
-initialisation is explicit in the source.  This module turns that narrow,
-syntax-backed evidence into an additive semantic graph.  It intentionally
+initialisation is explicit in the source.  This module turns syntax- and
+data-flow-backed evidence into an additive semantic graph.  It intentionally
 does not modify the native call graph and never guesses a target from a name
 alone.
 
-The first supported form is a ``baseFuncs_``-style member-function table:
-
-``baseFuncs_[CODE] = &Stub::HandleInner;``
-``(this->*memberFunc)(data, reply);``
+The resolver is table-name agnostic.  It connects a table registration such
+as ``handlers[CODE] = &Stub::HandleInner`` (or a metadata pair containing the
+pointer) to a lookup-derived member-pointer call such as
+``(this->*(iterator->second))(data, reply)``.  The table identifier is kept as
+evidence, not used as an allow-list.
 
 When a handler directly calls a method implemented by a class that is proven
 to inherit the stub (for example ``MedicalSensorService`` inheriting
@@ -38,7 +39,10 @@ RESOLVER_VERSION = 1
 HANDLER_EDGE_KIND = "native_dispatch_to_handler"
 SERVICE_EDGE_KIND = "native_dispatch_to_service"
 _CPP_EXTENSIONS = frozenset({".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"})
-_BASE_TABLE_RE = re.compile(r"(?:^|[^A-Za-z0-9_])(?P<table>[A-Za-z_][A-Za-z0-9_]*)$")
+_TABLE_EXPR_RE = re.compile(
+    r"(?:this\s*(?:->|\.)\s*)?[A-Za-z_]\w*"
+    r"(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)*"
+)
 _CLASS_RE = re.compile(
     r"\bclass\s+(?P<class>[A-Za-z_]\w*)\s*"
     r"(?:(?:final)\s*)?(?::\s*(?P<bases>[^\{;]+))?\{",
@@ -129,17 +133,12 @@ def _function_attributes(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _is_base_table(value: Any) -> bool:
-    """Recognize the deliberately narrow ``baseFuncs_`` table family."""
+def _is_dispatch_table(value: Any) -> bool:
+    """Accept a simple table expression without relying on its identifier."""
     table = _text(value)
     if not table:
         return False
-    table = table.replace("->", ".").split(".")[-1]
-    match = _BASE_TABLE_RE.fullmatch(table)
-    if not match:
-        return False
-    normalized = match.group("table").lower().rstrip("_")
-    return normalized in {"basefuncs", "base_funcs"}
+    return bool(_TABLE_EXPR_RE.fullmatch(table))
 
 
 def _parser_for(path: str) -> Parser:
@@ -335,7 +334,7 @@ def _assignment_index(assignments: Iterable[Any]) -> dict[tuple[str, str, str], 
     for item in assignments:
         if not isinstance(item, Mapping):
             continue
-        if not _is_base_table(item.get("table")):
+        if not _is_dispatch_table(item.get("table")):
             continue
         target_id = _text(item.get("target_id"))
         if not target_id:
@@ -356,7 +355,7 @@ def _candidate_evidence(
         "path": _text(site.get("file")),
         "line": site.get("line", 0),
         "function": _text(site.get("caller_id")),
-        "signal": "baseFuncs_member_function_call",
+        "signal": "member_function_table_call",
         "matched": _text(site.get("expression")),
     }
     evidence.append(site_evidence)
@@ -372,17 +371,62 @@ def _candidate_evidence(
     return evidence
 
 
+def _registration_metadata(
+    assignments: Iterable[Any],
+    *,
+    target_id: str,
+    table: str,
+) -> list[dict[str, Any]]:
+    """Collect every table registration represented by one semantic edge.
+
+    ``SemanticGraph`` deliberately merges edges with the same source, target,
+    and kind.  A service may nevertheless register the same handler for more
+    than one transaction code.  Keeping the registrations as edge metadata
+    prevents that merge from hiding the multiplicity while retaining the
+    compact graph shape.
+    """
+    registrations: list[dict[str, Any]] = []
+    for raw in assignments:
+        if not isinstance(raw, Mapping):
+            continue
+        if _text(raw.get("target_id")) != target_id:
+            continue
+        if _text(raw.get("table")) != table:
+            continue
+        selector = _text(raw.get("selector"))
+        if not selector:
+            continue
+        permissions = raw.get("permissions", [])
+        if not isinstance(permissions, list):
+            permissions = []
+        registrations.append(
+            {
+                "selector": selector,
+                "value_kind": _text(raw.get("value_kind")),
+                "permissions": list(permissions),
+            }
+        )
+    registrations.sort(
+        key=lambda item: (
+            item["selector"],
+            item["value_kind"],
+            tuple(item["permissions"]),
+        )
+    )
+    return registrations
+
+
 def _add_orphan_for_site(graph: SemanticGraph, site: Mapping[str, Any]) -> None:
     graph.add_orphan(
         kind="unresolved_native_dispatch",
-        reason="baseFuncs_ member-function dispatch has no resolved handler candidate",
+        reason="member-function table dispatch has no resolved handler candidate",
         evidence=[
             {
                 "source": "native_dispatch",
                 "path": _text(site.get("file")),
                 "line": site.get("line", 0),
                 "function": _text(site.get("caller_id")),
-                "signal": "baseFuncs_member_function_call",
+                "signal": "member_function_table_call",
                 "matched": _text(site.get("expression")),
             }
         ],
@@ -410,7 +454,7 @@ def _resolve_dispatch_edges(
         caller = records_by_id.get(caller_id)
         symbols = raw_site.get("symbols")
         table = symbols.get("dispatch_table") if isinstance(symbols, Mapping) else ""
-        if not caller or caller.get("leaf") != "OnRemoteRequest" or not _is_base_table(table):
+        if not caller or caller.get("leaf") != "OnRemoteRequest" or not _is_dispatch_table(table):
             continue
         dispatch_callers[caller_id].append(raw_site)
         candidates = raw_site.get("candidates")
@@ -431,6 +475,24 @@ def _resolve_dispatch_edges(
             selector = _text(candidate.get("selector"))
             table_key = (target_id, _text(table), selector)
             assignment = assignment_by_target.get(table_key, [None])[0]
+            assignment_value_kind = (
+                _text(assignment.get("value_kind"))
+                if isinstance(assignment, Mapping)
+                else ""
+            )
+            assignment_permissions = (
+                assignment.get("permissions", [])
+                if isinstance(assignment, Mapping)
+                else []
+            )
+            value_kind = _text(candidate.get("value_kind")) or assignment_value_kind
+            permissions = candidate.get("permissions", []) or assignment_permissions
+            registrations = _registration_metadata(
+                assignments,
+                target_id=target_id,
+                table=_text(table),
+            )
+            selectors = [item["selector"] for item in registrations]
             _add_function_node(graph, caller)
             _add_function_node(graph, target)
             graph.add_edge(
@@ -445,7 +507,18 @@ def _resolve_dispatch_edges(
                     "attributes": {
                         "dispatch_table": _text(table),
                         "selector": selector,
+                        "selectors": selectors or [selector],
+                        "registrations": registrations
+                        or [
+                            {
+                                "selector": selector,
+                                "value_kind": value_kind,
+                                "permissions": permissions,
+                            }
+                        ],
                         "stub_class": caller.get("owner", ""),
+                        "value_kind": value_kind,
+                        "permissions": permissions,
                     },
                 }
             )
@@ -463,7 +536,7 @@ def _resolve_dispatch_edges(
     for raw_assignment in assignments:
         if not isinstance(raw_assignment, Mapping):
             continue
-        if not _is_base_table(raw_assignment.get("table")):
+        if not _is_dispatch_table(raw_assignment.get("table")):
             continue
         target_id = _text(raw_assignment.get("target_id"))
         target = records_by_id.get(target_id)
@@ -478,6 +551,12 @@ def _resolve_dispatch_edges(
         if len(owners) != 1 or owners[0]["id"] in dispatch_callers:
             continue
         caller = owners[0]
+        registrations = _registration_metadata(
+            assignments,
+            target_id=target_id,
+            table=_text(raw_assignment.get("table")),
+        )
+        selectors = [item["selector"] for item in registrations]
         _add_function_node(graph, caller)
         _add_function_node(graph, target)
         graph.add_edge(
@@ -497,7 +576,18 @@ def _resolve_dispatch_edges(
                 "attributes": {
                     "dispatch_table": _text(raw_assignment.get("table")),
                     "selector": _text(raw_assignment.get("selector")),
+                    "selectors": selectors or [_text(raw_assignment.get("selector"))],
+                    "registrations": registrations
+                    or [
+                        {
+                            "selector": _text(raw_assignment.get("selector")),
+                            "value_kind": _text(raw_assignment.get("value_kind")),
+                            "permissions": raw_assignment.get("permissions", []),
+                        }
+                    ],
                     "stub_class": caller.get("owner", ""),
+                    "value_kind": _text(raw_assignment.get("value_kind")),
+                    "permissions": raw_assignment.get("permissions", []),
                 },
             }
         )
@@ -623,7 +713,7 @@ def build_native_dispatch_graph(
     ``diagnostics`` should normally be the already persisted
     ``call_graph_residuals`` result.  If omitted, the observation-only
     diagnostics collector is invoked once.  The function returns ``None``
-    when no ``baseFuncs_`` evidence exists, preserving the previous optional
+    when no structurally valid member-function-table evidence exists, preserving the previous optional
     semantic-graph behavior for unrelated repositories.
     """
     if not isinstance(extract_result, Mapping):
@@ -639,11 +729,11 @@ def build_native_dispatch_graph(
 
         diagnostics = build_call_graph_diagnostics(extract_result, call_graph_result)
     assignments, sites = _diagnostic_lists(diagnostics)
-    has_base_evidence = any(
-        isinstance(item, Mapping) and _is_base_table(item.get("table"))
+    has_dispatch_evidence = any(
+        isinstance(item, Mapping) and _is_dispatch_table(item.get("table"))
         for item in [*assignments, *sites]
     )
-    if not has_base_evidence:
+    if not has_dispatch_evidence:
         return None
 
     graph = SemanticGraph()

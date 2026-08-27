@@ -207,7 +207,7 @@ def test_native_dispatch_edges_are_available_to_unit_context_without_rewriting_n
     )
 
 
-def test_non_base_function_table_does_not_create_native_dispatch_graph():
+def test_dispatch_graph_does_not_depend_on_function_table_name():
     extract, call_graph = _fixture()
     extract["functions"][CONSTRUCTOR]["code"] = extract["functions"][CONSTRUCTOR][
         "code"
@@ -216,4 +216,43 @@ def test_non_base_function_table_does_not_create_native_dispatch_graph():
         "baseFuncs_", "otherTable"
     )
 
-    assert build_native_dispatch_graph(extract, call_graph) is None
+    graph = build_native_dispatch_graph(extract, call_graph)
+
+    assert graph is not None
+    handler_edges = [
+        edge for edge in graph.edges.values() if edge.kind == HANDLER_EDGE_KIND
+    ]
+    assert {
+        (edge.source_id, edge.target_id) for edge in handler_edges
+    } == {
+        (f"function:{STUB}", f"function:{ENABLE_INNER}"),
+        (f"function:{STUB}", f"function:{LIST_INNER}"),
+    }
+    assert all(
+        edge.attributes["dispatch_table"] == "otherTable"
+        for edge in handler_edges
+    )
+
+
+def test_duplicate_handler_registrations_are_retained_in_edge_metadata():
+    extract, call_graph = _fixture()
+    constructor = extract["functions"][CONSTRUCTOR]
+    constructor["code"] += (
+        "\n    baseFuncs_[ENABLE_CODE_ALIAS] = "
+        "&HealthServiceStub::EnableInner;"
+    )
+
+    graph = build_native_dispatch_graph(extract, call_graph)
+    enable_edge = next(
+        edge
+        for edge in graph.edges.values()
+        if edge.kind == HANDLER_EDGE_KIND and edge.target_id.endswith(ENABLE_INNER)
+    )
+
+    assert set(enable_edge.attributes["selectors"]) == {
+        "ENABLE_CODE",
+        "ENABLE_CODE_ALIAS",
+    }
+    assert {
+        item["selector"] for item in enable_edge.attributes["registrations"]
+    } == {"ENABLE_CODE", "ENABLE_CODE_ALIAS"}
