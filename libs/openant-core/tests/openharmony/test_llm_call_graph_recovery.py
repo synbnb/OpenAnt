@@ -16,6 +16,7 @@ if str(CORE_ROOT) not in sys.path:
 from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     build_recovery_prompt,
     build_recovery_worklist,
+    classify_recovery_site,
     parse_recovery_response,
     validate_recovery_proposals,
 )
@@ -26,6 +27,7 @@ CALLER = f"{SOURCE}:NetStub::OnRemoteRequest"
 HANDLER = f"{SOURCE}:NetStub::HandleRequest"
 OTHER = f"{SOURCE}:NetStub::OtherRequest"
 BACKGROUND = f"{SOURCE}:NetStub::Background"
+CALLER_ALIAS = f"{SOURCE}:OHOS.NetStub"
 
 
 def _functions() -> dict[str, dict]:
@@ -67,6 +69,14 @@ def _functions() -> dict[str, dict]:
             "end_line": 55,
             "class_name": "NetStub",
             "code": "void NetStub::Background() { callback(event); }",
+        },
+        CALLER_ALIAS: {
+            "name": "OHOS.NetStub",
+            "file_path": SOURCE,
+            "start_line": 10,
+            "end_line": 20,
+            "class_name": "NetStub",
+            "code": "int32_t OHOS::NetStub::OnRemoteRequest(uint32_t code) { return 0; }",
         },
     }
 
@@ -274,3 +284,113 @@ def test_low_confidence_edge_is_kept_out_of_accepted_review_set():
     assert validated["rejected"][0]["rejection_reason"] == (
         "confidence_below_threshold"
     )
+
+
+def test_worklist_deduplicates_same_source_span_and_keeps_all_callers():
+    diagnostics = {
+        "unresolved_call_sites": [
+            {
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line": 12,
+                "expression": "return (this->*requestFunc)(data, reply);",
+                "reason": "parenthesized_member_function_pointer",
+                "symbols": {"target_variable": "requestFunc"},
+                "candidate_target_ids": [],
+            },
+            {
+                "caller_id": CALLER_ALIAS,
+                "file": SOURCE,
+                "line": 12,
+                "expression": "return (this->*requestFunc)(data, reply);",
+                "reason": "same_span_from_second_parser",
+                "symbols": {
+                    "target_variable": "requestFunc",
+                    "dispatch_table": "handlers_",
+                },
+                "candidate_target_ids": [],
+            },
+        ]
+    }
+
+    first = build_recovery_worklist(diagnostics, _functions(), max_sites=-1)
+    reversed_diagnostics = {
+        "unresolved_call_sites": list(reversed(diagnostics["unresolved_call_sites"]))
+    }
+    second = build_recovery_worklist(
+        reversed_diagnostics, _functions(), max_sites=-1
+    )
+
+    assert len(first) == 1
+    assert first[0]["duplicate_count"] == 2
+    assert set(first[0]["caller_ids"]) == {CALLER, CALLER_ALIAS}
+    assert first[0]["symbols"]["dispatch_table"] == "handlers_"
+    assert first[0]["site_id"] == second[0]["site_id"]
+
+
+def test_site_classification_separates_local_template_and_external_calls():
+    local = classify_recovery_site(
+        {
+            "expression": "iter->second(args)",
+            "reason": "lookup_derived_callable",
+            "symbols": {"dispatch_table": "handlers_"},
+        },
+        {
+            "name": "AudioEngine::Invoke",
+            "code": "void *handle = dlsym(nullptr, \"unrelated\"); auto it = handlers_.find(cmd); if (it != handlers_.end()) it->second(args);",
+        },
+    )
+    template = classify_recovery_site(
+        {
+            "expression": "(modulePtr.get()->*(_moduleFunc))(args...)",
+            "reason": "parenthesized_member_function_pointer",
+        },
+        {
+            "name": "TelRilCallback::Execute",
+            "code": "template<typename ModuleFuncType> return (modulePtr.get()->*(_moduleFunc))(args...);",
+        },
+    )
+    callback = classify_recovery_site(
+        {
+            "expression": "(*cacheCallback)(event)",
+            "reason": "parenthesized_function_pointer",
+        },
+        {
+            "name": "TaiheAudioCallback::SafeJsCallbackWork",
+            "code": "std::shared_ptr<taihe::callback<void(Event)>> cacheCallback; (*cacheCallback)(event);",
+        },
+    )
+    dynamic = classify_recovery_site(
+        {
+            "expression": "(*initParam)(processName)",
+            "reason": "parenthesized_function_pointer",
+        },
+        {
+            "name": "InitDebugParams",
+            "code": 'void *handle = dlopen(path, RTLD_LAZY); dlsym(handle, "InitEnvironmentParam");',
+        },
+    )
+    external_interface = classify_recovery_site(
+        {
+            "expression": "(rilInterface->*(_func))(slotId, serial)",
+            "reason": "parenthesized_member_function_pointer",
+        },
+        {
+            "name": "TelRilBase::Execute",
+            "code": "return (rilInterface->*(_func))(slotId, serial);",
+        },
+    )
+
+    assert local["kind"] == "local_dispatch"
+    assert local["analysis_route"] == "deterministic"
+    assert template["kind"] == "template_dispatch"
+    assert template["analysis_route"] == "deterministic"
+    assert callback["kind"] == "external_callback"
+    assert callback["analysis_route"] == "external_boundary"
+    assert callback["llm_eligible"] is False
+    assert dynamic["kind"] == "external_dynamic_symbol"
+    assert dynamic["analysis_route"] == "external_boundary"
+    assert dynamic["llm_eligible"] is False
+    assert external_interface["kind"] == "external_interface"
+    assert external_interface["analysis_route"] == "external_boundary"
+    assert external_interface["llm_eligible"] is False
