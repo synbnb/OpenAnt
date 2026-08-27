@@ -66,6 +66,11 @@ class FunctionExtractor:
         self.macros: Dict[str, List[Dict]] = {}
         self.macro_aliases: Dict[str, str] = {}  # e.g. OPENSSL_malloc -> CRYPTO_malloc
         self.prototypes: Dict[str, Dict] = {}  # function name -> declaration info
+        # Source-file index used by platform diagnostics that need to inspect
+        # file-level initializers not represented by function units.  The
+        # source text is deliberately not duplicated here; consumers can read
+        # the validated repository-relative path when needed.
+        self.source_files: Dict[str, Dict[str, str]] = {}
         # class/struct name -> list of direct base-class names, for inheritance
         # walks in member dispatch (bug [30]). Populated from the
         # base_class_clause of each class_specifier/struct_specifier.
@@ -751,6 +756,9 @@ class FunctionExtractor:
         # Count as processed only after extraction fully succeeds, so a file that crashes
         # mid-extraction (caught by _process_file_guarded) is counted once as an error and
         # never as processed.
+        self.source_files[relative_path] = {
+            'language': 'cpp' if is_cpp else 'c',
+        }
         self.stats['files_processed'] += 1
 
     def _process_file_guarded(self, file_path: Path) -> None:
@@ -804,6 +812,7 @@ class FunctionExtractor:
             'macro_aliases': self.macro_aliases,
             'prototypes': self.prototypes,
             'class_bases': self.class_bases,
+            'source_files': self.source_files,
             'statistics': self.stats,
         }
 

@@ -17,6 +17,7 @@ from core.platforms.openharmony.call_graph_diagnostics import (  # noqa: E402
 from core.platforms.openharmony.native_dispatch import (  # noqa: E402
     build_native_dispatch_graph,
 )
+from parsers.c.function_extractor import FunctionExtractor  # noqa: E402
 
 
 SOURCE = "services/medical_sensor/src/medical_service_stub.cpp"
@@ -544,3 +545,117 @@ def test_lambda_field_alias_does_not_cross_receiver_types():
     assert site["candidate_target_ids"] == []
     assert lambda_dispatch["summary"].get("field_alias_matches", 0) == 0
     assert "field_alias_matches" not in lambda_dispatch
+
+
+def test_file_level_initializer_lambda_is_observed_without_new_function_unit(
+    tmp_path,
+):
+    source = """#include <map>
+
+struct Event {};
+struct NetworkSearchHandler {
+    using Func = void (*)(NetworkSearchHandler *, const Event &);
+    static const std::map<int, Func> memberFuncMap_;
+    void ProcessEvent(int code, const Event &event);
+    void HandleEvent(const Event &event);
+};
+
+const std::map<int, NetworkSearchHandler::Func>
+    NetworkSearchHandler::memberFuncMap_ = {
+        {READY, [](NetworkSearchHandler *handler, const Event &event) {
+            handler->HandleEvent(event);
+        }}
+    };
+
+void NetworkSearchHandler::ProcessEvent(int code, const Event &event)
+{
+    auto itFunc = memberFuncMap_.find(code);
+    if (itFunc != memberFuncMap_.end()) {
+        auto memberFunc = itFunc->second;
+        memberFunc(this, event);
+    }
+}
+
+void NetworkSearchHandler::HandleEvent(const Event &)
+{
+}
+"""
+    source_path = tmp_path / "network_search.cpp"
+    source_path.write_text(source, encoding="utf-8")
+
+    extracted = FunctionExtractor(str(tmp_path)).extract_all(
+        [source_path.name]
+    )
+    assert source_path.name in extracted["source_files"]
+    assert "memberFuncMap_" not in extracted["functions"]
+
+    diagnostics = build_call_graph_diagnostics(extracted, {})
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["summary"]["call_sites"] == 1
+    assert lambda_dispatch["summary"]["candidate_edges"] == 1
+    assert lambda_dispatch["summary"]["unresolved_without_candidates"] == 0
+    assignment = lambda_dispatch["assignments"][0]
+    assert assignment["registration_form"] == "file_initializer_list"
+    assert assignment["table"] == "NetworkSearchHandler::memberFuncMap_"
+    assert assignment["selector"] == "READY"
+    assert assignment["target_name"] == "NetworkSearchHandler::HandleEvent"
+    assert assignment["target_id"].endswith("NetworkSearchHandler::HandleEvent")
+    site = lambda_dispatch["call_sites"][0]
+    assert site["candidate_target_ids"] == [assignment["target_id"]]
+
+
+def test_function_initializer_list_lambda_uses_same_observation_schema():
+    source = "services/core/common_event_hub.cpp"
+    initializer_id = f"{source}:CommonEventHub::InitHandlers"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    handler_id = f"{source}:CommonEventHub::HandleReady"
+    functions = {
+        initializer_id: {
+            "name": "CommonEventHub::InitHandlers",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::InitHandlers()
+{
+    actionHandlersMap_ = {
+        {READY, [this](const Event &event) { HandleReady(event); }}
+    };
+}""",
+        },
+        caller_id: {
+            "name": "CommonEventHub::OnReceive",
+            "file_path": source,
+            "start_line": 12,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::OnReceive(const Event &event)
+{
+    auto it = actionHandlersMap_.find(event.id);
+    if (it != actionHandlersMap_.end()) {
+        it->second(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "CommonEventHub::HandleReady",
+            "file_path": source,
+            "start_line": 25,
+            "class_name": "CommonEventHub",
+            "code": "void CommonEventHub::HandleReady(const Event &) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["assignments"][0]["registration_form"] == (
+        "initializer_list"
+    )
+    assert lambda_dispatch["assignments"][0]["target_id"] == handler_id
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]

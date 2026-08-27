@@ -64,7 +64,12 @@ def _selector_text(node: Any, source: bytes) -> str:
 
 
 def _leaf(text: str) -> str:
-    return text.strip().rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+    return (
+        text.strip()
+        .rsplit("::", 1)[-1]
+        .rsplit("->", 1)[-1]
+        .rsplit(".", 1)[-1]
+    )
 
 
 def _qualified_target_name(raw_name: str, owner_class: Any) -> str:
@@ -254,7 +259,7 @@ def _table_expression(node: Any, source: bytes) -> str:
         return ""
     text = re.sub(r"\s+", "", _node_text(node, source).strip())
     if re.fullmatch(
-        r"(?:this|[A-Za-z_]\w*)(?:(?:->|\.)[A-Za-z_]\w*)*", text
+        r"(?:this|[A-Za-z_]\w*)(?:(?:->|\.|::)[A-Za-z_]\w*)*", text
     ):
         return text
     return ""
@@ -354,6 +359,23 @@ def _lambda_target_spec(
     }
 
 
+def _lambda_parameter_types(node: Any, source: bytes) -> dict[str, str]:
+    """Infer receiver hints from a lambda's own parameter list."""
+    for child in node.children:
+        if child.type != "abstract_function_declarator":
+            continue
+        parameter_list = child.child_by_field_name("parameters")
+        if parameter_list is None:
+            continue
+        parameters = [
+            _node_text(parameter, source).strip()
+            for parameter in parameter_list.children
+            if parameter.is_named
+        ]
+        return _parameter_types({"parameters": parameters})
+    return {}
+
+
 def _lambda_call_targets(
     node: Any,
     source: bytes,
@@ -369,6 +391,8 @@ def _lambda_call_targets(
     body = node.child_by_field_name("body")
     if body is None:
         return []
+    effective_parameter_types = dict(parameter_types)
+    effective_parameter_types.update(_lambda_parameter_types(node, source))
     targets: list[dict[str, Any]] = []
     seen: set[tuple[str, int | None]] = set()
     for child in _walk(body):
@@ -376,7 +400,7 @@ def _lambda_call_targets(
             continue
         called = child.child_by_field_name("function")
         target_spec = _lambda_target_spec(
-            called, source, owner_class, parameter_types
+            called, source, owner_class, effective_parameter_types
         )
         target_name = target_spec["name"]
         if not target_name:
@@ -408,6 +432,123 @@ def _lambda_capture(node: Any, source: bytes) -> str:
     return ""
 
 
+def _lambda_registration_records(
+    *,
+    table: str,
+    selector: str,
+    lambda_node: Any,
+    source: bytes,
+    owner_function_id: str,
+    owner_file: str,
+    owner_class: Any,
+    parameter_types: Mapping[str, str],
+    line: int,
+    expression: str,
+    functions: Mapping[str, Any],
+    registration_form: str,
+) -> list[dict[str, Any]]:
+    """Build normalized evidence records for one Lambda registration."""
+    if not table or not selector or lambda_node.type != "lambda_expression":
+        return []
+    field_identity = _field_identity(table, owner_class, parameter_types)
+    lambda_text = _node_text(lambda_node, source).strip()
+    lambda_targets = _lambda_call_targets(
+        lambda_node, source, owner_class, parameter_types
+    )
+    if not lambda_targets:
+        lambda_targets = [
+            {"name": "", "argument_count": None, "expression": ""}
+        ]
+    capture = _lambda_capture(lambda_node, source)
+    records: list[dict[str, Any]] = []
+    target_names = [item["name"] for item in lambda_targets]
+    for target_spec in lambda_targets:
+        target_name = target_spec["name"]
+        target_id: str | None = None
+        resolution = "no_lambda_call_target"
+        if target_name:
+            target_id, resolution = _target_resolution(
+                target_name,
+                owner_file,
+                functions,
+                target_spec.get("owner_hint"),
+                target_spec["argument_count"],
+            )
+        resolved_name = target_name
+        if target_id:
+            resolved = functions.get(target_id)
+            if isinstance(resolved, Mapping):
+                resolved_name = str(resolved.get("name") or target_name)
+        records.append(
+            {
+                "owner_function_id": owner_function_id,
+                "owner_class": owner_class,
+                "file": owner_file,
+                "line": line,
+                "table": table,
+                "field_identity": field_identity,
+                "selector": selector,
+                "target_name": resolved_name,
+                "target_id": target_id,
+                "resolution": resolution,
+                "value_kind": "lambda",
+                "registration_form": registration_form,
+                "capture": capture,
+                "lambda_calls": target_names,
+                "call_argument_count": target_spec["argument_count"],
+                "evidence": {
+                    "file": owner_file,
+                    "start_line": line,
+                    "end_line": line,
+                    "text": expression,
+                    "value_kind": "lambda",
+                    "registration_form": registration_form,
+                    "field_identity": field_identity,
+                    "capture": capture,
+                    "lambda_calls": target_names,
+                    "call_argument_count": target_spec["argument_count"],
+                },
+                "lambda_text": lambda_text,
+            }
+        )
+    return records
+
+
+def _initializer_lambda_entries(
+    node: Any, source: bytes
+) -> list[tuple[str, Any, str]]:
+    """Return ``(selector, lambda, pair_text)`` entries from a map initializer."""
+    if node is None or node.type != "initializer_list":
+        return []
+    entries: list[tuple[str, Any, str]] = []
+    for pair in node.children:
+        if pair.type != "initializer_list":
+            continue
+        lambda_nodes = [
+            child
+            for child in pair.children
+            if child.type == "lambda_expression"
+        ]
+        if not lambda_nodes:
+            continue
+        lambda_node = lambda_nodes[0]
+        key_nodes = [
+            child
+            for child in pair.children
+            if child.is_named and child is not lambda_node
+        ]
+        if not key_nodes:
+            continue
+        entries.append(
+            (
+                _selector_text(key_nodes[0], source),
+                lambda_node,
+                _node_text(pair, source).strip(),
+            )
+        )
+    return entries
+
+
 def _lambda_dispatch_assignments(
     node: Any,
     source: bytes,
@@ -420,81 +561,174 @@ def _lambda_dispatch_assignments(
         return []
     left = node.child_by_field_name("left")
     right = node.child_by_field_name("right")
-    if left is None or right is None or left.type != "subscript_expression":
+    if left is None or right is None:
         return []
-    if right.type != "lambda_expression":
-        return []
-    table_node = left.child_by_field_name("argument")
-    selector_node = left.child_by_field_name("indices")
-    if table_node is None or selector_node is None:
-        return []
-
-    table = _node_text(table_node, source).strip()
-    selector = _selector_text(selector_node, source)
-    if not table or not selector:
-        return []
-
     owner_file = str(function.get("file_path", ""))
     owner_class = function.get("class_name")
     parameter_types = _parameter_types(function)
-    field_identity = _field_identity(table, owner_class, parameter_types)
-    lambda_text = _node_text(right, source).strip()
-    lambda_targets = _lambda_call_targets(
-        right, source, owner_class, parameter_types
-    )
-    if not lambda_targets:
-        lambda_targets = [{"name": "", "argument_count": None, "expression": ""}]
-    line = _source_line(function, node)
-    capture = _lambda_capture(right, source)
-    records: list[dict[str, Any]] = []
-    target_names = [item["name"] for item in lambda_targets]
-    for target_spec in lambda_targets:
-        target_name = target_spec["name"]
-        target_id: str | None = None
-        resolution = "no_lambda_call_target"
-        if target_name:
-            target_id, resolution = _target_resolution(
-                target_name,
-                owner_file,
-                functions,
-                target_spec["owner_hint"],
-                target_spec["argument_count"],
-            )
-        resolved_name = target_name
-        if target_id:
-            resolved = functions.get(target_id)
-            if isinstance(resolved, Mapping):
-                resolved_name = str(resolved.get("name") or target_name)
-        records.append(
-            {
-                "owner_function_id": function_id,
-                "owner_class": owner_class,
-                "file": owner_file,
-                "line": line,
-                "table": table,
-                "field_identity": field_identity,
-                "selector": selector,
-                "target_name": resolved_name,
-                "target_id": target_id,
-                "resolution": resolution,
-                "value_kind": "lambda",
-                "capture": capture,
-                "lambda_calls": target_names,
-                "call_argument_count": target_spec["argument_count"],
-                "evidence": {
-                    "file": owner_file,
-                    "start_line": line,
-                    "end_line": line,
-                    "text": _node_text(node, source).strip(),
-                    "value_kind": "lambda",
-                    "field_identity": field_identity,
-                    "capture": capture,
-                    "lambda_calls": target_names,
-                    "call_argument_count": target_spec["argument_count"],
-                },
-                "lambda_text": lambda_text,
-            }
+    if left.type == "subscript_expression" and right.type == "lambda_expression":
+        table_node = left.child_by_field_name("argument")
+        selector_node = left.child_by_field_name("indices")
+        if table_node is None or selector_node is None:
+            return []
+        return _lambda_registration_records(
+            table=_node_text(table_node, source).strip(),
+            selector=_selector_text(selector_node, source),
+            lambda_node=right,
+            source=source,
+            owner_function_id=function_id,
+            owner_file=owner_file,
+            owner_class=owner_class,
+            parameter_types=parameter_types,
+            line=_source_line(function, node),
+            expression=_node_text(node, source).strip(),
+            functions=functions,
+            registration_form="subscript_assignment",
         )
+
+    if right.type != "initializer_list":
+        return []
+    table = _table_expression(left, source)
+    if not table:
+        return []
+    records: list[dict[str, Any]] = []
+    for selector, lambda_node, pair_text in _initializer_lambda_entries(
+        right, source
+    ):
+        records.extend(
+            _lambda_registration_records(
+                table=table,
+                selector=selector,
+                lambda_node=lambda_node,
+                source=source,
+                owner_function_id=function_id,
+                owner_file=owner_file,
+                owner_class=owner_class,
+                parameter_types=parameter_types,
+                line=_source_line(function, lambda_node),
+                expression=pair_text,
+                functions=functions,
+                registration_form="initializer_list",
+            )
+        )
+    return records
+
+
+def _initializer_table_from_source(node: Any, source: bytes) -> str:
+    """Find the declarator immediately to the left of a file-level ``= {``."""
+    text = source.decode("utf-8", errors="replace")
+    masked = _mask_preserving_lines(text)
+    equals = masked.rfind("=", 0, node.start_byte)
+    if equals < 0:
+        return ""
+    prefix_start = max(
+        masked.rfind(";", 0, equals),
+        masked.rfind("{", 0, equals),
+        masked.rfind("}", 0, equals),
+    ) + 1
+    prefix = masked[prefix_start:equals]
+    match = re.search(
+        r"(?P<table>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*$", prefix
+    )
+    return match.group("table") if match else ""
+
+
+def _table_owner_class(table: str) -> str | None:
+    """Infer a class owner from ``Class::field`` without treating namespaces as classes."""
+    parts = [part for part in table.split("::") if part]
+    return parts[-2] if len(parts) >= 2 else None
+
+
+def _file_level_lambda_dispatch_assignments(
+    source: bytes,
+    file_path: str,
+    functions: Mapping[str, Any],
+    parser: Parser,
+) -> list[dict[str, Any]]:
+    """Observe Lambda entries in global/static map initializer lists.
+
+    Global declarations are sometimes exposed by tree-sitter as ``ERROR``
+    nodes (notably templated ``std::map`` declarations).  Walking initializer
+    lists and recovering the declarator from the preceding ``=`` keeps this
+    collector independent of that node shape while still requiring a concrete
+    ``{key, lambda}`` entry.
+    """
+    root = parser.parse(source).root_node
+    records: list[dict[str, Any]] = []
+    seen_initializers: set[int] = set()
+    for node in _walk(root):
+        if node.type != "initializer_list":
+            continue
+        entries = _initializer_lambda_entries(node, source)
+        if not entries or node.start_byte in seen_initializers:
+            continue
+        ancestor = node.parent
+        inside_function = False
+        while ancestor is not None:
+            if ancestor.type == "function_definition":
+                inside_function = True
+                break
+            ancestor = ancestor.parent
+        if inside_function:
+            continue
+        table = _initializer_table_from_source(node, source)
+        if not table:
+            continue
+        seen_initializers.add(node.start_byte)
+        owner_class = _table_owner_class(table)
+        owner_function_id = f"{file_path}:<file-level:{table}>"
+        for selector, lambda_node, pair_text in entries:
+            records.extend(
+                _lambda_registration_records(
+                    table=table,
+                    selector=selector,
+                    lambda_node=lambda_node,
+                    source=source,
+                    owner_function_id=owner_function_id,
+                    owner_file=file_path,
+                    owner_class=owner_class,
+                    parameter_types={},
+                    line=lambda_node.start_point[0] + 1,
+                    expression=pair_text,
+                    functions=functions,
+                    registration_form="file_initializer_list",
+                )
+            )
+    return records
+
+
+def _source_file_records(
+    extract_result: Mapping[str, Any],
+) -> list[tuple[str, bytes, str]]:
+    """Load the extractor's validated source-file index safely."""
+    source_files = extract_result.get("source_files", {})
+    if not isinstance(source_files, Mapping):
+        return []
+    repository = Path(str(extract_result.get("repository", ""))).resolve()
+    records: list[tuple[str, bytes, str]] = []
+    for relative_path, metadata in source_files.items():
+        relative = str(relative_path)
+        if not relative:
+            continue
+        code: Any = metadata.get("code") if isinstance(metadata, Mapping) else None
+        language = (
+            str(metadata.get("language", ""))
+            if isinstance(metadata, Mapping)
+            else ""
+        )
+        if isinstance(code, str):
+            source = code.encode("utf-8", errors="replace")
+        else:
+            candidate = (repository / relative).resolve()
+            try:
+                candidate.relative_to(repository)
+            except ValueError:
+                continue
+            try:
+                source = candidate.read_bytes()
+            except OSError:
+                continue
+        records.append((relative, source, language))
     return records
 
 
@@ -761,6 +995,19 @@ def build_call_graph_diagnostics(
                     node, source, function_id, function, functions
                 )
             )
+
+    for file_path, source, language in _source_file_records(extract_result):
+        suffix = Path(file_path).suffix.lower()
+        parser = (
+            cpp_parser
+            if language == "cpp" or suffix in CPP_EXTENSIONS
+            else c_parser
+        )
+        lambda_assignments.extend(
+            _file_level_lambda_dispatch_assignments(
+                source, file_path, functions, parser
+            )
+        )
 
     assignments.sort(
         key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
