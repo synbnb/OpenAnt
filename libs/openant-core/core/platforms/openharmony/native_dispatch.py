@@ -609,6 +609,7 @@ def _registration_metadata(
     *,
     target_id: str,
     table: str,
+    owner_function_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Collect every table registration represented by one semantic edge.
 
@@ -625,6 +626,10 @@ def _registration_metadata(
         if _text(raw.get("target_id")) != target_id:
             continue
         if _text(raw.get("table")) != table:
+            continue
+        if owner_function_id is not None and _text(
+            raw.get("owner_function_id")
+        ) != owner_function_id:
             continue
         selector = _text(raw.get("selector"))
         if not selector:
@@ -673,14 +678,24 @@ def _add_orphan_for_site(graph: SemanticGraph, site: Mapping[str, Any]) -> None:
 def _is_member_initializer_candidate(
     candidate: Mapping[str, Any], caller: Mapping[str, Any]
 ) -> bool:
-    """Allow non-IPC call sites only for the new class-owned initializer form."""
-    if _text(candidate.get("registration_form")) != (
-        "initializer_member_function"
-    ):
+    """Allow non-IPC sites only for class-owned, source-backed tables."""
+    if _text(candidate.get("registration_form")) not in {
+        "initializer_member_function",
+        "declaration_member_function_array",
+    }:
         return False
     candidate_owner = _text(candidate.get("owner_class"))
     caller_owner = _text(caller.get("owner"))
-    return bool(candidate_owner and caller_owner and _leaf(candidate_owner) == _leaf(caller_owner))
+    if not (candidate_owner and caller_owner and _leaf(candidate_owner) == _leaf(caller_owner)):
+        return False
+    registration_owner = _text(candidate.get("registration_owner_function_id"))
+    if registration_owner:
+        # The diagnostic matcher has already proved the parameter flow.  This
+        # check only rejects malformed candidates that point at a function
+        # absent from the caller's class/file scope.
+        registration_file = registration_owner.partition(":")[0]
+        return registration_file == _text(caller.get("file_path"))
+    return True
 
 
 def _resolve_dispatch_edges(
@@ -689,7 +704,13 @@ def _resolve_dispatch_edges(
     assignments: list[Any],
     sites: list[Any],
 ) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
-    """Emit OnRemoteRequest -> handler edges and return resolved pairs."""
+    """Emit source-call -> handler edges and return resolved pairs.
+
+    Binder ``OnRemoteRequest`` sites keep their existing table semantics;
+    non-Binder sites are admitted only when the diagnostic candidate carries
+    a class-owned initializer registration (including a uniquely flowed local
+    member-function array).
+    """
     assignment_by_target = _assignment_index(assignments)
     resolved: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     dispatch_callers: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
@@ -729,7 +750,18 @@ def _resolve_dispatch_edges(
             target = records_by_id[target_id]
             selector = _text(candidate.get("selector"))
             table_key = (target_id, _text(table), selector)
-            assignment = assignment_by_target.get(table_key, [None])[0]
+            assignment_candidates = assignment_by_target.get(table_key, [])
+            registration_owner = _text(
+                candidate.get("registration_owner_function_id")
+            )
+            if registration_owner:
+                assignment_candidates = [
+                    item
+                    for item in assignment_candidates
+                    if _text(item.get("owner_function_id"))
+                    == registration_owner
+                ]
+            assignment = assignment_candidates[0] if assignment_candidates else None
             assignment_value_kind = (
                 _text(assignment.get("value_kind"))
                 if isinstance(assignment, Mapping)
@@ -746,6 +778,7 @@ def _resolve_dispatch_edges(
                 assignments,
                 target_id=target_id,
                 table=_text(table),
+                owner_function_id=registration_owner or None,
             )
             selectors = [item["selector"] for item in registrations]
             _add_function_node(graph, caller)
@@ -778,8 +811,17 @@ def _resolve_dispatch_edges(
                             if isinstance(assignment, Mapping)
                             else ""
                         ),
+                        "registration_owner_function_id": registration_owner
+                        or _text(
+                            assignment.get("owner_function_id")
+                            if isinstance(assignment, Mapping)
+                            else ""
+                        ),
                     }
                 )
+                parameter_flow = symbols.get("parameter_flow")
+                if isinstance(parameter_flow, Mapping):
+                    attributes["parameter_flow"] = dict(parameter_flow)
             graph.add_edge(
                 {
                     "schema_version": graph.schema_version,
@@ -806,9 +848,10 @@ def _resolve_dispatch_edges(
     for raw_assignment in assignments:
         if not isinstance(raw_assignment, Mapping):
             continue
-        if _text(raw_assignment.get("registration_form")) == (
-            "initializer_member_function"
-        ):
+        if _text(raw_assignment.get("registration_form")) in {
+            "initializer_member_function",
+            "declaration_member_function_array",
+        }:
             # Class-owned initializer tables are linked from their concrete
             # lookup caller above; they must not be heuristically attached to
             # an unrelated OnRemoteRequest fallback in the same class.
@@ -832,6 +875,12 @@ def _resolve_dispatch_edges(
             assignments,
             target_id=target_id,
             table=_text(raw_assignment.get("table")),
+            owner_function_id=(
+                _text(raw_assignment.get("owner_function_id"))
+                if _text(raw_assignment.get("registration_form"))
+                == "declaration_member_function_array"
+                else None
+            ),
         )
         selectors = [item["selector"] for item in registrations]
         _add_function_node(graph, caller)

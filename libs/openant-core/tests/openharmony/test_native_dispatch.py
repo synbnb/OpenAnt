@@ -267,6 +267,108 @@ def test_member_function_initializer_list_projects_same_class_non_remote_site():
     assert edges[0].attributes["value_kind"] == "member_function_reference"
 
 
+def test_parameterized_decoder_projects_local_member_array_with_source_scope():
+    """A decoder's parameter must retain the unique caller-local table scope."""
+    source = "interfaces/innerkits/unwinder/exidx_entry_parser.cpp"
+    eval_id = f"{source}:ExidxEntryParser::Eval"
+    decode_id = f"{source}:ExidxEntryParser::Decode"
+    target_id = f"{source}:ExidxEntryParser::Decode00xxxxxx"
+    functions = {
+        eval_id: _function(
+            "ExidxEntryParser::Eval",
+            "bool ExidxEntryParser::Eval() {}",
+            file_path=source,
+            start_line=1,
+            class_name="ExidxEntryParser",
+        ),
+        decode_id: _function(
+            "ExidxEntryParser::Decode",
+            "bool ExidxEntryParser::Decode(DecodeTable decodeTable[], size_t size) {}",
+            file_path=source,
+            start_line=10,
+            class_name="ExidxEntryParser",
+        ),
+        target_id: _function(
+            "ExidxEntryParser::Decode00xxxxxx",
+            "bool ExidxEntryParser::Decode00xxxxxx() { return true; }",
+            file_path=source,
+            start_line=20,
+            class_name="ExidxEntryParser",
+        ),
+    }
+    assignment = {
+        "owner_function_id": eval_id,
+        "owner_class": "ExidxEntryParser",
+        "file": source,
+        "line": 3,
+        "table": "decodeTable",
+        "selector": "0xc0/0x00",
+        "target_name": "ExidxEntryParser::Decode00xxxxxx",
+        "target_id": target_id,
+        "resolution": "exact_function_id",
+        "value_kind": "member_function_pointer",
+        "registration_form": "declaration_member_function_array",
+        "permissions": [],
+        "evidence": {"file": source, "start_line": 3, "text": "{0xc0, 0x00, &ExidxEntryParser::Decode00xxxxxx}"},
+    }
+    diagnostics = {
+        "dispatch_assignments": [assignment],
+        "unresolved_call_sites": [
+            {
+                "caller_id": decode_id,
+                "file": source,
+                "line": 12,
+                "expression": "(this->*(decodeTable[0].decoder))()",
+                "ast_kind": "indirect_member_call",
+                "static_resolution": "unresolved",
+                "reason": "parameter_derived_member_function_pointer",
+                "symbols": {
+                    "target_variable": "decodeTable[0].decoder",
+                    "dispatch_table": "decodeTable",
+                    "parameter_flow": {
+                        "source_function_id": eval_id,
+                        "callee_id": decode_id,
+                        "argument_index": 0,
+                        "source_table": "decodeTable",
+                        "callee_parameter": "decodeTable",
+                        "registration_form": "declaration_member_function_array",
+                    },
+                },
+                "candidate_target_ids": [target_id],
+                "candidates": [
+                    {
+                        "target_id": target_id,
+                        "target_name": assignment["target_name"],
+                        "selector": assignment["selector"],
+                        "value_kind": assignment["value_kind"],
+                        "registration_form": assignment["registration_form"],
+                        "owner_class": assignment["owner_class"],
+                        "registration_owner_function_id": eval_id,
+                        "permissions": [],
+                        "evidence": assignment["evidence"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+
+    assert graph is not None
+    edges = [edge for edge in graph.edges.values() if edge.kind == HANDLER_EDGE_KIND]
+    assert {(edge.source_id, edge.target_id) for edge in edges} == {
+        (f"function:{decode_id}", f"function:{target_id}")
+    }
+    edge = edges[0]
+    assert edge.attributes["registration_form"] == (
+        "declaration_member_function_array"
+    )
+    assert edge.attributes["registration_owner_function_id"] == eval_id
+    assert edge.attributes["parameter_flow"]["source_function_id"] == eval_id
+
+
 def test_lambda_dispatch_candidates_are_projected_with_registration_evidence():
     source = "services/core/common_event_hub.cpp"
     caller_id = f"{source}:CommonEventHub::OnReceive"

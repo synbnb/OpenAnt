@@ -5,7 +5,10 @@ semantic edges.  It records syntax-backed member-pointer dispatch and
 separate lambda/std::function observations with bounded candidate targets so
 later deterministic/LLM stages have auditable inputs.  For callable reads it
 also joins a registration and a read when their normalized member field and
-proven receiver type agree, while keeping that join observation-only.
+proven receiver type agree, while keeping that join observation-only.  A
+local member-function array is joined to a same-class helper only when it is
+passed as a direct, uniquely resolved parameter; ambiguous or aliased flows
+remain residuals.
 """
 
 from __future__ import annotations
@@ -270,18 +273,27 @@ def _initializer_member_function_assignments(
     """Observe class-owned function-pointer tables initialized as a whole.
 
     This deliberately handles only a simple assignment such as
-    ``parseTable_ = {{Section::A, Class::Handle}}`` inside a method.  The
+    ``parseTable_ = {{Section::A, Class::Handle}}`` or a local array
+    declaration such as ``Entry table[] = {{A, &Class::Handle}}``.  The
     registration class must match the containing method's class, which keeps
     enum/metadata maps and unrelated qualified values out of the dispatch
-    evidence.  It does not propagate a local array through another function.
+    evidence.  A local array is not considered callable across functions
+    until a separate, explicit parameter-flow record joins it to a callee.
     """
-    if node.type != "assignment_expression":
+    if node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        registration_form = "initializer_member_function"
+        table = _table_expression(left, source)
+    elif node.type == "init_declarator":
+        left = node.child_by_field_name("declarator")
+        right = node.child_by_field_name("value")
+        registration_form = "declaration_member_function_array"
+        table = _declarator_table_expression(left, source)
+    else:
         return []
-    left = node.child_by_field_name("left")
-    right = node.child_by_field_name("right")
     if left is None or right is None or right.type != "initializer_list":
         return []
-    table = _table_expression(left, source)
     owner_file = str(function.get("file_path", ""))
     owner_class = _leaf(str(function.get("class_name") or ""))
     if not table or not owner_class:
@@ -321,7 +333,7 @@ def _initializer_member_function_assignments(
                 "target_id": target_id,
                 "resolution": resolution,
                 "value_kind": value_kind,
-                "registration_form": "initializer_member_function",
+                "registration_form": registration_form,
                 "permissions": permissions,
                 "evidence": {
                     "file": owner_file,
@@ -329,7 +341,7 @@ def _initializer_member_function_assignments(
                     "end_line": line,
                     "text": pair_text,
                     "value_kind": value_kind,
-                    "registration_form": "initializer_member_function",
+                    "registration_form": registration_form,
                     "permissions": permissions,
                 },
             }
@@ -464,6 +476,25 @@ def _table_expression(node: Any, source: bytes) -> str:
         r"(?:this|[A-Za-z_]\w*)(?:(?:->|\.|::)[A-Za-z_]\w*)*", text
     ):
         return text
+    return ""
+
+
+def _declarator_table_expression(node: Any, source: bytes) -> str:
+    """Extract the identifier represented by a simple array declarator."""
+    current = node
+    while current is not None:
+        if current.type == "identifier":
+            value = _node_text(current, source).strip()
+            return value if value.isidentifier() else ""
+        nested = current.child_by_field_name("declarator")
+        if nested is not None and nested is not current:
+            current = nested
+            continue
+        named = [child for child in current.children if child.is_named]
+        if len(named) == 1 and named[0] is not current:
+            current = named[0]
+            continue
+        break
     return ""
 
 
@@ -1022,6 +1053,150 @@ def _local_dispatch_flow(root: Any, source: bytes) -> tuple[dict[str, str], dict
     return member_to_iterator, iterator_to_table
 
 
+def _parameter_names(function: Mapping[str, Any]) -> list[str]:
+    """Extract parameter names while preserving the extractor's order."""
+    parameters = function.get("parameters", [])
+    if not isinstance(parameters, list):
+        return []
+    names: list[str] = []
+    for parameter in parameters:
+        if not isinstance(parameter, str):
+            names.append("")
+            continue
+        declaration = parameter.split("=", 1)[0].strip()
+        match = re.search(r"(?P<name>[A-Za-z_]\w*)\s*(?:\[\s*\])?\s*$", declaration)
+        names.append(match.group("name") if match else "")
+    return names
+
+
+def _member_function_parameter_flows(
+    parsed: Mapping[str, tuple[Any, bytes, Mapping[str, Any]]],
+    assignments: Iterable[Mapping[str, Any]],
+    functions: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Join a local member-function array to a direct callee parameter.
+
+    Only an identifier argument that is registered in the caller's own
+    ``declaration_member_function_array`` table is accepted.  The callee must
+    resolve uniquely, have the corresponding parameter name, and belong to
+    the same class.  This is intentionally a one-hop flow; no alias or
+    transitive propagation is attempted.
+    """
+    registrations = [
+        item
+        for item in assignments
+        if isinstance(item, Mapping)
+        and item.get("registration_form") == "declaration_member_function_array"
+    ]
+    if not registrations:
+        return []
+    flows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int, str]] = set()
+    for caller_id, (root, source, caller) in parsed.items():
+        caller_owner = _leaf(str(caller.get("class_name") or ""))
+        if not caller_owner:
+            continue
+        for node in _walk(root):
+            if node.type != "call_expression":
+                continue
+            called = node.child_by_field_name("function")
+            called_name = _called_name(called, source)
+            arguments = node.child_by_field_name("arguments")
+            if not called_name or arguments is None:
+                continue
+            argument_nodes = [child for child in arguments.children if child.is_named]
+            if not argument_nodes:
+                continue
+            callee_id, resolution = _target_resolution(
+                called_name,
+                str(caller.get("file_path", "")),
+                functions,
+                caller_owner,
+                len(argument_nodes),
+            )
+            callee = functions.get(callee_id) if callee_id else None
+            if not callee_id or not isinstance(callee, Mapping):
+                continue
+            callee_owner = _leaf(str(callee.get("class_name") or ""))
+            if not callee_owner or callee_owner != caller_owner:
+                continue
+            callee_parameters = _parameter_names(callee)
+            for index, argument in enumerate(argument_nodes):
+                if argument.type != "identifier" or index >= len(callee_parameters):
+                    continue
+                source_table = _node_text(argument, source).strip()
+                callee_parameter = callee_parameters[index]
+                if not source_table or not callee_parameter:
+                    continue
+                matching = [
+                    item
+                    for item in registrations
+                    if item.get("owner_function_id") == caller_id
+                    and item.get("table") == source_table
+                ]
+                if not matching:
+                    continue
+                key = (caller_id, callee_id, index, source_table)
+                if key in seen:
+                    continue
+                seen.add(key)
+                flows.append(
+                    {
+                        "source_function_id": caller_id,
+                        "callee_id": callee_id,
+                        "argument_index": index,
+                        "source_table": source_table,
+                        "callee_parameter": callee_parameter,
+                        "resolution": resolution,
+                        "registration_form": "declaration_member_function_array",
+                        "evidence": {
+                            "file": caller.get("file_path", ""),
+                            "start_line": _source_line(caller, node),
+                            "end_line": _source_line(caller, node),
+                            "text": _node_text(node, source).strip(),
+                            "argument": source_table,
+                            "parameter": callee_parameter,
+                        },
+                    }
+                )
+    flows.sort(
+        key=lambda item: (
+            item["callee_id"],
+            item["argument_index"],
+            item["source_function_id"],
+            item["source_table"],
+        )
+    )
+    return flows
+
+
+def _parameter_flow_for_operand(
+    caller_id: str,
+    operand: str,
+    flows_by_callee: Mapping[str, list[Mapping[str, Any]]],
+) -> Mapping[str, Any] | None:
+    """Return a unique parameter flow for ``parameter[index].member``."""
+    normalized = re.sub(r"\s+", "", operand)
+    match = re.fullmatch(
+        r"(?P<parameter>[A-Za-z_]\w*)\[[^\[\]]+\]\.[A-Za-z_]\w*",
+        normalized,
+    )
+    if match is None:
+        return None
+    candidates = [
+        flow
+        for flow in flows_by_callee.get(caller_id, [])
+        if flow.get("callee_parameter") == match.group("parameter")
+    ]
+    origins = {
+        (flow.get("source_function_id"), flow.get("source_table"))
+        for flow in candidates
+    }
+    if len(origins) != 1:
+        return None
+    return candidates[0] if candidates else None
+
+
 def _indirect_target(function_text: str) -> tuple[str | None, str, str] | None:
     member_match = re.search(
         r"(?:->\*|\.\*)\s*(?:\(\s*)?"
@@ -1275,6 +1450,13 @@ def build_call_graph_diagnostics(
             )
         )
 
+    parameter_flows = _member_function_parameter_flows(
+        parsed, assignments, functions
+    )
+    flows_by_callee: dict[str, list[dict[str, Any]]] = {}
+    for flow in parameter_flows:
+        flows_by_callee.setdefault(flow["callee_id"], []).append(flow)
+
     assignments.sort(
         key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
     )
@@ -1353,19 +1535,52 @@ def build_call_graph_diagnostics(
             )
             owner_class = function.get("class_name")
 
-            matched = [
-                item
-                for item in assignments
-                if table
-                and item["table"] == table
-                and item["target_id"]
-                and (
-                    not owner_class
-                    or not item.get("owner_class")
-                    or item.get("owner_class") == owner_class
-                )
-            ]
+            parameter_flow = _parameter_flow_for_operand(
+                function_id,
+                indirect["target_variable"],
+                flows_by_callee,
+            )
+            if parameter_flow is not None:
+                table = str(parameter_flow["source_table"])
+                matched = [
+                    item
+                    for item in assignments
+                    if item["table"] == table
+                    and item["target_id"]
+                    and item.get("owner_function_id")
+                    == parameter_flow["source_function_id"]
+                    and (
+                        not owner_class
+                        or not item.get("owner_class")
+                        or item.get("owner_class") == owner_class
+                    )
+                ]
+            else:
+                matched = [
+                    item
+                    for item in assignments
+                    if table
+                    and item["table"] == table
+                        and item["target_id"]
+                        and (
+                            item.get("registration_form")
+                            != "declaration_member_function_array"
+                            or item.get("owner_function_id") == function_id
+                        )
+                        and (
+                        not owner_class
+                        or not item.get("owner_class")
+                        or item.get("owner_class") == owner_class
+                    )
+                ]
             target_ids = list(dict.fromkeys(item["target_id"] for item in matched))
+            symbols = {
+                "target_variable": target_variable,
+                "iterator_variable": iterator_variable,
+                "dispatch_table": table,
+            }
+            if parameter_flow is not None:
+                symbols["parameter_flow"] = dict(parameter_flow)
             sites.append(
                 {
                     "caller_id": function_id,
@@ -1374,12 +1589,12 @@ def build_call_graph_diagnostics(
                     "expression": indirect["expression"],
                     "ast_kind": indirect["ast_kind"],
                     "static_resolution": "unresolved",
-                    "reason": indirect["reason"],
-                    "symbols": {
-                        "target_variable": target_variable,
-                        "iterator_variable": iterator_variable,
-                        "dispatch_table": table,
-                    },
+                    "reason": (
+                        "parameter_derived_member_function_pointer"
+                        if parameter_flow is not None
+                        else indirect["reason"]
+                    ),
+                    "symbols": symbols,
                     "candidate_target_ids": target_ids,
                     "candidates": [
                         {
@@ -1388,6 +1603,13 @@ def build_call_graph_diagnostics(
                             "selector": item["selector"],
                             "value_kind": item.get("value_kind", ""),
                             "permissions": item.get("permissions", []),
+                            "registration_form": item.get(
+                                "registration_form", ""
+                            ),
+                            "owner_class": item.get("owner_class"),
+                            "registration_owner_function_id": item.get(
+                                "owner_function_id", ""
+                            ),
                             "evidence": item["evidence"],
                         }
                         for item in matched
@@ -1584,6 +1806,8 @@ def build_call_graph_diagnostics(
         "dispatch_assignments": assignments,
         "orphans": orphans,
     }
+    if parameter_flows:
+        result["parameter_flows"] = parameter_flows
     if lambda_assignments or lambda_sites or lambda_orphans:
         result["lambda_dispatch"] = {
             "summary": summary["lambda_dispatch"],

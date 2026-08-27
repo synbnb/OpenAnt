@@ -948,3 +948,156 @@ def test_qualified_enum_initializer_is_not_misclassified_as_a_function_registrat
 
     assert diagnostics["dispatch_assignments"] == []
     assert diagnostics["summary"]["candidate_edges"] == 0
+
+
+def test_local_member_function_array_flows_to_parameterized_decoder():
+    """A local pointer array can be passed directly to a decoder helper."""
+    source = "interfaces/innerkits/unwinder/exidx_entry_parser.cpp"
+    eval_id = f"{source}:ExidxEntryParser::Eval"
+    decode_id = f"{source}:ExidxEntryParser::Decode"
+    first_handler_id = f"{source}:ExidxEntryParser::Decode00xxxxxx"
+    second_handler_id = f"{source}:ExidxEntryParser::Decode01xxxxxx"
+    functions = {
+        eval_id: {
+            "name": "ExidxEntryParser::Eval",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "ExidxEntryParser",
+            "code": """bool ExidxEntryParser::Eval()
+{
+    DecodeTable decodeTable[] = {
+        {0xc0, 0x00, &ExidxEntryParser::Decode00xxxxxx},
+        {0xc0, 0x40, &ExidxEntryParser::Decode01xxxxxx}
+    };
+    return Decode(decodeTable, 2);
+}""",
+        },
+        decode_id: {
+            "name": "ExidxEntryParser::Decode",
+            "file_path": source,
+            "start_line": 12,
+            "class_name": "ExidxEntryParser",
+            "parameters": ["DecodeTable decodeTable[]", "size_t size"],
+            "code": """bool ExidxEntryParser::Decode(
+    DecodeTable decodeTable[], size_t size)
+{
+    return (this->*(decodeTable[0].decoder))();
+}""",
+        },
+        first_handler_id: {
+            "name": "ExidxEntryParser::Decode00xxxxxx",
+            "file_path": source,
+            "start_line": 20,
+            "class_name": "ExidxEntryParser",
+            "code": "bool ExidxEntryParser::Decode00xxxxxx() { return true; }",
+        },
+        second_handler_id: {
+            "name": "ExidxEntryParser::Decode01xxxxxx",
+            "file_path": source,
+            "start_line": 21,
+            "class_name": "ExidxEntryParser",
+            "code": "bool ExidxEntryParser::Decode01xxxxxx() { return true; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assert diagnostics["summary"]["dispatch_assignments"] == 2
+    assert diagnostics["summary"]["candidate_edges"] == 2
+    assert diagnostics["summary"]["unresolved_without_candidates"] == 0
+    assert len(diagnostics["parameter_flows"]) == 1
+    assert diagnostics["parameter_flows"][0]["source_function_id"] == eval_id
+    assert diagnostics["dispatch_assignments"]
+    assert all(
+        item["registration_form"] == "declaration_member_function_array"
+        for item in diagnostics["dispatch_assignments"]
+    )
+    assert all(
+        item["owner_function_id"] == eval_id
+        for item in diagnostics["dispatch_assignments"]
+    )
+    site = next(
+        item
+        for item in diagnostics["unresolved_call_sites"]
+        if item["caller_id"] == decode_id
+    )
+    assert set(site["candidate_target_ids"]) == {
+        first_handler_id,
+        second_handler_id,
+    }
+    assert site["symbols"]["dispatch_table"] == "decodeTable"
+    assert site["symbols"]["parameter_flow"]["source_function_id"] == eval_id
+    assert site["symbols"]["parameter_flow"]["callee_parameter"] == "decodeTable"
+
+
+def test_ambiguous_local_member_array_sources_remain_unresolved():
+    """Two caller-local arrays must not be merged by their shared name."""
+    source = "interfaces/innerkits/unwinder/exidx_entry_parser.cpp"
+    eval_id = f"{source}:ExidxEntryParser::Eval"
+    eval_second_id = f"{source}:ExidxEntryParser::EvalAlternate"
+    decode_id = f"{source}:ExidxEntryParser::Decode"
+    target_id = f"{source}:ExidxEntryParser::Decode00xxxxxx"
+    functions = {
+        eval_id: {
+            "name": "ExidxEntryParser::Eval",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "ExidxEntryParser",
+            "code": """bool ExidxEntryParser::Eval()
+{
+    DecodeTable decodeTable[] = {
+        {0xc0, 0x00, &ExidxEntryParser::Decode00xxxxxx}
+    };
+    return Decode(decodeTable, 1);
+}""",
+        },
+        eval_second_id: {
+            "name": "ExidxEntryParser::EvalAlternate",
+            "file_path": source,
+            "start_line": 12,
+            "class_name": "ExidxEntryParser",
+            "code": """bool ExidxEntryParser::EvalAlternate()
+{
+    DecodeTable decodeTable[] = {
+        {0xc0, 0x40, &ExidxEntryParser::Decode00xxxxxx}
+    };
+    return Decode(decodeTable, 1);
+}""",
+        },
+        decode_id: {
+            "name": "ExidxEntryParser::Decode",
+            "file_path": source,
+            "start_line": 24,
+            "class_name": "ExidxEntryParser",
+            "parameters": ["DecodeTable decodeTable[]", "size_t size"],
+            "code": """bool ExidxEntryParser::Decode(
+    DecodeTable decodeTable[], size_t size)
+{
+    return (this->*(decodeTable[0].decoder))();
+}""",
+        },
+        target_id: {
+            "name": "ExidxEntryParser::Decode00xxxxxx",
+            "file_path": source,
+            "start_line": 32,
+            "class_name": "ExidxEntryParser",
+            "code": "bool ExidxEntryParser::Decode00xxxxxx() { return true; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assert diagnostics["summary"]["dispatch_assignments"] == 2
+    assert diagnostics["summary"]["candidate_edges"] == 0
+    assert diagnostics["summary"]["unresolved_without_candidates"] == 1
+    assert len(diagnostics["parameter_flows"]) == 2
+    site = next(
+        item
+        for item in diagnostics["unresolved_call_sites"]
+        if item["caller_id"] == decode_id
+    )
+    assert site["candidate_target_ids"] == []
