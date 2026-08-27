@@ -1,8 +1,9 @@
 """Observation-only diagnostics for unresolved OpenHarmony C/C++ calls.
 
 The collector deliberately does not mutate the native call graph or emit
-semantic edges.  It records syntax-backed dispatch assignments and bounded
-candidate targets so later deterministic/LLM stages have auditable inputs.
+semantic edges.  It records syntax-backed member-pointer dispatch and
+separate lambda/std::function observations with bounded candidate targets so
+later deterministic/LLM stages have auditable inputs.
 """
 
 from __future__ import annotations
@@ -60,27 +61,61 @@ def _selector_text(node: Any, source: bytes) -> str:
     return text
 
 
+def _leaf(text: str) -> str:
+    return text.strip().rsplit("::", 1)[-1].rsplit(".", 1)[-1]
+
+
+def _qualified_target_name(raw_name: str, owner_class: Any) -> str:
+    target = raw_name.strip()
+    owner = str(owner_class or "").strip().rsplit("::", 1)[-1]
+    if owner and "::" not in target and target:
+        return f"{owner}::{target}"
+    return target
+
+
 def _target_resolution(
     target_name: str,
     owner_file: str,
     functions: Mapping[str, Any],
+    owner_class: Any = None,
+    argument_count: int | None = None,
 ) -> tuple[str | None, str]:
-    matches = [
-        function_id
-        for function_id, function in functions.items()
-        if isinstance(function, Mapping) and function.get("name") == target_name
-    ]
-    if len(matches) == 1:
-        return matches[0], "exact_function_id"
+    names = [target_name]
+    qualified = _qualified_target_name(target_name, owner_class)
+    if qualified and qualified not in names:
+        names.insert(0, qualified)
+    leaf = _leaf(target_name)
+    if leaf and leaf not in names:
+        names.append(leaf)
+    saw_match = False
+    for candidate_name in names:
+        matches = [
+            function_id
+            for function_id, function in functions.items()
+            if isinstance(function, Mapping) and function.get("name") == candidate_name
+        ]
+        if argument_count is not None:
+            arity_matches = [
+                function_id
+                for function_id in matches
+                if isinstance(functions[function_id].get("parameters"), list)
+                and len(functions[function_id]["parameters"]) == argument_count
+            ]
+            if arity_matches:
+                matches = arity_matches
+        if len(matches) == 1:
+            return matches[0], "exact_function_id"
 
-    same_file = [
-        function_id
-        for function_id in matches
-        if functions[function_id].get("file_path") == owner_file
-    ]
-    if len(same_file) == 1:
-        return same_file[0], "exact_function_id"
-    if matches:
+        same_file = [
+            function_id
+            for function_id in matches
+            if functions[function_id].get("file_path") == owner_file
+        ]
+        if len(same_file) == 1:
+            return same_file[0], "exact_function_id"
+        if matches:
+            saw_match = True
+    if saw_match:
         return None, "ambiguous_target_function"
     return None, "unknown_target_function"
 
@@ -162,6 +197,203 @@ def _dispatch_target(node: Any, source: bytes) -> tuple[str | None, str]:
             if target_name:
                 return target_name, "member_function_pair"
     return None, "unsupported"
+
+
+def _called_name(node: Any, source: bytes) -> str:
+    if node is None:
+        return ""
+    if node.type not in {
+        "identifier",
+        "field_expression",
+        "qualified_identifier",
+        "scoped_identifier",
+    }:
+        return ""
+    text = _node_text(node, source).strip()
+    if not text:
+        return ""
+    return text if "::" in text else _leaf(text)
+
+
+def _parameter_types(function: Mapping[str, Any]) -> dict[str, str]:
+    """Infer simple parameter-name to class-type hints from extractor data."""
+    parameters = function.get("parameters", [])
+    if not isinstance(parameters, list):
+        return {}
+    result: dict[str, str] = {}
+    for parameter in parameters:
+        if not isinstance(parameter, str):
+            continue
+        match = re.search(
+            r"(?P<type>[A-Za-z_]\w*(?:(?:::|\s*<)[A-Za-z0-9_:<> ,*&]+)?)"
+            r"\s*[&*]*\s*(?P<name>[A-Za-z_]\w*)\s*$",
+            parameter.strip(),
+        )
+        if match:
+            result[match.group("name")] = match.group("type").strip()
+    return result
+
+
+def _lambda_target_spec(
+    called: Any,
+    source: bytes,
+    owner_class: Any,
+    parameter_types: Mapping[str, str],
+) -> dict[str, Any]:
+    raw_name = _called_name(called, source)
+    owner_hint = owner_class
+    if called is not None and called.type == "field_expression":
+        receiver = called.child_by_field_name("argument")
+        receiver_name = _node_text(receiver, source).strip() if receiver else ""
+        if receiver_name == "this":
+            owner_hint = owner_class
+        else:
+            owner_hint = parameter_types.get(receiver_name)
+    return {
+        "name": _qualified_target_name(raw_name, owner_hint),
+        "owner_hint": owner_hint,
+    }
+
+
+def _lambda_call_targets(
+    node: Any,
+    source: bytes,
+    owner_class: Any,
+    parameter_types: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Collect direct calls made by one lambda and qualify stub methods.
+
+    The target is accepted only as a source-level call expression.  Later
+    resolution still requires a unique extracted function, so a lambda that
+    calls an overloaded or unavailable method remains an explicit orphan.
+    """
+    body = node.child_by_field_name("body")
+    if body is None:
+        return []
+    targets: list[dict[str, Any]] = []
+    seen: set[tuple[str, int | None]] = set()
+    for child in _walk(body):
+        if child.type != "call_expression":
+            continue
+        called = child.child_by_field_name("function")
+        target_spec = _lambda_target_spec(
+            called, source, owner_class, parameter_types
+        )
+        target_name = target_spec["name"]
+        if not target_name:
+            continue
+        arguments = child.child_by_field_name("arguments")
+        argument_count = None
+        if arguments is not None:
+            argument_count = sum(
+                1 for argument in arguments.children if argument.is_named
+            )
+        key = (target_name, argument_count)
+        if target_name and key not in seen:
+            seen.add(key)
+            targets.append(
+                {
+                    "name": target_name,
+                    "owner_hint": target_spec["owner_hint"],
+                    "argument_count": argument_count,
+                    "expression": _node_text(child, source).strip(),
+                }
+            )
+    return targets
+
+
+def _lambda_capture(node: Any, source: bytes) -> str:
+    for child in node.children:
+        if child.type == "lambda_capture_specifier":
+            return _node_text(child, source).strip()
+    return ""
+
+
+def _lambda_dispatch_assignments(
+    node: Any,
+    source: bytes,
+    function_id: str,
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Extract lambda registrations without treating them as native edges."""
+    if node.type != "assignment_expression":
+        return []
+    left = node.child_by_field_name("left")
+    right = node.child_by_field_name("right")
+    if left is None or right is None or left.type != "subscript_expression":
+        return []
+    if right.type != "lambda_expression":
+        return []
+    table_node = left.child_by_field_name("argument")
+    selector_node = left.child_by_field_name("indices")
+    if table_node is None or selector_node is None:
+        return []
+
+    table = _node_text(table_node, source).strip()
+    selector = _selector_text(selector_node, source)
+    if not table or not selector:
+        return []
+
+    owner_file = str(function.get("file_path", ""))
+    owner_class = function.get("class_name")
+    parameter_types = _parameter_types(function)
+    lambda_text = _node_text(right, source).strip()
+    lambda_targets = _lambda_call_targets(
+        right, source, owner_class, parameter_types
+    )
+    if not lambda_targets:
+        lambda_targets = [{"name": "", "argument_count": None, "expression": ""}]
+    line = _source_line(function, node)
+    capture = _lambda_capture(right, source)
+    records: list[dict[str, Any]] = []
+    target_names = [item["name"] for item in lambda_targets]
+    for target_spec in lambda_targets:
+        target_name = target_spec["name"]
+        target_id: str | None = None
+        resolution = "no_lambda_call_target"
+        if target_name:
+            target_id, resolution = _target_resolution(
+                target_name,
+                owner_file,
+                functions,
+                target_spec["owner_hint"],
+                target_spec["argument_count"],
+            )
+        resolved_name = target_name
+        if target_id:
+            resolved = functions.get(target_id)
+            if isinstance(resolved, Mapping):
+                resolved_name = str(resolved.get("name") or target_name)
+        records.append(
+            {
+                "owner_function_id": function_id,
+                "owner_class": owner_class,
+                "file": owner_file,
+                "line": line,
+                "table": table,
+                "selector": selector,
+                "target_name": resolved_name,
+                "target_id": target_id,
+                "resolution": resolution,
+                "value_kind": "lambda",
+                "capture": capture,
+                "lambda_calls": target_names,
+                "call_argument_count": target_spec["argument_count"],
+                "evidence": {
+                    "file": owner_file,
+                    "start_line": line,
+                    "end_line": line,
+                    "text": _node_text(node, source).strip(),
+                    "value_kind": "lambda",
+                    "capture": capture,
+                    "lambda_calls": target_names,
+                    "call_argument_count": target_spec["argument_count"],
+                },
+                "lambda_text": lambda_text,
+            }
+        )
+    return records
 
 
 def _permission_tokens(value_text: str, target_name: str, value_kind: str) -> list[str]:
@@ -248,6 +480,24 @@ def _indirect_target(function_text: str) -> tuple[str | None, str, str] | None:
             "indirect_function_call",
             "parenthesized_function_pointer",
         )
+    return None
+
+
+def _callable_dispatch_target(
+    called: Any,
+    source: bytes,
+    member_to_iterator: Mapping[str, str],
+) -> str | None:
+    """Return a lookup-derived callable expression, if one is present."""
+    if called is None:
+        return None
+    if called.type == "identifier":
+        variable = _node_text(called, source).strip()
+        return variable if variable in member_to_iterator else None
+    if called.type == "field_expression":
+        text = re.sub(r"\s+", "", _node_text(called, source).strip())
+        if re.fullmatch(r"[A-Za-z_]\w*->second(?:\.first)?", text):
+            return text
     return None
 
 
@@ -355,6 +605,7 @@ def build_call_graph_diagnostics(
     cpp_parser = Parser(CPP_LANGUAGE)
     parsed: dict[str, tuple[Any, bytes, Mapping[str, Any]]] = {}
     assignments: list[dict[str, Any]] = []
+    lambda_assignments: list[dict[str, Any]] = []
 
     for function_id, function in functions.items():
         if not isinstance(function_id, str) or not isinstance(function, Mapping):
@@ -373,19 +624,39 @@ def build_call_graph_diagnostics(
             )
             if item is not None:
                 assignments.append(item)
+            lambda_assignments.extend(
+                _lambda_dispatch_assignments(
+                    node, source, function_id, function, functions
+                )
+            )
 
     assignments.sort(
         key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
     )
     sites: list[dict[str, Any]] = []
+    lambda_sites: list[dict[str, Any]] = []
     for function_id, (root, source, function) in parsed.items():
         member_to_iterator, iterator_to_table = _local_dispatch_flow(root, source)
         indirect_calls: list[dict[str, Any]] = []
+        callable_calls: list[dict[str, Any]] = []
         seen_calls: set[tuple[str, int]] = set()
         for node in _walk(root):
             if node.type != "call_expression":
                 continue
             called = node.child_by_field_name("function")
+            callable_target = _callable_dispatch_target(
+                called, source, member_to_iterator
+            )
+            if callable_target is not None:
+                callable_calls.append(
+                    {
+                        "target_variable": callable_target,
+                        "ast_kind": "std_function_call",
+                        "reason": "lookup_derived_callable",
+                        "line": _source_line(function, node),
+                        "expression": _node_text(node, source).strip(),
+                    }
+                )
             if called is None or called.type != "parenthesized_expression":
                 continue
             target = _indirect_target(_node_text(called, source))
@@ -478,6 +749,59 @@ def build_call_graph_diagnostics(
                 }
             )
 
+        for callable_call in callable_calls:
+            target_variable, iterator_variable, table = _dispatch_symbols(
+                callable_call["target_variable"],
+                member_to_iterator,
+                iterator_to_table,
+            )
+            owner_class = function.get("class_name")
+            matched = [
+                item
+                for item in lambda_assignments
+                if table
+                and item["table"] == table
+                and item["target_id"]
+                and (
+                    not owner_class
+                    or not item.get("owner_class")
+                    or item.get("owner_class") == owner_class
+                )
+            ]
+            target_ids = list(dict.fromkeys(item["target_id"] for item in matched))
+            lambda_sites.append(
+                {
+                    "caller_id": function_id,
+                    "file": function.get("file_path", ""),
+                    "line": callable_call["line"],
+                    "expression": callable_call["expression"],
+                    "ast_kind": callable_call["ast_kind"],
+                    "static_resolution": "unresolved",
+                    "reason": callable_call["reason"],
+                    "symbols": {
+                        "target_variable": target_variable,
+                        "iterator_variable": iterator_variable,
+                        "dispatch_table": table,
+                    },
+                    "candidate_target_ids": target_ids,
+                    "candidates": [
+                        {
+                            "target_id": item["target_id"],
+                            "target_name": item["target_name"],
+                            "selector": item["selector"],
+                            "value_kind": item.get("value_kind", "lambda"),
+                            "capture": item.get("capture", ""),
+                            "lambda_calls": item.get("lambda_calls", []),
+                            "call_argument_count": item.get(
+                                "call_argument_count"
+                            ),
+                            "evidence": item["evidence"],
+                        }
+                        for item in matched
+                    ],
+                }
+            )
+
     sites.sort(key=lambda item: (item["file"], item["line"], item["caller_id"]))
     orphans = [
         {
@@ -494,26 +818,66 @@ def build_call_graph_diagnostics(
         if not item["target_id"]
     ]
 
-    return {
+    lambda_sites.sort(
+        key=lambda item: (item["file"], item["line"], item["caller_id"])
+    )
+    lambda_orphans = [
+        {
+            "owner_function_id": item["owner_function_id"],
+            "file": item["file"],
+            "line": item["line"],
+            "table": item["table"],
+            "selector": item["selector"],
+            "target_name": item["target_name"],
+            "reason": item["resolution"],
+            "evidence": item["evidence"],
+        }
+        for item in lambda_assignments
+        if not item["target_id"]
+    ]
+
+    summary = {
+        "unresolved_call_sites": len(sites),
+        "dispatch_assignments": len(assignments),
+        "candidate_edges": sum(
+            len(site["candidate_target_ids"]) for site in sites
+        ),
+        "unresolved_without_candidates": sum(
+            not site["candidate_target_ids"] for site in sites
+        ),
+        "orphan_assignments": len(orphans),
+    }
+    if lambda_assignments or lambda_sites or lambda_orphans:
+        summary["lambda_dispatch"] = {
+            "dispatch_assignments": len(lambda_assignments),
+            "call_sites": len(lambda_sites),
+            "candidate_edges": sum(
+                len(site["candidate_target_ids"]) for site in lambda_sites
+            ),
+            "unresolved_without_candidates": sum(
+                not site["candidate_target_ids"] for site in lambda_sites
+            ),
+            "orphan_assignments": len(lambda_orphans),
+        }
+
+    result = {
         "schema_version": SCHEMA_VERSION,
         "platform": "openharmony",
         "status": "complete",
         "repository": extract_result.get("repository", ""),
-        "summary": {
-            "unresolved_call_sites": len(sites),
-            "dispatch_assignments": len(assignments),
-            "candidate_edges": sum(
-                len(site["candidate_target_ids"]) for site in sites
-            ),
-            "unresolved_without_candidates": sum(
-                not site["candidate_target_ids"] for site in sites
-            ),
-            "orphan_assignments": len(orphans),
-        },
+        "summary": summary,
         "unresolved_call_sites": sites,
         "dispatch_assignments": assignments,
         "orphans": orphans,
     }
+    if lambda_assignments or lambda_sites or lambda_orphans:
+        result["lambda_dispatch"] = {
+            "summary": summary["lambda_dispatch"],
+            "assignments": lambda_assignments,
+            "call_sites": lambda_sites,
+            "orphans": lambda_orphans,
+        }
+    return result
 
 
 __all__ = ["SCHEMA_VERSION", "build_call_graph_diagnostics"]

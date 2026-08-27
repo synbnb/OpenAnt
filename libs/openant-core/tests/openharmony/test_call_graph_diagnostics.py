@@ -14,6 +14,9 @@ if str(CORE_ROOT) not in sys.path:
 from core.platforms.openharmony.call_graph_diagnostics import (  # noqa: E402
     build_call_graph_diagnostics,
 )
+from core.platforms.openharmony.native_dispatch import (  # noqa: E402
+    build_native_dispatch_graph,
+)
 
 
 SOURCE = "services/medical_sensor/src/medical_service_stub.cpp"
@@ -286,3 +289,123 @@ def test_member_function_pair_preserves_permission_metadata():
     assert assignment["value_kind"] == "member_function_pair"
     assert assignment["permissions"] == ["Permission::INTERNAL", "Permission::NETWORK"]
     assert diagnostics["unresolved_call_sites"][0]["candidate_target_ids"] == [handler_id]
+
+
+def test_lambda_dispatch_is_observed_separately_without_native_edge_promotion():
+    source = "services/telephony/core_service_stub.cpp"
+    initializer_id = f"{source}:CoreServiceStub::AddHandlerNetWorkToMap"
+    caller_id = f"{source}:CoreServiceStub::OnRemoteRequest"
+    handler_id = f"{source}:CoreServiceStub::OnGetNetworkState"
+    functions = {
+        initializer_id: {
+            "name": "CoreServiceStub::AddHandlerNetWorkToMap",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CoreServiceStub",
+            "code": """void CoreServiceStub::AddHandlerNetWorkToMap()
+{
+    requestTable_[GET_NETWORK_STATE] =
+        [this](MessageParcel &data, MessageParcel &reply) {
+            return OnGetNetworkState(data, reply);
+        };
+}""",
+        },
+        caller_id: {
+            "name": "CoreServiceStub::OnRemoteRequest",
+            "file_path": source,
+            "start_line": 12,
+            "class_name": "CoreServiceStub",
+            "code": """int32_t CoreServiceStub::OnRemoteRequest(uint32_t code,
+    MessageParcel &data, MessageParcel &reply)
+{
+    auto itFunc = requestTable_.find(code);
+    if (itFunc != requestTable_.end()) {
+        auto requestFunc = itFunc->second;
+        if (requestFunc != nullptr) {
+            return requestFunc(data, reply);
+        }
+    }
+    return -1;
+}""",
+        },
+        handler_id: {
+            "name": "CoreServiceStub::OnGetNetworkState",
+            "file_path": source,
+            "start_line": 30,
+            "class_name": "CoreServiceStub",
+            "code": "int32_t CoreServiceStub::OnGetNetworkState(MessageParcel &, MessageParcel &) { return 0; }",
+        },
+    }
+
+    extract_result = {"repository": "/fixture", "functions": functions}
+    diagnostics = build_call_graph_diagnostics(extract_result, {})
+
+    assert diagnostics["dispatch_assignments"] == []
+    assert diagnostics["unresolved_call_sites"] == []
+    assert diagnostics["lambda_dispatch"]["summary"] == {
+        "dispatch_assignments": 1,
+        "call_sites": 1,
+        "candidate_edges": 1,
+        "unresolved_without_candidates": 0,
+        "orphan_assignments": 0,
+    }
+    assignment = diagnostics["lambda_dispatch"]["assignments"][0]
+    assert assignment["table"] == "requestTable_"
+    assert assignment["value_kind"] == "lambda"
+    assert assignment["target_name"] == "CoreServiceStub::OnGetNetworkState"
+    assert assignment["target_id"] == handler_id
+    site = diagnostics["lambda_dispatch"]["call_sites"][0]
+    assert site["caller_id"] == caller_id
+    assert site["symbols"] == {
+        "target_variable": "requestFunc",
+        "iterator_variable": "itFunc",
+        "dispatch_table": "requestTable_",
+    }
+    assert site["candidate_target_ids"] == [handler_id]
+    assert build_native_dispatch_graph(extract_result, {}, diagnostics) is None
+
+
+def test_lambda_receiver_type_and_call_arity_resolve_overloaded_target():
+    source = "services/telephony/sim_file_init.cpp"
+    initializer_id = f"{source}:SimFileInit::InitMemberFunc"
+    functions = {
+        initializer_id: {
+            "name": "SimFileInit::InitMemberFunc",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "SimFileInit",
+            "parameters": ["SimFile &simFile"],
+            "code": """void SimFileInit::InitMemberFunc(SimFile &simFile)
+{
+    simFile.memberTable_[READY] =
+        [&](const Event &event) { return simFile.Process(event); };
+}""",
+        },
+        "services/telephony/sim_file.cpp:SimFile::Process(Event)": {
+            "name": "SimFile::Process",
+            "file_path": "services/telephony/sim_file.cpp",
+            "start_line": 20,
+            "class_name": "SimFile",
+            "parameters": ["const Event &event"],
+            "code": "bool SimFile::Process(const Event &) { return true; }",
+        },
+        "services/telephony/sim_file.cpp:SimFile::Process(int)": {
+            "name": "SimFile::Process",
+            "file_path": "services/telephony/sim_file.cpp",
+            "start_line": 30,
+            "class_name": "SimFile",
+            "parameters": ["int value", "int other"],
+            "code": "bool SimFile::Process(int value, int other) { return value > other; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assignments = diagnostics["lambda_dispatch"]["assignments"]
+    assert len(assignments) == 1
+    assert assignments[0]["target_name"] == "SimFile::Process"
+    assert assignments[0]["target_id"].endswith("SimFile::Process(Event)")
+    assert assignments[0]["resolution"] == "exact_function_id"
+    assert assignments[0]["call_argument_count"] == 1
