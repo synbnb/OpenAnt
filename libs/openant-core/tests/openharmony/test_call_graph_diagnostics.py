@@ -669,3 +669,176 @@ def test_function_initializer_list_lambda_uses_same_observation_schema():
     assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
         handler_id
     ]
+
+
+def test_local_declaration_initializer_list_lambda_is_observed_and_matched():
+    source = "services/core/common_event_hub.cpp"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    handler_id = f"{source}:CommonEventHub::HandleReady"
+    functions = {
+        caller_id: {
+            "name": "CommonEventHub::OnReceive",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::OnReceive(const Event &event)
+{
+    std::unordered_map<int, std::function<void(const Event &)>> handlers = {
+        {READY, [this](const Event &event) { HandleReady(event); }}
+    };
+    auto it = handlers.find(event.id);
+    if (it != handlers.end()) {
+        it->second(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "CommonEventHub::HandleReady",
+            "file_path": source,
+            "start_line": 16,
+            "class_name": "CommonEventHub",
+            "code": "void CommonEventHub::HandleReady(const Event &) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["summary"]["call_sites"] == 1
+    assert lambda_dispatch["summary"]["candidate_edges"] == 1
+    assignment = lambda_dispatch["assignments"][0]
+    assert assignment["registration_form"] == "declaration_initializer_list"
+    assert assignment["owner_function_id"] == caller_id
+    assert assignment["table"] == "handlers"
+    assert assignment["target_id"] == handler_id
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]
+
+
+def test_local_declaration_initializer_does_not_cross_function_scope():
+    source = "services/core/common_event_hub.cpp"
+    initializer_id = f"{source}:CommonEventHub::InitHandlers"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    handler_id = f"{source}:CommonEventHub::HandleReady"
+    functions = {
+        initializer_id: {
+            "name": "CommonEventHub::InitHandlers",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::InitHandlers()
+{
+    std::unordered_map<int, std::function<void(const Event &)>> handlers = {
+        {READY, [this](const Event &event) { HandleReady(event); }}
+    };
+}""",
+        },
+        caller_id: {
+            "name": "CommonEventHub::OnReceive",
+            "file_path": source,
+            "start_line": 10,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::OnReceive(const Event &event)
+{
+    auto it = handlers.find(event.id);
+    if (it != handlers.end()) {
+        it->second(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "CommonEventHub::HandleReady",
+            "file_path": source,
+            "start_line": 20,
+            "class_name": "CommonEventHub",
+            "code": "void CommonEventHub::HandleReady(const Event &) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["summary"]["call_sites"] == 1
+    assert lambda_dispatch["summary"]["candidate_edges"] == 0
+    assert lambda_dispatch["summary"]["unresolved_without_candidates"] == 1
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == []
+
+
+def test_local_declaration_resolves_unique_namespace_target_by_leaf_name():
+    source = "services/hilogtool/main.cpp"
+    caller_id = f"{source}:OHOS::HiviewDFX::FormatHandler"
+    handler_id = f"{source}:OHOS::HiviewDFX::TimeHandler"
+    functions = {
+        caller_id: {
+            "name": "OHOS::HiviewDFX::FormatHandler",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": None,
+            "code": """static int FormatHandler(HilogArgs &context, const char *arg)
+{
+    static std::unordered_map<std::string, std::function<int(HilogArgs &, int)>> handlers = {
+        {"time", [](HilogArgs &value, int unused) {
+            return TimeHandler(value, FormatTime::TIME);
+        }}
+    };
+    auto handler = handlers.find(arg);
+    return handler->second(context, 0);
+}""",
+        },
+        handler_id: {
+            "name": "OHOS::HiviewDFX::TimeHandler",
+            "file_path": source,
+            "start_line": 20,
+            "class_name": None,
+            "parameters": ["HilogArgs &context", "FormatTime value"],
+            "code": "static int TimeHandler(HilogArgs &, FormatTime) { return 0; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["candidate_edges"] == 1
+    assert lambda_dispatch["assignments"][0]["target_id"] == handler_id
+
+
+def test_local_declaration_initializer_without_lambda_call_stays_explicitly_unresolved():
+    source = "services/core/common_event_hub.cpp"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    functions = {
+        caller_id: {
+            "name": "CommonEventHub::OnReceive",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::OnReceive(const Event &event)
+{
+    std::unordered_map<int, std::function<void(Event &)>> handlers = {
+        {READY, [](Event &value) { value.ready = true; }}
+    };
+    auto it = handlers.find(event.id);
+    it->second(event);
+}""",
+        }
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["summary"]["call_sites"] == 1
+    assert lambda_dispatch["summary"]["candidate_edges"] == 0
+    assert lambda_dispatch["summary"]["unresolved_without_candidates"] == 1
+    assert lambda_dispatch["summary"]["orphan_assignments"] == 1
+    assert lambda_dispatch["orphans"][0]["reason"] == "no_lambda_call_target"

@@ -376,6 +376,16 @@ def _lambda_registration_matches(
     if _text(assignment.get("selector")) != selector:
         return False
 
+    # ``declaration_initializer_list`` denotes a function-local table.  The
+    # same identifier (for example ``allFuncs`` or ``handlers``) in another
+    # method is unrelated even when the class and field identities happen to
+    # match, so keep the semantic projection scoped to the caller as well as
+    # the diagnostic matcher.
+    if assignment.get("registration_form") == "declaration_initializer_list":
+        caller_id = _text(caller.get("id"))
+        if not caller_id or _text(assignment.get("owner_function_id")) != caller_id:
+            return False
+
     site_table = _lambda_site_table(site)
     assignment_table = _text(assignment.get("table"))
     if not site_table or not assignment_table:

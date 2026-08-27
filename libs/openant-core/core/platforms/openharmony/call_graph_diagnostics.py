@@ -122,6 +122,40 @@ def _target_resolution(
             return same_file[0], "exact_function_id"
         if matches:
             saw_match = True
+    # Namespace-qualified free functions are often indexed as
+    # ``OHOS::Namespace::Handler`` while the lambda call expression contains
+    # only ``Handler``.  Resolve that spelling only when the unqualified name
+    # is unique (preferably in the same source file) and, when available,
+    # agrees with the call arity.  Never apply this fallback to an already
+    # qualified target, where a leaf-only match could select the wrong class
+    # or namespace overload.
+    if "::" not in target_name and leaf:
+        leaf_matches = [
+            function_id
+            for function_id, function in functions.items()
+            if isinstance(function, Mapping)
+            and _leaf(str(function.get("name") or "")) == leaf
+        ]
+        if argument_count is not None:
+            arity_matches = [
+                function_id
+                for function_id in leaf_matches
+                if isinstance(functions[function_id].get("parameters"), list)
+                and len(functions[function_id]["parameters"]) == argument_count
+            ]
+            if arity_matches:
+                leaf_matches = arity_matches
+        same_file = [
+            function_id
+            for function_id in leaf_matches
+            if functions[function_id].get("file_path") == owner_file
+        ]
+        if len(same_file) == 1:
+            return same_file[0], "leaf_name_same_file"
+        if len(leaf_matches) == 1:
+            return leaf_matches[0], "leaf_name"
+        if leaf_matches:
+            saw_match = True
     if saw_match:
         return None, "ambiguous_target_function"
     return None, "unknown_target_function"
@@ -557,16 +591,39 @@ def _lambda_dispatch_assignments(
     functions: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Extract lambda registrations without treating them as native edges."""
-    if node.type != "assignment_expression":
+    if node.type == "init_declarator":
+        # A dispatch table can be scoped to one function instead of assigned
+        # after declaration, e.g. ``std::map<int, Handler> handlers = { ...
+        # };``.  The initializer list is still a concrete ``{selector,
+        # lambda}`` registration and should use the same bounded matching as
+        # assignment expressions.  Keep a distinct form so downstream users
+        # can tell that this table is local to the owner function.
+        left = node.child_by_field_name("declarator")
+        right = node.child_by_field_name("value")
+        if left is None or right is None or right.type != "initializer_list":
+            return []
+        table = _table_expression(left, source)
+        if not table:
+            return []
+        registration_form = "declaration_initializer_list"
+    elif node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        if left is None or right is None:
+            return []
+        table = ""
+        registration_form = "initializer_list"
+    else:
         return []
-    left = node.child_by_field_name("left")
-    right = node.child_by_field_name("right")
-    if left is None or right is None:
-        return []
+
     owner_file = str(function.get("file_path", ""))
     owner_class = function.get("class_name")
     parameter_types = _parameter_types(function)
-    if left.type == "subscript_expression" and right.type == "lambda_expression":
+    if (
+        node.type == "assignment_expression"
+        and left.type == "subscript_expression"
+        and right.type == "lambda_expression"
+    ):
         table_node = left.child_by_field_name("argument")
         selector_node = left.child_by_field_name("indices")
         if table_node is None or selector_node is None:
@@ -588,7 +645,8 @@ def _lambda_dispatch_assignments(
 
     if right.type != "initializer_list":
         return []
-    table = _table_expression(left, source)
+    if node.type == "assignment_expression":
+        table = _table_expression(left, source)
     if not table:
         return []
     records: list[dict[str, Any]] = []
@@ -608,7 +666,7 @@ def _lambda_dispatch_assignments(
                 line=_source_line(function, lambda_node),
                 expression=pair_text,
                 functions=functions,
-                registration_form="initializer_list",
+                registration_form=registration_form,
             )
         )
     return records
@@ -933,12 +991,23 @@ def _lambda_dispatch_matches(
     table: str,
     owner_class: Any,
     field_identity: Mapping[str, Any],
+    caller_function_id: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Match callable reads and return explicit cross-function alias evidence."""
     matched: list[dict[str, Any]] = []
     aliases: list[dict[str, Any]] = []
     for item in assignments:
         if not item.get("target_id"):
+            continue
+        # A declaration initializer creates a function-local object.  The
+        # same variable name in another method is a different table, so it
+        # must not be joined through the class/field alias fallback.  Global
+        # initializers and post-declaration member assignments retain their
+        # existing cross-function behavior.
+        if (
+            item.get("registration_form") == "declaration_initializer_list"
+            and item.get("owner_function_id") != caller_function_id
+        ):
             continue
         same_owner = (
             not owner_class
@@ -1140,7 +1209,11 @@ def build_call_graph_diagnostics(
                 table, owner_class, _parameter_types(function)
             )
             matched, aliases = _lambda_dispatch_matches(
-                lambda_assignments, table, owner_class, field_identity
+                lambda_assignments,
+                table,
+                owner_class,
+                field_identity,
+                function_id,
             )
             target_ids = list(dict.fromkeys(item["target_id"] for item in matched))
             for item in aliases:

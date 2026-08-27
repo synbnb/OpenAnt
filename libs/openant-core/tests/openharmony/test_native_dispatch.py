@@ -363,6 +363,78 @@ def test_lambda_dispatch_unknown_target_is_not_projected():
     assert graph is None
 
 
+def test_local_lambda_registration_scope_is_rechecked_before_projection():
+    source = "services/core/common_event_hub.cpp"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    target_id = f"{source}:CommonEventHub::HandleReady"
+    field_identity = {
+        "field": "handlers",
+        "receiver": "this",
+        "receiver_type": "CommonEventHub",
+        "receiver_kind": "this",
+    }
+    functions = {
+        caller_id: _function(
+            "CommonEventHub::OnReceive",
+            "void CommonEventHub::OnReceive() { return it->second(); }",
+            file_path=source,
+            start_line=20,
+            class_name="CommonEventHub",
+        ),
+        target_id: _function(
+            "CommonEventHub::HandleReady",
+            "void CommonEventHub::HandleReady() {}",
+            file_path=source,
+            start_line=30,
+            class_name="CommonEventHub",
+        ),
+    }
+    assignment = {
+        "owner_function_id": f"{source}:CommonEventHub::InitHandlers",
+        "owner_class": "CommonEventHub",
+        "file": source,
+        "line": 10,
+        "table": "handlers",
+        "field_identity": field_identity,
+        "selector": "READY",
+        "target_name": "CommonEventHub::HandleReady",
+        "target_id": target_id,
+        "resolution": "exact_function_id",
+        "value_kind": "lambda",
+        "registration_form": "declaration_initializer_list",
+        "evidence": {"file": source, "start_line": 10},
+    }
+    diagnostics = {
+        "lambda_dispatch": {
+            "assignments": [assignment],
+            "call_sites": [
+                {
+                    "caller_id": caller_id,
+                    "file": source,
+                    "line": 22,
+                    "expression": "it->second()",
+                    "symbols": {"dispatch_table": "handlers"},
+                    "field_identity": field_identity,
+                    "candidate_target_ids": [target_id],
+                    "candidates": [
+                        {
+                            "target_id": target_id,
+                            "selector": "READY",
+                            "evidence": assignment["evidence"],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+
+    assert graph is None
+
+
 def test_reachability_overlay_accepts_native_dispatch_edges_only_for_known_functions():
     extract, call_graph = _fixture()
     graph = build_native_dispatch_graph(extract, call_graph)
