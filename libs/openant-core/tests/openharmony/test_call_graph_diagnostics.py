@@ -842,3 +842,109 @@ def test_local_declaration_initializer_without_lambda_call_stays_explicitly_unre
     assert lambda_dispatch["summary"]["unresolved_without_candidates"] == 1
     assert lambda_dispatch["summary"]["orphan_assignments"] == 1
     assert lambda_dispatch["orphans"][0]["reason"] == "no_lambda_call_target"
+
+
+def test_member_function_initializer_list_without_ampersand_is_observed_and_matched():
+    """A class member table may use ``Class::Method`` without an explicit ``&``."""
+    source = "services/snapshot/kernel_snapshot_parser.cpp"
+    initializer_id = f"{source}:KernelSnapshotParser::InitializeParseTable"
+    caller_id = f"{source}:KernelSnapshotParser::ProcessSnapshotSection"
+    first_handler_id = f"{source}:KernelSnapshotParser::ParseTransStart"
+    second_handler_id = f"{source}:KernelSnapshotParser::ParseThreadInfo"
+    functions = {
+        initializer_id: {
+            "name": "KernelSnapshotParser::InitializeParseTable",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "KernelSnapshotParser",
+            "code": """void KernelSnapshotParser::InitializeParseTable()
+{
+    parseTable_ = {
+        {SnapshotSection::TRANSACTION_START, KernelSnapshotParser::ParseTransStart},
+        {SnapshotSection::THREAD_INFO, KernelSnapshotParser::ParseThreadInfo}
+    };
+}""",
+        },
+        caller_id: {
+            "name": "KernelSnapshotParser::ProcessSnapshotSection",
+            "file_path": source,
+            "start_line": 12,
+            "class_name": "KernelSnapshotParser",
+            "code": """void KernelSnapshotParser::ProcessSnapshotSection(
+    const SnapshotCell& cell, CrashMap& output)
+{
+    auto it = parseTable_.find(cell.sectionKey);
+    if (it != parseTable_.end() && it->second) {
+        it->second(cell, output);
+    }
+}""",
+        },
+        first_handler_id: {
+            "name": "KernelSnapshotParser::ParseTransStart",
+            "file_path": source,
+            "start_line": 25,
+            "class_name": "KernelSnapshotParser",
+            "code": "void KernelSnapshotParser::ParseTransStart(const SnapshotCell&, CrashMap&) {}",
+        },
+        second_handler_id: {
+            "name": "KernelSnapshotParser::ParseThreadInfo",
+            "file_path": source,
+            "start_line": 30,
+            "class_name": "KernelSnapshotParser",
+            "code": "void KernelSnapshotParser::ParseThreadInfo(const SnapshotCell&, CrashMap&) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assert diagnostics["summary"]["dispatch_assignments"] == 2
+    assert diagnostics["summary"]["candidate_edges"] == 2
+    assert diagnostics["summary"]["unresolved_call_sites"] == 1
+    site = diagnostics["unresolved_call_sites"][0]
+    assert site["caller_id"] == caller_id
+    assert site["symbols"] == {
+        "target_variable": "it->second",
+        "iterator_variable": "it",
+        "dispatch_table": "parseTable_",
+    }
+    assert set(site["candidate_target_ids"]) == {
+        first_handler_id,
+        second_handler_id,
+    }
+    assert all(
+        item["registration_form"] == "initializer_member_function"
+        for item in diagnostics["dispatch_assignments"]
+    )
+    assert all(
+        item["value_kind"] == "member_function_reference"
+        for item in diagnostics["dispatch_assignments"]
+    )
+    assert "lambda_dispatch" not in diagnostics
+
+
+def test_qualified_enum_initializer_is_not_misclassified_as_a_function_registration():
+    source = "services/snapshot/section_map.cpp"
+    function_id = f"{source}:SectionMap::Initialize"
+    functions = {
+        function_id: {
+            "name": "SectionMap::Initialize",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "SectionMap",
+            "code": """void SectionMap::Initialize()
+{
+    sectionNames_ = {
+        {SnapshotSection::TRANSACTION_START, CrashSection::TRANSACTION}
+    };
+}""",
+        }
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assert diagnostics["dispatch_assignments"] == []
+    assert diagnostics["summary"]["candidate_edges"] == 0

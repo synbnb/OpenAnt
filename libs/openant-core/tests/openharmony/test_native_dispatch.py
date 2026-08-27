@@ -168,6 +168,105 @@ def test_base_funcs_edges_recover_handler_and_concrete_service_method():
     assert not any(edge.target_id.endswith(UNRELATED) for edge in graph.edges.values())
 
 
+def test_member_function_initializer_list_projects_same_class_non_remote_site():
+    """A class-owned parser table can be consumed outside OnRemoteRequest."""
+    source = "services/snapshot/kernel_snapshot_parser.cpp"
+    caller_id = f"{source}:KernelSnapshotParser::ProcessSnapshotSection"
+    initializer_id = f"{source}:KernelSnapshotParser::InitializeParseTable"
+    target_id = f"{source}:KernelSnapshotParser::ParseTransStart"
+    functions = {
+        caller_id: _function(
+            "KernelSnapshotParser::ProcessSnapshotSection",
+            "void KernelSnapshotParser::ProcessSnapshotSection() {}",
+            file_path=source,
+            start_line=20,
+            class_name="KernelSnapshotParser",
+        ),
+        initializer_id: _function(
+            "KernelSnapshotParser::InitializeParseTable",
+            "void KernelSnapshotParser::InitializeParseTable() {}",
+            file_path=source,
+            start_line=10,
+            class_name="KernelSnapshotParser",
+        ),
+        target_id: _function(
+            "KernelSnapshotParser::ParseTransStart",
+            "void KernelSnapshotParser::ParseTransStart() {}",
+            file_path=source,
+            start_line=30,
+            class_name="KernelSnapshotParser",
+        ),
+    }
+    assignment = {
+        "owner_function_id": initializer_id,
+        "owner_class": "KernelSnapshotParser",
+        "file": source,
+        "line": 12,
+        "table": "parseTable_",
+        "selector": "SnapshotSection::TRANSACTION_START",
+        "target_name": "KernelSnapshotParser::ParseTransStart",
+        "target_id": target_id,
+        "resolution": "exact_function_id",
+        "value_kind": "member_function_reference",
+        "registration_form": "initializer_member_function",
+        "permissions": [],
+        "evidence": {
+            "file": source,
+            "start_line": 12,
+            "end_line": 12,
+            "text": "{SnapshotSection::TRANSACTION_START, KernelSnapshotParser::ParseTransStart}",
+            "value_kind": "member_function_reference",
+            "registration_form": "initializer_member_function",
+        },
+    }
+    diagnostics = {
+        "dispatch_assignments": [assignment],
+        "unresolved_call_sites": [
+            {
+                "caller_id": caller_id,
+                "file": source,
+                "line": 24,
+                "expression": "it->second(cell, output)",
+                "ast_kind": "std_function_call",
+                "static_resolution": "unresolved",
+                "reason": "lookup_derived_member_function_pointer",
+                "symbols": {
+                    "target_variable": "it->second",
+                    "iterator_variable": "it",
+                    "dispatch_table": "parseTable_",
+                },
+                "candidate_target_ids": [target_id],
+                "candidates": [
+                    {
+                        "target_id": target_id,
+                        "target_name": assignment["target_name"],
+                        "selector": assignment["selector"],
+                        "value_kind": assignment["value_kind"],
+                        "registration_form": assignment["registration_form"],
+                        "owner_class": assignment["owner_class"],
+                        "permissions": [],
+                        "evidence": assignment["evidence"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+
+    assert graph is not None
+    edges = [edge for edge in graph.edges.values() if edge.kind == HANDLER_EDGE_KIND]
+    assert {(edge.source_id, edge.target_id) for edge in edges} == {
+        (f"function:{caller_id}", f"function:{target_id}")
+    }
+    assert edges[0].attributes["registration_form"] == (
+        "initializer_member_function"
+    )
+    assert edges[0].attributes["value_kind"] == "member_function_reference"
+
+
 def test_lambda_dispatch_candidates_are_projected_with_registration_evidence():
     source = "services/core/common_event_hub.cpp"
     caller_id = f"{source}:CommonEventHub::OnReceive"

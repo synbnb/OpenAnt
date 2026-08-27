@@ -670,6 +670,19 @@ def _add_orphan_for_site(graph: SemanticGraph, site: Mapping[str, Any]) -> None:
     )
 
 
+def _is_member_initializer_candidate(
+    candidate: Mapping[str, Any], caller: Mapping[str, Any]
+) -> bool:
+    """Allow non-IPC call sites only for the new class-owned initializer form."""
+    if _text(candidate.get("registration_form")) != (
+        "initializer_member_function"
+    ):
+        return False
+    candidate_owner = _text(candidate.get("owner_class"))
+    caller_owner = _text(caller.get("owner"))
+    return bool(candidate_owner and caller_owner and _leaf(candidate_owner) == _leaf(caller_owner))
+
+
 def _resolve_dispatch_edges(
     graph: SemanticGraph,
     records_by_id: Mapping[str, Mapping[str, Any]],
@@ -687,9 +700,9 @@ def _resolve_dispatch_edges(
         caller = records_by_id.get(caller_id)
         symbols = raw_site.get("symbols")
         table = symbols.get("dispatch_table") if isinstance(symbols, Mapping) else ""
-        if not caller or caller.get("leaf") != "OnRemoteRequest" or not _is_dispatch_table(table):
+        if not caller or not _is_dispatch_table(table):
             continue
-        dispatch_callers[caller_id].append(raw_site)
+        is_remote_dispatch = caller.get("leaf") == "OnRemoteRequest"
         candidates = raw_site.get("candidates")
         if not isinstance(candidates, list):
             candidates = []
@@ -699,6 +712,15 @@ def _resolve_dispatch_edges(
             if isinstance(item, Mapping)
             and _text(item.get("target_id")) in records_by_id
         ]
+        if not is_remote_dispatch:
+            valid_candidates = [
+                item
+                for item in valid_candidates
+                if _is_member_initializer_candidate(item, caller)
+            ]
+            if not valid_candidates:
+                continue
+        dispatch_callers[caller_id].append(raw_site)
         if not valid_candidates:
             _add_orphan_for_site(graph, raw_site)
             continue
@@ -728,6 +750,36 @@ def _resolve_dispatch_edges(
             selectors = [item["selector"] for item in registrations]
             _add_function_node(graph, caller)
             _add_function_node(graph, target)
+            attributes = {
+                "dispatch_table": _text(table),
+                "selector": selector,
+                "selectors": selectors or [selector],
+                "registrations": registrations
+                or [
+                    {
+                        "selector": selector,
+                        "value_kind": value_kind,
+                        "permissions": permissions,
+                    }
+                ],
+                "stub_class": caller.get("owner", ""),
+                "value_kind": value_kind,
+                "permissions": permissions,
+            }
+            if not is_remote_dispatch:
+                attributes.update(
+                    {
+                        "callable_kind": "member_function_table",
+                        "registration_form": _text(
+                            candidate.get("registration_form")
+                        )
+                        or _text(
+                            assignment.get("registration_form")
+                            if isinstance(assignment, Mapping)
+                            else ""
+                        ),
+                    }
+                )
             graph.add_edge(
                 {
                     "schema_version": graph.schema_version,
@@ -737,22 +789,7 @@ def _resolve_dispatch_edges(
                     "evidence": _candidate_evidence(raw_site, candidate, assignment),
                     "confidence": 0.98,
                     "resolver_version": RESOLVER_VERSION,
-                    "attributes": {
-                        "dispatch_table": _text(table),
-                        "selector": selector,
-                        "selectors": selectors or [selector],
-                        "registrations": registrations
-                        or [
-                            {
-                                "selector": selector,
-                                "value_kind": value_kind,
-                                "permissions": permissions,
-                            }
-                        ],
-                        "stub_class": caller.get("owner", ""),
-                        "value_kind": value_kind,
-                        "permissions": permissions,
-                    },
+                    "attributes": attributes,
                 }
             )
             resolved.append((caller, target))
@@ -768,6 +805,13 @@ def _resolve_dispatch_edges(
     ]
     for raw_assignment in assignments:
         if not isinstance(raw_assignment, Mapping):
+            continue
+        if _text(raw_assignment.get("registration_form")) == (
+            "initializer_member_function"
+        ):
+            # Class-owned initializer tables are linked from their concrete
+            # lookup caller above; they must not be heuristically attached to
+            # an unrelated OnRemoteRequest fallback in the same class.
             continue
         if not _is_dispatch_table(raw_assignment.get("table")):
             continue

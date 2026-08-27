@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import tree_sitter_c as tsc
 import tree_sitter_cpp as tscpp
@@ -122,6 +122,47 @@ def _target_resolution(
             return same_file[0], "exact_function_id"
         if matches:
             saw_match = True
+    # Extracted function names may retain the namespace while the source
+    # initializer only spells ``Class::Method``.  A two-component qualified
+    # suffix is still a concrete class/member identity, unlike a leaf-only
+    # fallback.  Resolve it only when the suffix is unique (preferably in the
+    # registration file), and keep arity filtering when the caller supplied
+    # one.
+    if "::" in target_name:
+        target_parts = [part for part in target_name.split("::") if part]
+        if len(target_parts) >= 2:
+            suffix = "::".join(target_parts[-2:])
+            suffix_matches = [
+                function_id
+                for function_id, function in functions.items()
+                if isinstance(function, Mapping)
+                and (
+                    str(function.get("name") or "") == suffix
+                    or str(function.get("name") or "").endswith(
+                        f"::{suffix}"
+                    )
+                )
+            ]
+            if argument_count is not None:
+                arity_matches = [
+                    function_id
+                    for function_id in suffix_matches
+                    if isinstance(functions[function_id].get("parameters"), list)
+                    and len(functions[function_id]["parameters"]) == argument_count
+                ]
+                if arity_matches:
+                    suffix_matches = arity_matches
+            same_file = [
+                function_id
+                for function_id in suffix_matches
+                if functions[function_id].get("file_path") == owner_file
+            ]
+            if len(same_file) == 1:
+                return same_file[0], "qualified_suffix_same_file"
+            if len(suffix_matches) == 1:
+                return suffix_matches[0], "qualified_suffix"
+            if suffix_matches:
+                saw_match = True
     # Namespace-qualified free functions are often indexed as
     # ``OHOS::Namespace::Handler`` while the lambda call expression contains
     # only ``Handler``.  Resolve that spelling only when the unqualified name
@@ -219,7 +260,86 @@ def _dispatch_assignment(
     }
 
 
-def _dispatch_target(node: Any, source: bytes) -> tuple[str | None, str]:
+def _initializer_member_function_assignments(
+    node: Any,
+    source: bytes,
+    function_id: str,
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Observe class-owned function-pointer tables initialized as a whole.
+
+    This deliberately handles only a simple assignment such as
+    ``parseTable_ = {{Section::A, Class::Handle}}`` inside a method.  The
+    registration class must match the containing method's class, which keeps
+    enum/metadata maps and unrelated qualified values out of the dispatch
+    evidence.  It does not propagate a local array through another function.
+    """
+    if node.type != "assignment_expression":
+        return []
+    left = node.child_by_field_name("left")
+    right = node.child_by_field_name("right")
+    if left is None or right is None or right.type != "initializer_list":
+        return []
+    table = _table_expression(left, source)
+    owner_file = str(function.get("file_path", ""))
+    owner_class = _leaf(str(function.get("class_name") or ""))
+    if not table or not owner_class:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for selector, target_name, value_kind, pair_text in (
+        _initializer_member_function_entries(right, source)
+    ):
+        target_parts = [part for part in target_name.split("::") if part]
+        if len(target_parts) < 2:
+            continue
+        target_class = _leaf("::".join(target_parts[:-1]))
+        if target_class != owner_class:
+            continue
+        target_id, resolution = _target_resolution(
+            target_name, owner_file, functions, owner_class
+        )
+        if target_id:
+            resolved = functions.get(target_id)
+            resolved_class = _leaf(
+                str(resolved.get("class_name") or "")
+            ) if isinstance(resolved, Mapping) else ""
+            if resolved_class and resolved_class != owner_class:
+                continue
+        line = _source_line(function, node)
+        permissions = _permission_tokens(pair_text, target_name, value_kind)
+        records.append(
+            {
+                "owner_function_id": function_id,
+                "owner_class": function.get("class_name"),
+                "file": owner_file,
+                "line": line,
+                "table": table,
+                "selector": selector,
+                "target_name": target_name,
+                "target_id": target_id,
+                "resolution": resolution,
+                "value_kind": value_kind,
+                "registration_form": "initializer_member_function",
+                "permissions": permissions,
+                "evidence": {
+                    "file": owner_file,
+                    "start_line": line,
+                    "end_line": line,
+                    "text": pair_text,
+                    "value_kind": value_kind,
+                    "registration_form": "initializer_member_function",
+                    "permissions": permissions,
+                },
+            }
+        )
+    return records
+
+
+def _dispatch_target(
+    node: Any, source: bytes, *, allow_reference: bool = False
+) -> tuple[str | None, str]:
     """Extract a member-function target from a pointer or pair initializer.
 
     C++ services use both ``table[key] = &Stub::Handler`` and
@@ -232,12 +352,60 @@ def _dispatch_target(node: Any, source: bytes) -> tuple[str | None, str]:
         target_node = node.child_by_field_name("argument")
         target_name = _node_text(target_node, source).strip() if target_node else ""
         return (target_name if "::" in target_name else None, "member_function_pointer")
+    if allow_reference and node.type in {
+        "qualified_identifier",
+        "scoped_identifier",
+    }:
+        target_name = _node_text(node, source).strip()
+        # A qualified reference such as ``Class::Handler`` is a valid C++
+        # function-pointer initializer even when the source omits ``&``.
+        # Keep unqualified identifiers out of this path: they could be enum
+        # values, constants, or arbitrary data rather than callable targets.
+        return (target_name if "::" in target_name else None, "member_function_reference")
     if node.type == "initializer_list":
         for child in node.children:
-            target_name, value_kind = _dispatch_target(child, source)
+            target_name, value_kind = _dispatch_target(
+                child, source, allow_reference=allow_reference
+            )
             if target_name:
                 return target_name, "member_function_pair"
     return None, "unsupported"
+
+
+def _initializer_member_function_entries(
+    node: Any, source: bytes
+) -> list[tuple[str, str, str, str]]:
+    """Return direct function references from ``{selector, target}`` pairs.
+
+    The pair's final named child is intentionally used as the value.  This
+    prevents a qualified selector such as ``SnapshotSection::THREAD_INFO``
+    from being mistaken for a function target while still allowing a nested
+    value pair such as ``{selector, {&Class::Handler, metadata}}``.
+    """
+    if node is None or node.type != "initializer_list":
+        return []
+    entries: list[tuple[str, str, str, str]] = []
+    for pair in node.children:
+        if pair.type != "initializer_list":
+            continue
+        named = [child for child in pair.children if child.is_named]
+        if len(named) < 2:
+            continue
+        selector = _selector_text(named[0], source)
+        target_name, value_kind = _dispatch_target(
+            named[-1], source, allow_reference=True
+        )
+        if not selector or not target_name:
+            continue
+        entries.append(
+            (
+                selector,
+                target_name,
+                value_kind,
+                _node_text(pair, source).strip(),
+            )
+        )
+    return entries
 
 
 def _called_name(node: Any, source: bytes) -> str:
@@ -1027,6 +1195,30 @@ def _lambda_dispatch_matches(
     return matched, aliases
 
 
+def _member_function_dispatch_matches(
+    assignments: Iterable[Mapping[str, Any]],
+    table: str,
+    owner_class: Any,
+) -> list[dict[str, Any]]:
+    """Match a callable table read to class-owned function registrations."""
+    owner = _leaf(str(owner_class or ""))
+    if not table or not owner:
+        return []
+    matched: list[dict[str, Any]] = []
+    for item in assignments:
+        if not isinstance(item, Mapping) or not item.get("target_id"):
+            continue
+        if item.get("table") != table:
+            continue
+        registration_owner = _leaf(str(item.get("owner_class") or ""))
+        if not registration_owner or registration_owner != owner:
+            continue
+        if item.get("value_kind") == "lambda":
+            continue
+        matched.append(dict(item))
+    return matched
+
+
 def build_call_graph_diagnostics(
     extract_result: Mapping[str, Any],
     call_graph_result: Mapping[str, Any] | None = None,
@@ -1059,6 +1251,11 @@ def build_call_graph_diagnostics(
             )
             if item is not None:
                 assignments.append(item)
+            assignments.extend(
+                _initializer_member_function_assignments(
+                    node, source, function_id, function, functions
+                )
+            )
             lambda_assignments.extend(
                 _lambda_dispatch_assignments(
                     node, source, function_id, function, functions
@@ -1205,6 +1402,46 @@ def build_call_graph_diagnostics(
                 iterator_to_table,
             )
             owner_class = function.get("class_name")
+            member_matches = _member_function_dispatch_matches(
+                assignments, table, owner_class
+            )
+            if member_matches:
+                target_ids = list(
+                    dict.fromkeys(item["target_id"] for item in member_matches)
+                )
+                sites.append(
+                    {
+                        "caller_id": function_id,
+                        "file": function.get("file_path", ""),
+                        "line": callable_call["line"],
+                        "expression": callable_call["expression"],
+                        "ast_kind": callable_call["ast_kind"],
+                        "static_resolution": "unresolved",
+                        "reason": "lookup_derived_member_function_pointer",
+                        "symbols": {
+                            "target_variable": target_variable,
+                            "iterator_variable": iterator_variable,
+                            "dispatch_table": table,
+                        },
+                        "candidate_target_ids": target_ids,
+                        "candidates": [
+                            {
+                                "target_id": item["target_id"],
+                                "target_name": item["target_name"],
+                                "selector": item["selector"],
+                                "value_kind": item.get("value_kind", ""),
+                                "registration_form": item.get(
+                                    "registration_form", ""
+                                ),
+                                "owner_class": item.get("owner_class"),
+                                "permissions": item.get("permissions", []),
+                                "evidence": item["evidence"],
+                            }
+                            for item in member_matches
+                        ],
+                    }
+                )
+                continue
             field_identity = _field_identity(
                 table, owner_class, _parameter_types(function)
             )
