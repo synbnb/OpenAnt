@@ -318,6 +318,229 @@ def _diagnostic_lists(diagnostics: Mapping[str, Any] | None) -> tuple[list[Any],
     )
 
 
+def _lambda_diagnostic_lists(
+    diagnostics: Mapping[str, Any] | None,
+) -> tuple[list[Any], list[Any]]:
+    """Return the observation-only Lambda assignments and callable reads."""
+    if not isinstance(diagnostics, Mapping):
+        return [], []
+    payload = diagnostics.get("lambda_dispatch")
+    if not isinstance(payload, Mapping):
+        return [], []
+    assignments = payload.get("assignments", [])
+    sites = payload.get("call_sites", [])
+    return (
+        assignments if isinstance(assignments, list) else [],
+        sites if isinstance(sites, list) else [],
+    )
+
+
+def _lambda_type_key(value: Any) -> str:
+    """Normalize the proven receiver type used by Lambda field identities."""
+    text = _text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\b(?:const|volatile|class|struct|typename)\b", "", text)
+    text = re.sub(r"[\s*&]+", "", text)
+    return text.rsplit("::", 1)[-1]
+
+
+def _lambda_field_key(value: Any) -> tuple[str, str]:
+    """Return ``(field, receiver_type)`` only for a proven identity."""
+    if not isinstance(value, Mapping):
+        return "", ""
+    field = _text(value.get("field"))
+    receiver_type = _lambda_type_key(value.get("receiver_type"))
+    if not field or not receiver_type:
+        return "", ""
+    return field, receiver_type
+
+
+def _lambda_site_table(site: Mapping[str, Any]) -> str:
+    symbols = site.get("symbols")
+    if not isinstance(symbols, Mapping):
+        return ""
+    return _text(symbols.get("dispatch_table"))
+
+
+def _lambda_registration_matches(
+    assignment: Mapping[str, Any],
+    site: Mapping[str, Any],
+    caller: Mapping[str, Any],
+    target_id: str,
+    selector: str,
+) -> bool:
+    """Validate one Lambda candidate against its concrete registration."""
+    if _text(assignment.get("target_id")) != target_id:
+        return False
+    if _text(assignment.get("selector")) != selector:
+        return False
+
+    site_table = _lambda_site_table(site)
+    assignment_table = _text(assignment.get("table"))
+    if not site_table or not assignment_table:
+        return False
+
+    site_identity = _lambda_field_key(site.get("field_identity"))
+    assignment_identity = _lambda_field_key(assignment.get("field_identity"))
+    if site_identity and assignment_identity:
+        if site_identity != assignment_identity:
+            return False
+    elif site_table == assignment_table:
+        # A hand-written/older diagnostic may omit field_identity.  In that
+        # compatibility case the same table is accepted only when its owner
+        # class is also proven to be the caller's class.
+        assignment_owner = _lambda_type_key(assignment.get("owner_class"))
+        caller_owner = _lambda_type_key(caller.get("owner"))
+        if assignment_owner and caller_owner and assignment_owner != caller_owner:
+            return False
+    else:
+        # Qualified file-level tables (Class::memberFuncMap_) can only be
+        # joined to an unqualified read through the exact field identity.
+        return False
+
+    if assignment_table == site_table:
+        return True
+    return bool(site_identity and assignment_identity)
+
+
+def _lambda_site_evidence(site: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a callable-read site into auditable semantic evidence."""
+    return {
+        "source": "lambda_dispatch_call_site",
+        "path": _text(site.get("file")),
+        "line": site.get("line", 0),
+        "function": _text(site.get("caller_id")),
+        "signal": _text(site.get("reason")) or "lookup_derived_callable",
+        "matched": _text(site.get("expression")),
+    }
+
+
+def _lambda_registration_evidence(
+    assignment: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prefix registration evidence so it cannot be confused with a read."""
+    raw = assignment.get("evidence")
+    evidence = dict(raw) if isinstance(raw, Mapping) else {}
+    return {"source": "lambda_dispatch_assignment", **evidence}
+
+
+def _lambda_registrations_metadata(
+    assignments: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    registrations: list[dict[str, Any]] = []
+    for item in assignments:
+        registrations.append(
+            {
+                "selector": _text(item.get("selector")),
+                "value_kind": _text(item.get("value_kind")) or "lambda",
+                "registration_form": _text(item.get("registration_form")),
+                "owner_function_id": _text(item.get("owner_function_id")),
+                "file": _text(item.get("file")),
+                "line": item.get("line", 0),
+            }
+        )
+    return sorted(
+        registrations,
+        key=lambda item: (
+            item["selector"],
+            item["registration_form"],
+            item["owner_function_id"],
+        ),
+    )
+
+
+def _resolve_lambda_dispatch_edges(
+    graph: SemanticGraph,
+    records_by_id: Mapping[str, Mapping[str, Any]],
+    assignments: list[Any],
+    sites: list[Any],
+) -> None:
+    """Project only source-backed Lambda dispatch candidates into the overlay."""
+    for raw_site in sites:
+        if not isinstance(raw_site, Mapping):
+            continue
+        caller_id = _text(raw_site.get("caller_id"))
+        caller = records_by_id.get(caller_id)
+        if caller is None:
+            continue
+        candidates = raw_site.get("candidates")
+        if not isinstance(candidates, list):
+            continue
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            target_id = _text(raw_candidate.get("target_id"))
+            selector = _text(raw_candidate.get("selector"))
+            target = records_by_id.get(target_id)
+            if not target_id or not selector or target is None:
+                # The diagnostic residual retains this candidate; no semantic
+                # node is created for an unknown or incomplete endpoint.
+                continue
+            matching = [
+                item
+                for item in assignments
+                if isinstance(item, Mapping)
+                and _lambda_registration_matches(
+                    item, raw_site, caller, target_id, selector
+                )
+            ]
+            if not matching:
+                # A candidate without a matching registration is not strong
+                # enough for the overlay.  It remains visible in residuals.
+                continue
+
+            _add_function_node(graph, caller)
+            _add_function_node(graph, target)
+            site_table = _lambda_site_table(raw_site)
+            registration_tables = sorted(
+                {_text(item.get("table")) for item in matching if item.get("table")}
+            )
+            field_identity = raw_site.get("field_identity")
+            field_identity = (
+                dict(field_identity) if isinstance(field_identity, Mapping) else {}
+            )
+            forms = sorted(
+                {
+                    _text(item.get("registration_form"))
+                    for item in matching
+                    if _text(item.get("registration_form"))
+                }
+            )
+            evidence = [_lambda_site_evidence(raw_site)]
+            evidence.extend(_lambda_registration_evidence(item) for item in matching)
+            graph.add_edge(
+                {
+                    "schema_version": graph.schema_version,
+                    "source_id": _function_node_id(caller),
+                    "target_id": _function_node_id(target),
+                    "kind": HANDLER_EDGE_KIND,
+                    "evidence": evidence,
+                    "confidence": 0.95,
+                    "resolver_version": RESOLVER_VERSION,
+                    "attributes": {
+                        "callable_kind": "lambda",
+                        "dispatch_table": site_table,
+                        "registration_tables": registration_tables,
+                        "selector": selector,
+                        "selectors": sorted(
+                            {
+                                _text(item.get("selector"))
+                                for item in matching
+                                if _text(item.get("selector"))
+                            }
+                        ),
+                        "registrations": _lambda_registrations_metadata(matching),
+                        "registration_form": forms[0] if len(forms) == 1 else "mixed",
+                        "registration_forms": forms,
+                        "owner_class": caller.get("owner", ""),
+                        "field_identity": field_identity,
+                        "value_kind": "lambda",
+                    },
+                }
+            )
+
+
 def _add_function_node(graph: SemanticGraph, record: Mapping[str, Any]) -> None:
     graph.add_node(
         {
@@ -729,11 +952,20 @@ def build_native_dispatch_graph(
 
         diagnostics = build_call_graph_diagnostics(extract_result, call_graph_result)
     assignments, sites = _diagnostic_lists(diagnostics)
+    lambda_assignments, lambda_sites = _lambda_diagnostic_lists(diagnostics)
     has_dispatch_evidence = any(
         isinstance(item, Mapping) and _is_dispatch_table(item.get("table"))
         for item in [*assignments, *sites]
     )
-    if not has_dispatch_evidence:
+    has_lambda_evidence = any(
+        isinstance(item, Mapping)
+        and (
+            _text(item.get("table"))
+            or _lambda_site_table(item)
+        )
+        for item in [*lambda_assignments, *lambda_sites]
+    )
+    if not has_dispatch_evidence and not has_lambda_evidence:
         return None
 
     graph = SemanticGraph()
@@ -743,7 +975,15 @@ def build_native_dispatch_graph(
         assignments,
         sites,
     )
+    _resolve_lambda_dispatch_edges(
+        graph,
+        records_by_id,
+        lambda_assignments,
+        lambda_sites,
+    )
     _resolve_service_edges(graph, records, handler_pairs)
+    if not graph.nodes and not graph.edges and not graph.orphans:
+        return None
     return graph
 
 

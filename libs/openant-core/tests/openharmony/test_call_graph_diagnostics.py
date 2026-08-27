@@ -292,7 +292,7 @@ def test_member_function_pair_preserves_permission_metadata():
     assert diagnostics["unresolved_call_sites"][0]["candidate_target_ids"] == [handler_id]
 
 
-def test_lambda_dispatch_is_observed_separately_without_native_edge_promotion():
+def test_lambda_dispatch_is_projected_with_evidence_after_observation():
     source = "services/telephony/core_service_stub.cpp"
     initializer_id = f"{source}:CoreServiceStub::AddHandlerNetWorkToMap"
     caller_id = f"{source}:CoreServiceStub::OnRemoteRequest"
@@ -363,7 +363,17 @@ def test_lambda_dispatch_is_observed_separately_without_native_edge_promotion():
         "dispatch_table": "requestTable_",
     }
     assert site["candidate_target_ids"] == [handler_id]
-    assert build_native_dispatch_graph(extract_result, {}, diagnostics) is None
+    graph = build_native_dispatch_graph(extract_result, {}, diagnostics)
+    assert graph is not None
+    edges = [
+        edge for edge in graph.edges.values() if edge.kind == "native_dispatch_to_handler"
+    ]
+    assert {(edge.source_id, edge.target_id) for edge in edges} == {
+        (f"function:{caller_id}", f"function:{handler_id}")
+    }
+    edge = edges[0]
+    assert edge.attributes["callable_kind"] == "lambda"
+    assert edge.attributes["registration_form"] == "subscript_assignment"
 
 
 def test_lambda_receiver_type_and_call_arity_resolve_overloaded_target():

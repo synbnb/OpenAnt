@@ -168,6 +168,201 @@ def test_base_funcs_edges_recover_handler_and_concrete_service_method():
     assert not any(edge.target_id.endswith(UNRELATED) for edge in graph.edges.values())
 
 
+def test_lambda_dispatch_candidates_are_projected_with_registration_evidence():
+    source = "services/core/common_event_hub.cpp"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    target_id = f"{source}:CommonEventHub::HandleReady"
+    functions = {
+        caller_id: _function(
+            "CommonEventHub::OnReceive",
+            "void CommonEventHub::OnReceive(const Event &event) { return it->second(event); }",
+            file_path=source,
+            start_line=20,
+            class_name="CommonEventHub",
+        ),
+        target_id: _function(
+            "CommonEventHub::HandleReady",
+            "void CommonEventHub::HandleReady(const Event &) {}",
+            file_path=source,
+            start_line=30,
+            class_name="CommonEventHub",
+        ),
+    }
+    field_identity = {
+        "field": "actionHandlersMap_",
+        "receiver": "this",
+        "receiver_type": "CommonEventHub",
+        "receiver_kind": "this",
+    }
+    assignment = {
+        "owner_function_id": f"{source}:CommonEventHub::InitHandlers",
+        "owner_class": "CommonEventHub",
+        "file": source,
+        "line": 10,
+        "table": "actionHandlersMap_",
+        "field_identity": field_identity,
+        "selector": "READY",
+        "target_name": "CommonEventHub::HandleReady",
+        "target_id": target_id,
+        "resolution": "exact_function_id",
+        "value_kind": "lambda",
+        "registration_form": "initializer_list",
+        "evidence": {
+            "file": source,
+            "start_line": 10,
+            "end_line": 10,
+            "text": "{READY, [this](event) { HandleReady(event); }}",
+            "value_kind": "lambda",
+            "registration_form": "initializer_list",
+            "field_identity": field_identity,
+        },
+    }
+    diagnostics = {
+        "lambda_dispatch": {
+            "assignments": [assignment],
+            "call_sites": [
+                {
+                    "caller_id": caller_id,
+                    "file": source,
+                    "line": 22,
+                    "expression": "it->second(event)",
+                    "ast_kind": "std_function_call",
+                    "reason": "lookup_derived_callable",
+                    "symbols": {
+                        "target_variable": "it->second",
+                        "iterator_variable": "it",
+                        "dispatch_table": "actionHandlersMap_",
+                    },
+                    "field_identity": field_identity,
+                    "candidate_target_ids": [target_id],
+                    "candidates": [
+                        {
+                            "target_id": target_id,
+                            "target_name": "CommonEventHub::HandleReady",
+                            "selector": "READY",
+                            "value_kind": "lambda",
+                            "evidence": assignment["evidence"],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    extract = {"repository": "/fixture", "functions": functions}
+    call_graph = {
+        "repository": "/fixture",
+        "functions": functions,
+        "call_graph": {caller_id: []},
+        "reverse_call_graph": {},
+    }
+
+    graph = build_native_dispatch_graph(extract, call_graph, diagnostics)
+
+    assert graph is not None
+    assert call_graph["call_graph"] == {caller_id: []}
+    edges = [edge for edge in graph.edges.values() if edge.kind == HANDLER_EDGE_KIND]
+    assert {(edge.source_id, edge.target_id) for edge in edges} == {
+        (f"function:{caller_id}", f"function:{target_id}")
+    }
+    edge = edges[0]
+    assert edge.attributes["callable_kind"] == "lambda"
+    assert edge.attributes["dispatch_table"] == "actionHandlersMap_"
+    assert edge.attributes["registration_form"] == "initializer_list"
+    assert edge.attributes["selector"] == "READY"
+    assert any(
+        item.get("source") == "lambda_dispatch_call_site"
+        for item in edge.evidence
+    )
+    assert any(
+        item.get("source") == "lambda_dispatch_assignment"
+        for item in edge.evidence
+    )
+
+    known = set(functions)
+    overlay = build_semantic_reachability_overlay(graph.to_dict(), known)
+    assert overlay["candidate_edges"] == 1
+    assert {
+        (item["source_id"], item["target_id"])
+        for item in overlay["edges"]
+    } == {(caller_id, target_id)}
+    assert overlay["edges"][0]["edge_kinds"] == [HANDLER_EDGE_KIND]
+
+    generator = UnitGenerator(call_graph, {"semantic_graph": graph.to_dict()})
+    caller_unit = generator.create_unit(caller_id, functions[caller_id])
+    assert {
+        item["id"] for item in caller_unit["metadata"]["context_functions"]
+    } == {target_id}
+
+
+def test_lambda_dispatch_unknown_target_is_not_projected():
+    source = "services/core/common_event_hub.cpp"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    unknown_id = f"{source}:Missing::Handle"
+    field_identity = {
+        "field": "actionHandlersMap_",
+        "receiver": "this",
+        "receiver_type": "CommonEventHub",
+        "receiver_kind": "this",
+    }
+    extract = {
+        "repository": "/fixture",
+        "functions": {
+            caller_id: _function(
+                "CommonEventHub::OnReceive",
+                "void CommonEventHub::OnReceive() { return it->second(); }",
+                file_path=source,
+                start_line=20,
+                class_name="CommonEventHub",
+            )
+        },
+    }
+    diagnostics = {
+        "lambda_dispatch": {
+            "assignments": [
+                {
+                    "owner_function_id": f"{source}:CommonEventHub::InitHandlers",
+                    "owner_class": "CommonEventHub",
+                    "file": source,
+                    "line": 10,
+                    "table": "actionHandlersMap_",
+                    "field_identity": field_identity,
+                    "selector": "READY",
+                    "target_name": "Missing::Handle",
+                    "target_id": unknown_id,
+                    "resolution": "exact_function_id",
+                    "value_kind": "lambda",
+                    "registration_form": "initializer_list",
+                    "evidence": {"file": source, "start_line": 10},
+                }
+            ],
+            "call_sites": [
+                {
+                    "caller_id": caller_id,
+                    "file": source,
+                    "line": 22,
+                    "expression": "it->second()",
+                    "symbols": {
+                        "dispatch_table": "actionHandlersMap_",
+                    },
+                    "field_identity": field_identity,
+                    "candidate_target_ids": [unknown_id],
+                    "candidates": [
+                        {
+                            "target_id": unknown_id,
+                            "selector": "READY",
+                            "evidence": {"file": source, "start_line": 10},
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    graph = build_native_dispatch_graph(extract, {}, diagnostics)
+
+    assert graph is None
+
+
 def test_reachability_overlay_accepts_native_dispatch_edges_only_for_known_functions():
     extract, call_graph = _fixture()
     graph = build_native_dispatch_graph(extract, call_graph)
