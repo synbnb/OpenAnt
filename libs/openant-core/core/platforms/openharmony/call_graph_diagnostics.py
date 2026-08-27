@@ -3,7 +3,9 @@
 The collector deliberately does not mutate the native call graph or emit
 semantic edges.  It records syntax-backed member-pointer dispatch and
 separate lambda/std::function observations with bounded candidate targets so
-later deterministic/LLM stages have auditable inputs.
+later deterministic/LLM stages have auditable inputs.  For callable reads it
+also joins a registration and a read when their normalized member field and
+proven receiver type agree, while keeping that join observation-only.
 """
 
 from __future__ import annotations
@@ -234,6 +236,103 @@ def _parameter_types(function: Mapping[str, Any]) -> dict[str, str]:
     return result
 
 
+def _normalized_type(type_name: Any) -> str:
+    """Return a conservative type key suitable for field-identity joins."""
+    text = str(type_name or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\b(?:const|volatile|class|struct|typename)\b", "", text)
+    text = re.sub(r"[\s*&]+", "", text)
+    if not text:
+        return ""
+    return text.rsplit("::", 1)[-1]
+
+
+def _table_expression(node: Any, source: bytes) -> str:
+    """Keep a simple object/field expression used as a dispatch table."""
+    if node is None:
+        return ""
+    text = re.sub(r"\s+", "", _node_text(node, source).strip())
+    if re.fullmatch(
+        r"(?:this|[A-Za-z_]\w*)(?:(?:->|\.)[A-Za-z_]\w*)*", text
+    ):
+        return text
+    return ""
+
+
+def _field_identity(
+    table: str,
+    owner_class: Any,
+    parameter_types: Mapping[str, str],
+) -> dict[str, str]:
+    """Describe a dispatch field independently of its local receiver name.
+
+    The identity intentionally stays small: an exact field name plus a
+    receiver type that can be proven from ``this`` or a simple parameter.
+    Unknown expressions do not receive a type and therefore cannot create a
+    cross-function match.
+    """
+    normalized = re.sub(r"\s+", "", str(table or "").strip())
+    owner_type = _normalized_type(owner_class)
+    field = normalized
+    receiver = "this"
+    receiver_type = owner_type
+    receiver_kind = "this"
+
+    if normalized.startswith("this->"):
+        field = normalized[len("this->") :]
+    elif normalized.startswith("this."):
+        field = normalized[len("this.") :]
+    else:
+        match = re.fullmatch(
+            r"(?P<receiver>[A-Za-z_]\w*)(?:->|\.)(?P<field>[A-Za-z_]\w*)",
+            normalized,
+        )
+        if match:
+            receiver = match.group("receiver")
+            field = match.group("field")
+            if receiver in parameter_types:
+                receiver_type = _normalized_type(parameter_types[receiver])
+                receiver_kind = "parameter"
+            elif receiver and receiver[0].isupper():
+                receiver_type = _normalized_type(receiver)
+                receiver_kind = "class"
+            else:
+                receiver_type = ""
+                receiver_kind = "expression"
+        else:
+            scope_match = re.fullmatch(
+                r"(?P<receiver>[A-Za-z_]\w*)::(?P<field>[A-Za-z_]\w*)",
+                normalized,
+            )
+            if scope_match:
+                receiver = scope_match.group("receiver")
+                field = scope_match.group("field")
+                receiver_type = _normalized_type(receiver)
+                receiver_kind = "class"
+
+    return {
+        "field": field,
+        "receiver": receiver,
+        "receiver_type": receiver_type,
+        "receiver_kind": receiver_kind,
+    }
+
+
+def _field_identities_match(
+    registration: Mapping[str, Any], call_site: Mapping[str, Any]
+) -> bool:
+    """Require an exact field and proven receiver type for alias joins."""
+    registration_type = _normalized_type(registration.get("receiver_type"))
+    call_type = _normalized_type(call_site.get("receiver_type"))
+    return bool(
+        registration.get("field")
+        and registration.get("field") == call_site.get("field")
+        and registration_type
+        and registration_type == call_type
+    )
+
+
 def _lambda_target_spec(
     called: Any,
     source: bytes,
@@ -338,6 +437,7 @@ def _lambda_dispatch_assignments(
     owner_file = str(function.get("file_path", ""))
     owner_class = function.get("class_name")
     parameter_types = _parameter_types(function)
+    field_identity = _field_identity(table, owner_class, parameter_types)
     lambda_text = _node_text(right, source).strip()
     lambda_targets = _lambda_call_targets(
         right, source, owner_class, parameter_types
@@ -372,6 +472,7 @@ def _lambda_dispatch_assignments(
                 "file": owner_file,
                 "line": line,
                 "table": table,
+                "field_identity": field_identity,
                 "selector": selector,
                 "target_name": resolved_name,
                 "target_id": target_id,
@@ -386,6 +487,7 @@ def _lambda_dispatch_assignments(
                     "end_line": line,
                     "text": _node_text(node, source).strip(),
                     "value_kind": "lambda",
+                    "field_identity": field_identity,
                     "capture": capture,
                     "lambda_calls": target_names,
                     "call_argument_count": target_spec["argument_count"],
@@ -453,7 +555,7 @@ def _local_dispatch_flow(root: Any, source: bytes) -> tuple[dict[str, str], dict
         called = value.child_by_field_name("function")
         if called is None or called.type != "field_expression":
             continue
-        table = _identifier(called.child_by_field_name("argument"), source)
+        table = _table_expression(called.child_by_field_name("argument"), source)
         field = called.child_by_field_name("field")
         if table and field is not None and _node_text(field, source) == "find":
             iterator_to_table[variable] = table
@@ -592,6 +694,36 @@ def _dispatch_symbols(
     return normalized, "", ""
 
 
+def _lambda_dispatch_matches(
+    assignments: list[dict[str, Any]],
+    table: str,
+    owner_class: Any,
+    field_identity: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Match callable reads and return explicit cross-function alias evidence."""
+    matched: list[dict[str, Any]] = []
+    aliases: list[dict[str, Any]] = []
+    for item in assignments:
+        if not item.get("target_id"):
+            continue
+        same_owner = (
+            not owner_class
+            or not item.get("owner_class")
+            or item.get("owner_class") == owner_class
+        )
+        if table and item.get("table") == table and same_owner:
+            matched.append(item)
+            continue
+        registration_identity = item.get("field_identity")
+        if not isinstance(registration_identity, Mapping):
+            continue
+        if not _field_identities_match(registration_identity, field_identity):
+            continue
+        matched.append(item)
+        aliases.append(item)
+    return matched, aliases
+
+
 def build_call_graph_diagnostics(
     extract_result: Mapping[str, Any],
     call_graph_result: Mapping[str, Any] | None = None,
@@ -635,6 +767,7 @@ def build_call_graph_diagnostics(
     )
     sites: list[dict[str, Any]] = []
     lambda_sites: list[dict[str, Any]] = []
+    field_alias_matches: list[dict[str, Any]] = []
     for function_id, (root, source, function) in parsed.items():
         member_to_iterator, iterator_to_table = _local_dispatch_flow(root, source)
         indirect_calls: list[dict[str, Any]] = []
@@ -756,19 +889,30 @@ def build_call_graph_diagnostics(
                 iterator_to_table,
             )
             owner_class = function.get("class_name")
-            matched = [
-                item
-                for item in lambda_assignments
-                if table
-                and item["table"] == table
-                and item["target_id"]
-                and (
-                    not owner_class
-                    or not item.get("owner_class")
-                    or item.get("owner_class") == owner_class
-                )
-            ]
+            field_identity = _field_identity(
+                table, owner_class, _parameter_types(function)
+            )
+            matched, aliases = _lambda_dispatch_matches(
+                lambda_assignments, table, owner_class, field_identity
+            )
             target_ids = list(dict.fromkeys(item["target_id"] for item in matched))
+            for item in aliases:
+                field_alias_matches.append(
+                    {
+                        "caller_id": function_id,
+                        "call_site_line": callable_call["line"],
+                        "registration_owner_function_id": item[
+                            "owner_function_id"
+                        ],
+                        "registration_line": item["line"],
+                        "dispatch_table": field_identity["field"],
+                        "selector": item["selector"],
+                        "target_id": item["target_id"],
+                        "target_name": item["target_name"],
+                        "reason": "same_field_receiver_type",
+                        "confidence": "high",
+                    }
+                )
             lambda_sites.append(
                 {
                     "caller_id": function_id,
@@ -783,6 +927,7 @@ def build_call_graph_diagnostics(
                         "iterator_variable": iterator_variable,
                         "dispatch_table": table,
                     },
+                    "field_identity": field_identity,
                     "candidate_target_ids": target_ids,
                     "candidates": [
                         {
@@ -821,6 +966,15 @@ def build_call_graph_diagnostics(
     lambda_sites.sort(
         key=lambda item: (item["file"], item["line"], item["caller_id"])
     )
+    field_alias_matches.sort(
+        key=lambda item: (
+            item["caller_id"],
+            item["call_site_line"],
+            item["registration_owner_function_id"],
+            item["registration_line"],
+            item["target_id"],
+        )
+    )
     lambda_orphans = [
         {
             "owner_function_id": item["owner_function_id"],
@@ -848,7 +1002,7 @@ def build_call_graph_diagnostics(
         "orphan_assignments": len(orphans),
     }
     if lambda_assignments or lambda_sites or lambda_orphans:
-        summary["lambda_dispatch"] = {
+        lambda_summary = {
             "dispatch_assignments": len(lambda_assignments),
             "call_sites": len(lambda_sites),
             "candidate_edges": sum(
@@ -859,6 +1013,9 @@ def build_call_graph_diagnostics(
             ),
             "orphan_assignments": len(lambda_orphans),
         }
+        if field_alias_matches:
+            lambda_summary["field_alias_matches"] = len(field_alias_matches)
+        summary["lambda_dispatch"] = lambda_summary
 
     result = {
         "schema_version": SCHEMA_VERSION,
@@ -877,6 +1034,8 @@ def build_call_graph_diagnostics(
             "call_sites": lambda_sites,
             "orphans": lambda_orphans,
         }
+        if field_alias_matches:
+            result["lambda_dispatch"]["field_alias_matches"] = field_alias_matches
     return result
 
 

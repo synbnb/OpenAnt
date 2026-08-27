@@ -409,3 +409,138 @@ def test_lambda_receiver_type_and_call_arity_resolve_overloaded_target():
     assert assignments[0]["target_id"].endswith("SimFile::Process(Event)")
     assert assignments[0]["resolution"] == "exact_function_id"
     assert assignments[0]["call_argument_count"] == 1
+
+
+def test_lambda_field_alias_matches_parameter_receiver_to_this_field():
+    init_source = "services/telephony/sim_file_init.cpp"
+    sim_source = "services/telephony/sim_file.cpp"
+    initializer_id = f"{init_source}:SimFileInit::InitMemberFunc"
+    caller_id = f"{sim_source}:SimFile::ProcessEvent"
+    handler_id = f"{sim_source}:SimFile::ProcessReady"
+    functions = {
+        initializer_id: {
+            "name": "SimFileInit::InitMemberFunc",
+            "file_path": init_source,
+            "start_line": 1,
+            "class_name": "SimFileInit",
+            "parameters": ["SimFile &simFile"],
+            "code": """void SimFileInit::InitMemberFunc(SimFile &simFile)
+{
+    simFile.memberFuncMap_[READY] =
+        [&](const Event &event) { return simFile.ProcessReady(event); };
+}""",
+        },
+        caller_id: {
+            "name": "SimFile::ProcessEvent",
+            "file_path": sim_source,
+            "start_line": 20,
+            "class_name": "SimFile",
+            "parameters": ["const Event &event"],
+            "code": """void SimFile::ProcessEvent(const Event &event)
+{
+    auto itFunc = memberFuncMap_.find(event.id);
+    if (itFunc != memberFuncMap_.end()) {
+        auto memberFunc = itFunc->second;
+        memberFunc(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "SimFile::ProcessReady",
+            "file_path": sim_source,
+            "start_line": 35,
+            "class_name": "SimFile",
+            "parameters": ["const Event &event"],
+            "code": "bool SimFile::ProcessReady(const Event &) { return true; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["field_alias_matches"] == 1
+    assignment = lambda_dispatch["assignments"][0]
+    assert assignment["field_identity"] == {
+        "field": "memberFuncMap_",
+        "receiver": "simFile",
+        "receiver_type": "SimFile",
+        "receiver_kind": "parameter",
+    }
+    site = lambda_dispatch["call_sites"][0]
+    assert site["field_identity"] == {
+        "field": "memberFuncMap_",
+        "receiver": "this",
+        "receiver_type": "SimFile",
+        "receiver_kind": "this",
+    }
+    assert site["candidate_target_ids"] == [handler_id]
+    assert lambda_dispatch["field_alias_matches"] == [
+        {
+            "caller_id": caller_id,
+            "call_site_line": 25,
+            "registration_owner_function_id": initializer_id,
+            "registration_line": 3,
+            "dispatch_table": "memberFuncMap_",
+            "selector": "READY",
+            "target_id": handler_id,
+            "target_name": "SimFile::ProcessReady",
+            "reason": "same_field_receiver_type",
+            "confidence": "high",
+        }
+    ]
+
+
+def test_lambda_field_alias_does_not_cross_receiver_types():
+    source = "services/telephony/other_file.cpp"
+    initializer_id = f"{source}:SimFileInit::InitMemberFunc"
+    caller_id = f"{source}:OtherFile::ProcessEvent"
+    handler_id = f"{source}:SimFile::ProcessReady"
+    functions = {
+        initializer_id: {
+            "name": "SimFileInit::InitMemberFunc",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "SimFileInit",
+            "parameters": ["SimFile &simFile"],
+            "code": """void SimFileInit::InitMemberFunc(SimFile &simFile)
+{
+    simFile.memberFuncMap_[READY] =
+        [&](const Event &event) { return simFile.ProcessReady(event); };
+}""",
+        },
+        caller_id: {
+            "name": "OtherFile::ProcessEvent",
+            "file_path": source,
+            "start_line": 20,
+            "class_name": "OtherFile",
+            "parameters": ["const Event &event"],
+            "code": """void OtherFile::ProcessEvent(const Event &event)
+{
+    auto itFunc = memberFuncMap_.find(event.id);
+    if (itFunc != memberFuncMap_.end()) {
+        auto memberFunc = itFunc->second;
+        memberFunc(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "SimFile::ProcessReady",
+            "file_path": source,
+            "start_line": 35,
+            "class_name": "SimFile",
+            "parameters": ["const Event &event"],
+            "code": "bool SimFile::ProcessReady(const Event &) { return true; }",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    site = lambda_dispatch["call_sites"][0]
+    assert site["candidate_target_ids"] == []
+    assert lambda_dispatch["summary"].get("field_alias_matches", 0) == 0
+    assert "field_alias_matches" not in lambda_dispatch
