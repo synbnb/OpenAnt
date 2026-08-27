@@ -8,7 +8,10 @@ also joins a registration and a read when their normalized member field and
 proven receiver type agree, while keeping that join observation-only.  A
 local member-function array is joined to a same-class helper only when it is
 passed as a direct, uniquely resolved parameter; ambiguous or aliased flows
-remain residuals.
+remain residuals.  Registration helpers are recognized structurally when a
+callable parameter is written into a subscripted table, and concrete helper
+calls are expanded only when the passed function reference exists in the
+extracted function index.
 """
 
 from __future__ import annotations
@@ -60,6 +63,8 @@ def _mask_preserving_lines(code: str) -> str:
 
 
 def _selector_text(node: Any, source: bytes) -> str:
+    if node is None:
+        return ""
     text = _node_text(node, source).strip()
     if text.startswith("[") and text.endswith("]"):
         return text[1:-1].strip()
@@ -89,6 +94,8 @@ def _target_resolution(
     functions: Mapping[str, Any],
     owner_class: Any = None,
     argument_count: int | None = None,
+    name_index: Mapping[str, list[str]] | None = None,
+    leaf_index: Mapping[str, list[str]] | None = None,
 ) -> tuple[str | None, str]:
     names = [target_name]
     qualified = _qualified_target_name(target_name, owner_class)
@@ -99,11 +106,15 @@ def _target_resolution(
         names.append(leaf)
     saw_match = False
     for candidate_name in names:
-        matches = [
-            function_id
-            for function_id, function in functions.items()
-            if isinstance(function, Mapping) and function.get("name") == candidate_name
-        ]
+        if name_index is not None:
+            matches = list(name_index.get(candidate_name, []))
+        else:
+            matches = [
+                function_id
+                for function_id, function in functions.items()
+                if isinstance(function, Mapping)
+                and function.get("name") == candidate_name
+            ]
         if argument_count is not None:
             arity_matches = [
                 function_id
@@ -135,17 +146,29 @@ def _target_resolution(
         target_parts = [part for part in target_name.split("::") if part]
         if len(target_parts) >= 2:
             suffix = "::".join(target_parts[-2:])
-            suffix_matches = [
-                function_id
-                for function_id, function in functions.items()
-                if isinstance(function, Mapping)
-                and (
-                    str(function.get("name") or "") == suffix
-                    or str(function.get("name") or "").endswith(
-                        f"::{suffix}"
+            if name_index is not None:
+                suffix_matches = list(name_index.get(suffix, []))
+                if not suffix_matches:
+                    suffix_matches = [
+                        function_id
+                        for function_id, function in functions.items()
+                        if isinstance(function, Mapping)
+                        and str(function.get("name") or "").endswith(
+                            f"::{suffix}"
+                        )
+                    ]
+            else:
+                suffix_matches = [
+                    function_id
+                    for function_id, function in functions.items()
+                    if isinstance(function, Mapping)
+                    and (
+                        str(function.get("name") or "") == suffix
+                        or str(function.get("name") or "").endswith(
+                            f"::{suffix}"
+                        )
                     )
-                )
-            ]
+                ]
             if argument_count is not None:
                 arity_matches = [
                     function_id
@@ -174,12 +197,15 @@ def _target_resolution(
     # qualified target, where a leaf-only match could select the wrong class
     # or namespace overload.
     if "::" not in target_name and leaf:
-        leaf_matches = [
-            function_id
-            for function_id, function in functions.items()
-            if isinstance(function, Mapping)
-            and _leaf(str(function.get("name") or "")) == leaf
-        ]
+        if leaf_index is not None:
+            leaf_matches = list(leaf_index.get(leaf, []))
+        else:
+            leaf_matches = [
+                function_id
+                for function_id, function in functions.items()
+                if isinstance(function, Mapping)
+                and _leaf(str(function.get("name") or "")) == leaf
+            ]
         if argument_count is not None:
             arity_matches = [
                 function_id
@@ -363,17 +389,33 @@ def _dispatch_target(
     if node.type == "pointer_expression":
         target_node = node.child_by_field_name("argument")
         target_name = _node_text(target_node, source).strip() if target_node else ""
-        return (target_name if "::" in target_name else None, "member_function_pointer")
+        if target_name and (allow_reference or "::" in target_name):
+            value_kind = (
+                "member_function_pointer"
+                if "::" in target_name
+                else "function_pointer"
+            )
+            return target_name, value_kind
+        return None, "unsupported"
     if allow_reference and node.type in {
+        "identifier",
         "qualified_identifier",
         "scoped_identifier",
     }:
         target_name = _node_text(node, source).strip()
-        # A qualified reference such as ``Class::Handler`` is a valid C++
-        # function-pointer initializer even when the source omits ``&``.
-        # Keep unqualified identifiers out of this path: they could be enum
-        # values, constants, or arbitrary data rather than callable targets.
-        return (target_name if "::" in target_name else None, "member_function_reference")
+        # A qualified reference such as ``Class::Handler`` or an unqualified
+        # function name is a valid C++ callable initializer even when the
+        # source omits ``&``.  Unqualified names are accepted here only as a
+        # syntactic observation; callers must still resolve them uniquely in
+        # the extracted function index before they become candidates.
+        if not target_name:
+            return None, "unsupported"
+        value_kind = (
+            "member_function_reference"
+            if "::" in target_name
+            else "function_reference"
+        )
+        return target_name, value_kind
     if node.type == "initializer_list":
         for child in node.children:
             target_name, value_kind = _dispatch_target(
@@ -782,6 +824,228 @@ def _initializer_lambda_entries(
     return entries
 
 
+def _initializer_callable_entries(
+    node: Any, source: bytes
+) -> list[tuple[str, str, str, str]]:
+    """Return source-level function references from ``{key, callable}`` pairs.
+
+    Unlike member-function initializers, the callable may be a free function
+    written as an unqualified identifier.  A later resolution step still
+    requires that identifier to map to exactly one extracted function, so
+    enum constants and unknown symbols are not promoted to candidates.
+    """
+    if node is None or node.type != "initializer_list":
+        return []
+    entries: list[tuple[str, str, str, str]] = []
+    for pair in node.children:
+        if pair.type != "initializer_list":
+            continue
+        named = [child for child in pair.children if child.is_named]
+        if len(named) < 2:
+            continue
+        selector = _selector_text(named[0], source)
+        target_name, value_kind = _dispatch_target(
+            named[-1], source, allow_reference=True
+        )
+        if not selector or not target_name:
+            continue
+        entries.append(
+            (
+                selector,
+                target_name,
+                value_kind,
+                _node_text(pair, source).strip(),
+            )
+        )
+    return entries
+
+
+def _initializer_callable_assignments(
+    node: Any,
+    source: bytes,
+    function_id: str,
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+    name_index: Mapping[str, list[str]] | None = None,
+    leaf_index: Mapping[str, list[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Observe map entries that point directly at indexed free functions.
+
+    Existing member-table handling intentionally requires a class-qualified
+    target.  This companion path covers tables such as
+    ``{{CPP_CRASH, GetCppCrashSectionLogs}}`` while keeping the same strict
+    function-index resolution requirement.
+    """
+    if node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        table = _table_expression(left, source)
+        registration_form = "initializer_function_reference"
+    elif node.type == "init_declarator":
+        left = node.child_by_field_name("declarator")
+        right = node.child_by_field_name("value")
+        table = _declarator_table_expression(left, source)
+        registration_form = "declaration_function_reference"
+    else:
+        return []
+    if right is None or right.type != "initializer_list" or not table:
+        return []
+
+    owner_file = str(function.get("file_path", ""))
+    owner_class = function.get("class_name")
+    owner_leaf = _leaf(str(owner_class or ""))
+    records: list[dict[str, Any]] = []
+    for selector, target_name, value_kind, pair_text in _initializer_callable_entries(
+        right, source
+    ):
+        # Qualified members owned by the containing class are already emitted
+        # by _initializer_member_function_assignments; avoid duplicate records.
+        target_parts = [part for part in target_name.split("::") if part]
+        if len(target_parts) >= 2 and owner_leaf:
+            target_owner = _leaf("::".join(target_parts[:-1]))
+            if target_owner == owner_leaf:
+                continue
+        target_id, resolution = _target_resolution(
+            target_name,
+            owner_file,
+            functions,
+            owner_class,
+            name_index=name_index,
+            leaf_index=leaf_index,
+        )
+        if not target_id:
+            # An unresolved identifier is deliberately not treated as a
+            # callable registration: it may be an enum/constant or external
+            # symbol.  The surrounding residual call remains visible.
+            continue
+        line = _source_line(function, node)
+        records.append(
+            {
+                "owner_function_id": function_id,
+                "owner_class": owner_class,
+                "file": owner_file,
+                "line": line,
+                "table": table,
+                "selector": selector,
+                "target_name": target_name,
+                "target_id": target_id,
+                "resolution": resolution,
+                "value_kind": value_kind,
+                "registration_form": registration_form,
+                "permissions": [],
+                "evidence": {
+                    "file": owner_file,
+                    "start_line": line,
+                    "end_line": line,
+                    "text": pair_text,
+                    "value_kind": value_kind,
+                    "registration_form": registration_form,
+                },
+            }
+        )
+    return records
+
+
+def _lambda_method_registration_records(
+    node: Any,
+    source: bytes,
+    function_id: str,
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Extract ``emplace/try_emplace/insert`` Lambda registrations.
+
+    Only calls with a concrete Lambda argument are accepted.  ``insert`` is
+    supported in its pair form, while ``emplace`` and ``try_emplace`` use the
+    first argument before the Lambda as the selector.  No target is inferred
+    from a method name or table name.
+    """
+    if node.type != "call_expression":
+        return []
+    called = node.child_by_field_name("function")
+    if called is None or called.type != "field_expression":
+        return []
+    field = called.child_by_field_name("field")
+    method = _node_text(field, source).strip() if field is not None else ""
+    if method not in {"emplace", "try_emplace", "insert"}:
+        return []
+    table = _table_expression(called.child_by_field_name("argument"), source)
+    arguments = node.child_by_field_name("arguments")
+    if not table or arguments is None:
+        return []
+    args = [child for child in arguments.children if child.is_named]
+    owner_file = str(function.get("file_path", ""))
+    owner_class = function.get("class_name")
+    parameter_types = _parameter_types(function)
+    records: list[dict[str, Any]] = []
+    if method == "insert" and len(args) == 1 and args[0].type == "initializer_list":
+        entries = _initializer_lambda_entries(args[0], source)
+        if not entries:
+            # ``map.insert({key, lambda})`` exposes the pair itself as the
+            # argument-list initializer, rather than nesting another
+            # initializer_list node around it.
+            named = [child for child in args[0].children if child.is_named]
+            lambda_nodes = [
+                child for child in named if child.type == "lambda_expression"
+            ]
+            if lambda_nodes and named.index(lambda_nodes[0]) > 0:
+                entries = [
+                    (
+                        _selector_text(named[0], source),
+                        lambda_nodes[0],
+                        _node_text(args[0], source).strip(),
+                    )
+                ]
+        for selector, lambda_node, pair_text in entries:
+            records.extend(
+                _lambda_registration_records(
+                    table=table,
+                    selector=selector,
+                    lambda_node=lambda_node,
+                    source=source,
+                    owner_function_id=function_id,
+                    owner_file=owner_file,
+                    owner_class=owner_class,
+                    parameter_types=parameter_types,
+                    line=_source_line(function, lambda_node),
+                    expression=pair_text,
+                    functions=functions,
+                    registration_form="method_insert",
+                )
+            )
+        return records
+
+    lambda_indices = [
+        index for index, argument in enumerate(args)
+        if argument.type == "lambda_expression"
+    ]
+    if not lambda_indices:
+        return []
+    lambda_index = lambda_indices[0]
+    if lambda_index == 0:
+        return []
+    selector = _selector_text(args[0], source)
+    if not selector:
+        return []
+    records.extend(
+        _lambda_registration_records(
+            table=table,
+            selector=selector,
+            lambda_node=args[lambda_index],
+            source=source,
+            owner_function_id=function_id,
+            owner_file=owner_file,
+            owner_class=owner_class,
+            parameter_types=parameter_types,
+            line=_source_line(function, args[lambda_index]),
+            expression=_node_text(node, source).strip(),
+            functions=functions,
+            registration_form="method_emplace",
+        )
+    )
+    return records
+
+
 def _lambda_dispatch_assignments(
     node: Any,
     source: bytes,
@@ -790,6 +1054,10 @@ def _lambda_dispatch_assignments(
     functions: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Extract lambda registrations without treating them as native edges."""
+    if node.type == "call_expression":
+        return _lambda_method_registration_records(
+            node, source, function_id, function, functions
+        )
     if node.type == "init_declarator":
         # A dispatch table can be scoped to one function instead of assigned
         # after declaration, e.g. ``std::map<int, Handler> handlers = { ...
@@ -1006,49 +1274,88 @@ def _identifier(node: Any, source: bytes) -> str | None:
     return text if text.isidentifier() else None
 
 
+def _lookup_table_from_call(node: Any, source: bytes) -> str:
+    """Return a dispatch table used by a map-like lookup expression.
+
+    The iterator may be declared with ``begin`` and assigned later with
+    ``find`` (a common pattern in generated OpenHarmony code).  Treating both
+    forms as table-producing operations is safe here because the table is
+    still required to match a concrete registration before a candidate is
+    emitted.
+    """
+    if node is None or node.type != "call_expression":
+        return ""
+    called = node.child_by_field_name("function")
+    if called is None or called.type != "field_expression":
+        return ""
+    field = called.child_by_field_name("field")
+    method = _node_text(field, source).strip() if field is not None else ""
+    if method not in {
+        "find",
+        "begin",
+        "cbegin",
+        "lower_bound",
+        "upper_bound",
+    }:
+        return ""
+    return _table_expression(called.child_by_field_name("argument"), source)
+
+
+def _member_value_iterator(node: Any, source: bytes) -> tuple[str, str] | None:
+    """Return ``(member_variable, iterator)`` for ``it->second`` aliases."""
+    if node is None or node.type != "field_expression":
+        return None
+    field = node.child_by_field_name("field")
+    receiver_node = node.child_by_field_name("argument")
+    receiver = _identifier(receiver_node, source)
+    field_name = _node_text(field, source).strip() if field is not None else ""
+    if receiver and field_name == "second":
+        return _node_text(node, source).strip(), receiver
+    if (
+        field_name == "first"
+        and receiver_node is not None
+        and receiver_node.type == "field_expression"
+    ):
+        inner_field = receiver_node.child_by_field_name("field")
+        inner_receiver = _identifier(
+            receiver_node.child_by_field_name("argument"), source
+        )
+        if (
+            inner_receiver
+            and inner_field is not None
+            and _node_text(inner_field, source).strip() == "second"
+        ):
+            return _node_text(node, source).strip(), inner_receiver
+    return None
+
+
 def _local_dispatch_flow(root: Any, source: bytes) -> tuple[dict[str, str], dict[str, str]]:
     member_to_iterator: dict[str, str] = {}
     iterator_to_table: dict[str, str] = {}
     for node in _walk(root):
-        if node.type != "init_declarator":
+        if node.type not in {"init_declarator", "assignment_expression"}:
             continue
-        variable = _identifier(node.child_by_field_name("declarator"), source)
-        value = node.child_by_field_name("value")
+        if node.type == "init_declarator":
+            variable = _identifier(node.child_by_field_name("declarator"), source)
+            value = node.child_by_field_name("value")
+        else:
+            variable = _identifier(node.child_by_field_name("left"), source)
+            value = node.child_by_field_name("right")
         if not variable or value is None:
             continue
 
-        if value.type == "field_expression":
-            field = value.child_by_field_name("field")
-            field_name = _node_text(field, source) if field is not None else ""
-            receiver_node = value.child_by_field_name("argument")
-            receiver = _identifier(receiver_node, source)
+        member_value = _member_value_iterator(value, source)
+        if member_value is not None:
+            _, receiver = member_value
             # ``it->second`` is a direct member-function value.  A
             # permission-bearing pair uses ``it->second.first``; retain the
             # iterator for both forms so the table can be recovered without
             # knowing its identifier.
-            if field_name == "second" and receiver:
-                member_to_iterator[variable] = receiver
-            elif field_name == "first" and receiver_node is not None and receiver_node.type == "field_expression":
-                inner_field = receiver_node.child_by_field_name("field")
-                inner_receiver = _identifier(
-                    receiver_node.child_by_field_name("argument"), source
-                )
-                if (
-                    inner_receiver
-                    and inner_field is not None
-                    and _node_text(inner_field, source) == "second"
-                ):
-                    member_to_iterator[variable] = inner_receiver
+            member_to_iterator[variable] = receiver
             continue
 
-        if value.type != "call_expression":
-            continue
-        called = value.child_by_field_name("function")
-        if called is None or called.type != "field_expression":
-            continue
-        table = _table_expression(called.child_by_field_name("argument"), source)
-        field = called.child_by_field_name("field")
-        if table and field is not None and _node_text(field, source) == "find":
+        table = _lookup_table_from_call(value, source)
+        if table:
             iterator_to_table[variable] = table
     return member_to_iterator, iterator_to_table
 
@@ -1065,8 +1372,237 @@ def _parameter_names(function: Mapping[str, Any]) -> list[str]:
             continue
         declaration = parameter.split("=", 1)[0].strip()
         match = re.search(r"(?P<name>[A-Za-z_]\w*)\s*(?:\[\s*\])?\s*$", declaration)
-        names.append(match.group("name") if match else "")
+        if match:
+            names.append(match.group("name"))
+            continue
+        # Function-pointer parameters are commonly rendered by the C/C++
+        # extractor as ``void (Class::*func)(Args...)``.  The name is not at
+        # the end of that declaration, so recover only the identifier
+        # immediately following the pointer marker.
+        pointer_match = re.findall(
+            r"(?:\*|&)\s*(?:[A-Za-z_]\w*::)?(?P<name>[A-Za-z_]\w*)",
+            declaration,
+        )
+        names.append(pointer_match[-1] if pointer_match else "")
     return names
+
+
+def _registration_helper_specs(
+    parsed: Mapping[str, tuple[Any, bytes, Mapping[str, Any]]]
+) -> list[dict[str, Any]]:
+    """Find helpers that store a callable parameter in a table.
+
+    This is intentionally structural rather than name based.  A function is
+    considered a registrar only when its body contains ``table[key] = p`` or
+    ``table[key] = [capture p](...)`` and both ``key`` and ``p`` are declared
+    parameters.  That pattern covers OpenHarmony factories, creator maps and
+    HPAE-style wrapper lambdas without maintaining a repository-specific list
+    of helper names.
+    """
+    specs: list[dict[str, Any]] = []
+    for helper_id, (root, source, function) in parsed.items():
+        parameter_names = _parameter_names(function)
+        if not parameter_names:
+            continue
+        parameter_indices = {
+            name: index for index, name in enumerate(parameter_names) if name
+        }
+        if len(parameter_indices) < 2:
+            continue
+        helper_name = _leaf(str(function.get("name") or ""))
+        if not helper_name:
+            continue
+        for node in _walk(root):
+            if node.type != "assignment_expression":
+                continue
+            left = node.child_by_field_name("left")
+            right = node.child_by_field_name("right")
+            if left is None or right is None or left.type != "subscript_expression":
+                continue
+            table_node = left.child_by_field_name("argument")
+            selector_node = left.child_by_field_name("indices")
+            table = _table_expression(table_node, source)
+            selector = _selector_text(selector_node, source)
+            if not table or not selector or selector not in parameter_indices:
+                continue
+
+            callable_parameter = ""
+            value_kind = "function_pointer"
+            if right.type == "identifier":
+                candidate = _identifier(right, source)
+                if candidate in parameter_indices and candidate != selector:
+                    callable_parameter = candidate
+                    value_kind = "function_pointer"
+            elif right.type == "lambda_expression":
+                capture = _lambda_capture(right, source)
+                captured_parameters = [
+                    name
+                    for name in parameter_indices
+                    if name != selector
+                    and re.search(rf"\b{re.escape(name)}\b", capture)
+                ]
+                if len(captured_parameters) == 1:
+                    callable_parameter = captured_parameters[0]
+                    value_kind = "lambda"
+            if not callable_parameter:
+                continue
+            specs.append(
+                {
+                    "helper_function_id": helper_id,
+                    "helper_function_name": helper_name,
+                    "helper_owner_class": function.get("class_name"),
+                    "helper_file": function.get("file_path", ""),
+                    "table": table,
+                    "selector_parameter": selector,
+                    "selector_index": parameter_indices[selector],
+                    "callable_parameter": callable_parameter,
+                    "callable_index": parameter_indices[callable_parameter],
+                    "value_kind": value_kind,
+                    "evidence": {
+                        "file": function.get("file_path", ""),
+                        "start_line": _source_line(function, node),
+                        "end_line": _source_line(function, node),
+                        "text": _node_text(node, source).strip(),
+                        "table": table,
+                        "selector_parameter": selector,
+                        "callable_parameter": callable_parameter,
+                    },
+                }
+            )
+    specs.sort(
+        key=lambda item: (
+            str(item.get("helper_file", "")),
+            int(item.get("evidence", {}).get("start_line", 0)),
+            str(item.get("helper_function_id", "")),
+            str(item.get("table", "")),
+        )
+    )
+    return specs
+
+
+def _helper_parameter_registration_assignments(
+    parsed: Mapping[str, tuple[Any, bytes, Mapping[str, Any]]],
+    specs: Iterable[Mapping[str, Any]],
+    functions: Mapping[str, Any],
+    name_index: Mapping[str, list[str]] | None = None,
+    leaf_index: Mapping[str, list[str]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Expand registrar calls into bounded table assignments.
+
+    The callsite must pass a concrete function reference (``&Class::Method``,
+    ``Class::Method`` or a uniquely indexed free-function name).  A helper
+    that stores a wrapper Lambda is emitted through the Lambda channel; a
+    helper that stores the pointer directly is emitted through the native
+    dispatch channel.  Both records retain the helper-body evidence.
+    """
+    helper_specs = [item for item in specs if isinstance(item, Mapping)]
+    if not helper_specs:
+        return [], []
+    specs_by_name: dict[str, list[Mapping[str, Any]]] = {}
+    for spec in helper_specs:
+        helper_name = str(spec.get("helper_function_name") or "")
+        if helper_name:
+            specs_by_name.setdefault(helper_name, []).append(spec)
+    assignments: list[dict[str, Any]] = []
+    lambda_assignments: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for caller_id, (root, source, caller) in parsed.items():
+        caller_owner = _leaf(str(caller.get("class_name") or ""))
+        owner_file = str(caller.get("file_path", ""))
+        for node in _walk(root):
+            if node.type != "call_expression":
+                continue
+            called = node.child_by_field_name("function")
+            called_name = _called_name(called, source)
+            arguments = node.child_by_field_name("arguments")
+            if not called_name or arguments is None:
+                continue
+            argument_nodes = [child for child in arguments.children if child.is_named]
+            if not argument_nodes:
+                continue
+            for spec in specs_by_name.get(called_name, []):
+                helper_owner = _leaf(str(spec.get("helper_owner_class") or ""))
+                if helper_owner or caller_owner:
+                    if not helper_owner or not caller_owner or helper_owner != caller_owner:
+                        continue
+                if called_name != spec.get("helper_function_name"):
+                    continue
+                selector_index = spec.get("selector_index")
+                callable_index = spec.get("callable_index")
+                if not isinstance(selector_index, int) or not isinstance(callable_index, int):
+                    continue
+                if max(selector_index, callable_index) >= len(argument_nodes):
+                    continue
+                target_name, value_kind = _dispatch_target(
+                    argument_nodes[callable_index], source, allow_reference=True
+                )
+                if not target_name:
+                    continue
+                target_id, resolution = _target_resolution(
+                    target_name,
+                    owner_file,
+                    functions,
+                    caller.get("class_name"),
+                    name_index=name_index,
+                    leaf_index=leaf_index,
+                )
+                if not target_id:
+                    continue
+                selector = _selector_text(argument_nodes[selector_index], source)
+                table = str(spec.get("table") or "")
+                if not selector or not table:
+                    continue
+                key = (caller_id, table, selector, target_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                line = _source_line(caller, node)
+                registration_form = "helper_parameter_registration"
+                evidence = {
+                    "file": owner_file,
+                    "start_line": line,
+                    "end_line": line,
+                    "text": _node_text(node, source).strip(),
+                    "value_kind": value_kind,
+                    "registration_form": registration_form,
+                    "helper_function_id": spec.get("helper_function_id", ""),
+                    "helper_function_name": spec.get("helper_function_name", ""),
+                    "helper_evidence": dict(spec.get("evidence") or {}),
+                }
+                record = {
+                    "owner_function_id": caller_id,
+                    "owner_class": caller.get("class_name"),
+                    "file": owner_file,
+                    "line": line,
+                    "table": table,
+                    "selector": selector,
+                    "target_name": target_name,
+                    "target_id": target_id,
+                    "resolution": resolution,
+                    "value_kind": "lambda" if spec.get("value_kind") == "lambda" else value_kind,
+                    "registration_form": registration_form,
+                    "helper_function_id": spec.get("helper_function_id", ""),
+                    "helper_function_name": spec.get("helper_function_name", ""),
+                    "helper_parameter": spec.get("callable_parameter", ""),
+                    "field_identity": _field_identity(
+                        table, caller.get("class_name"), _parameter_types(caller)
+                    ),
+                    "permissions": [],
+                    "evidence": evidence,
+                }
+                if spec.get("value_kind") == "lambda":
+                    record["lambda_calls"] = [target_name]
+                    record["capture"] = f"[{spec.get('callable_parameter', '')}]"
+                    lambda_assignments.append(record)
+                else:
+                    assignments.append(record)
+    assignments.sort(
+        key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
+    )
+    lambda_assignments.sort(
+        key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
+    )
+    return assignments, lambda_assignments
 
 
 def _member_function_parameter_flows(
@@ -1377,7 +1913,7 @@ def _member_function_dispatch_matches(
 ) -> list[dict[str, Any]]:
     """Match a callable table read to class-owned function registrations."""
     owner = _leaf(str(owner_class or ""))
-    if not table or not owner:
+    if not table:
         return []
     matched: list[dict[str, Any]] = []
     for item in assignments:
@@ -1386,7 +1922,15 @@ def _member_function_dispatch_matches(
         if item.get("table") != table:
             continue
         registration_owner = _leaf(str(item.get("owner_class") or ""))
-        if not registration_owner or registration_owner != owner:
+        # A class method may use a free-function callback table, while a
+        # class-owned table must never be joined across unrelated classes.
+        # Unknown receiver ownership is accepted only when both sides are
+        # unknown; the target itself is still required to be indexed.
+        if owner and registration_owner and registration_owner != owner:
+            continue
+        if owner and not registration_owner:
+            continue
+        if not owner and registration_owner:
             continue
         if item.get("value_kind") == "lambda":
             continue
@@ -1402,6 +1946,19 @@ def build_call_graph_diagnostics(
     functions = extract_result.get("functions", {})
     if not isinstance(functions, Mapping):
         functions = {}
+    name_index: dict[str, list[str]] = {}
+    leaf_index: dict[str, list[str]] = {}
+    for function_id, function in functions.items():
+        if not isinstance(function_id, str) or not isinstance(function, Mapping):
+            continue
+        name = str(function.get("name") or "")
+        if not name:
+            continue
+        name_index.setdefault(name, []).append(function_id)
+        leaf_index.setdefault(_leaf(name), []).append(function_id)
+    for index in (name_index, leaf_index):
+        for key in index:
+            index[key].sort()
 
     c_parser = Parser(C_LANGUAGE)
     cpp_parser = Parser(CPP_LANGUAGE)
@@ -1431,6 +1988,17 @@ def build_call_graph_diagnostics(
                     node, source, function_id, function, functions
                 )
             )
+            assignments.extend(
+                _initializer_callable_assignments(
+                    node,
+                    source,
+                    function_id,
+                    function,
+                    functions,
+                    name_index,
+                    leaf_index,
+                )
+            )
             lambda_assignments.extend(
                 _lambda_dispatch_assignments(
                     node, source, function_id, function, functions
@@ -1450,6 +2018,37 @@ def build_call_graph_diagnostics(
             )
         )
 
+    registration_helpers = _registration_helper_specs(parsed)
+    helper_wrapper_keys = {
+        (str(item.get("helper_function_id") or ""), str(item.get("table") or ""))
+        for item in registration_helpers
+        if item.get("value_kind") == "lambda"
+    }
+    if helper_wrapper_keys:
+        # The helper body itself contains a generic wrapper Lambda whose
+        # target is a parameter (for example ``func``).  Keep the wrapper
+        # represented by the concrete callsite expansion below instead of
+        # emitting a duplicate orphan registration for its definition.
+        lambda_assignments = [
+            item
+            for item in lambda_assignments
+            if (
+                item.get("owner_function_id"),
+                item.get("table"),
+            ) not in helper_wrapper_keys
+        ]
+    helper_assignments, helper_lambda_assignments = (
+        _helper_parameter_registration_assignments(
+            parsed,
+            registration_helpers,
+            functions,
+            name_index,
+            leaf_index,
+        )
+    )
+    assignments.extend(helper_assignments)
+    lambda_assignments.extend(helper_lambda_assignments)
+
     parameter_flows = _member_function_parameter_flows(
         parsed, assignments, functions
     )
@@ -1459,6 +2058,14 @@ def build_call_graph_diagnostics(
 
     assignments.sort(
         key=lambda item: (item["file"], item["line"], item["selector"], item["target_name"])
+    )
+    lambda_assignments.sort(
+        key=lambda item: (
+            item["file"],
+            item["line"],
+            item["selector"],
+            item["target_name"],
+        )
     )
     sites: list[dict[str, Any]] = []
     lambda_sites: list[dict[str, Any]] = []
@@ -1714,6 +2321,18 @@ def build_call_graph_diagnostics(
                             "target_name": item["target_name"],
                             "selector": item["selector"],
                             "value_kind": item.get("value_kind", "lambda"),
+                            "registration_form": item.get(
+                                "registration_form", ""
+                            ),
+                            "registration_owner_function_id": item.get(
+                                "owner_function_id", ""
+                            ),
+                            "helper_function_id": item.get(
+                                "helper_function_id", ""
+                            ),
+                            "helper_parameter": item.get(
+                                "helper_parameter", ""
+                            ),
                             "capture": item.get("capture", ""),
                             "lambda_calls": item.get("lambda_calls", []),
                             "call_argument_count": item.get(
@@ -1817,6 +2436,8 @@ def build_call_graph_diagnostics(
         }
         if field_alias_matches:
             result["lambda_dispatch"]["field_alias_matches"] = field_alias_matches
+    if registration_helpers:
+        result["registration_helpers"] = registration_helpers
     return result
 
 

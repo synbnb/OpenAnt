@@ -682,11 +682,16 @@ def _is_member_initializer_candidate(
     if _text(candidate.get("registration_form")) not in {
         "initializer_member_function",
         "declaration_member_function_array",
+        "initializer_function_reference",
+        "declaration_function_reference",
+        "helper_parameter_registration",
     }:
         return False
     candidate_owner = _text(candidate.get("owner_class"))
     caller_owner = _text(caller.get("owner"))
-    if not (candidate_owner and caller_owner and _leaf(candidate_owner) == _leaf(caller_owner)):
+    if candidate_owner and caller_owner and _leaf(candidate_owner) != _leaf(caller_owner):
+        return False
+    if candidate_owner and not caller_owner:
         return False
     registration_owner = _text(candidate.get("registration_owner_function_id"))
     if registration_owner:
@@ -695,6 +700,13 @@ def _is_member_initializer_candidate(
         # absent from the caller's class/file scope.
         registration_file = registration_owner.partition(":")[0]
         return registration_file == _text(caller.get("file_path"))
+    # A free-function table has no class owner.  It is admitted only when the
+    # registration evidence itself points at the same source file, avoiding
+    # a cross-file join on an unqualified function name.
+    if not candidate_owner and not caller_owner:
+        evidence = candidate.get("evidence")
+        evidence_file = evidence.get("file") if isinstance(evidence, Mapping) else ""
+        return _text(evidence_file) == _text(caller.get("file_path"))
     return True
 
 

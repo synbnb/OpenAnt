@@ -719,6 +719,326 @@ def test_local_declaration_initializer_list_lambda_is_observed_and_matched():
     ]
 
 
+def test_emplace_lambda_and_late_iterator_assignment_are_recovered():
+    """Map::emplace plus ``it = table.find`` remains source-backed."""
+    source = "services/core/common_event_hub.cpp"
+    initializer_id = f"{source}:CommonEventHub::InitHandlers"
+    caller_id = f"{source}:CommonEventHub::OnReceive"
+    handler_id = f"{source}:CommonEventHub::HandleReady"
+    functions = {
+        initializer_id: {
+            "name": "CommonEventHub::InitHandlers",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::InitHandlers()
+{
+    handlers.emplace(READY, [this](const Event &event) {
+        HandleReady(event);
+    });
+}""",
+        },
+        caller_id: {
+            "name": "CommonEventHub::OnReceive",
+            "file_path": source,
+            "start_line": 10,
+            "class_name": "CommonEventHub",
+            "code": """void CommonEventHub::OnReceive(const Event &event)
+{
+    auto it = handlers.begin();
+    it = handlers.find(event.id);
+    if (it != handlers.end()) {
+        it->second(event);
+    }
+}""",
+        },
+        handler_id: {
+            "name": "CommonEventHub::HandleReady",
+            "file_path": source,
+            "start_line": 25,
+            "class_name": "CommonEventHub",
+            "code": "void CommonEventHub::HandleReady(const Event &) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["assignments"][0]["registration_form"] == (
+        "method_emplace"
+    )
+    assert lambda_dispatch["assignments"][0]["target_id"] == handler_id
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]
+    assert diagnostics["unresolved_call_sites"] == []
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+    assert graph is not None
+    assert {
+        (edge.source_id, edge.target_id)
+        for edge in graph.edges.values()
+        if edge.kind == "native_dispatch_to_handler"
+    } == {(f"function:{caller_id}", f"function:{handler_id}")}
+
+
+def test_insert_pair_lambda_registration_is_recovered():
+    source = "services/core/insert_hub.cpp"
+    initializer_id = f"{source}:InsertHub::Init"
+    caller_id = f"{source}:InsertHub::Dispatch"
+    handler_id = f"{source}:InsertHub::HandleReady"
+    functions = {
+        initializer_id: {
+            "name": "InsertHub::Init",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "InsertHub",
+            "code": """void InsertHub::Init()
+{
+    handlers.insert({READY, [this]() { HandleReady(); }});
+}""",
+        },
+        caller_id: {
+            "name": "InsertHub::Dispatch",
+            "file_path": source,
+            "start_line": 7,
+            "class_name": "InsertHub",
+            "code": """void InsertHub::Dispatch()
+{
+    auto it = handlers.find(READY);
+    it->second();
+}""",
+        },
+        handler_id: {
+            "name": "InsertHub::HandleReady",
+            "file_path": source,
+            "start_line": 14,
+            "class_name": "InsertHub",
+            "code": "void InsertHub::HandleReady() {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["assignments"][0]["registration_form"] == (
+        "method_insert"
+    )
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]
+
+
+def test_registration_helper_parameter_recovers_member_pointer_target():
+    """A helper that stores its callable parameter can be resolved generically."""
+    source = "services/core/handler_factory.cpp"
+    helper_id = f"{source}:HandlerFactory::RegisterHandler"
+    initializer_id = f"{source}:HandlerFactory::Init"
+    caller_id = f"{source}:HandlerFactory::Dispatch"
+    handler_id = f"{source}:HandlerFactory::HandleReady"
+    functions = {
+        helper_id: {
+            "name": "HandlerFactory::RegisterHandler",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "HandlerFactory",
+            "parameters": ["int key", "Handler handler"],
+            "code": """void HandlerFactory::RegisterHandler(int key, Handler handler)
+{
+    handlers_[key] = handler;
+}""",
+        },
+        initializer_id: {
+            "name": "HandlerFactory::Init",
+            "file_path": source,
+            "start_line": 8,
+            "class_name": "HandlerFactory",
+            "code": """void HandlerFactory::Init()
+{
+    RegisterHandler(READY, &HandlerFactory::HandleReady);
+}""",
+        },
+        caller_id: {
+            "name": "HandlerFactory::Dispatch",
+            "file_path": source,
+            "start_line": 14,
+            "class_name": "HandlerFactory",
+            "code": """void HandlerFactory::Dispatch(int key)
+{
+    auto it = handlers_.find(key);
+    if (it != handlers_.end()) {
+        it->second();
+    }
+}""",
+        },
+        handler_id: {
+            "name": "HandlerFactory::HandleReady",
+            "file_path": source,
+            "start_line": 24,
+            "class_name": "HandlerFactory",
+            "code": "void HandlerFactory::HandleReady() {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assignments = diagnostics["dispatch_assignments"]
+    assert len(assignments) == 1
+    assert assignments[0]["registration_form"] == (
+        "helper_parameter_registration"
+    )
+    assert assignments[0]["target_id"] == handler_id
+    site = diagnostics["unresolved_call_sites"][0]
+    assert site["candidate_target_ids"] == [handler_id]
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+    assert graph is not None
+    assert {
+        (edge.source_id, edge.target_id)
+        for edge in graph.edges.values()
+        if edge.kind == "native_dispatch_to_handler"
+    } == {(f"function:{caller_id}", f"function:{handler_id}")}
+
+
+def test_registration_helper_lambda_wrapper_recovers_template_member_pointer():
+    """HPAE-style helpers may store a member pointer inside a wrapper Lambda."""
+    source = "services/audio/hpae_manager.cpp"
+    helper_id = f"{source}:HpaeManager::RegisterHandler"
+    initializer_id = f"{source}:HpaeManager::Init"
+    caller_id = f"{source}:HpaeManager::Invoke"
+    handler_id = f"{source}:HpaeManager::HandleReady"
+    functions = {
+        helper_id: {
+            "name": "HpaeManager::RegisterHandler",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "HpaeManager",
+            "parameters": ["int key", "void (HpaeManager::*func)()"],
+            "code": """void HpaeManager::RegisterHandler(
+    int key, void (HpaeManager::*func)())
+{
+    handlers_[key] = [this, key, func]() { (this->*func)(); };
+}""",
+        },
+        initializer_id: {
+            "name": "HpaeManager::Init",
+            "file_path": source,
+            "start_line": 8,
+            "class_name": "HpaeManager",
+            "code": """void HpaeManager::Init()
+{
+    RegisterHandler(READY, &HpaeManager::HandleReady);
+}""",
+        },
+        caller_id: {
+            "name": "HpaeManager::Invoke",
+            "file_path": source,
+            "start_line": 14,
+            "class_name": "HpaeManager",
+            "code": """void HpaeManager::Invoke()
+{
+    auto it = handlers_.find(READY);
+    if (it != handlers_.end()) {
+        it->second();
+    }
+}""",
+        },
+        handler_id: {
+            "name": "HpaeManager::HandleReady",
+            "file_path": source,
+            "start_line": 24,
+            "class_name": "HpaeManager",
+            "code": "void HpaeManager::HandleReady() {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    lambda_dispatch = diagnostics["lambda_dispatch"]
+    assert lambda_dispatch["summary"]["dispatch_assignments"] == 1
+    assert lambda_dispatch["assignments"][0]["registration_form"] == (
+        "helper_parameter_registration"
+    )
+    assert lambda_dispatch["assignments"][0]["target_id"] == handler_id
+    assert lambda_dispatch["call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+    assert graph is not None
+    assert {
+        (edge.source_id, edge.target_id)
+        for edge in graph.edges.values()
+        if edge.kind == "native_dispatch_to_handler"
+    } == {(f"function:{caller_id}", f"function:{handler_id}")}
+
+
+def test_initializer_free_function_reference_is_recovered_without_enum_guessing():
+    """Only names resolving to an indexed function become table candidates."""
+    source = "plugins/faultlog_formatter.cpp"
+    formatter_id = f"{source}:FaultLogFormatter::Format"
+    handler_id = f"{source}:FaultLogFormatter::GetCppCrashSectionLogs"
+    functions = {
+        formatter_id: {
+            "name": "FaultLogFormatter::Format",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": None,
+            "code": """void FaultLogFormatter::Format(int type)
+{
+    std::unordered_map<int, Handler> table = {
+        {CPP_CRASH, GetCppCrashSectionLogs},
+        {THREAD_INFO, MissingSymbol}
+    };
+    auto it = table.find(type);
+    if (it != table.end()) {
+        it->second();
+    }
+}""",
+        },
+        handler_id: {
+            "name": "FaultLogFormatter::GetCppCrashSectionLogs",
+            "file_path": source,
+            "start_line": 20,
+            "class_name": None,
+            "code": "void FaultLogFormatter::GetCppCrashSectionLogs() {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, {}
+    )
+
+    assignments = diagnostics["dispatch_assignments"]
+    assert len(assignments) == 1
+    assert assignments[0]["selector"] == "CPP_CRASH"
+    assert assignments[0]["target_id"] == handler_id
+    assert diagnostics["unresolved_call_sites"][0]["candidate_target_ids"] == [
+        handler_id
+    ]
+    graph = build_native_dispatch_graph(
+        {"repository": "/fixture", "functions": functions}, {}, diagnostics
+    )
+    assert graph is not None
+    assert {
+        (edge.source_id, edge.target_id)
+        for edge in graph.edges.values()
+        if edge.kind == "native_dispatch_to_handler"
+    } == {(f"function:{formatter_id}", f"function:{handler_id}")}
+
+
 def test_local_declaration_initializer_does_not_cross_function_scope():
     source = "services/core/common_event_hub.cpp"
     initializer_id = f"{source}:CommonEventHub::InitHandlers"
