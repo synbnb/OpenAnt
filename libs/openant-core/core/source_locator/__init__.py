@@ -146,6 +146,29 @@ from .prompts import (
     build_search_planner_prompt,
     build_search_planner_repair_prompt,
 )
+from .events import (
+    EVENT_SCHEMA_VERSION,
+    EVENTS_FILENAME,
+    LocatorEvent,
+    LocatorEventError,
+    LocatorEventLog,
+)
+from .state_machine import (
+    ACTIVE_STATES,
+    ALL_STATES,
+    FLOW_STATES,
+    LocatorSession,
+    LocatorSessionStore,
+    LocatorStateError,
+    SourceLocatorStateMachine,
+    StageResult,
+    TERMINAL_STATES,
+)
+from .orchestrator import (
+    SourceLocatorOrchestrator,
+    SourceLocatorOrchestratorError,
+    normalize_stage,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -259,4 +282,21 @@ __all__ = [
     "SEARCH_PLANNER_SYSTEM",
     "build_search_planner_prompt",
     "build_search_planner_repair_prompt",
+    "EVENT_SCHEMA_VERSION",
+    "EVENTS_FILENAME",
+    "LocatorEvent",
+    "LocatorEventError",
+    "LocatorEventLog",
+    "ACTIVE_STATES",
+    "ALL_STATES",
+    "FLOW_STATES",
+    "LocatorSession",
+    "LocatorSessionStore",
+    "LocatorStateError",
+    "SourceLocatorStateMachine",
+    "StageResult",
+    "TERMINAL_STATES",
+    "SourceLocatorOrchestrator",
+    "SourceLocatorOrchestratorError",
+    "normalize_stage",
 ]
