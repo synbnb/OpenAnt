@@ -53,6 +53,25 @@ from .path_classifier import (
     classify_path,
     rank_paths,
 )
+from .evidence_store import (
+    Evidence,
+    EvidenceEdge,
+    EvidenceGraph,
+    EvidenceGraphError,
+    EvidenceStore,
+    EvidenceStoreError,
+    EvidenceValidationError,
+)
+from .evidence_scoring import (
+    EvidenceScore,
+    MandatoryPredicates,
+    ScoreFeature,
+    evaluate_mandatory_predicates,
+    score_edge,
+    score_edge_evidence,
+    score_evidence,
+    score_evidence_bundle,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -93,4 +112,19 @@ __all__ = [
     "PathFeature",
     "classify_path",
     "rank_paths",
+    "Evidence",
+    "EvidenceEdge",
+    "EvidenceGraph",
+    "EvidenceGraphError",
+    "EvidenceStore",
+    "EvidenceStoreError",
+    "EvidenceValidationError",
+    "EvidenceScore",
+    "MandatoryPredicates",
+    "ScoreFeature",
+    "evaluate_mandatory_predicates",
+    "score_edge",
+    "score_edge_evidence",
+    "score_evidence",
+    "score_evidence_bundle",
 ]
