@@ -108,6 +108,14 @@ from .repository_manager import (
     RepositoryManager,
     RepositoryManagerError,
 )
+from .post_clone_verifier import (
+    PostCloneVerificationRequest,
+    PostCloneVerificationResult,
+    PostCloneVerifier,
+    PostCloneVerifierError,
+    SourceHandoff,
+    VerificationCheck,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -193,4 +201,10 @@ __all__ = [
     "RepositoryConfirmation",
     "RepositoryManager",
     "RepositoryManagerError",
+    "PostCloneVerificationRequest",
+    "PostCloneVerificationResult",
+    "PostCloneVerifier",
+    "PostCloneVerifierError",
+    "SourceHandoff",
+    "VerificationCheck",
 ]

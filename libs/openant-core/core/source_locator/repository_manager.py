@@ -9,10 +9,12 @@ The source locator must never turn a model-proposed URL into an implicit
 * the destination has been proven to remain below the project-local
   ``source_code_base`` directory.
 
-This slice intentionally does not perform post-clone source verification or
-produce a ``SourceHandoff``.  It only performs a shallow, non-recursive fetch
-into a new directory, safely reuses an identical existing checkout, and
-returns a structured result for the next stage.
+``RepositoryManager`` itself performs only the acquisition step: it performs a
+shallow, non-recursive fetch into a new directory, safely reuses an identical
+existing checkout, records the resolved commit and returns the validated
+Manifest mapping.  ``PostCloneVerifier`` consumes that result for the
+read-only source/evidence checks and produces the ``SourceHandoff`` used by a
+scanner.
 """
 
 from __future__ import annotations
@@ -246,10 +248,22 @@ class RepositoryAcquisitionResult:
     reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     schema_version: str = _SCHEMA_VERSION
+    # Appended after the original fields to keep positional construction of
+    # the public result object backward compatible.
+    resolved_commit: str | None = None
+    mapping: RepositoryMapping | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _RESULT_STATUSES:
             raise RepositoryManagerError("仓库拉取结果状态无效")
+        if self.resolved_commit is not None:
+            if not isinstance(self.resolved_commit, str) or not re.fullmatch(
+                r"[0-9a-fA-F]{7,128}", self.resolved_commit.strip()
+            ):
+                raise RepositoryManagerError("resolved_commit 不是安全的 Git commit")
+            object.__setattr__(self, "resolved_commit", self.resolved_commit.strip().lower())
+        if self.mapping is not None and not isinstance(self.mapping, RepositoryMapping):
+            raise RepositoryManagerError("mapping 必须是 RepositoryMapping 或 null")
         object.__setattr__(self, "commands", tuple(self.commands))
         object.__setattr__(self, "reasons", tuple(_clean(item) for item in self.reasons))
         object.__setattr__(self, "warnings", tuple(_clean(item) for item in self.warnings))
@@ -268,6 +282,8 @@ class RepositoryAcquisitionResult:
             "repo_url": self.repo_url,
             "canonical_url": self.canonical_url,
             "revision": self.revision,
+            "resolved_commit": self.resolved_commit,
+            "mapping": self.mapping.to_dict() if self.mapping else None,
             "decision": self.decision.to_dict() if self.decision else None,
             "confirmation": self.confirmation.to_dict() if self.confirmation else None,
             "commands": [command.to_dict() for command in self.commands],
@@ -389,6 +405,7 @@ class RepositoryManager:
             repo_url=mapping.repo_url,
             canonical_url=decision.canonical_url if decision else None,
             revision=mapping.revision,
+            mapping=mapping,
             decision=decision,
             confirmation=confirmation,
             reasons=tuple(dict.fromkeys(_clean(item) for item in reasons)),
@@ -419,7 +436,7 @@ class RepositoryManager:
         *,
         decision: RepositoryPolicyDecision,
         records: list[CommandRecord],
-    ) -> tuple[str, tuple[str, ...]]:
+    ) -> tuple[str, tuple[str, ...], str | None]:
         """Classify an existing directory without modifying it."""
 
         inside = self._record_command(
@@ -428,14 +445,14 @@ class RepositoryManager:
             records=records,
         )
         if inside is None or inside.returncode != 0 or inside.stdout.strip().lower() != "true":
-            return "conflict", ("目标目录已存在但不是 Git 工作树，不覆盖",)
+            return "conflict", ("目标目录已存在但不是 Git 工作树，不覆盖",), None
         remote = self._record_command(
             ("git", "-C", str(destination), "remote", "get-url", "origin"),
             cwd=None,
             records=records,
         )
         if remote is None or remote.returncode != 0:
-            return "conflict", ("已有 Git 目录缺少 origin，不能确认来源，不覆盖",)
+            return "conflict", ("已有 Git 目录缺少 origin，不能确认来源，不覆盖",), None
         origin = remote.stdout.strip()
         origin_check = validate_gitcode_url(
             origin,
@@ -448,10 +465,10 @@ class RepositoryManager:
             or origin_check.organization != decision.organization
             or origin_check.repository != decision.repository
         ):
-            return "conflict", ("已有仓库 origin 与确认的 GitCode 地址不一致，不覆盖",)
+            return "conflict", ("已有仓库 origin 与确认的 GitCode 地址不一致，不覆盖",), None
         target = _safe_revision(decision.revision)
         if target is None:
-            return "conflict", ("目标 revision 不安全，不能复用已有目录",)
+            return "conflict", ("目标 revision 不安全，不能复用已有目录",), None
         expected = self._record_command(
             (
                 "git",
@@ -476,8 +493,8 @@ class RepositoryManager:
             or head.returncode != 0
             or expected.stdout.strip() != head.stdout.strip()
         ):
-            return "conflict", ("已有仓库 HEAD 与确认的 revision 不一致，不覆盖",)
-        return "reused", ()
+            return "conflict", ("已有仓库 HEAD 与确认的 revision 不一致，不覆盖",), None
+        return "reused", (), head.stdout.strip().lower()
 
     def _clone_new(
         self,
@@ -485,24 +502,24 @@ class RepositoryManager:
         *,
         decision: RepositoryPolicyDecision,
         records: list[CommandRecord],
-    ) -> tuple[str, tuple[str, ...]]:
+    ) -> tuple[str, tuple[str, ...], str | None]:
         destination_root = destination.parent
         project_root = self.project_root.expanduser().resolve(strict=True)
         raw_destination_root = project_root / self.config.destination_root
         if _has_symlink_component(raw_destination_root, stop=project_root):
-            return "rejected", ("source_code_base 不能是符号链接",)
+            return "rejected", ("source_code_base 不能是符号链接",), None
         try:
             raw_destination_root.mkdir(parents=True, exist_ok=True)
             resolved_root = destination_root.resolve(strict=True)
         except OSError as exc:
-            return "failed", (f"无法创建或确认 source_code_base：{_clean(exc)}",)
+            return "failed", (f"无法创建或确认 source_code_base：{_clean(exc)}",), None
         if (
             not _within(resolved_root, project_root)
             or _has_symlink_component(raw_destination_root, stop=project_root)
         ):
-            return "rejected", ("source_code_base 解析后超出项目根目录",)
+            return "rejected", ("source_code_base 解析后超出项目根目录",), None
         if destination.exists():
-            return "conflict", ("目标目录在拉取前已出现，不覆盖",)
+            return "conflict", ("目标目录在拉取前已出现，不覆盖",), None
 
         staging: Path | None = None
         try:
@@ -522,7 +539,7 @@ class RepositoryManager:
                         shutil.rmtree(staging)
                 except OSError:
                     pass
-            return "failed", (f"无法创建 Git staging 目录：{_clean(exc)}",)
+            return "failed", (f"无法创建 Git staging 目录：{_clean(exc)}",), None
         try:
             base = (
                 self.runner_git_prefix
@@ -530,7 +547,7 @@ class RepositoryManager:
             )
             clone = self._record_command(base, cwd=None, records=records)
             if clone is None or clone.returncode != 0:
-                return "failed", ("git clone 初始化失败",)
+                return "failed", ("git clone 初始化失败",), None
             fetch = self._record_command(
                 self.runner_git_prefix
                 + ("-C", str(staging), "fetch", "--depth", "1", "origin", decision.revision or ""),
@@ -538,7 +555,7 @@ class RepositoryManager:
                 records=records,
             )
             if fetch is None or fetch.returncode != 0:
-                return "failed", ("目标 revision 拉取失败",)
+                return "failed", ("目标 revision 拉取失败",), None
             fetched = self._record_command(
                 self.runner_git_prefix + ("-C", str(staging), "rev-parse", "FETCH_HEAD"),
                 cwd=None,
@@ -563,16 +580,16 @@ class RepositoryManager:
                 or head.returncode != 0
                 or fetched.stdout.strip() != head.stdout.strip()
             ):
-                return "failed", ("拉取后无法确认目标 revision",)
+                return "failed", ("拉取后无法确认目标 revision",), None
             if destination.exists():
-                return "conflict", ("拉取完成后目标目录出现，不覆盖",)
+                return "conflict", ("拉取完成后目标目录出现，不覆盖",), None
             try:
                 os.rename(staging, destination)
             except FileExistsError:
-                return "conflict", ("目标目录发生并发冲突，不覆盖",)
+                return "conflict", ("目标目录发生并发冲突，不覆盖",), None
             except OSError as exc:
-                return "failed", (f"无法提交仓库目录：{_clean(exc)}",)
-            return "cloned", ()
+                return "failed", (f"无法提交仓库目录：{_clean(exc)}",), None
+            return "cloned", (), head.stdout.strip().lower()
         finally:
             if staging.exists() or staging.is_symlink():
                 try:
@@ -665,7 +682,7 @@ class RepositoryManager:
                     warnings=decision.warnings,
                 )
             try:
-                existing_status, existing_reasons = self._inspect_existing(
+                existing_status, existing_reasons, existing_commit = self._inspect_existing(
                     destination,
                     decision=decision,
                     records=records,
@@ -678,6 +695,7 @@ class RepositoryManager:
                     repo_url=mapping.repo_url,
                     canonical_url=decision.canonical_url,
                     revision=decision.revision,
+                    mapping=mapping,
                     decision=decision,
                     confirmation=confirmation,
                     commands=tuple(records),
@@ -692,6 +710,8 @@ class RepositoryManager:
                     repo_url=mapping.repo_url,
                     canonical_url=decision.canonical_url,
                     revision=decision.revision,
+                    resolved_commit=existing_commit,
+                    mapping=mapping,
                     decision=decision,
                     confirmation=confirmation,
                     commands=tuple(records),
@@ -704,6 +724,8 @@ class RepositoryManager:
                 repo_url=mapping.repo_url,
                 canonical_url=decision.canonical_url,
                 revision=decision.revision,
+                resolved_commit=existing_commit,
+                mapping=mapping,
                 decision=decision,
                 confirmation=confirmation,
                 commands=tuple(records),
@@ -711,8 +733,9 @@ class RepositoryManager:
                 warnings=decision.warnings,
             )
 
+        resolved_commit: str | None = None
         try:
-            status, reasons = self._clone_new(
+            status, reasons, resolved_commit = self._clone_new(
                 destination,
                 decision=decision,
                 records=records,
@@ -726,6 +749,8 @@ class RepositoryManager:
             repo_url=mapping.repo_url,
             canonical_url=decision.canonical_url,
             revision=decision.revision,
+            resolved_commit=resolved_commit,
+            mapping=mapping,
             decision=decision,
             confirmation=confirmation,
             commands=tuple(records),
