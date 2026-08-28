@@ -22,6 +22,16 @@ from .opengrok_client import (
     normalize_search_line,
     normalize_source_path,
 )
+from .config import (
+    GitCodeConfig,
+    ManifestConfig,
+    OpenGrokConfig,
+    SourceLocatorAuth,
+    SourceLocatorConfig,
+    SourceLocatorConfigError,
+    load_source_locator_config,
+    parse_source_locator_config,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -39,4 +49,12 @@ __all__ = [
     "normalize_base_url",
     "normalize_search_line",
     "normalize_source_path",
+    "GitCodeConfig",
+    "ManifestConfig",
+    "OpenGrokConfig",
+    "SourceLocatorAuth",
+    "SourceLocatorConfig",
+    "SourceLocatorConfigError",
+    "load_source_locator_config",
+    "parse_source_locator_config",
 ]

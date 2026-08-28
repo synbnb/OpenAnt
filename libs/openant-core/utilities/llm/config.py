@@ -50,6 +50,11 @@ from types import MappingProxyType
 from typing import Mapping, Optional
 
 from .adapter import LLMError
+from core.source_locator.config import (
+    SourceLocatorConfig,
+    SourceLocatorConfigError,
+    parse_source_locator_config,
+)
 
 
 # The closed set of phase names. User configs and openant-default both
@@ -147,6 +152,10 @@ class ConfigFile:
     # post-migration — everything goes through ``llm_providers``.
     legacy_api_key: Optional[str] = None
     legacy_default_model: Optional[str] = None
+    # Optional OpenHarmony source-locator settings. Kept after all legacy
+    # fields so callers using ConfigFile's historical positional arguments
+    # retain their meaning.
+    source_locator: Optional[SourceLocatorConfig] = None
 
 
 class ConfigError(LLMError):
@@ -223,10 +232,16 @@ def parse_config(raw: dict) -> ConfigFile:
     if active_project is not None and not isinstance(active_project, str):
         raise ConfigError("config.json: 'active_project' must be a string")
 
+    try:
+        source_locator = parse_source_locator_config(raw)
+    except SourceLocatorConfigError as exc:
+        raise ConfigError(f"config.json: source_locator: {exc}") from exc
+
     cf = ConfigFile(
         schema_version=CURRENT_SCHEMA_VERSION,
         default_llm=default_llm,
         active_project=active_project,
+        source_locator=source_locator,
         llm_providers=providers,
         llm_configs=configs,
         legacy_api_key=legacy_api_key,
@@ -378,6 +393,8 @@ def serialise_config(cf: ConfigFile) -> dict:
     }
     if cf.active_project:
         out["active_project"] = cf.active_project
+    if cf.source_locator is not None:
+        out["source_locator"] = cf.source_locator.to_dict()
     if cf.legacy_api_key:
         out["api_key"] = cf.legacy_api_key
     if cf.legacy_default_model:
