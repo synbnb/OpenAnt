@@ -130,6 +130,22 @@ from .client_locator import (
     ClientLocator,
     ClientLocatorError,
 )
+from .llm_search_planner import (
+    ALLOWED_ACTION_KINDS,
+    FORBIDDEN_ACTION_KINDS,
+    LLMSearchAction,
+    LLMSearchPlanResult,
+    LLMSearchPlanner,
+    LLMSearchPlannerContext,
+    LLMSearchPlannerError,
+    ModelCall,
+    PlannerBudget,
+)
+from .prompts import (
+    SEARCH_PLANNER_SYSTEM,
+    build_search_planner_prompt,
+    build_search_planner_repair_prompt,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -231,4 +247,16 @@ __all__ = [
     "ClientAttributionResult",
     "ClientLocator",
     "ClientLocatorError",
+    "ALLOWED_ACTION_KINDS",
+    "FORBIDDEN_ACTION_KINDS",
+    "LLMSearchAction",
+    "LLMSearchPlanResult",
+    "LLMSearchPlanner",
+    "LLMSearchPlannerContext",
+    "LLMSearchPlannerError",
+    "ModelCall",
+    "PlannerBudget",
+    "SEARCH_PLANNER_SYSTEM",
+    "build_search_planner_prompt",
+    "build_search_planner_repair_prompt",
 ]

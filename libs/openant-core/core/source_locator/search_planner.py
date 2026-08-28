@@ -203,3 +203,36 @@ class SearchPlanner:
                     raise SearchPlannerError("OpenGrok client 返回的不是 SearchResponse")
                 executions.append(SearchExecution(query=query, status="ok", response=response))
         return SearchPlanResult(tuple(executions), target=target)
+
+
+# 兼容执行计划中把 planner 视为一个模块的导入方式。确定性
+# ``SearchPlanner`` 仍在本文件中；LLM 动作校验实现位于独立模块，避免两条
+# 执行路径互相改变。
+from .llm_search_planner import (  # noqa: E402  (compatibility re-export)
+    ALLOWED_ACTION_KINDS,
+    FORBIDDEN_ACTION_KINDS,
+    LLMSearchAction,
+    LLMSearchPlanResult,
+    LLMSearchPlanner,
+    LLMSearchPlannerContext,
+    LLMSearchPlannerError,
+    ModelCall,
+    PlannerBudget,
+)
+
+
+__all__ = [
+    "SearchExecution",
+    "SearchPlanResult",
+    "SearchPlanner",
+    "SearchPlannerError",
+    "ALLOWED_ACTION_KINDS",
+    "FORBIDDEN_ACTION_KINDS",
+    "LLMSearchAction",
+    "LLMSearchPlanResult",
+    "LLMSearchPlanner",
+    "LLMSearchPlannerContext",
+    "LLMSearchPlannerError",
+    "ModelCall",
+    "PlannerBudget",
+]
