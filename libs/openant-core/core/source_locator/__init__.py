@@ -88,6 +88,18 @@ from .manifest_resolver import (
     parse_manifest,
     resolve_project,
 )
+from .repository_policy import (
+    GitCodeURLValidation,
+    RepositoryPolicy,
+    RepositoryPolicyDecision,
+    RepositoryPolicyError,
+    RevisionValidation,
+    validate_gitcode_remote,
+    validate_gitcode_url,
+    validate_repository_mapping,
+    validate_repository_url,
+    validate_revision,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -157,4 +169,14 @@ __all__ = [
     "manifest_cache_key",
     "parse_manifest",
     "resolve_project",
+    "GitCodeURLValidation",
+    "RepositoryPolicy",
+    "RepositoryPolicyDecision",
+    "RepositoryPolicyError",
+    "RevisionValidation",
+    "validate_gitcode_remote",
+    "validate_gitcode_url",
+    "validate_repository_mapping",
+    "validate_repository_url",
+    "validate_revision",
 ]
