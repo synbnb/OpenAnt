@@ -116,6 +116,20 @@ from .post_clone_verifier import (
     SourceHandoff,
     VerificationCheck,
 )
+from .service_attributor import (
+    AttributionCandidate,
+    OverallAttributionResult,
+    ServerAttributionResult,
+    ServiceAttributionError,
+    ServiceAttributor,
+    SourceLocation,
+    combine_attributions,
+)
+from .client_locator import (
+    ClientAttributionResult,
+    ClientLocator,
+    ClientLocatorError,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -207,4 +221,14 @@ __all__ = [
     "PostCloneVerifierError",
     "SourceHandoff",
     "VerificationCheck",
+    "AttributionCandidate",
+    "OverallAttributionResult",
+    "ServerAttributionResult",
+    "ServiceAttributionError",
+    "ServiceAttributor",
+    "SourceLocation",
+    "combine_attributions",
+    "ClientAttributionResult",
+    "ClientLocator",
+    "ClientLocatorError",
 ]
