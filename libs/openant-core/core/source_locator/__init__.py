@@ -40,6 +40,12 @@ from .target_normalizer import (
     normalize_and_plan,
     normalize_target,
 )
+from .search_planner import (
+    SearchExecution,
+    SearchPlanResult,
+    SearchPlanner,
+    SearchPlannerError,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -71,4 +77,8 @@ __all__ = [
     "build_initial_queries",
     "normalize_and_plan",
     "normalize_target",
+    "SearchExecution",
+    "SearchPlanResult",
+    "SearchPlanner",
+    "SearchPlannerError",
 ]
