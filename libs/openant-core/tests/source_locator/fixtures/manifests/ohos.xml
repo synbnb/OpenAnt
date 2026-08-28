@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="gitcode" fetch="https://gitcode.com/openharmony" />
+  <remote name="mirror" fetch="https://mirror.example.invalid/openharmony" />
+  <default remote="gitcode" revision="OpenHarmony-6.1-LTS" />
+
+  <project name="communication" path="foundation/communication" />
+  <project name="communication_netmanager_base" path="foundation/communication/netmanager_base" />
+  <project name="startup_init" path="base/startup/init" />
+  <project name="startup_appspawn" path="base/startup/appspawn" remote="mirror" revision="OpenHarmony-6.1-LTS" />
+</manifest>

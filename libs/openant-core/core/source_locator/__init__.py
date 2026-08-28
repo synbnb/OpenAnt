@@ -72,6 +72,22 @@ from .evidence_scoring import (
     score_evidence,
     score_evidence_bundle,
 )
+from .manifest_resolver import (
+    ManifestAmbiguityError,
+    ManifestDocument,
+    ManifestParseError,
+    ManifestProject,
+    ManifestRemote,
+    ManifestResolver,
+    ManifestResolverError,
+    RepositoryMapping,
+    RepositoryResolution,
+    build_repository_url,
+    load_manifest,
+    manifest_cache_key,
+    parse_manifest,
+    resolve_project,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -127,4 +143,18 @@ __all__ = [
     "score_edge_evidence",
     "score_evidence",
     "score_evidence_bundle",
+    "ManifestAmbiguityError",
+    "ManifestDocument",
+    "ManifestParseError",
+    "ManifestProject",
+    "ManifestRemote",
+    "ManifestResolver",
+    "ManifestResolverError",
+    "RepositoryMapping",
+    "RepositoryResolution",
+    "build_repository_url",
+    "load_manifest",
+    "manifest_cache_key",
+    "parse_manifest",
+    "resolve_project",
 ]
