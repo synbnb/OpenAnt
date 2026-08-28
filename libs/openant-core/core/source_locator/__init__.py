@@ -46,6 +46,13 @@ from .search_planner import (
     SearchPlanner,
     SearchPlannerError,
 )
+from .path_classifier import (
+    PathClassification,
+    PathClassificationError,
+    PathFeature,
+    classify_path,
+    rank_paths,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -81,4 +88,9 @@ __all__ = [
     "SearchPlanResult",
     "SearchPlanner",
     "SearchPlannerError",
+    "PathClassification",
+    "PathClassificationError",
+    "PathFeature",
+    "classify_path",
+    "rank_paths",
 ]

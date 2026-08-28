@@ -54,6 +54,7 @@ def test_live_fixture_is_small_and_contains_no_credentials():
         "capability_snapshot.json",
         "raw_param_service_excerpt.c",
         "search_init_param_service.json",
+        "search_full_paramservice_paths.json",
     }
     combined = "\n".join(path.read_text(encoding="utf-8") for path in fixture_files).lower()
     for forbidden in ("set-cookie:", "jsessionid=", "authorization:", "bearer ", "api_key"):
