@@ -1,0 +1,88 @@
+{
+  "schema_version": "openant.opengrok.fixture.v1",
+  "captured_at": "2026-08-28",
+  "source_url": "https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source",
+  "project": "openharmony",
+  "context_path": "/source",
+  "probe_path": "/openharmony/base/startup/init/services/param/linux/param_service.c",
+  "version": "OpenGrok 1.14.11 (512e738c6819518f2a95b9f49a3ea8550efff948)",
+  "index_time": "2026-04-09T10:21:31.737+00:00",
+  "sanitization": [
+    "Cookie and Set-Cookie headers omitted",
+    "Authorization headers omitted",
+    "Authentication error body omitted",
+    "Raw source reduced to a task-relevant excerpt"
+  ],
+  "responses": {
+    "root": {
+      "path": "/source/",
+      "status": 200,
+      "content_type": "text/html;charset=UTF-8",
+      "body_kind": "text",
+      "body": "<html><head><meta name=\"generator\" content=\"{OpenGrok 1.14.11 (512e738c6819518f2a95b9f49a3ea8550efff948)\" /></head></html>"
+    },
+    "ping": {
+      "path": "/source/api/v1/system/ping",
+      "status": 200,
+      "content_type": "text/plain",
+      "body_kind": "text",
+      "body": ""
+    },
+    "indextime": {
+      "path": "/source/api/v1/system/indextime",
+      "status": 200,
+      "content_type": "application/json",
+      "body_kind": "json",
+      "body": "2026-04-09T10:21:31.737+00:00"
+    },
+    "suggest_config": {
+      "path": "/source/api/v1/suggest/config",
+      "status": 200,
+      "content_type": "application/json",
+      "body_kind": "json",
+      "body": {
+        "enabled": true,
+        "maxResults": 10,
+        "minChars": 0,
+        "allowedProjects": null,
+        "maxProjects": 32767,
+        "allowedFields": ["defs", "path", "hist", "refs", "type", "full"],
+        "allowComplexQueries": true
+      }
+    },
+    "search_probe": {
+      "path": "/source/api/v1/search",
+      "status": 200,
+      "content_type": "application/json",
+      "body_kind": "json",
+      "body": {
+        "time": 1,
+        "resultCount": 0,
+        "startDocument": 0,
+        "endDocument": -1,
+        "results": {}
+      }
+    },
+    "file_content": {
+      "path": "/source/api/v1/file/content",
+      "status": 401,
+      "content_type": "text/html;charset=utf-8",
+      "body_kind": "text",
+      "body": ""
+    },
+    "raw": {
+      "path": "/source/raw/openharmony/base/startup/init/services/param/linux/param_service.c",
+      "status": 200,
+      "content_type": "text/plain",
+      "body_kind": "file",
+      "body_file": "raw_param_service_excerpt.c"
+    },
+    "xref": {
+      "path": "/source/xref/openharmony/base/startup/init/services/param/linux/param_service.c",
+      "status": 200,
+      "content_type": "text/html;charset=UTF-8",
+      "body_kind": "text",
+      "body": "<html><body>Sanitized OpenGrok xref fixture</body></html>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "time": 10,
+  "resultCount": 2,
+  "startDocument": 0,
+  "endDocument": 1,
+  "results": {
+    "/openharmony/base/startup/init/services/param/liteos/param_service.c": [
+      {
+        "line": "int <b>InitParamService</b>(void)\r",
+        "lineNumber": "62",
+        "tag": "function"
+      }
+    ],
+    "/openharmony/base/startup/init/services/param/linux/param_service.c": [
+      {
+        "line": "int <b>InitParamService</b>(void)\r",
+        "lineNumber": "412",
+        "tag": "function"
+      }
+    ]
+  }
+}
