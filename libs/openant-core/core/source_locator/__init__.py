@@ -100,6 +100,14 @@ from .repository_policy import (
     validate_repository_url,
     validate_revision,
 )
+from .repository_manager import (
+    CommandRecord,
+    CommandResult,
+    RepositoryAcquisitionResult,
+    RepositoryConfirmation,
+    RepositoryManager,
+    RepositoryManagerError,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -179,4 +187,10 @@ __all__ = [
     "validate_repository_mapping",
     "validate_repository_url",
     "validate_revision",
+    "CommandRecord",
+    "CommandResult",
+    "RepositoryAcquisitionResult",
+    "RepositoryConfirmation",
+    "RepositoryManager",
+    "RepositoryManagerError",
 ]
