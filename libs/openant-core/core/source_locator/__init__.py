@@ -32,6 +32,14 @@ from .config import (
     load_source_locator_config,
     parse_source_locator_config,
 )
+from .target_normalizer import (
+    LocatorQuery,
+    TargetNormalizationError,
+    TargetSpec,
+    build_initial_queries,
+    normalize_and_plan,
+    normalize_target,
+)
 
 __all__ = [
     "EndpointCapability",
@@ -57,4 +65,10 @@ __all__ = [
     "SourceLocatorConfigError",
     "load_source_locator_config",
     "parse_source_locator_config",
+    "LocatorQuery",
+    "TargetNormalizationError",
+    "TargetSpec",
+    "build_initial_queries",
+    "normalize_and_plan",
+    "normalize_target",
 ]
