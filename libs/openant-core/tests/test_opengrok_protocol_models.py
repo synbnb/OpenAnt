@@ -106,3 +106,11 @@ def test_search_response_parses_realistic_opengrok_shape():
 def test_search_response_rejects_malformed_shapes(payload):
     with pytest.raises(OpenGrokProtocolError):
         SearchResponse.from_payload(payload)
+
+
+def test_generator_version_hint_ignores_template_brace():
+    from core.source_locator.opengrok_client import OpenGrokClient
+
+    assert OpenGrokClient._extract_version(
+        '<meta name="generator" content="{OpenGrok 1.14.11 (abc)">'
+    ) == "OpenGrok 1.14.11 (abc)"

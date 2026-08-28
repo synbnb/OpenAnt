@@ -8,8 +8,11 @@ kept in :mod:`core.source_locator.opengrok_client` and is opt-in.
 from .opengrok_client import (
     EndpointCapability,
     OpenGrokError,
+    OpenGrokHTTPError,
     OpenGrokPathError,
     OpenGrokProtocolError,
+    OpenGrokClient,
+    OpenGrokTransportError,
     ProbeResult,
     RequestAttempt,
     SearchHit,
@@ -23,8 +26,11 @@ from .opengrok_client import (
 __all__ = [
     "EndpointCapability",
     "OpenGrokError",
+    "OpenGrokHTTPError",
+    "OpenGrokClient",
     "OpenGrokPathError",
     "OpenGrokProtocolError",
+    "OpenGrokTransportError",
     "ProbeResult",
     "RequestAttempt",
     "SearchHit",
