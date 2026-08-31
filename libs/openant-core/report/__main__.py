@@ -100,6 +100,7 @@ def cmd_disclosures(args):
 
     output_dir = Path(args.output) if args.output else Path("disclosures")
     output_dir.mkdir(parents=True, exist_ok=True)
+    chinese_output_dir = output_dir.with_name(output_dir.name + ".zh-CN")
 
     report_binding = _build_report_binding()
 
@@ -129,12 +130,24 @@ def cmd_disclosures(args):
         with open_utf8(output_dir / filename, "w") as f:
             f.write(disclosure)
         print(f"  -> {output_dir / filename}")
+
+        chinese_disclosure, _usage = generate_disclosure(
+            finding,
+            product_name,
+            report_binding,
+            pipeline_data=pipeline_data,
+            language="zh-CN",
+        )
+        chinese_output_dir.mkdir(parents=True, exist_ok=True)
+        with open_utf8(chinese_output_dir / filename, "w") as f:
+            f.write(chinese_disclosure)
+        print(f"  -> {chinese_output_dir / filename}")
         count += 1
 
     if count == 0:
         print("No confirmed vulnerabilities to generate disclosures for.")
     else:
-        print(f"Generated {count} disclosure(s).")
+        print(f"Generated {count} English and {count} Chinese disclosure(s).")
 
 
 def cmd_all(args):

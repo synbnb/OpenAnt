@@ -1035,6 +1035,11 @@ def generate_disclosure_docs(
         raise RuntimeError(f"Invalid pipeline output: {e}")
 
     os.makedirs(output_dir, exist_ok=True)
+    # Keep the historical English directory and place the Chinese variant
+    # beside it so existing consumers remain compatible while reviewers get a
+    # predictable localized artifact directory.
+    output_path = Path(output_dir)
+    chinese_output_dir = output_path.with_name(output_path.name + ".zh-CN")
 
     # Resolve the report-phase binding once and reuse across the
     # ThreadPoolExecutor — adapters are stateless dispatchers, safe
@@ -1070,27 +1075,41 @@ def generate_disclosure_docs(
 
         def _one(args):
             i, finding = args
-            disclosure_text, usage = _generate_disclosure(
-                finding,
-                product_name,
-                report_binding,
-                pipeline_data=pipeline_data,
-            )
             filename = f"DISCLOSURE_{i:02d}_{safe_disclosure_filename(finding['short_name'])}.md"
-            filepath = os.path.join(output_dir, filename)
-            with open_utf8(filepath, "w") as f:
-                f.write(disclosure_text)
-            return finding["short_name"], filepath, usage
+            written = []
+            usages = []
+            for locale, target_dir in (("en", output_path), ("zh-CN", chinese_output_dir)):
+                target_dir.mkdir(parents=True, exist_ok=True)
+                kwargs = {"pipeline_data": pipeline_data}
+                # Keep the legacy English invocation shape for wrappers and
+                # third-party integrations that still accept only the old
+                # arguments; the locale is explicit for the new Chinese call.
+                if locale == "zh-CN":
+                    kwargs["language"] = locale
+                disclosure_text, usage = _generate_disclosure(
+                    finding,
+                    product_name,
+                    report_binding,
+                    **kwargs,
+                )
+                filepath = target_dir / filename
+                with open_utf8(filepath, "w") as f:
+                    f.write(disclosure_text)
+                written.append(str(filepath))
+                usages.append(usage)
+            from report.generator import _merge_usage
+            return finding["short_name"], written, _merge_usage(usages)
 
         executor = ThreadPoolExecutor(max_workers=8)
         futures = {executor.submit(_one, item): item for item in confirmed}
         try:
             for future in as_completed(futures):
-                name, filepath, usage = future.result()
+                name, filepaths, usage = future.result()
                 all_usages.append(usage)
                 count += 1
-                print(f"  [{count}/{len(confirmed)}] {name} -> {filepath}",
+                print(f"  [{count}/{len(confirmed)}] {name} -> {filepaths[0]}",
                       file=sys.stderr)
+                print(f"      中文版本 -> {filepaths[1]}", file=sys.stderr)
         except KeyboardInterrupt:
             print("\n[Report] Interrupted — cancelling pending disclosures...",
                   file=sys.stderr, flush=True)
@@ -1100,7 +1119,9 @@ def generate_disclosure_docs(
 
     merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
 
-    print(f"  Disclosures: {count} files in {output_dir}", file=sys.stderr)
+    print(f"  Disclosures: {count} English + {count} Chinese files", file=sys.stderr)
+    if count:
+        print(f"  Chinese disclosures: {chinese_output_dir}", file=sys.stderr)
     print(f"  Cost: {_format_usage_cost(merged_usage)} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
 
     # Record in global tracker so step_context picks it up

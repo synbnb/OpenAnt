@@ -43,6 +43,106 @@ _REPAIR_PLACEHOLDER_MARKERS = (
 )
 
 
+# Disclosure documents have two independent language concerns: the report
+# locale (English/Chinese) and the code-fence language (C/C++/Python, ...).
+# Keep the locale vocabulary in one place so deterministic sections use the
+# same headings as the localized LLM prompt.  The default English values are
+# intentionally identical to the historical report contract.
+_DISCLOSURE_LABELS = {
+    "en": {
+        "title": "Security Disclosure",
+        "product": "Product",
+        "type": "Type",
+        "affected": "Affected",
+        "tested": "Tested",
+        "summary": "Summary",
+        "steps": "Steps to Reproduce",
+        "impact": "Impact",
+        "fix": "Suggested Fix",
+        "code": "Vulnerable Code",
+        "context": "Evidence Context",
+        "target_location": "Target Source Location",
+        "source_sink": "Source-to-Sink Evidence",
+        "call_chain": "Call Chain Source",
+        "call_graph": "Call Graph Evidence",
+        "function": "Function",
+        "file": "File",
+        "route": "Route key",
+        "entry": "Entry point",
+        "ordered_flow": "Ordered data flow",
+        "dataflow": "Data-flow summary",
+        "attack": "Attack scenario",
+        "route_chain": "Function route chain",
+        "sink_reached": "Sink reached",
+        "attacker_control": "Attacker control at sink",
+        "path_broken": "Path broken at",
+        "native_edges": "Native edges",
+        "semantic_edges": "Semantic edges",
+        "projected_edges": "Projected/recovered edges",
+        "statistics": "Graph statistics",
+        "recovery": "Recovery summary",
+        "coverage": "Coverage note",
+        "no_graph": "No local graph edge connected the selected context nodes.",
+        "artifacts": "Evidence artifacts",
+        "source_missing": "No call-chain function source was preserved in the available artifacts.",
+        "deterministic_note": (
+            "This section is generated deterministically from scan artifacts; "
+            "source and line numbers were not rewritten by the LLM. Missing "
+            "content means the corresponding evidence was not preserved."
+        ),
+    },
+    "zh-CN": {
+        "title": "安全漏洞披露",
+        "product": "产品",
+        "type": "类型",
+        "affected": "影响版本",
+        "tested": "测试环境",
+        "summary": "摘要",
+        "steps": "复现步骤",
+        "impact": "影响",
+        "fix": "建议修复",
+        "code": "漏洞代码",
+        "context": "证据上下文",
+        "target_location": "目标源码位置",
+        "source_sink": "源到汇证据",
+        "call_chain": "调用链源码",
+        "call_graph": "调用图证据",
+        "function": "函数",
+        "file": "文件",
+        "route": "路由键",
+        "entry": "入口",
+        "ordered_flow": "有序数据流",
+        "dataflow": "数据流摘要",
+        "attack": "攻击场景",
+        "route_chain": "函数路由链",
+        "sink_reached": "是否到达汇",
+        "attacker_control": "攻击者在汇点的控制能力",
+        "path_broken": "路径中断位置",
+        "native_edges": "原生调用边",
+        "semantic_edges": "语义调用边",
+        "projected_edges": "投影/恢复调用边",
+        "statistics": "调用图统计",
+        "recovery": "恢复摘要",
+        "coverage": "覆盖范围说明",
+        "no_graph": "选定的上下文节点之间没有保存本地调用图边。",
+        "artifacts": "证据来源产物",
+        "source_missing": "可用产物中没有保存调用链函数源码。",
+        "deterministic_note": (
+            "本节由扫描产物确定性生成，源码和行号未经过大模型改写；缺失内容表示扫描时没有保存对应证据。"
+        ),
+    },
+}
+
+
+def _disclosure_locale(language: str | None) -> str:
+    """Normalize a disclosure locale while keeping legacy calls English."""
+    return "zh-CN" if language == "zh-CN" else "en"
+
+
+def _disclosure_labels(language: str | None) -> dict[str, str]:
+    return _DISCLOSURE_LABELS[_disclosure_locale(language)]
+
+
 def _extract_usage(
     input_tokens: int,
     output_tokens: int,
@@ -354,39 +454,47 @@ def generate_summary_report(
     )
 
 
-def _splice_code_section(llm_output: str, code_section: str) -> str:
+def _splice_code_section(
+    llm_output: str,
+    code_section: str,
+    language: str = "en",
+) -> str:
     """Insert the verbatim code block into the LLM-generated disclosure.
 
     The LLM generates everything except the Vulnerable Code section. This
     function inserts the server-built code block at the right position.
 
     As a safety net, if the LLM ignored the instruction and still generated
-    its own ``## Vulnerable Code`` block, that block is stripped first.
+    its own vulnerable-code block (in either supported locale), that block is
+    stripped first.
     """
     if not code_section:
         return llm_output
 
-    # Safety net: strip any LLM-generated Vulnerable Code section.
-    # Matches from "## Vulnerable Code" up to the next ## heading or end of string.
+    labels = _disclosure_labels(language)
+    # Safety net: strip any LLM-generated vulnerable-code section.  Accept the
+    # English alias as well so a model that disregards the Chinese template
+    # cannot create a duplicate deterministic source section.
     output = re.sub(
-        r'## Vulnerable Code.*?(?=\n## |\Z)',
+        r'(?ims)^##\s+(?:Vulnerable Code|漏洞代码)\s*$.*?(?=^##\s|\Z)',
         '',
         llm_output,
-        flags=re.DOTALL,
     )
 
-    # Insert the real code section before "## Steps to Reproduce".
-    insertion_point = '## Steps to Reproduce'
-    if insertion_point in output:
+    # Insert the real code section before the localized reproduction steps.
+    insertion_points = [f"## {labels['steps']}", "## Steps to Reproduce"]
+    insertion_point = next((item for item in insertion_points if item in output), None)
+    if insertion_point:
         output = output.replace(
             insertion_point,
             f"{code_section}\n\n{insertion_point}",
             1,
         )
     else:
-        # Fallback: insert before "## Impact" if Steps is missing.
-        fallback = '## Impact'
-        if fallback in output:
+        # Fallback: insert before the localized impact section.
+        fallback_points = [f"## {labels['impact']}", "## Impact"]
+        fallback = next((item for item in fallback_points if item in output), None)
+        if fallback:
             output = output.replace(fallback, f"{code_section}\n\n{fallback}", 1)
         else:
             output += f"\n\n{code_section}"
@@ -402,6 +510,104 @@ def _finding_location(vulnerability_data: Mapping) -> tuple[str, str]:
     file_path = str(location.get("file") or "unknown")
     function = str(location.get("function") or "unknown")
     return file_path, function
+
+
+def _localize_disclosure_markdown(text: str, language: str = "en") -> str:
+    """Translate deterministic disclosure labels without touching evidence/code.
+
+    LLM output is still free-form, so the report layer normalizes known English
+    headings/field labels when producing the Chinese variant.  Replacements
+    are anchored to Markdown headings or list-label prefixes; source snippets,
+    paths, function names, and model evidence remain byte-for-byte unchanged.
+    """
+    if _disclosure_locale(language) != "zh-CN":
+        return text
+    output = text or ""
+    heading_map = {
+        "Security Disclosure": "安全漏洞披露",
+        "Vulnerable Code": "漏洞代码",
+        "Evidence Context": "证据上下文",
+        "Target Source Location": "目标源码位置",
+        "Source-to-Sink Evidence": "源到汇证据",
+        "Call Chain Source": "调用链源码",
+        "Call Graph Evidence": "调用图证据",
+        "Summary": "摘要",
+        "Steps to Reproduce": "复现步骤",
+        "Impact": "影响",
+        "Suggested Fix": "建议修复",
+    }
+    for source, target in heading_map.items():
+        output = re.sub(
+            rf"(?im)^(##?|###)\s+{re.escape(source)}\s*$",
+            lambda match, target=target: f"{match.group(1)} {target}",
+            output,
+        )
+    field_map = {
+        "Product": "产品",
+        "Type": "类型",
+        "Affected": "影响版本",
+        "Tested": "测试环境",
+        "Function": "函数",
+        "File": "文件",
+        "Route key": "路由键",
+        "Entry point": "入口",
+        "Ordered data flow": "有序数据流",
+        "Data-flow summary": "数据流摘要",
+        "Attack scenario": "攻击场景",
+        "Function route chain": "函数路由链",
+        "Sink reached": "是否到达汇",
+        "Attacker control at sink": "攻击者在汇点的控制能力",
+        "Path broken at": "路径中断位置",
+        "Native edges": "原生调用边",
+        "Semantic edges": "语义调用边",
+        "Projected/recovered edges": "投影/恢复调用边",
+        "Graph statistics": "调用图统计",
+        "Recovery summary": "恢复摘要",
+        "Coverage note": "覆盖范围说明",
+    }
+    for source, target in field_map.items():
+        # Match only bold Markdown labels (including a trailing colon) so a
+        # source-code comment or an evidence value containing the same words
+        # is never translated.
+        output = re.sub(
+            rf"(\*\*){re.escape(source)}:\s*(\*\*)",
+            rf"\1{target}：\2",
+            output,
+        )
+    output = output.replace(
+        "No call-chain function source was preserved in the available artifacts.",
+        "可用产物中没有保存调用链函数源码。",
+    )
+    output = output.replace(
+        "No local graph edge connected the selected context nodes.",
+        "选定的上下文节点之间没有保存本地调用图边。",
+    )
+    output = output.replace("Evidence artifacts:", "证据来源产物：")
+    output = re.sub(
+        r"(?im)^#\s+Security Disclosure\s*:\s*",
+        "# 安全漏洞披露：",
+        output,
+        count=1,
+    )
+    # Normalize metadata labels emitted with either ASCII or full-width colon.
+    for source, target in {
+        "Product": "产品",
+        "Type": "类型",
+        "Affected": "影响版本",
+        "Tested": "测试环境",
+    }.items():
+        output = re.sub(
+            rf"(?im)^(\s*\*\*){re.escape(source)}\s*[:：](\*\*)",
+            rf"\1{target}：\2",
+            output,
+        )
+    for label in ("产品", "类型", "影响版本", "测试环境"):
+        output = re.sub(
+            rf"(?im)^(\s*\*\*){re.escape(label)}\s*[:：](\*\*)",
+            rf"\1{label}：\2",
+            output,
+        )
+    return output
 
 
 def _disclosure_title(vulnerability_data: Mapping) -> str:
@@ -695,13 +901,22 @@ def _prompt_payload(vulnerability_data: Mapping) -> dict:
     return payload
 
 
-def _render_disclosure_context(vulnerability_data: Mapping, language: str = "text") -> str:
+def _render_disclosure_context(
+    vulnerability_data: Mapping,
+    language: str = "text",
+    locale: str = "en",
+) -> str:
     """Render evidence-rich context deterministically after LLM generation.
 
     The model receives locations, data-flow claims and graph metadata, but not
     verbatim source.  This renderer adds the bounded source snippets and graph
     evidence to the final document without allowing the model to rewrite them.
     """
+    # ``locale`` is accepted separately from the code-fence ``language`` for
+    # callers producing Chinese disclosures.  Label translation is applied by
+    # ``_localize_disclosure_markdown`` after this evidence renderer finishes;
+    # keeping this function's default output unchanged preserves old callers.
+    del locale
     context = vulnerability_data.get("report_context")
     if not isinstance(context, Mapping):
         return ""
@@ -849,6 +1064,7 @@ def _render_repair_section(
     vulnerability_data: Mapping,
     repair_info: Mapping,
     language: str,
+    locale: str = "en",
 ) -> str:
     """Render a deterministic Suggested Fix section from repair evidence."""
     status = str(repair_info.get("status") or "unavailable")
@@ -857,7 +1073,7 @@ def _render_repair_section(
     rationale = str(repair_info.get("rationale") or "").strip()
     assumptions = str(repair_info.get("assumptions") or "").strip()
     file_path, function = _finding_location(vulnerability_data)
-    lines = ["## Suggested Fix", ""]
+    lines = [f"## {_disclosure_labels(locale)['fix']}", ""]
     if code:
         lines.append("以下是基于当前源码和证据生成的最小修复片段，提交前需通过项目编译和回归测试：")
         lines.extend(["", f"```{language or 'text'}", code, "```"])
@@ -1105,9 +1321,15 @@ def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
     return pipeline_data
 
 
-def _fallback_code_section(vulnerability_data: Mapping) -> str:
+def _fallback_code_section(vulnerability_data: Mapping, language: str = "en") -> str:
     """Keep the disclosure schema complete when source evidence is absent."""
     file_path, function = _finding_location(vulnerability_data)
+    if _disclosure_locale(language) == "zh-CN":
+        return (
+            "## 漏洞代码\n\n"
+            f"`{file_path}` / `{function}`\n\n"
+            "> 当前扫描产物未保存源码，请维护者在仓库中复核该函数。"
+        )
     return (
         "## Vulnerable Code\n\n"
         f"`{file_path}` / `{function}`\n\n"
@@ -1116,8 +1338,10 @@ def _fallback_code_section(vulnerability_data: Mapping) -> str:
     )
 
 
-def _heading_present(text: str, heading: str) -> bool:
-    return bool(re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text or ""))
+def _heading_present(text: str, heading: str, aliases: tuple[str, ...] = ()) -> bool:
+    names = (heading, *aliases)
+    pattern = "|".join(re.escape(name) for name in names)
+    return bool(re.search(rf"(?im)^##\s+(?:{pattern})\s*$", text or ""))
 
 
 def _ensure_disclosure_sections(
@@ -1127,6 +1351,7 @@ def _ensure_disclosure_sections(
     code_section: str,
     context_section: str = "",
     fix_section: str = "",
+    language: str = "en",
 ) -> str:
     """Fill mandatory report fields the LLM omitted or left as placeholders.
 
@@ -1135,20 +1360,25 @@ def _ensure_disclosure_sections(
     from yielding a file that is syntactically present yet unusable to a
     reviewer.
     """
-    output = (text or "").strip()
+    locale = _disclosure_locale(language)
+    labels = _disclosure_labels(locale)
+    output = _localize_disclosure_markdown((text or "").strip(), locale)
     title = _disclosure_title(vulnerability_data)
     if not output:
-        output = f"# Security Disclosure: {title}"
+        output = f"# {labels['title']}: {title}"
 
     # Ensure the three metadata lines are visible even if the model omitted
     # the requested header.  Insert them after the first title when possible.
+    colon = "：" if locale == "zh-CN" else ":"
     metadata_lines = {
-        "**Product:**": f"**Product:** {metadata.get('product_name') or 'unknown'}",
-        "**Type:**": (
-            f"**Type:** CWE-{vulnerability_data.get('cwe_id') or 0} "
+        f"**{labels['product']}{colon}**":
+            f"**{labels['product']}{colon}** {metadata.get('product_name') or 'unknown'}",
+        f"**{labels['type']}{colon}**": (
+            f"**{labels['type']}{colon}** CWE-{vulnerability_data.get('cwe_id') or 0} "
             f"({vulnerability_data.get('cwe_name') or 'Unknown'})"
         ),
-        "**Affected:**": f"**Affected:** {metadata.get('affected_versions')}",
+        f"**{labels['affected']}{colon}**":
+            f"**{labels['affected']}{colon}** {metadata.get('affected_versions')}",
     }
     missing_metadata = []
     for marker, line in metadata_lines.items():
@@ -1167,52 +1397,80 @@ def _ensure_disclosure_sections(
         else:
             output = "\n".join(missing_metadata) + "\n\n" + output
 
-    fallbacks = {
-        "Summary": str(vulnerability_data.get("description") or (
-            "The analysis identified a security-relevant condition in the "
-            "reported function; confirm the exact behavior during review."
-        )),
-        "Steps to Reproduce": str(vulnerability_data.get("steps_to_reproduce") or (
-            "[REQUIRES DYNAMIC TESTING] Reproduce the call with a controlled "
-            "local harness and record the input, caller identity, and result."
-        )),
-        "Impact": str(vulnerability_data.get("impact") or (
-            "Impact is not available from the supplied analysis fields; confirm "
-            "the affected operation manually."
-        )),
-        "Suggested Fix": str(vulnerability_data.get("suggested_fix") or (
-            "[MANUAL REVIEW REQUIRED] Add the missing validation or authorization "
-            "at the identified trust boundary after confirming intended behavior."
-        )),
-    }
+    if locale == "zh-CN":
+        fallbacks = {
+            labels["summary"]: str(vulnerability_data.get("description") or (
+                "分析在报告函数中发现与安全相关的缺陷；请在复核中确认具体行为。"
+            )),
+            labels["steps"]: str(vulnerability_data.get("steps_to_reproduce") or (
+                "[需要动态验证] 使用受控的本地测试程序复现调用，并记录输入、调用者身份和结果。"
+            )),
+            labels["impact"]: str(vulnerability_data.get("impact") or (
+                "当前分析字段未提供影响信息，请人工确认受影响的操作。"
+            )),
+            labels["fix"]: str(vulnerability_data.get("suggested_fix") or (
+                "[需要人工复核] 在确认预期行为后，于识别出的信任边界增加缺失的校验或授权。"
+            )),
+        }
+    else:
+        fallbacks = {
+            labels["summary"]: str(vulnerability_data.get("description") or (
+                "The analysis identified a security-relevant condition in the "
+                "reported function; confirm the exact behavior during review."
+            )),
+            labels["steps"]: str(vulnerability_data.get("steps_to_reproduce") or (
+                "[REQUIRES DYNAMIC TESTING] Reproduce the call with a controlled "
+                "local harness and record the input, caller identity, and result."
+            )),
+            labels["impact"]: str(vulnerability_data.get("impact") or (
+                "Impact is not available from the supplied analysis fields; confirm "
+                "the affected operation manually."
+            )),
+            labels["fix"]: str(vulnerability_data.get("suggested_fix") or (
+                "[MANUAL REVIEW REQUIRED] Add the missing validation or authorization "
+                "at the identified trust boundary after confirming intended behavior."
+            )),
+        }
 
     tested_line = (
-        f"**Tested:** {metadata.get('platform_version') or 'application platform'}, "
+        f"**{labels['tested']}{colon}** "
+        f"{metadata.get('platform_version') or 'application platform'}, "
         f"{metadata.get('analysis_date') or 'date not recorded'}."
     )
-    tested_match = re.search(r"(?im)^\*\*Tested:\*\*.*$", output)
+    tested_match = re.search(
+        rf"(?im)^\*\*{re.escape(labels['tested'])}{re.escape(colon)}\*\*.*$",
+        output,
+    )
     if tested_match:
         if re.search(r"\[(?:NOT PROVIDED|REQUIRES MANUAL INPUT)\]", tested_match.group(0), re.I):
             output = output[:tested_match.start()] + tested_line + output[tested_match.end():]
     else:
         # The Tested line is part of the disclosure contract even though it is
         # not a level-2 section.  Add it next to the affected metadata.
-        output = output.replace(metadata_lines["**Affected:**"],
-                                metadata_lines["**Affected:**"] + "\n" + tested_line,
+        affected_line = metadata_lines[f"**{labels['affected']}{colon}**"]
+        output = output.replace(affected_line,
+                                affected_line + "\n" + tested_line,
                                 1)
 
     # Keep the source section ahead of the reproduction steps.  It is already
     # deterministic and may contain a verbatim parser snippet.
-    if not _heading_present(output, "Vulnerable Code"):
+    if not _heading_present(output, labels["code"], aliases=("Vulnerable Code", "漏洞代码")):
         insertion = "\n\n" + (code_section or _fallback_code_section(vulnerability_data))
-        marker = "## Steps to Reproduce"
+        marker = f"## {labels['steps']}"
         if marker in output:
             output = output.replace(marker, insertion + "\n\n" + marker, 1)
         else:
             output += insertion
 
     for heading, fallback in fallbacks.items():
-        heading_match = re.search(rf"(?ims)^##\s+{re.escape(heading)}\s*$.*?(?=^##\s|^---\s*$|\Z)", output)
+        heading_aliases = {
+            labels["summary"]: ("Summary", "摘要"),
+            labels["steps"]: ("Steps to Reproduce", "复现步骤"),
+            labels["impact"]: ("Impact", "影响"),
+            labels["fix"]: ("Suggested Fix", "建议修复"),
+        }.get(heading, ())
+        pattern = "|".join(re.escape(item) for item in (heading, *heading_aliases))
+        heading_match = re.search(rf"(?ims)^##\s+(?:{pattern})\s*$.*?(?=^##\s|^---\s*$|\Z)", output)
         if not heading_match:
             output += f"\n\n## {heading}\n\n{fallback}"
             continue
@@ -1231,7 +1489,7 @@ def _ensure_disclosure_sections(
     # cannot duplicate or rewrite line numbers and graph edges.
     if context_section:
         output = re.sub(
-            r"(?ims)^##\s+Evidence Context\s*$.*?(?=^##\s|\Z)",
+            r"(?ims)^##\s+(?:Evidence Context|证据上下文)\s*$.*?(?=^##\s|\Z)",
             "",
             output,
         ).rstrip()
@@ -1239,7 +1497,7 @@ def _ensure_disclosure_sections(
 
     if fix_section:
         output = re.sub(
-            r"(?ims)^##\s+Suggested Fix\s*$.*?(?=^##\s|^---\s*$|\Z)",
+            rf"(?ims)^##\s+(?:Suggested Fix|建议修复)\s*$.*?(?=^##\s|^---\s*$|\Z)",
             "",
             output,
         ).rstrip()
@@ -1261,6 +1519,7 @@ def generate_disclosure(
     product_name: str,
     binding: PhaseBinding,
     pipeline_data: Mapping | None = None,
+    language: str = "en",
 ) -> tuple[str, dict]:
     """Generate a disclosure document for a single vulnerability.
 
@@ -1269,12 +1528,15 @@ def generate_disclosure(
         product_name: Repository / product name.
         binding: Phase binding for the report phase.
         pipeline_data: Optional pipeline output carrying platform provenance.
+        language: Disclosure locale (``en`` or ``zh-CN``). English is the
+            backward-compatible default.
 
     Returns:
         (disclosure_text, usage_dict)
     """
     from utilities.llm import Message, TextBlock
 
+    locale = _disclosure_locale(language)
     system_prompt = load_prompt("system")
 
     # The vulnerable-code markdown block is spliced into the LLM output
@@ -1286,7 +1548,9 @@ def generate_disclosure(
     if not isinstance(code_section, str):
         code_section = str(code_section)
     if not code_section:
-        code_section = _fallback_code_section(vulnerability_data)
+        code_section = _fallback_code_section(vulnerability_data, locale)
+    else:
+        code_section = _localize_disclosure_markdown(code_section, locale)
     repair_info, repair_usage = _generate_repair_suggestion(vulnerability_data, binding)
     effective_data = dict(vulnerability_data)
     if repair_info.get("code"):
@@ -1310,14 +1574,19 @@ def generate_disclosure(
         "analysis_date": _report_analysis_date(report_data),
         "verification_method": _report_verification_method(vulnerability_data),
         "language": _report_language(file_path, report_data),
+        "preconditions": str(
+            vulnerability_data.get("preconditions")
+            or "调用者身份、设备状态和其他前置条件请以扫描证据为准。"
+        ),
         "fixed_code_snippet": repair_info.get("code") or (
             "// Manual review required: add the appropriate validation or "
             "authorization check."
         ),
     }
-    user_prompt = load_prompt("disclosure")
+    prompt_name = "disclosure.zh-CN" if locale == "zh-CN" else "disclosure"
+    user_prompt = load_prompt(prompt_name)
     user_prompt = user_prompt.replace(
-        "{vulnerability_data}", json.dumps(payload, indent=2), 1
+        "{vulnerability_data}", json.dumps(payload, ensure_ascii=False, indent=2), 1
     )
     user_prompt = user_prompt.replace(
         "{platform_context}",
@@ -1340,11 +1609,13 @@ def generate_disclosure(
     llm_output = "\n".join(
         b.text for b in result.content if isinstance(b, TextBlock)
     )
-    final_output = _splice_code_section(llm_output, code_section)
+    final_output = _splice_code_section(llm_output, code_section, locale)
     context_section = _render_disclosure_context(
         vulnerability_data,
         language=replacements["language"],
+        locale=locale,
     )
+    context_section = _localize_disclosure_markdown(context_section, locale)
     final_output = _ensure_disclosure_sections(
         final_output,
         vulnerability_data,
@@ -1356,7 +1627,13 @@ def generate_disclosure(
         },
         code_section,
         context_section=context_section,
-        fix_section=_render_repair_section(effective_data, repair_info, replacements["language"]),
+        fix_section=_render_repair_section(
+            effective_data,
+            repair_info,
+            replacements["language"],
+            locale=locale,
+        ),
+        language=locale,
     )
 
     disclosure_usage = _extract_usage(
@@ -1412,6 +1689,7 @@ def generate_all(
     # Generate disclosure for each confirmed vulnerability
     disclosures_dir = output_path / "disclosures"
     disclosures_dir.mkdir(exist_ok=True)
+    disclosures_zh_dir = output_path / "disclosures.zh-CN"
 
     product_name = pipeline_data["repository"]["name"]
 
@@ -1441,6 +1719,19 @@ def generate_all(
         with open_utf8(disclosures_dir / filename, "w") as f:
             f.write(disclosure)
         print(f"  -> {disclosures_dir / filename}")
+
+        print(f"Generating Chinese disclosure for {finding['short_name']}...")
+        disclosure_zh, _usage = generate_disclosure(
+            finding,
+            product_name,
+            report_binding,
+            pipeline_data=pipeline_data,
+            language="zh-CN",
+        )
+        disclosures_zh_dir.mkdir(exist_ok=True)
+        with open_utf8(disclosures_zh_dir / filename, "w") as f:
+            f.write(disclosure_zh)
+        print(f"  -> {disclosures_zh_dir / filename}")
 
 
 if __name__ == "__main__":

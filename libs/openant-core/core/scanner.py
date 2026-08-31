@@ -2019,6 +2019,7 @@ def scan_repository(
 
             summary_path = os.path.join(report_dir, "SUMMARY_REPORT.md")
             disclosures_dir = os.path.join(report_dir, "disclosures")
+            disclosures_zh_dir = os.path.join(report_dir, "disclosures.zh-CN")
 
             outputs = {}
 
@@ -2042,9 +2043,11 @@ def scan_repository(
                 try:
                     generate_disclosure_docs(pipeline_output_path, disclosures_dir, llm_config_name)
                     outputs["disclosures_dir"] = disclosures_dir
+                    outputs["disclosures_zh_cn_dir"] = disclosures_zh_dir
                     print(f"  Disclosures: {disclosures_dir}", file=sys.stderr)
                     _print_chinese_log(
-                        f"报告结果：已为候选问题生成披露目录 {disclosures_dir}。"
+                        f"报告结果：已生成英文披露目录 {disclosures_dir}，"
+                        f"以及中文披露目录 {disclosures_zh_dir}。"
                     )
                 except Exception as e:
                     print(f"  WARNING: Disclosure docs failed: {e}", file=sys.stderr)
