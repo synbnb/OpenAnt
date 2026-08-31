@@ -333,6 +333,68 @@ func TestSourceLocatorAdvanceRejectsUnsafeLLMConfig(t *testing.T) {
 	}
 }
 
+func TestSourceLocatorSelectVersionRequiresCSRFAndPassesSafeRevision(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "source-locator")
+	sessionID := "loc_version123456"
+	sessionDir := filepath.Join(root, sessionID)
+	if err := os.MkdirAll(sessionDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := `{"schema_version":"openant.source-locator.session.v1","session_id":"loc_version123456","raw_target":"paramservice","state":"VERSION_SELECTION_REQUIRED","version_selection":{"status":"ok","candidate_revisions":["OpenHarmony-6.1-LTS"]},"artifacts":{"repository_version_candidates.json":"候选版本"},"evidence_ids":[],"executed_queries":[],"executed_actions":[],"excluded_paths":[],"excluded_repos":[],"feedback_round":0,"budget":{},"metrics":{},"created_at":"2026-08-29T00:00:00Z","updated_at":"2026-08-29T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), []byte(checkpoint), 0600); err != nil {
+		t.Fatal(err)
+	}
+	envelope := `{"status":"success","data":{"session":{"session_id":"loc_version123456","state":"CLONE"}},"errors":[]}`
+	pythonStub, argsPath := sourceLocatorFakePythonRecordingArgs(t, envelope)
+	s := &Server{outDir: filepath.Dir(root), pythonPath: pythonStub, csrfToken: "token"}
+
+	req := sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_version123456/select-version", `{"revision":"OpenHarmony-6.1-LTS"}`)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", sessionID)
+	rec := httptest.NewRecorder()
+	s.handleSourceLocatorSelectVersion(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status=%d, want 403", rec.Code)
+	}
+
+	req = sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_version123456/select-version", `{"revision":"OpenHarmony-6.1-LTS"}`)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.SetPathValue("id", sessionID)
+	rec = httptest.NewRecorder()
+	s.handleSourceLocatorSelectVersion(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"state":"CLONE"`) {
+		t.Fatalf("select-version status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Fields(string(args))
+	for _, want := range []string{"source-locator", "select-version", sessionID, "--revision", "OpenHarmony-6.1-LTS", "--root", root} {
+		found := false
+		for _, got := range argv {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("argv %q missing %q", argv, want)
+		}
+	}
+
+	req = sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_version123456/select-version", `{"revision":"../../etc/passwd"}`)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.SetPathValue("id", sessionID)
+	rec = httptest.NewRecorder()
+	s.handleSourceLocatorSelectVersion(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "revision") {
+		t.Fatalf("unsafe revision status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSourceLocatorHandoffUsesReadOnlyPythonCommand(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "source-locator")
 	sessionID := "loc_api123456"

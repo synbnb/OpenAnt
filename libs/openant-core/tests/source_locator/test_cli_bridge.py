@@ -190,3 +190,95 @@ def test_handoff_returns_only_verified_done_artifact(capsys, tmp_path: Path):
     assert code == 0
     assert payload["data"]["primary_analysis_repo"].endswith("startup_init")
     assert payload["data"]["handoff"]["status"] == "ready_for_analysis"
+
+
+def test_select_version_validates_artifact_and_resumes_clone(capsys, tmp_path: Path):
+    root = tmp_path / "sessions"
+    store = LocatorSessionStore(root)
+    session_id = "loc_version123456"
+    machine = store.create(
+        "/dev/unix/socket/paramservice",
+        target_revision="OpenHarmony-6.1-LTS",
+        session_id=session_id,
+    )
+    for state, updates in (
+        ("NORMALIZE_TARGET", {}),
+        ("PROBE_OPENGROK", {}),
+        ("SEARCH_INITIAL", {}),
+        ("TRACE_EVIDENCE", {}),
+        ("ATTRIBUTION_SERVER", {}),
+        ("LOCATE_CLIENT_COMM", {}),
+        ("RESOLVE_REPOSITORIES", {
+            "repository_mappings": {
+                "mappings": [{
+                    "project_name": "startup_init",
+                    "status": "resolved",
+                    "revision": "OpenHarmony-6.1-LTS",
+                }]
+            }
+        }),
+        ("VERIFY_EVIDENCE", {}),
+        ("AWAIT_USER_CONFIRMATION", {}),
+        ("CLONE", {}),
+    ):
+        machine.transition(state, summary_zh=state, updates=updates)
+    machine.transition(
+        "VERSION_SELECTION_REQUIRED",
+        summary_zh="等待版本",
+        updates={
+            "version_selection": {
+                "artifact": "repository_version_candidates.json",
+                "status": "ok",
+                "project_name": "startup_init",
+                "candidate_count": 2,
+                "candidate_revisions": ["OpenHarmony-6.1-LTS", "OpenHarmony-6.0-LTS"],
+            },
+            "artifacts": {"repository_version_candidates.json": "远程版本候选"},
+        },
+    )
+    artifact = {
+        "schema_version": "openant.source-locator.repository-versions.v1",
+        "status": "ok",
+        "project_name": "startup_init",
+        "repo_url": "https://gitcode.com/openharmony/startup_init",
+        "requested_revision": "OpenHarmony-6.1-LTS",
+        "candidate_count": 2,
+        "candidates": [
+            {"revision": "OpenHarmony-6.1-LTS", "ref": "refs/heads/OpenHarmony-6.1-LTS", "kind": "branch", "commit": "a" * 40, "recommended": True},
+            {"revision": "OpenHarmony-6.0-LTS", "ref": "refs/heads/OpenHarmony-6.0-LTS", "kind": "branch", "commit": "b" * 40, "recommended": False},
+        ],
+    }
+    (root / session_id / "repository_version_candidates.json").write_text(json.dumps(artifact), encoding="utf-8")
+
+    code, payload = _invoke(
+        capsys,
+        [
+            "source-locator",
+            "select-version",
+            session_id,
+            "--root",
+            str(root),
+            "--revision",
+            "OpenHarmony-6.0-LTS",
+            "--confirmation-id",
+            "choice-1",
+        ],
+    )
+    assert code == 0
+    assert payload["data"]["session"]["state"] == "CLONE"
+    assert payload["data"]["session"]["repository_mappings"]["mappings"][0]["revision"] == "OpenHarmony-6.0-LTS"
+
+    code, rejected = _invoke(
+        capsys,
+        [
+            "source-locator",
+            "select-version",
+            session_id,
+            "--root",
+            str(root),
+            "--revision",
+            "../../etc/passwd",
+        ],
+    )
+    assert code == 2
+    assert rejected["status"] == "error"

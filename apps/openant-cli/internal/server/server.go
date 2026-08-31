@@ -440,6 +440,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /source-locator/sessions/{id}/message", s.handleSourceLocatorMessage)
 	mux.HandleFunc("POST /source-locator/sessions/{id}/advance", s.handleSourceLocatorAdvance)
 	mux.HandleFunc("POST /source-locator/sessions/{id}/approve", s.handleSourceLocatorApprove)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/select-version", s.handleSourceLocatorSelectVersion)
 	mux.HandleFunc("POST /source-locator/sessions/{id}/reject", s.handleSourceLocatorReject)
 	mux.HandleFunc("POST /source-locator/sessions/{id}/cancel", s.handleSourceLocatorCancel)
 	mux.HandleFunc("DELETE /source-locator/sessions/{id}", s.handleSourceLocatorDelete)

@@ -631,6 +631,115 @@ class SourceLocatorStateMachine:
             details["confirmation_id"] = _text(confirmation_id, name="confirmation_id", limit=256)
         return self.transition("CLONE", summary_zh="用户已确认候选仓库，允许进入拉取阶段", event_type="user.confirmed", details=details)
 
+    def select_version(
+        self,
+        revision: str,
+        *,
+        candidate_revisions: Iterable[str] | None = None,
+        confirmation_id: str | None = None,
+    ) -> LocatorSession:
+        """Select one previously discovered remote revision and retry Git.
+
+        The selected value must be present in the bounded candidate summary
+        persisted by the worker.  Callers such as the Web bridge may provide
+        the independently read candidate artifact as ``candidate_revisions``;
+        when supplied it must agree with the session summary.  This prevents a
+        free-form revision from becoming a Git fetch argument and makes a
+        stale or tampered artifact fail closed.
+        """
+
+        if self.session.state != "VERSION_SELECTION_REQUIRED":
+            raise LocatorStateError("只有等待版本选择时才能选择远程 revision")
+        selected = _text(revision, name="revision", limit=128)
+        if (
+            not _REVISION_RE.fullmatch(selected)
+            or selected == "unknown"
+            or ".." in selected
+            or "//" in selected
+            or selected.endswith(".")
+            or selected.endswith(".lock")
+        ):
+            raise LocatorStateError("revision 不是安全的远程版本标识")
+
+        summary = self.session.version_selection
+        if not isinstance(summary, Mapping):
+            raise LocatorStateError("session 缺少版本候选摘要")
+        summary_revisions = _safe_tuple(
+            summary.get("candidate_revisions", ()),
+            name="candidate_revisions",
+            limit=64,
+            pattern=_REVISION_RE,
+        )
+        if candidate_revisions is not None:
+            artifact_revisions = _safe_tuple(
+                candidate_revisions,
+                name="artifact_candidate_revisions",
+                limit=64,
+                pattern=_REVISION_RE,
+            )
+            if set(artifact_revisions) != set(summary_revisions):
+                raise LocatorStateError("版本候选产物与 session 摘要不一致，请刷新后重试")
+            allowed = artifact_revisions
+        else:
+            allowed = summary_revisions
+        if selected not in allowed:
+            raise LocatorStateError("revision 不在本次远程候选列表中")
+
+        project_name = summary.get("project_name")
+        project_name = _text(project_name, name="version_selection.project_name", limit=128)
+        mapping_data = self.session.repository_mappings
+        if not isinstance(mapping_data, Mapping):
+            raise LocatorStateError("session 缺少 repository_mappings")
+        raw_mappings = mapping_data.get("mappings")
+        if not isinstance(raw_mappings, list):
+            raise LocatorStateError("repository_mappings.mappings 不是列表")
+        updated_mappings: list[Any] = []
+        found = False
+        for item in raw_mappings:
+            if not isinstance(item, Mapping):
+                updated_mappings.append(item)
+                continue
+            copied = dict(item)
+            if (
+                not found
+                and copied.get("project_name") == project_name
+                and copied.get("status") == "resolved"
+            ):
+                copied["revision"] = selected
+                found = True
+            updated_mappings.append(copied)
+        if not found:
+            raise LocatorStateError("版本候选对应的 resolved mapping 不存在")
+
+        selection = dict(summary)
+        selection["selected_revision"] = selected
+        selection["selection_status"] = "selected"
+        if confirmation_id:
+            selection["selection_confirmation_id"] = _text(
+                confirmation_id,
+                name="confirmation_id",
+                limit=256,
+            )
+        details = {
+            "decision": "selected",
+            "project_name": project_name,
+            "revision": selected,
+            "candidate_count": len(allowed),
+        }
+        if confirmation_id:
+            details["confirmation_id"] = selection["selection_confirmation_id"]
+        return self.transition(
+            "CLONE",
+            summary_zh="用户已选择远程版本，准备重新拉取；已有目录不会被覆盖",
+            event_type="user.version_selected",
+            updates={
+                "repository_mappings": {**dict(mapping_data), "mappings": updated_mappings},
+                "version_selection": selection,
+                "last_error": None,
+            },
+            details=details,
+        )
+
     def reject(
         self,
         reason: str,

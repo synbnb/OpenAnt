@@ -294,6 +294,57 @@ def test_version_selection_required_is_resumable_and_persisted(tmp_path):
     assert restored.session.state == "CLONE"
 
 
+def test_select_version_requires_candidate_and_updates_resolved_mapping(tmp_path):
+    machine = _machine(tmp_path)
+    for state, updates in (
+        ("NORMALIZE_TARGET", {}),
+        ("PROBE_OPENGROK", {}),
+        ("SEARCH_INITIAL", {}),
+        ("TRACE_EVIDENCE", {}),
+        ("ATTRIBUTION_SERVER", {}),
+        ("LOCATE_CLIENT_COMM", {}),
+        ("RESOLVE_REPOSITORIES", {
+            "repository_mappings": {
+                "mappings": [{
+                    "project_name": "startup_init",
+                    "status": "resolved",
+                    "revision": "OpenHarmony-6.1-LTS",
+                }]
+            }
+        }),
+        ("VERIFY_EVIDENCE", {}),
+        ("AWAIT_USER_CONFIRMATION", {}),
+        ("CLONE", {}),
+    ):
+        machine.transition(state, summary_zh=state, updates=updates)
+    machine.transition(
+        "VERSION_SELECTION_REQUIRED",
+        summary_zh="等待版本",
+        updates={
+            "version_selection": {
+                "artifact": "repository_version_candidates.json",
+                "status": "ok",
+                "project_name": "startup_init",
+                "candidate_revisions": ["OpenHarmony-6.1-LTS", "OpenHarmony-6.0-LTS"],
+            }
+        },
+    )
+
+    with pytest.raises(LocatorStateError):
+        machine.select_version("feature/not-listed")
+
+    selected = machine.select_version(
+        "OpenHarmony-6.0-LTS",
+        candidate_revisions=("OpenHarmony-6.1-LTS", "OpenHarmony-6.0-LTS"),
+        confirmation_id="version-choice-1",
+    )
+    assert selected.state == "CLONE"
+    assert selected.repository_mappings["mappings"][0]["revision"] == "OpenHarmony-6.0-LTS"
+    assert selected.version_selection["selected_revision"] == "OpenHarmony-6.0-LTS"
+    assert selected.version_selection["selection_status"] == "selected"
+    assert machine.store.events(selected.session_id).load()[-1].type == "user.version_selected"
+
+
 def test_event_log_rejects_gaps_and_unsafe_artifacts(tmp_path):
     machine = _machine(tmp_path)
     log = machine.store.events(machine.session.session_id)

@@ -34,6 +34,7 @@ const (
 
 var sourceLocatorSessionIDRe = regexp.MustCompile(`^loc_[A-Za-z0-9_-]{8,64}$`)
 var sourceLocatorLLMConfigRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var sourceLocatorRevisionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/@+~-]{0,127}$`)
 
 var sourceLocatorTerminalStates = map[string]bool{
 	"DONE": true, "PARTIAL": true, "NEEDS_REVIEW": true,
@@ -220,6 +221,20 @@ func sourceLocatorLLMConfig(fields sourceLocatorRequestFields) (string, error) {
 	}
 	if value != "" && !sourceLocatorLLMConfigRe.MatchString(value) {
 		return "", errors.New("llm_config 只能包含字母、数字、点、下划线和连字符")
+	}
+	return value, nil
+}
+
+func sourceLocatorRevision(fields sourceLocatorRequestFields) (string, error) {
+	value, err := sourceLocatorString(fields, "revision", 128)
+	if err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", errors.New("revision 不能为空")
+	}
+	if !sourceLocatorRevisionRe.MatchString(value) || value == "unknown" || strings.Contains(value, "..") || strings.Contains(value, "//") || strings.HasSuffix(value, ".") || strings.HasSuffix(value, ".lock") {
+		return "", errors.New("revision 不是安全的远程版本标识")
 	}
 	return value, nil
 }
@@ -614,6 +629,35 @@ func (s *Server) handleSourceLocatorApprove(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	args := []string{"confirm", r.PathValue("id")}
+	if value, stringErr := sourceLocatorString(fields, "confirmation_id", 256); stringErr != nil {
+		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{stringErr.Error()}})
+		return
+	} else if value != "" {
+		args = append(args, "--confirmation-id", value)
+	}
+	result, invokeErr := s.invokeSourceLocatorMutation(r, args)
+	writeSourceLocatorResult(w, result, invokeErr)
+}
+
+func (s *Server) handleSourceLocatorSelectVersion(w http.ResponseWriter, r *http.Request) {
+	fields, err := readSourceLocatorFields(r)
+	if err != nil {
+		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{err.Error()}})
+		return
+	}
+	if !s.sourceLocatorMutationAllowed(w, r, fields) {
+		return
+	}
+	id := r.PathValue("id")
+	if !s.ensureSourceLocatorSession(w, r, id) {
+		return
+	}
+	revision, err := sourceLocatorRevision(fields)
+	if err != nil {
+		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{err.Error()}})
+		return
+	}
+	args := []string{"select-version", id, "--revision", revision}
 	if value, stringErr := sourceLocatorString(fields, "confirmation_id", 256); stringErr != nil {
 		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{stringErr.Error()}})
 		return
