@@ -48,6 +48,9 @@ FLOW_STATES = (
     "APPLY_FEEDBACK",
     "CLONE",
     "POST_CLONE_VERIFY",
+    # Git acquisition or post-clone verification failed, but the session is
+    # intentionally resumable after the user selects another remote revision.
+    "VERSION_SELECTION_REQUIRED",
     "HANDOFF",
     "DONE",
 )
@@ -80,8 +83,9 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "RECOVER_EVIDENCE": frozenset({"TRACE_EVIDENCE", "VERIFY_EVIDENCE", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
     "AWAIT_USER_CONFIRMATION": frozenset({"APPLY_FEEDBACK", "CLONE", "CANCELLED", "NEEDS_REVIEW"}),
     "APPLY_FEEDBACK": frozenset({"SEARCH_INITIAL", "NEEDS_REVIEW", "CANCELLED"}),
-    "CLONE": frozenset({"POST_CLONE_VERIFY", "CLONE_FAILED", "PARTIAL", "CANCELLED"}),
-    "POST_CLONE_VERIFY": frozenset({"HANDOFF", "POST_CLONE_VERIFY_FAILED", "PARTIAL", "CANCELLED"}),
+    "CLONE": frozenset({"POST_CLONE_VERIFY", "VERSION_SELECTION_REQUIRED", "CLONE_FAILED", "PARTIAL", "CANCELLED"}),
+    "POST_CLONE_VERIFY": frozenset({"HANDOFF", "VERSION_SELECTION_REQUIRED", "POST_CLONE_VERIFY_FAILED", "PARTIAL", "CANCELLED"}),
+    "VERSION_SELECTION_REQUIRED": frozenset({"CLONE", "CANCELLED", "NEEDS_REVIEW"}),
     "HANDOFF": frozenset({"DONE", "FAILED", "CANCELLED"}),
 }
 
@@ -216,6 +220,9 @@ class LocatorSession:
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
     schema_version: str = SESSION_SCHEMA_VERSION
+    # Appended at the end to keep positional construction of older session
+    # objects backward compatible.
+    version_selection: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _session_id(self.session_id)
@@ -234,6 +241,7 @@ class LocatorSession:
         object.__setattr__(self, "server_attribution", _safe_mapping(self.server_attribution, name="server_attribution"))
         object.__setattr__(self, "client_attribution", _safe_mapping(self.client_attribution, name="client_attribution"))
         object.__setattr__(self, "repository_mappings", _safe_mapping(self.repository_mappings, name="repository_mappings"))
+        object.__setattr__(self, "version_selection", _safe_mapping(self.version_selection, name="version_selection"))
         object.__setattr__(self, "handoff", _safe_mapping(self.handoff, name="handoff"))
         object.__setattr__(self, "artifacts", _safe_artifacts(self.artifacts))
         object.__setattr__(self, "excluded_paths", _safe_excluded_paths(self.excluded_paths))
@@ -266,6 +274,7 @@ class LocatorSession:
             "server_attribution": dict(self.server_attribution) if self.server_attribution else None,
             "client_attribution": dict(self.client_attribution) if self.client_attribution else None,
             "repository_mappings": dict(self.repository_mappings) if self.repository_mappings else None,
+            "version_selection": dict(self.version_selection) if self.version_selection else None,
             "handoff": dict(self.handoff) if self.handoff else None,
             "artifacts": dict(self.artifacts),
             "excluded_paths": list(self.excluded_paths),
@@ -457,6 +466,7 @@ class SourceLocatorStateMachine:
             "server_attribution",
             "client_attribution",
             "repository_mappings",
+            "version_selection",
             "handoff",
             "artifacts",
             "excluded_paths",

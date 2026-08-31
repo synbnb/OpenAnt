@@ -56,6 +56,7 @@ from .repository_manager import (
     RepositoryAcquisitionResult,
     RepositoryManager,
 )
+from .repository_versions import discover_repository_versions
 from .service_attributor import (
     AttributionCandidate,
     ServerAttributionResult,
@@ -158,6 +159,10 @@ class SourceLocatorRuntime:
     # unexpected extra model call.  The CLI wires it only when --llm-search is
     # explicitly enabled.
     llm_role_attributor: LLMRoleAttributor | None = None
+    # Optional fixed Git command adapter.  Production leaves this unset so
+    # the manager uses its non-shell runner; tests and offline callers can
+    # inject a deterministic adapter without touching the network.
+    git_runner: Any | None = None
 
     def __post_init__(self) -> None:
         if self.client is not None and not callable(getattr(self.client, "search", None)):
@@ -170,6 +175,8 @@ class SourceLocatorRuntime:
             raise SourceLocatorWorkerError("runtime.llm_planner 必须是 LLMSearchPlanner 或 null")
         if self.llm_role_attributor is not None and not isinstance(self.llm_role_attributor, LLMRoleAttributor):
             raise SourceLocatorWorkerError("runtime.llm_role_attributor 必须是 LLMRoleAttributor 或 null")
+        if self.git_runner is not None and not callable(self.git_runner):
+            raise SourceLocatorWorkerError("runtime.git_runner 必须是可调用对象或 null")
         if self.project_root is not None:
             root = Path(self.project_root).expanduser()
             if root.exists() and root.is_symlink():
@@ -3181,6 +3188,80 @@ class SourceLocatorWorker:
         store = _load_evidence(self.machine)
         return max(candidates, key=lambda item: self._mapping_score(item, store, target=_target(self.session))[0])
 
+    def _require_version_selection(
+        self,
+        mapping: RepositoryMapping,
+        *,
+        stage: str,
+        reason: str,
+        acquisition_status: str | None = None,
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        """Persist bounded remote revision choices and a resumable summary.
+
+        A failed clone or verification is no longer represented only by a
+        terminal error.  The remote query is read-only and uses the same
+        allowlisted Manifest mapping; no candidate is applied automatically.
+        The returned summary is deliberately small enough for ``session.json``
+        while the full, user-visible list lives in its own artifact.
+        """
+
+        failure_reason = _compact(reason)
+        try:
+            discovery = discover_repository_versions(
+                mapping,
+                config=self.runtime.gitcode,
+                runner=self.runtime.git_runner,
+            )
+            payload: dict[str, Any] = discovery.to_dict()
+        except Exception as exc:  # defensive: failure recovery must not mask the original error
+            discovery = None
+            payload = {
+                "schema_version": "openant.source-locator.repository-versions.v1",
+                "status": "unavailable",
+                "project_name": mapping.project_name,
+                "repo_url": mapping.repo_url,
+                "requested_revision": mapping.revision,
+                "candidate_count": 0,
+                "candidates": [],
+                "commands": [],
+                "reasons": [f"远程版本查询执行异常：{_compact(exc)}"],
+                "warnings": [],
+            }
+        payload["failure"] = {
+            "stage": stage,
+            "reason": failure_reason,
+            "acquisition_status": acquisition_status,
+        }
+        artifacts = _save_artifact(
+            self.machine,
+            "repository_version_candidates.json",
+            payload,
+            "Git 拉取或拉取后验证失败时生成的远程 branch/tag 候选；仅供用户选择，不会自动切换 revision。",
+        )
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            candidates = []
+        candidate_revisions = tuple(
+            str(item.get("revision"))
+            for item in candidates[:32]
+            if isinstance(item, Mapping) and isinstance(item.get("revision"), str)
+        )
+        status = payload.get("status") if isinstance(payload.get("status"), str) else "unavailable"
+        summary: dict[str, Any] = {
+            "artifact": "repository_version_candidates.json",
+            "stage": stage,
+            "status": status,
+            "project_name": mapping.project_name,
+            "repo_url": mapping.repo_url,
+            "requested_revision": mapping.revision,
+            "candidate_count": len(candidate_revisions),
+            "candidate_revisions": list(candidate_revisions),
+            "reason": failure_reason,
+        }
+        if discovery is not None and discovery.reasons:
+            summary["discovery_reasons"] = list(discovery.reasons[:3])
+        return artifacts, summary
+
     def _advance_clone(self) -> LocatorSession:
         if self.runtime.project_root is None:
             return self._transition("CLONE_FAILED", "未配置项目根目录，无法安全写入 source_code_base", updates={"last_error": "缺少 project_root"}, event_type="clone.missing_project_root")
@@ -3188,6 +3269,7 @@ class SourceLocatorWorker:
         manager = RepositoryManager(
             self.runtime.project_root,
             config=self.runtime.gitcode,
+            runner=self.runtime.git_runner,
             on_log=lambda line: self.machine.record_event(event_type="clone.log", summary_zh=_compact(line), details={"channel": "git"}),
         )
         from .repository_manager import RepositoryConfirmation
@@ -3198,15 +3280,35 @@ class SourceLocatorWorker:
         try:
             acquisition = manager.ensure_repository(mapping, confirmation=confirmation)
         except Exception as exc:
+            artifacts, version_selection = self._require_version_selection(
+                mapping,
+                stage="clone",
+                reason=f"Git 拉取阶段发生可解释异常：{_compact(exc)}",
+            )
             return self._transition(
-                "CLONE_FAILED",
-                "Git 拉取阶段发生可解释异常，已停止后续写入",
-                updates={"last_error": _compact(exc)},
-                event_type="clone.exception",
+                "VERSION_SELECTION_REQUIRED",
+                "Git 拉取异常，已生成可选择的远程版本列表",
+                updates={"artifacts": artifacts, "version_selection": version_selection, "last_error": _compact(exc)},
+                event_type="clone.version_selection_required",
+                details={"stage": "clone", "candidate_count": version_selection["candidate_count"]},
             )
         artifacts = _save_artifact(self.machine, "clone_results.json", acquisition.to_dict(), "用户确认后执行的 Git 拉取结果、命令摘要、revision 和目录；失败时不会覆盖已有目录。")
         if not acquisition.succeeded:
-            return self._transition("CLONE_FAILED", "Git 仓库拉取未成功，保留命令摘要并停止后续扫描", updates={"artifacts": artifacts, "last_error": "; ".join(acquisition.reasons) or acquisition.status}, event_type="clone.failed")
+            reason = "; ".join(acquisition.reasons) or acquisition.status
+            version_artifacts, version_selection = self._require_version_selection(
+                mapping,
+                stage="clone",
+                reason=reason,
+                acquisition_status=acquisition.status,
+            )
+            artifacts = {**artifacts, **version_artifacts}
+            return self._transition(
+                "VERSION_SELECTION_REQUIRED",
+                "Git 仓库拉取未成功，已生成可选择的远程版本列表",
+                updates={"artifacts": artifacts, "version_selection": version_selection, "last_error": reason},
+                event_type="clone.version_selection_required",
+                details={"stage": "clone", "candidate_count": version_selection["candidate_count"], "acquisition_status": acquisition.status},
+            )
         return self._transition("POST_CLONE_VERIFY", "仓库已拉取或安全复用，开始进行只读拉取后验证", updates={"artifacts": artifacts}, event_type="clone.completed")
 
     def _advance_post_clone_verify(self) -> LocatorSession:
@@ -3256,7 +3358,21 @@ class SourceLocatorWorker:
             )
         artifacts = _save_artifact(self.machine, "post_clone_verification.json", result.to_dict(), "只读检查 origin、HEAD、源码文件、符号和目标字面量的结果；只有 ready 才允许交接。")
         if not result.ready:
-            return self._transition("POST_CLONE_VERIFY_FAILED", "拉取后验证未通过，禁止把仓库交给静态扫描", updates={"artifacts": artifacts, "last_error": "; ".join(result.reasons) or result.status}, event_type="post_clone_verify.failed")
+            reason = "; ".join(result.reasons) or result.status
+            version_artifacts, version_selection = self._require_version_selection(
+                mapping,
+                stage="post_clone_verify",
+                reason=reason,
+                acquisition_status=acquisition.status,
+            )
+            artifacts = {**artifacts, **version_artifacts}
+            return self._transition(
+                "VERSION_SELECTION_REQUIRED",
+                "拉取后验证未通过，已生成可选择的远程版本列表",
+                updates={"artifacts": artifacts, "version_selection": version_selection, "last_error": reason},
+                event_type="post_clone_verify.version_selection_required",
+                details={"stage": "post_clone_verify", "candidate_count": version_selection["candidate_count"]},
+            )
         return self._transition("HANDOFF", "拉取后验证通过，生成静态扫描交接对象", updates={"handoff": result.handoff.to_dict() if result.handoff else None, "artifacts": artifacts}, event_type="post_clone_verify.ready")
 
     def _advance_handoff(self) -> LocatorSession:
@@ -3293,7 +3409,7 @@ class SourceLocatorWorker:
             return self._advance_post_clone_verify()
         if state == "HANDOFF":
             return self._advance_handoff()
-        if state in {"AWAIT_USER_CONFIRMATION", "APPLY_FEEDBACK"}:
+        if state in {"AWAIT_USER_CONFIRMATION", "APPLY_FEEDBACK", "VERSION_SELECTION_REQUIRED"}:
             return self.session
         return self.session
 
@@ -3305,7 +3421,7 @@ class SourceLocatorWorker:
             after = self.advance()
             if after.state in {"AWAIT_USER_CONFIRMATION", *{
                 "DONE", "PARTIAL", "NEEDS_REVIEW", "OPENGROK_UNAVAILABLE", "VERSION_MISMATCH",
-                "CLONE_FAILED", "POST_CLONE_VERIFY_FAILED", "CANCELLED", "FAILED",
+                "CLONE_FAILED", "POST_CLONE_VERIFY_FAILED", "VERSION_SELECTION_REQUIRED", "CANCELLED", "FAILED",
             }} or after.state == before:
                 return after
         return self.session

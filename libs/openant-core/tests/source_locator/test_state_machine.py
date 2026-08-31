@@ -257,6 +257,43 @@ def test_confirm_is_the_only_path_to_clone(tmp_path):
     assert machine.store.events(machine.session.session_id).load()[-1].type == "user.confirmed"
 
 
+def test_version_selection_required_is_resumable_and_persisted(tmp_path):
+    machine = _machine(tmp_path)
+    for state in (
+        "NORMALIZE_TARGET",
+        "PROBE_OPENGROK",
+        "SEARCH_INITIAL",
+        "TRACE_EVIDENCE",
+        "ATTRIBUTION_SERVER",
+        "LOCATE_CLIENT_COMM",
+        "RESOLVE_REPOSITORIES",
+        "VERIFY_EVIDENCE",
+        "AWAIT_USER_CONFIRMATION",
+        "CLONE",
+    ):
+        machine.transition(state, summary_zh=state)
+    machine.transition(
+        "VERSION_SELECTION_REQUIRED",
+        summary_zh="拉取失败，等待选择远程版本",
+        updates={
+            "version_selection": {
+                "artifact": "repository_version_candidates.json",
+                "status": "ok",
+                "candidate_count": 2,
+                "candidate_revisions": ["OpenHarmony-6.1-LTS", "OpenHarmony-6.0-LTS"],
+            }
+        },
+    )
+
+    restored = LocatorSessionStore(tmp_path / "sessions").load(machine.session.session_id)
+    assert restored.session.state == "VERSION_SELECTION_REQUIRED"
+    assert restored.session.version_selection["candidate_count"] == 2
+    # The state is a pause, not a terminal failure; explicit selection can
+    # later transition it back to CLONE.
+    restored.transition("CLONE", summary_zh="用户选择版本后重试")
+    assert restored.session.state == "CLONE"
+
+
 def test_event_log_rejects_gaps_and_unsafe_artifacts(tmp_path):
     machine = _machine(tmp_path)
     log = machine.store.events(machine.session.session_id)

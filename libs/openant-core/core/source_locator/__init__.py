@@ -109,6 +109,11 @@ from .repository_manager import (
     RepositoryManager,
     RepositoryManagerError,
 )
+from .repository_versions import (
+    RepositoryVersionCandidate,
+    RepositoryVersionDiscoveryResult,
+    discover_repository_versions,
+)
 from .post_clone_verifier import (
     PostCloneVerificationRequest,
     PostCloneVerificationResult,
@@ -279,6 +284,9 @@ __all__ = [
     "RepositoryConfirmation",
     "RepositoryManager",
     "RepositoryManagerError",
+    "RepositoryVersionCandidate",
+    "RepositoryVersionDiscoveryResult",
+    "discover_repository_versions",
     "PostCloneVerificationRequest",
     "PostCloneVerificationResult",
     "PostCloneVerifier",

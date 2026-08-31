@@ -15,6 +15,7 @@ CORE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CORE_ROOT))
 
 from core.source_locator import (  # noqa: E402
+    CommandResult,
     EndpointCapability,
     LocatorSessionStore,
     OpenGrokHTTPError,
@@ -832,3 +833,98 @@ def test_worker_allows_different_search_semantics_for_same_query(tmp_path: Path)
     assert calls == 2
     assert "search_full:same_semantic_term" in session.executed_actions
     assert "search_definition:same_semantic_term" in session.executed_actions
+
+
+def test_worker_turns_clone_failure_into_version_selection_pause(tmp_path: Path, monkeypatch) -> None:
+    """A failed Git attempt exposes safe remote refs instead of ending the session."""
+
+    from core.source_locator import EvidenceStore, RepositoryAcquisitionResult, validate_repository_mapping
+    from core.source_locator import worker as worker_module
+    from core.source_locator.worker import _json_write
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    sessions = tmp_path / "sessions"
+    machine = LocatorSessionStore(sessions).create(
+        "/dev/unix/socket/paramservice",
+        target_revision="OpenHarmony-6.1-LTS",
+        session_id="loc_workerclonefail",
+    )
+    target = normalize_target("/dev/unix/socket/paramservice", target_revision="OpenHarmony-6.1-LTS")
+    manifest = load_manifest(Path(__file__).parent / "fixtures" / "manifests" / "ohos.xml")
+    mapping = RepositoryMapping(
+        project_name="startup_init",
+        source_root="base/startup/init",
+        remote_fetch="https://gitcode.com/openharmony",
+        repo_url="https://gitcode.com/openharmony/startup_init",
+        revision="OpenHarmony-6.1-LTS",
+        source_path="/openharmony/base/startup/init/services/param/linux/param_service.c",
+    )
+    session_dir = sessions / machine.session.session_id
+    _json_write(session_dir / "evidence.json", EvidenceStore().to_dict())
+    for state, updates in (
+        ("NORMALIZE_TARGET", {"target": target.to_dict()}),
+        ("PROBE_OPENGROK", {}),
+        ("SEARCH_INITIAL", {}),
+        ("TRACE_EVIDENCE", {}),
+        ("ATTRIBUTION_SERVER", {}),
+        ("LOCATE_CLIENT_COMM", {}),
+        ("RESOLVE_REPOSITORIES", {"repository_mappings": {"mappings": [{**mapping.to_dict(), "status": "resolved"}]}}),
+        ("VERIFY_EVIDENCE", {}),
+        ("AWAIT_USER_CONFIRMATION", {}),
+    ):
+        machine.transition(state, summary_zh=state, updates=updates)
+    machine.confirm(confirmation_id="test-confirmation")
+
+    decision = validate_repository_mapping(mapping)
+
+    class FailingManager:
+        def __init__(self, project_root, *, config, runner=None, on_log=None):
+            del project_root, config, runner, on_log
+
+        def ensure_repository(self, mapping, *, confirmation=None):
+            del confirmation
+            return RepositoryAcquisitionResult(
+                status="failed",
+                project_name=mapping.project_name,
+                destination=str(project_root / "source_code_base" / mapping.project_name),
+                repo_url=mapping.repo_url,
+                canonical_url=decision.canonical_url,
+                revision=mapping.revision,
+                mapping=mapping,
+                decision=decision,
+                reasons=("测试模拟 HTTP 301",),
+            )
+
+    monkeypatch.setattr(worker_module, "RepositoryManager", FailingManager)
+
+    def refs_runner(argv, *, cwd, timeout_seconds):
+        del argv, cwd, timeout_seconds
+        return CommandResult(
+            0,
+            stdout=(
+                "a" * 40 + "\trefs/heads/OpenHarmony-6.1-LTS\n"
+                + "b" * 40 + "\trefs/heads/OpenHarmony-6.0-LTS\n"
+            ),
+        )
+
+    session = worker_module.SourceLocatorWorker(
+        machine,
+        runtime=SourceLocatorRuntime(
+            manifest=manifest,
+            project_root=project_root,
+            git_runner=refs_runner,
+        ),
+    ).advance()
+
+    assert session.state == "VERSION_SELECTION_REQUIRED"
+    assert session.version_selection["candidate_count"] == 2
+    artifact = json.loads((session_dir / "repository_version_candidates.json").read_text(encoding="utf-8"))
+    assert artifact["status"] == "ok"
+    assert artifact["failure"]["stage"] == "clone"
+    assert [item["revision"] for item in artifact["candidates"]] == [
+        "OpenHarmony-6.1-LTS",
+        "OpenHarmony-6.0-LTS",
+    ]
+    events = LocatorSessionStore(sessions).events(machine.session.session_id).load()
+    assert events[-1].type == "clone.version_selection_required"
