@@ -7,6 +7,7 @@ Returns (text, usage_dict) tuples from LLM functions so callers can track costs.
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -30,6 +31,16 @@ load_dotenv()
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_REPORT_PLATFORM_CONTEXT_CHARS = 2400
+MAX_REPAIR_SOURCE_CHARS = 24_000
+MAX_REPAIR_CONTEXT_CHARS = 32_000
+_REPAIR_PLACEHOLDER_MARKERS = (
+    "[MANUAL REVIEW",
+    "[REQUIRES MANUAL",
+    "manual review required",
+    "review the referenced function",
+    "add the missing validation",
+    "add the appropriate validation",
+)
 
 
 def _extract_usage(
@@ -417,7 +428,212 @@ def _report_affected_versions(pipeline_data: Mapping) -> str:
     commit = repository.get("commit_sha") or pipeline_data.get("commit_sha")
     if commit:
         return f"Current scanned revision (commit {commit})"
-    return "Current scanned revision (release version not provided)"
+    branch = (
+        repository.get("branch")
+        or repository.get("revision")
+        or pipeline_data.get("branch")
+        or pipeline_data.get("revision")
+    )
+    if branch:
+        return f"Scanned source revision ({branch}; commit not recorded)"
+    return "Version evidence unavailable (scanned revision not recorded)"
+
+
+def _is_placeholder_fix(value) -> bool:
+    """Return whether a suggested fix is prose/placeholder rather than code."""
+    if not isinstance(value, str):
+        return True
+    text = value.strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if any(marker.lower() in lowered for marker in _REPAIR_PLACEHOLDER_MARKERS):
+        return True
+    # A short imperative sentence is useful as rationale, but it is not a
+    # patch that can be pasted into a review.  Accept common code indicators
+    # and fenced/diff snippets only as executable fix candidates.
+    return not (
+        "```" in text
+        or "diff --git" in lowered
+        or "@@" in text
+        or re.search(r"\b(if|switch|return|assert|CHECK|validate|Validate)\b", text)
+        and ("(" in text or ";" in text or "{" in text)
+    )
+
+
+def _clean_repair_code(value) -> str:
+    """Extract a bounded code/diff snippet from a repair-model response."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or _is_placeholder_fix(text):
+        return ""
+    fenced = re.findall(r"```(?:[A-Za-z0-9_+.#-]+)?\s*\n(.*?)```", text, flags=re.DOTALL)
+    if fenced:
+        text = max((item.strip() for item in fenced), key=len, default="")
+    if not text or _is_placeholder_fix(text):
+        return ""
+    return text[:MAX_REPAIR_SOURCE_CHARS]
+
+
+def _repair_context_payload(vulnerability_data: Mapping) -> dict:
+    """Build a bounded source/evidence payload for the repair-model call."""
+    context = vulnerability_data.get("report_context")
+    context = context if isinstance(context, Mapping) else {}
+    target = context.get("target")
+    target = target if isinstance(target, Mapping) else {}
+    chain = context.get("call_chain")
+    chain = chain if isinstance(chain, Mapping) else {}
+    nodes = []
+    for node in chain.get("nodes", []) or []:
+        if not isinstance(node, Mapping):
+            continue
+        nodes.append({
+            key: node.get(key)
+            for key in ("order", "role", "function", "file", "start_line", "end_line", "reason", "source_code")
+            if node.get(key) not in (None, "", [])
+        })
+    payload = {
+        "function": vulnerability_data.get("location", {}).get("function")
+        if isinstance(vulnerability_data.get("location"), Mapping) else "unknown",
+        "file": vulnerability_data.get("location", {}).get("file")
+        if isinstance(vulnerability_data.get("location"), Mapping) else "unknown",
+        "vulnerability_categories": vulnerability_data.get("vulnerability_categories", []),
+        "impact": vulnerability_data.get("impact", []),
+        "reasoning": vulnerability_data.get("description") or vulnerability_data.get("reasoning"),
+        "attack_scenario": vulnerability_data.get("attack_scenario"),
+        "target_source": target.get("source_code") or vulnerability_data.get("vulnerable_code"),
+        "source_to_sink": context.get("source_to_sink", {}),
+        "call_chain": nodes,
+    }
+    # Keep the repair prompt bounded even if an old pipeline lacks the phase-1
+    # context limits.
+    encoded = json.dumps(payload, ensure_ascii=False)
+    if len(encoded) <= MAX_REPAIR_CONTEXT_CHARS:
+        return payload
+    payload["call_chain"] = nodes[:8]
+    payload["target_source"] = str(payload.get("target_source") or "")[:MAX_REPAIR_SOURCE_CHARS]
+    payload["source_to_sink"] = {
+        key: value for key, value in (payload.get("source_to_sink") or {}).items()
+        if key in ("entry_point", "ordered_steps", "dataflow_summary", "attack_scenario", "function_route_chain")
+    }
+    return payload
+
+
+def _parse_repair_response(text: str) -> dict:
+    """Parse the repair adapter's JSON/fenced response defensively."""
+    response = (text or "").strip()
+    # A report adapter/test double may return an entire disclosure document
+    # containing the vulnerable-code fence.  That is not a repair response and
+    # must never be mistaken for a patch.
+    if re.search(r"(?im)^#\s+Security Disclosure\b", response):
+        return {
+            "status": "unavailable",
+            "code": "",
+            "rationale": "修复模型未返回专用修复响应。",
+            "assumptions": "",
+        }
+    parsed = None
+    if response:
+        candidates = [response]
+        candidates.extend(re.findall(r"```(?:json)?\s*\n(.*?)```", response, flags=re.DOTALL))
+        for candidate in candidates:
+            try:
+                value = json.loads(candidate.strip())
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(value, Mapping):
+                parsed = value
+                break
+        if parsed is None:
+            decoder = json.JSONDecoder()
+            for match in re.finditer(r"\{", response):
+                try:
+                    value, _end = decoder.raw_decode(response[match.start():])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(value, Mapping):
+                    parsed = value
+                    break
+    if isinstance(parsed, Mapping):
+        code = _clean_repair_code(
+            parsed.get("patch") or parsed.get("code") or parsed.get("fixed_code_snippet")
+        )
+        return {
+            "status": "generated" if code else "unavailable",
+            "code": code,
+            "rationale": str(parsed.get("rationale") or parsed.get("explanation") or "").strip(),
+            "assumptions": str(parsed.get("assumptions") or "").strip(),
+        }
+    code = _clean_repair_code(response)
+    return {
+        "status": "generated" if code else "unavailable",
+        "code": code,
+        "rationale": "" if code else "修复模型未返回可验证的代码片段。",
+        "assumptions": "",
+    }
+
+
+def _generate_repair_suggestion(
+    vulnerability_data: Mapping,
+    binding: PhaseBinding,
+) -> tuple[dict, dict]:
+    """Ask the report-phase model for a minimal, evidence-backed patch."""
+    provided = vulnerability_data.get("suggested_fix")
+    if isinstance(provided, str) and not _is_placeholder_fix(provided):
+        return {
+            "status": "provided",
+            "code": _clean_repair_code(provided),
+            "rationale": provided if not _clean_repair_code(provided) else "扫描阶段已提供修复片段。",
+            "assumptions": "",
+        }, {
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
+        }
+
+    from utilities.llm import Message, TextBlock
+
+    payload = _repair_context_payload(vulnerability_data)
+    if not payload.get("target_source"):
+        return {
+            "status": "unavailable",
+            "code": "",
+            "rationale": "当前扫描产物未保存目标函数源码。",
+            "assumptions": "",
+        }, {
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
+        }
+    prompt = load_prompt("repair")
+    prompt = prompt.replace("{repair_context}", json.dumps(payload, ensure_ascii=False, indent=2))
+    try:
+        result = binding.adapter.complete(
+            model=binding.model,
+            max_tokens=2048,
+            system=load_prompt("system"),
+            messages=[Message(role="user", content=[TextBlock(prompt)])],
+        )
+        response = "\n".join(
+            block.text for block in result.content if isinstance(block, TextBlock)
+        )
+        info = _parse_repair_response(response)
+        usage = _extract_usage(
+            result.input_tokens,
+            result.output_tokens,
+            binding.model,
+            pricing=lookup_pricing(binding),
+        )
+        return info, usage
+    except Exception as exc:  # report generation must remain fail-safe
+        return {
+            "status": "unavailable",
+            "code": "",
+            "rationale": f"修复模型调用失败：{type(exc).__name__}。",
+            "assumptions": "",
+        }, {
+            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+            "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
+        }
 
 
 def _report_analysis_date(pipeline_data: Mapping) -> str:
@@ -629,6 +845,37 @@ def _render_disclosure_context(vulnerability_data: Mapping, language: str = "tex
     return "\n".join(lines)
 
 
+def _render_repair_section(
+    vulnerability_data: Mapping,
+    repair_info: Mapping,
+    language: str,
+) -> str:
+    """Render a deterministic Suggested Fix section from repair evidence."""
+    status = str(repair_info.get("status") or "unavailable")
+    code = repair_info.get("code")
+    code = code if isinstance(code, str) else ""
+    rationale = str(repair_info.get("rationale") or "").strip()
+    assumptions = str(repair_info.get("assumptions") or "").strip()
+    file_path, function = _finding_location(vulnerability_data)
+    lines = ["## Suggested Fix", ""]
+    if code:
+        lines.append("以下是基于当前源码和证据生成的最小修复片段，提交前需通过项目编译和回归测试：")
+        lines.extend(["", f"```{language or 'text'}", code, "```"])
+        if rationale:
+            lines.extend(["", f"修复说明：{rationale}"])
+    else:
+        lines.append(
+            f"当前没有足够证据安全生成可直接应用的修复代码（目标：{file_path}:{function}）。"
+        )
+        if rationale:
+            lines.extend(["", f"原因：{rationale}"])
+        lines.append("请维护者结合目标函数及其下游实现补充并验证修复。")
+    if assumptions:
+        lines.extend(["", f"前置假设：{assumptions}"])
+    lines.extend(["", f"修复状态：`{status}`"])
+    return "\n".join(lines)
+
+
 def _artifact_code_by_route(payload) -> dict[str, str]:
     """Read a route-to-source map from a sibling scan artifact."""
     if not isinstance(payload, Mapping):
@@ -660,6 +907,116 @@ def _artifact_code_by_route(payload) -> dict[str, str]:
     return {}
 
 
+def _scan_source_path(scan_dir: Path) -> str:
+    """Find the source checkout recorded by a scan report, if any."""
+    candidates: list[str] = []
+    for name in ("scan.report.json", "parse.report.json", "source_handoff.json"):
+        candidate = scan_dir / name
+        try:
+            payload = read_json(candidate) if candidate.is_file() else None
+        except (OSError, ValueError, json.JSONDecodeError):
+            payload = None
+        if not isinstance(payload, Mapping):
+            continue
+        inputs = payload.get("inputs")
+        outputs = payload.get("outputs")
+        for container in (inputs, payload, outputs):
+            if not isinstance(container, Mapping):
+                continue
+            for key in ("repo_path", "repository_path", "source_path", "local_path"):
+                value = container.get(key)
+                if isinstance(value, str) and value:
+                    if value not in candidates:
+                        candidates.append(value)
+    # ``scan.report.json`` often records the scan-output directory itself while
+    # ``parse.report.json`` records the actual source checkout.  Prefer a path
+    # that is demonstrably a Git work tree instead of returning the first path.
+    for value in candidates:
+        try:
+            candidate = Path(value).expanduser().resolve()
+            if candidate.is_dir() and (candidate / ".git").exists():
+                return str(candidate)
+        except (OSError, RuntimeError):
+            continue
+    return candidates[0] if candidates else ""
+
+
+def _git_revision_metadata(repo_path: str) -> dict[str, str]:
+    """Read branch/commit/describe from a checkout using non-shell Git calls."""
+    if not isinstance(repo_path, str) or not repo_path:
+        return {}
+    try:
+        path = Path(repo_path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return {}
+    if not path.is_dir():
+        return {}
+    # Git is invoked with a fixed argument vector and a sanitized config so a
+    # repository cannot inject shell commands or aliases into this read-only
+    # metadata lookup.
+    env = os.environ.copy()
+    env.update({
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "LC_ALL": "C",
+    })
+
+    def run(*args: str) -> str:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(path), *args],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=5,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if completed.returncode != 0:
+            return ""
+        return (completed.stdout or "").strip()
+
+    metadata = {}
+    branch = run("rev-parse", "--abbrev-ref", "HEAD")
+    commit = run("rev-parse", "HEAD")
+    describe = run("describe", "--tags", "--always")
+    if branch and branch != "HEAD":
+        metadata["branch"] = branch
+    if commit and re.fullmatch(r"[0-9a-fA-F]{7,64}", commit):
+        metadata["commit_sha"] = commit
+    if describe and len(describe) <= 256:
+        metadata["release_version"] = describe
+    if metadata.get("branch") or metadata.get("commit_sha"):
+        metadata["source"] = "git"
+    return metadata
+
+
+def _hydrate_revision_metadata(pipeline_path: str, pipeline_data: dict) -> None:
+    """Fill missing revision fields from the checkout recorded by the scan."""
+    repository = pipeline_data.get("repository")
+    if not isinstance(repository, dict):
+        return
+    if repository.get("commit_sha") and repository.get("release_version"):
+        return
+    scan_dir = Path(pipeline_path).resolve().parent
+    source_path = _scan_source_path(scan_dir)
+    metadata = _git_revision_metadata(source_path)
+    if not metadata:
+        return
+    for key in ("commit_sha", "branch", "release_version"):
+        if metadata.get(key) and not repository.get(key):
+            repository[key] = metadata[key]
+    provenance = pipeline_data.setdefault("revision_provenance", {})
+    if isinstance(provenance, dict):
+        provenance.update({
+            "source": metadata.get("source", "git"),
+            "source_path_recorded": bool(source_path),
+        })
+
+
 def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
     """Backfill source sections for pipeline files produced before the fix.
 
@@ -672,6 +1029,7 @@ def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
     if not isinstance(findings, list):
         return pipeline_data
 
+    _hydrate_revision_metadata(pipeline_path, pipeline_data)
     scan_dir = Path(pipeline_path).resolve().parent
     source_map = {}
     result_by_route = {}
@@ -768,6 +1126,7 @@ def _ensure_disclosure_sections(
     metadata: Mapping,
     code_section: str,
     context_section: str = "",
+    fix_section: str = "",
 ) -> str:
     """Fill mandatory report fields the LLM omitted or left as placeholders.
 
@@ -865,6 +1224,8 @@ def _ensure_disclosure_sections(
             replacement = f"## {heading}\n\n{fallback}\n"
             output = output[:heading_match.start()] + replacement + output[heading_match.end():]
 
+    deterministic_sections = []
+
     # Context is deterministic evidence, just like Vulnerable Code.  Strip a
     # model-generated copy before appending ours so a short/verbose response
     # cannot duplicate or rewrite line numbers and graph edges.
@@ -874,7 +1235,23 @@ def _ensure_disclosure_sections(
             "",
             output,
         ).rstrip()
-        output += "\n\n" + context_section.strip()
+        deterministic_sections.append(context_section.strip())
+
+    if fix_section:
+        output = re.sub(
+            r"(?ims)^##\s+Suggested Fix\s*$.*?(?=^##\s|^---\s*$|\Z)",
+            "",
+            output,
+        ).rstrip()
+        deterministic_sections.append(fix_section.strip())
+
+    if deterministic_sections:
+        insertion = "\n\n".join(deterministic_sections)
+        separator = re.search(r"(?m)^---\s*$", output)
+        if separator:
+            output = output[:separator.start()].rstrip() + "\n\n" + insertion + "\n\n" + output[separator.start():]
+        else:
+            output += "\n\n" + insertion
 
     return output.strip() + "\n"
 
@@ -910,8 +1287,14 @@ def generate_disclosure(
         code_section = str(code_section)
     if not code_section:
         code_section = _fallback_code_section(vulnerability_data)
+    repair_info, repair_usage = _generate_repair_suggestion(vulnerability_data, binding)
+    effective_data = dict(vulnerability_data)
+    if repair_info.get("code"):
+        effective_data["suggested_fix"] = repair_info["code"]
+    elif repair_info.get("rationale"):
+        effective_data["suggested_fix"] = repair_info["rationale"]
     payload = _prompt_payload({
-        k: v for k, v in vulnerability_data.items()
+        k: v for k, v in effective_data.items()
         if k not in ("vulnerable_code_section", "vulnerable_code")
     })
     payload["product_name"] = product_name
@@ -927,7 +1310,7 @@ def generate_disclosure(
         "analysis_date": _report_analysis_date(report_data),
         "verification_method": _report_verification_method(vulnerability_data),
         "language": _report_language(file_path, report_data),
-        "fixed_code_snippet": vulnerability_data.get("suggested_fix") or (
+        "fixed_code_snippet": repair_info.get("code") or (
             "// Manual review required: add the appropriate validation or "
             "authorization check."
         ),
@@ -973,14 +1356,16 @@ def generate_disclosure(
         },
         code_section,
         context_section=context_section,
+        fix_section=_render_repair_section(effective_data, repair_info, replacements["language"]),
     )
 
-    return final_output, _extract_usage(
+    disclosure_usage = _extract_usage(
         result.input_tokens,
         result.output_tokens,
         binding.model,
         pricing=lookup_pricing(binding),
     )
+    return final_output, _merge_usage([repair_usage, disclosure_usage])
 
 
 def generate_all(

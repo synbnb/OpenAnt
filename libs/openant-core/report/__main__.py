@@ -14,7 +14,12 @@ import sys
 from pathlib import Path
 
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
-from .generator import generate_summary_report, generate_disclosure, generate_all
+from .generator import (
+    _hydrate_pipeline_findings,
+    generate_summary_report,
+    generate_disclosure,
+    generate_all,
+)
 from .schema import validate_pipeline_output, ValidationError
 from utilities.file_io import normalize_results, open_utf8, read_json
 from utilities.llm import (
@@ -79,6 +84,9 @@ def cmd_summary(args):
 def cmd_disclosures(args):
     """Generate disclosure documents."""
     pipeline_data = read_json(args.input)
+    # Historical pipeline files may lack report_context and revision metadata;
+    # hydrate them from sibling scan artifacts before validation/generation.
+    pipeline_data = _hydrate_pipeline_findings(args.input, pipeline_data)
     # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only at load
     # (presence-guarded) before validation / the disclosure enumerate.
     if "findings" in pipeline_data:

@@ -245,3 +245,108 @@ def test_context_renderer_keeps_source_and_edges_out_of_model_rewrite():
     assert "int OnRemoteRequest(...)" in rendered
     assert "native_dispatch_to_handler" in rendered
     assert "Sink reached" in rendered
+
+
+def test_repair_response_requires_code_and_rejects_disclosure_document():
+    from report import generator
+
+    parsed = generator._parse_repair_response(
+        '{"status":"ready","patch":"if (size == 0) return ERR_INVALID_PARAM;",'
+        '"rationale":"Reject empty input."}'
+    )
+    assert parsed["status"] == "generated"
+    assert "ERR_INVALID_PARAM" in parsed["code"]
+
+    rejected = generator._parse_repair_response(
+        "# Security Disclosure: Example\n\n```cpp\nif (size == 0) return 0;\n```"
+    )
+    assert rejected["status"] == "unavailable"
+    assert rejected["code"] == ""
+
+
+def test_disclosure_uses_model_repair_patch_instead_of_manual_placeholder():
+    from report import generator
+    from utilities.llm import CompletionResult, PhaseBinding, TextBlock
+
+    class RepairAdapter:
+        name = "offline"
+        supports_tools = False
+        pricing = {"repair-model": {"input": 1.0, "output": 1.0}}
+
+        def complete(self, *, model, system, messages, max_tokens, tools=None):
+            del model, system, max_tokens, tools
+            prompt = messages[0].content[0].text
+            if "minimal security patch" in prompt:
+                body = json.dumps({
+                    "status": "ready",
+                    "patch": "if (descriptors.empty()) return ERR_INVALID_PARAM;",
+                    "rationale": "Reject an empty caller-controlled container before delegation.",
+                })
+            else:
+                body = "# Security Disclosure: test\n\n## Summary\n\nA finding was identified."
+            return CompletionResult(
+                content=[TextBlock(body)],
+                input_tokens=2,
+                output_tokens=3,
+                stop_reason="end_turn",
+            )
+
+    finding = {
+        "id": "VULN-001",
+        "name": "Unchecked input",
+        "short_name": "unchecked-input",
+        "route_key": "services/audio.cpp:AudioService::Enable",
+        "location": {"file": "services/audio.cpp", "function": "AudioService::Enable"},
+        "cwe_id": 400,
+        "cwe_name": "Uncontrolled Resource Consumption",
+        "stage1_verdict": "vulnerable",
+        "stage2_verdict": "confirmed",
+        "description": "Caller-controlled input reaches a delegate.",
+        "suggested_fix": "[MANUAL REVIEW REQUIRED]",
+        "vulnerable_code": "int Enable() { return delegate(); }",
+        "vulnerable_code_section": "## Vulnerable Code\n\n```cpp\nint Enable() { return delegate(); }\n```",
+        "report_context": {
+            "target": {"source_location": {
+                "file": "services/audio.cpp", "function": "AudioService::Enable",
+                "start_line": 10, "end_line": 12,
+                "route_key": "services/audio.cpp:AudioService::Enable",
+            }, "source_code": "int Enable() { return delegate(); }"},
+            "source_to_sink": {},
+            "call_chain": {"nodes": []},
+            "call_graph": {},
+            "provenance": {},
+        },
+    }
+    binding = PhaseBinding(
+        phase="report", adapter=RepairAdapter(), model="repair-model", provider_name="offline"
+    )
+    disclosure, usage = generator.generate_disclosure(finding, "audio", binding)
+
+    assert "if (descriptors.empty()) return ERR_INVALID_PARAM;" in disclosure
+    assert "[MANUAL REVIEW REQUIRED]" not in disclosure
+    assert "修复状态：`generated`" in disclosure
+    assert usage["total_tokens"] == 10  # one repair call + one disclosure call
+
+
+def test_hydration_recovers_revision_from_scan_record(tmp_path: Path, monkeypatch):
+    from report import generator
+
+    monkeypatch.setattr(
+        generator,
+        "_git_revision_metadata",
+        lambda path: {"branch": "OpenHarmony-6.1-LTS", "commit_sha": "abc1234", "release_version": "OpenHarmony-6.1-LTS"},
+    )
+    (tmp_path / "scan.report.json").write_text(json.dumps({
+        "inputs": {"repo_path": "/source/medical_sensor"},
+    }), encoding="utf-8")
+    pipeline = {
+        "repository": {"name": "medical_sensor"},
+        "findings": [],
+    }
+    path = tmp_path / "pipeline_output.json"
+    path.write_text(json.dumps(pipeline), encoding="utf-8")
+
+    generator._hydrate_revision_metadata(str(path), pipeline)
+    assert pipeline["repository"]["commit_sha"] == "abc1234"
+    assert pipeline["repository"]["release_version"] == "OpenHarmony-6.1-LTS"
+    assert pipeline["revision_provenance"]["source"] == "git"
