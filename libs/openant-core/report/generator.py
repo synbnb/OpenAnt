@@ -479,6 +479,156 @@ def _prompt_payload(vulnerability_data: Mapping) -> dict:
     return payload
 
 
+def _render_disclosure_context(vulnerability_data: Mapping, language: str = "text") -> str:
+    """Render evidence-rich context deterministically after LLM generation.
+
+    The model receives locations, data-flow claims and graph metadata, but not
+    verbatim source.  This renderer adds the bounded source snippets and graph
+    evidence to the final document without allowing the model to rewrite them.
+    """
+    context = vulnerability_data.get("report_context")
+    if not isinstance(context, Mapping):
+        return ""
+    target = context.get("target")
+    target = target if isinstance(target, Mapping) else {}
+    location = target.get("source_location")
+    location = location if isinstance(location, Mapping) else {}
+    source_sink = context.get("source_to_sink")
+    source_sink = source_sink if isinstance(source_sink, Mapping) else {}
+    chain = context.get("call_chain")
+    chain = chain if isinstance(chain, Mapping) else {}
+    graph = context.get("call_graph")
+    graph = graph if isinstance(graph, Mapping) else {}
+    provenance = context.get("provenance")
+    provenance = provenance if isinstance(provenance, Mapping) else {}
+
+    def display(value, limit: int = 4_000) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            result = value
+        else:
+            try:
+                result = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                result = str(value)
+        return result if len(result) <= limit else result[:limit] + "…[已截断]"
+
+    def line_range(node: Mapping) -> str:
+        start = node.get("start_line")
+        end = node.get("end_line")
+        if isinstance(start, int) and isinstance(end, int):
+            return f"第 {start}-{end} 行"
+        if isinstance(start, int):
+            return f"第 {start} 行起"
+        return "行号未知"
+
+    lines = ["## Evidence Context", "", "### Target Source Location", ""]
+    file_path = str(location.get("file") or "unknown").replace("`", "'")
+    function = str(location.get("function") or "unknown").replace("`", "'")
+    lines.append(f"- **Function:** `{function}`")
+    lines.append(f"- **File:** `{file_path}` ({line_range(location)})")
+    route = location.get("route_key") or vulnerability_data.get("route_key")
+    if route:
+        display_route = str(route).replace("`", "'")
+        lines.append(f"- **Route key:** `{display_route}`")
+
+    lines.extend(["", "### Source-to-Sink Evidence", ""])
+    entry = display(source_sink.get("entry_point"))
+    if entry:
+        lines.append(f"- **Entry point:** {entry}")
+    steps = source_sink.get("ordered_steps")
+    if isinstance(steps, list) and steps:
+        lines.append("- **Ordered data flow:**")
+        for index, step in enumerate(steps, 1):
+            lines.append(f"  {index}. {display(step, 2_000)}")
+    for label, key in (
+        ("Data-flow summary", "dataflow_summary"),
+        ("Attack scenario", "attack_scenario"),
+        ("Function route chain", "function_route_chain"),
+    ):
+        value = source_sink.get(key)
+        if value not in (None, "", []):
+            lines.append(f"- **{label}:** {display(value, 6_000)}")
+    if "sink_reached" in source_sink:
+        lines.append(f"- **Sink reached:** `{display(source_sink.get('sink_reached')) or 'unknown'}`")
+    if source_sink.get("attacker_control_at_sink"):
+        lines.append(f"- **Attacker control at sink:** `{display(source_sink.get('attacker_control_at_sink'))}`")
+    if source_sink.get("path_broken_at"):
+        lines.append(f"- **Path broken at:** {display(source_sink.get('path_broken_at'))}")
+
+    lines.extend(["", "### Call Chain Source", ""])
+    nodes = chain.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        lines.append("> No call-chain function source was preserved in the available artifacts.")
+    else:
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            node_function = str(node.get("function") or "unknown").replace("`", "'")
+            node_file = str(node.get("file") or "unknown").replace("`", "'")
+            role = str(node.get("role") or "context")
+            order = node.get("order")
+            prefix = f"{order}. " if isinstance(order, int) else ""
+            lines.append(f"#### {prefix}{node_function} ({role})")
+            lines.append(f"`{node_file}` ({line_range(node)})")
+            reason = display(node.get("reason"), 1_500)
+            if reason:
+                lines.append(f"\n说明：{reason}")
+            code = node.get("source_code")
+            if isinstance(code, str) and code:
+                fence = fence_for_path(node_file, fallback=language or "text")
+                lines.extend(["", f"```{fence}", code, "```"])
+            else:
+                lines.append("\n> 该函数的源码未保存在当前扫描产物中。")
+    omitted = chain.get("omitted_node_count")
+    unresolved = chain.get("unresolved_references")
+    if isinstance(omitted, int) and omitted:
+        lines.append(f"\n> 调用链还有 {omitted} 个节点因上下文上限未展开。")
+    if isinstance(unresolved, list) and unresolved:
+        lines.append(f"\n> 未解析的调用引用：{display(unresolved, 4_000)}")
+
+    lines.extend(["", "### Call Graph Evidence", ""])
+    edge_count = 0
+    for label, key in (
+        ("Native edges", "native_edges"),
+        ("Semantic edges", "semantic_edges"),
+        ("Projected/recovered edges", "projected_edges"),
+    ):
+        edges = graph.get(key)
+        if not isinstance(edges, list) or not edges:
+            continue
+        lines.append(f"- **{label}:**")
+        for edge in edges:
+            if not isinstance(edge, Mapping):
+                continue
+            source = str(edge.get("source") or "unknown").replace("`", "'")
+            target_name = str(edge.get("target") or "unknown").replace("`", "'")
+            kind = display(edge.get("kind"), 300)
+            lines.append(f"  - `{source}` → `{target_name}`" + (f" ({kind})" if kind else ""))
+            edge_count += 1
+    statistics = graph.get("statistics")
+    if isinstance(statistics, Mapping) and statistics:
+        lines.append(f"- **Graph statistics:** {display(statistics, 4_000)}")
+    recovery = graph.get("recovery_summary")
+    if isinstance(recovery, Mapping) and recovery:
+        lines.append(f"- **Recovery summary:** {display(recovery, 4_000)}")
+    coverage_note = display(graph.get("coverage_note"), 3_000)
+    if coverage_note:
+        lines.append(f"- **Coverage note:** {coverage_note}")
+    if edge_count == 0:
+        lines.append("> No local graph edge connected the selected context nodes.")
+
+    artifacts = provenance.get("artifacts")
+    if isinstance(artifacts, list) and artifacts:
+        lines.extend(["", f"证据来源产物：{display(artifacts, 2_000)}"])
+    lines.extend([
+        "",
+        "> 本节由扫描产物确定性生成，源码和行号未经过大模型改写；缺失内容表示扫描时没有保存对应证据。",
+    ])
+    return "\n".join(lines)
+
+
 def _artifact_code_by_route(payload) -> dict[str, str]:
     """Read a route-to-source map from a sibling scan artifact."""
     if not isinstance(payload, Mapping):
@@ -617,6 +767,7 @@ def _ensure_disclosure_sections(
     vulnerability_data: Mapping,
     metadata: Mapping,
     code_section: str,
+    context_section: str = "",
 ) -> str:
     """Fill mandatory report fields the LLM omitted or left as placeholders.
 
@@ -714,6 +865,17 @@ def _ensure_disclosure_sections(
             replacement = f"## {heading}\n\n{fallback}\n"
             output = output[:heading_match.start()] + replacement + output[heading_match.end():]
 
+    # Context is deterministic evidence, just like Vulnerable Code.  Strip a
+    # model-generated copy before appending ours so a short/verbose response
+    # cannot duplicate or rewrite line numbers and graph edges.
+    if context_section:
+        output = re.sub(
+            r"(?ims)^##\s+Evidence Context\s*$.*?(?=^##\s|\Z)",
+            "",
+            output,
+        ).rstrip()
+        output += "\n\n" + context_section.strip()
+
     return output.strip() + "\n"
 
 
@@ -796,6 +958,10 @@ def generate_disclosure(
         b.text for b in result.content if isinstance(b, TextBlock)
     )
     final_output = _splice_code_section(llm_output, code_section)
+    context_section = _render_disclosure_context(
+        vulnerability_data,
+        language=replacements["language"],
+    )
     final_output = _ensure_disclosure_sections(
         final_output,
         vulnerability_data,
@@ -806,6 +972,7 @@ def generate_disclosure(
             "analysis_date": replacements["analysis_date"],
         },
         code_section,
+        context_section=context_section,
     )
 
     return final_output, _extract_usage(

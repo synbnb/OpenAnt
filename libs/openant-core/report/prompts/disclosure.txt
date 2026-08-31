@@ -3,6 +3,14 @@ Generate a security disclosure document from the provided vulnerability data.
 INPUT DATA:
 {vulnerability_data}
 
+The vulnerability data may contain an `report_context` object. Use it as
+evidence when describing the exact file/line, source-to-sink flow, Stage-2
+entry path, and native/semantic/recovered call-graph relationships. Do not
+invent a function, edge, line number, or source statement that is not present
+in that context. The final report layer appends the verbatim source and call
+chain section deterministically, so you must not rewrite or reproduce source
+code from memory.
+
 OPENHARMONY PLATFORM CONTEXT (if present):
 {platform_context}
 
@@ -64,6 +72,11 @@ INSTRUCTIONS:
 - Do NOT include a "## Vulnerable Code" section — it is added automatically after your output is generated. Do NOT emit code fences with the vulnerable source code. If you need to reference the vulnerable code, refer to the function name and describe the issue in prose.
 - Other code snippets (Suggested Fix): show only the minimal change needed, not entire files
 - Steps to Reproduce: if dynamic_testing data exists, use those steps; otherwise write "[REQUIRES DYNAMIC TESTING]" for each step
+- When `report_context` is present, mention the target file and line range and
+  summarize the ordered source-to-sink steps in the Summary or Steps section.
+  Distinguish native local edges from semantic/recovered or cross-process
+  evidence; absence of a native edge is not proof that a Binder/SA path is
+  unreachable.
 - Impact: 3-5 bullet points, no sub-bullets
 - Suggested Fix: show minimal code change, use comments to indicate what was added
 - Do not include CVSS scores or severity ratings

@@ -194,3 +194,54 @@ def test_historical_pipeline_is_enriched_from_sibling_artifacts(tmp_path: Path):
     assert finding["report_context"]["target"]["source_location"]["start_line"] == 10
     assert finding["report_context"]["source_to_sink"]["entry_point"].startswith("AudioStub")
     assert finding["location"]["start_line"] == 10
+
+
+def test_context_renderer_keeps_source_and_edges_out_of_model_rewrite():
+    from report import generator
+
+    finding = {
+        "route_key": "services/audio.cpp:AudioService::Enable",
+        "location": {
+            "file": "services/audio.cpp",
+            "function": "AudioService::Enable",
+            "start_line": 10,
+            "end_line": 12,
+        },
+        "report_context": {
+            "target": {"source_location": {
+                "file": "services/audio.cpp",
+                "function": "AudioService::Enable",
+                "start_line": 10,
+                "end_line": 12,
+                "route_key": "services/audio.cpp:AudioService::Enable",
+            }},
+            "source_to_sink": {
+                "entry_point": "AudioStub::OnRemoteRequest -> AudioStub::EnableInner",
+                "ordered_steps": ["caller input -> EnableInner", "EnableInner -> sink"],
+                "sink_reached": True,
+            },
+            "call_chain": {"nodes": [{
+                "order": 1,
+                "role": "entry",
+                "function": "AudioStub::OnRemoteRequest",
+                "file": "services/audio_stub.cpp",
+                "start_line": 20,
+                "end_line": 30,
+                "source_code": "int OnRemoteRequest(...) { return 0; }",
+            }]},
+            "call_graph": {"native_edges": [{
+                "source": "services/audio_stub.cpp:AudioStub::OnRemoteRequest",
+                "target": "services/audio.cpp:AudioService::Enable",
+                "kind": "native_dispatch_to_handler",
+            }]},
+            "provenance": {"artifacts": ["call_graph.json"]},
+        },
+    }
+
+    rendered = generator._render_disclosure_context(finding, language="cpp")
+    assert "services/audio.cpp" in rendered
+    assert "第 10-12 行" in rendered
+    assert "AudioStub::OnRemoteRequest" in rendered
+    assert "int OnRemoteRequest(...)" in rendered
+    assert "native_dispatch_to_handler" in rendered
+    assert "Sink reached" in rendered
