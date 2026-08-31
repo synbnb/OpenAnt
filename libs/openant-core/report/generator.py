@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
 from core.language_registry import fence_for_path
+from core.report_context import build_disclosure_context, load_report_context_index
 from .schema import validate_pipeline_output, ValidationError
 from utilities.file_io import normalize_results, open_utf8, read_json
 from utilities.llm import (
@@ -451,6 +452,33 @@ def _report_language(file_path: str, pipeline_data: Mapping) -> str:
     return suffixes.get(suffix, str(pipeline_data.get("language") or "text"))
 
 
+def _prompt_payload(vulnerability_data: Mapping) -> dict:
+    """Copy finding evidence while keeping verbatim source out of the LLM.
+
+    Source text is rendered deterministically by ``_splice_code_section`` (and
+    will be rendered for the call-chain context by the report layer).  Keeping
+    it out of the model prompt prevents a disclosure model from rewriting or
+    fabricating source, while still exposing locations, graph edges and the
+    Stage-2 source-to-sink explanation.  The original finding object is never
+    mutated.
+    """
+    payload = dict(vulnerability_data)
+    context = payload.get("report_context")
+    if not isinstance(context, Mapping):
+        return payload
+    context_copy = json.loads(json.dumps(context, ensure_ascii=False))
+    target = context_copy.get("target")
+    if isinstance(target, dict):
+        target.pop("source_code", None)
+    chain = context_copy.get("call_chain")
+    if isinstance(chain, dict):
+        for node in chain.get("nodes", []) or []:
+            if isinstance(node, dict):
+                node.pop("source_code", None)
+    payload["report_context"] = context_copy
+    return payload
+
+
 def _artifact_code_by_route(payload) -> dict[str, str]:
     """Read a route-to-source map from a sibling scan artifact."""
     if not isinstance(payload, Mapping):
@@ -494,19 +522,32 @@ def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
     if not isinstance(findings, list):
         return pipeline_data
 
-    source_map = {}
     scan_dir = Path(pipeline_path).resolve().parent
+    source_map = {}
+    result_by_route = {}
     for name in ("results_verified.json", "results.json", "call_graph.json"):
         candidate = scan_dir / name
         try:
             if candidate.is_file():
-                recovered = _artifact_code_by_route(read_json(candidate))
+                payload = read_json(candidate)
+                recovered = _artifact_code_by_route(payload)
                 for route, code in recovered.items():
                     source_map.setdefault(route, code)
+                if name in ("results_verified.json", "results.json") and isinstance(payload, Mapping):
+                    for result in payload.get("results", []) or []:
+                        if not isinstance(result, Mapping):
+                            continue
+                        route = result.get("route_key") or result.get("unit_id")
+                        if isinstance(route, str) and route:
+                            result_by_route.setdefault(route, result)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-    if not source_map:
-        return pipeline_data
+
+    # Newer pipeline files already carry this context.  For historical files,
+    # rebuild it from sibling artifacts in memory so report regeneration gains
+    # exact line ranges, source-to-sink evidence, and graph edges without
+    # rewriting the original scan output.
+    context_index = load_report_context_index(scan_dir)
 
     language = ""
     repository = pipeline_data.get("repository")
@@ -520,18 +561,39 @@ def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
             continue
         file_path = str(location.get("file") or "unknown")
         function = str(location.get("function") or "unknown")
-        route = f"{file_path}:{function}"
+        route = str(finding.get("route_key") or f"{file_path}:{function}")
         code = finding.get("vulnerable_code") or source_map.get(route)
-        if not isinstance(code, str) or not code:
-            continue
-        finding["vulnerable_code"] = code
-        if not finding.get("vulnerable_code_section"):
+        if isinstance(code, str) and code:
+            finding["vulnerable_code"] = code
+        if isinstance(code, str) and code and not finding.get("vulnerable_code_section"):
             fence = fence_for_path(file_path, fallback=language or "text")
             finding["vulnerable_code_section"] = (
                 "## Vulnerable Code\n\n"
                 f"`{file_path}`:\n\n"
                 f"```{fence}\n{code}\n```"
             )
+
+        if not finding.get("route_key"):
+            finding["route_key"] = route
+        if not finding.get("report_context"):
+            full_result = result_by_route.get(route, finding)
+            context = build_disclosure_context(
+                context_index,
+                route,
+                finding=finding,
+                full_result=full_result,
+                source_code=code if isinstance(code, str) else "",
+            )
+            finding["report_context"] = context
+            location = context.get("target", {}).get("source_location", {})
+            if isinstance(location, Mapping):
+                # Preserve the historical file/function fields while adding
+                # exact source lines when the graph/dataset knows them.
+                finding_location = finding.setdefault("location", {})
+                if isinstance(finding_location, dict):
+                    for key in ("start_line", "end_line"):
+                        if finding_location.get(key) is None and location.get(key) is not None:
+                            finding_location[key] = location[key]
     return pipeline_data
 
 
@@ -686,10 +748,10 @@ def generate_disclosure(
         code_section = str(code_section)
     if not code_section:
         code_section = _fallback_code_section(vulnerability_data)
-    payload = {
+    payload = _prompt_payload({
         k: v for k, v in vulnerability_data.items()
         if k not in ("vulnerable_code_section", "vulnerable_code")
-    }
+    })
     payload["product_name"] = product_name
 
     affected_versions = _report_affected_versions(report_data)

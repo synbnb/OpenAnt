@@ -1,0 +1,196 @@
+"""Tests for evidence-rich disclosure context construction."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+CORE_ROOT = Path(__file__).resolve().parents[2]
+if str(CORE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CORE_ROOT))
+
+
+def _function(route: str, code: str, start: int, end: int) -> dict:
+    file_path, name = route.split(":", 1)
+    return {
+        "name": name,
+        "file_path": file_path,
+        "start_line": start,
+        "end_line": end,
+        "code": code,
+        "unit_type": "method",
+    }
+
+
+def test_pipeline_output_contains_source_sink_and_graph_context(tmp_path: Path):
+    from core import reporter
+
+    target = "services/medical_sensor.cpp:MedicalSensorServiceClient::EnableSensor"
+    init = "services/medical_sensor.cpp:MedicalSensorServiceClient::InitServiceClient"
+    entry = "services/medical_sensor_stub.cpp:MedicalSensorServiceStub::OnRemoteRequest"
+    handler = "services/medical_sensor_stub.cpp:MedicalSensorServiceStub::AfeEnableInner"
+    downstream = "services/medical_sensor.cpp:MedicalSensorService::EnableSensor"
+    functions = {
+        target: _function(target, "int EnableSensor(...) { return afe->EnableSensor(...); }", 97, 114),
+        init: _function(init, "int InitServiceClient() { return 0; }", 120, 130),
+        entry: _function(entry, "int OnRemoteRequest(...) { dispatch(); }", 30, 80),
+        handler: _function(handler, "int AfeEnableInner(...) { return EnableSensor(...); }", 90, 110),
+        downstream: _function(downstream, "int EnableSensor(...) { return SaveSubscriber(...); }", 200, 230),
+    }
+    forward = {
+        target: [init],
+        entry: [],
+        handler: [downstream],
+    }
+    reverse = {
+        init: [target],
+        downstream: [handler],
+        target: [handler],
+    }
+    result = {
+        "dataset": "medical_sensor",
+        "metrics": {"total": 1, "vulnerable": 1},
+        "results": [{
+            "route_key": target,
+            "unit_id": target,
+            "finding": "vulnerable",
+            "verdict": "vulnerable",
+            "reasoning": "unchecked timing values reach a signed division",
+            "attack_scenario": "Send a malformed timing pair.",
+            "dataflow_summary": "caller -> client -> service -> division",
+            "verification": {
+                "agree": True,
+                "exploit_path": {
+                    "entry_point": "MedicalSensorServiceStub::OnRemoteRequest -> MedicalSensorServiceStub::AfeEnableInner (ENABLE_SENSOR)",
+                    "data_flow": [
+                        "Caller controls samplingPeriod and maxReportDelay.",
+                        "AfeEnableInner calls MedicalSensorService::EnableSensor.",
+                        "MedicalSensorService::EnableSensor reaches signed division.",
+                    ],
+                    "sink_reached": True,
+                    "attacker_control_at_sink": "full",
+                    "path_broken_at": None,
+                },
+            },
+        }],
+        "confirmed_findings": [{
+            "route_key": target,
+            "unit_id": target,
+            "finding": "vulnerable",
+            "verdict": "vulnerable",
+        }],
+        "code_by_route": {target: functions[target]["code"]},
+    }
+    (tmp_path / "results_verified.json").write_text(json.dumps(result), encoding="utf-8")
+    (tmp_path / "call_graph.json").write_text(json.dumps({
+        "functions": functions,
+        "call_graph": forward,
+        "reverse_call_graph": reverse,
+        "statistics": {"function_count": len(functions), "edge_count": 3},
+    }), encoding="utf-8")
+    (tmp_path / "dataset_enhanced.json").write_text(json.dumps({
+        "units": [{
+            "id": target,
+            "code": {"primary_origin": {"file_path": target.split(":", 1)[0], "start_line": 97, "end_line": 114, "function_name": target.split(":", 1)[1]}, "primary_code": functions[target]["code"]},
+            "agent_context": {"include_functions": [{"id": downstream, "reason": "下游服务处理函数"}]},
+        }],
+        "metadata": {"agentic_enhanced": True},
+    }), encoding="utf-8")
+    (tmp_path / "semantic_graph.json").write_text(json.dumps({
+        "edges": [{
+            "source_id": f"function:{entry}",
+            "target_id": f"function:{handler}",
+            "kind": "native_dispatch_to_handler",
+            "confidence": 0.98,
+        }],
+    }), encoding="utf-8")
+    (tmp_path / "dispatch_recovery_diff.json").write_text(json.dumps({
+        "projected_edges": [{"source_id": entry, "target_id": handler, "edge_kinds": ["native_dispatch_to_handler"], "is_new": True}],
+        "summary": {"projected_edge_count": 1, "new_edge_count": 1},
+    }), encoding="utf-8")
+
+    output_path = tmp_path / "pipeline_output.json"
+    reporter.build_pipeline_output(
+        str(tmp_path / "results_verified.json"),
+        str(output_path),
+        repo_name="medical_sensor",
+        language="cpp",
+    )
+    finding = json.loads(output_path.read_text(encoding="utf-8"))["findings"][0]
+
+    assert finding["route_key"] == target
+    assert finding["location"]["start_line"] == 97
+    assert finding["location"]["end_line"] == 114
+    context = finding["report_context"]
+    assert context["target"]["source_location"]["route_key"] == target
+    assert context["source_to_sink"]["sink_reached"] is True
+    assert "MedicalSensorService::EnableSensor" in context["source_to_sink"]["ordered_steps"][1]
+    routes = [node["route_key"] for node in context["call_chain"]["nodes"]]
+    assert entry in routes
+    assert handler in routes
+    assert downstream in routes
+    assert context["call_graph"]["semantic_edges"][0]["kind"] == "native_dispatch_to_handler"
+    assert context["call_graph"]["projected_edges"][0]["is_new"] is True
+    assert context["call_graph"]["enhanced_dataset"] is True
+    assert context["provenance"]["artifacts"]
+
+
+def test_context_builder_is_optional_when_scan_artifacts_are_missing(tmp_path: Path):
+    from core.report_context import build_disclosure_context, load_report_context_index
+
+    route = "services/audio.cpp:AudioService::Enable"
+    index = load_report_context_index(tmp_path)
+    context = build_disclosure_context(
+        index,
+        route,
+        finding={"finding": "vulnerable"},
+        full_result={"reasoning": "manual review required"},
+        source_code="void Enable() {}",
+    )
+
+    assert context["target"]["source_location"]["route_key"] == route
+    assert context["target"]["source_code"] == "void Enable() {}"
+    assert context["call_chain"]["node_count"] == 1
+    assert context["call_graph"]["native_edges"] == []
+    assert context["provenance"]["artifacts"] == []
+
+
+def test_historical_pipeline_is_enriched_from_sibling_artifacts(tmp_path: Path):
+    from report import generator
+
+    route = "services/audio.cpp:AudioService::Enable"
+    (tmp_path / "results_verified.json").write_text(json.dumps({
+        "results": [{
+            "route_key": route,
+            "unit_id": route,
+            "finding": "vulnerable",
+            "verification": {"exploit_path": {
+                "entry_point": "AudioStub::OnRemoteRequest -> AudioStub::EnableInner",
+                "data_flow": ["AudioStub::EnableInner calls AudioService::Enable"],
+            }},
+        }],
+        "code_by_route": {route: "int Enable() { return 0; }"},
+    }), encoding="utf-8")
+    (tmp_path / "call_graph.json").write_text(json.dumps({
+        "functions": {
+            route: _function(route, "int Enable() { return 0; }", 10, 12),
+        },
+        "call_graph": {},
+        "reverse_call_graph": {},
+    }), encoding="utf-8")
+    pipeline_path = tmp_path / "pipeline_output.json"
+    pipeline_path.write_text(json.dumps({
+        "repository": {"name": "audio"},
+        "findings": [{
+            "id": "VULN-001",
+            "route_key": route,
+            "location": {"file": "services/audio.cpp", "function": "AudioService::Enable"},
+        }],
+    }), encoding="utf-8")
+
+    hydrated = generator._hydrate_pipeline_findings(str(pipeline_path), json.loads(pipeline_path.read_text()))
+    finding = hydrated["findings"][0]
+    assert finding["report_context"]["target"]["source_location"]["start_line"] == 10
+    assert finding["report_context"]["source_to_sink"]["entry_point"].startswith("AudioStub")
+    assert finding["location"]["start_line"] == 10

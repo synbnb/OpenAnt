@@ -22,6 +22,7 @@ from pathlib import Path
 
 from core.schemas import ReportResult
 from core.language_registry import fence_for_path
+from core.report_context import build_disclosure_context, load_report_context_index
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
 from utilities.file_io import normalize_results, open_utf8, read_json, write_json
 
@@ -403,6 +404,12 @@ def build_pipeline_output(
     # building findings so disclosures remain source-faithful even when the
     # scan itself predates the verifier fix.
     code_by_route = _load_code_by_route(results_path, experiment)
+    # Join the optional dataset/call-graph artifacts once.  The resulting
+    # index is bounded per finding by ``build_disclosure_context`` and is kept
+    # additive so older consumers can ignore the report context safely.
+    report_context_index = load_report_context_index(
+        os.path.dirname(os.path.abspath(results_path))
+    )
     metrics = experiment.get("metrics", {})
 
     # Use confirmed_findings if present (verified results), else filter manually
@@ -590,8 +597,18 @@ def build_pipeline_output(
         else:
             stage2_verdict = finding.get("finding", "vulnerable")
 
+        report_context = build_disclosure_context(
+            report_context_index,
+            route_key,
+            finding=finding,
+            full_result=full_result,
+            source_code=vulnerable_code,
+        )
+        target_location = report_context.get("target", {}).get("source_location", {})
+
         findings_data.append({
             "id": f"VULN-{i+1:03d}",
+            "route_key": route_key,
             "name": vuln.get("name", finding.get("finding", "Unknown Vulnerability")),
             "short_name": vuln.get("short_name", finding.get("verdict", "vuln")),
             "location": {
@@ -602,6 +619,8 @@ def build_pipeline_output(
                 # ``file`` inside ``function`` (D3b).
                 "file": route_key.split(":")[0] if ":" in route_key else "unknown",
                 "function": route_key.split(":", 1)[1] if ":" in route_key else route_key,
+                "start_line": target_location.get("start_line"),
+                "end_line": target_location.get("end_line"),
             },
             "cwe_id": vuln.get("cwe_id") or finding.get("cwe_id") or full_result.get("cwe_id", 0),
             "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "Unknown"),
@@ -613,6 +632,10 @@ def build_pipeline_output(
             "impact": impact,
             "suggested_fix": suggested_fix,
             "steps_to_reproduce": steps_to_reproduce,
+            # Evidence-rich, additive context used by the disclosure model and
+            # by the Web/UI viewers.  Existing report consumers only read the
+            # baseline fields above, so this remains backwards compatible.
+            "report_context": report_context,
         })
 
     # Compute costs and durations from step reports
