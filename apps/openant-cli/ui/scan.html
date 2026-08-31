@@ -398,11 +398,12 @@
   .disclosure-card {
     display: grid; gap: 8px; min-width: 0; padding: 12px 14px;
     border: 1px solid #efb6bb; border-radius: 9px;
-    background: var(--danger-soft); color: var(--ink); text-decoration: none;
+    background: var(--danger-soft); color: var(--ink);
     transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
   }
   .disclosure-card:hover { border-color: #d98c95; background: #fff4f4; transform: translateY(-1px); }
-  .disclosure-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .disclosure-card-link { display: grid; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
+  .disclosure-card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 5px; }
   .disclosure-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
   .disclosure-card-title { min-width: 0; color: #7d2029; font-size: 0.8rem; font-weight: 800; overflow-wrap: anywhere; }
   .disclosure-card-status { flex: 0 0 auto; padding: 3px 6px; border: 1px solid #e3a4aa; border-radius: 5px; color: #8f2831; font: 0.62rem/1.2 var(--mono); font-weight: 800; letter-spacing: 0.03em; }
@@ -413,6 +414,17 @@
   .disclosure-card-meta-value.mono { color: #66343a; font: 0.68rem/1.45 var(--mono); }
   .disclosure-card-summary { margin: 0; color: #633b40; font-size: 0.73rem; line-height: 1.55; overflow-wrap: anywhere; }
   .disclosure-card-summary-label { color: #8a5a60; font-weight: 750; }
+  .disclosure-evidence { border-top: 1px solid #e9b7bc; padding-top: 7px; }
+  .disclosure-evidence > summary { cursor: pointer; color: #7d2029; font-size: 0.71rem; font-weight: 800; }
+  .disclosure-evidence > summary::marker { color: #a7444d; }
+  .disclosure-evidence-body { display: grid; gap: 7px; padding-top: 8px; color: #633b40; font-size: 0.7rem; line-height: 1.5; }
+  .disclosure-evidence-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; min-width: 0; }
+  .disclosure-evidence-label { color: #8a5a60; font-weight: 750; }
+  .disclosure-evidence-value { min-width: 0; overflow-wrap: anywhere; }
+  .disclosure-call-chain { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .disclosure-call-node { min-width: 0; overflow-wrap: anywhere; }
+  .disclosure-call-node code { color: #66343a; font: 0.67rem/1.4 var(--mono); }
+  .disclosure-call-role { color: #8a5a60; font-size: 0.64rem; }
 
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   @media (max-width: 1023px) {
@@ -813,9 +825,24 @@ const translations = {
     'disclosures.subtitle': '为已确认问题生成的独立披露文件。',
     'disclosures.status': '判定',
     'disclosures.type': '漏洞类型',
+    'disclosures.cwe': 'CWE',
     'disclosures.file': '文件路径',
     'disclosures.function': '函数',
+    'disclosures.lines': '代码行',
+    'disclosures.affected': '受影响版本',
+    'disclosures.repair': '修复状态',
+    'disclosures.repair.generated': '已生成修复代码',
+    'disclosures.repair.provided': '已有修复建议',
+    'disclosures.repair.unavailable': '证据不足，待人工修复',
+    'disclosures.repair.unknown': '未记录',
     'disclosures.summary': '漏洞简述',
+    'disclosures.evidence': '证据与调用链',
+    'disclosures.sourceToSink': 'Source → Sink',
+    'disclosures.callChain': '调用链',
+    'disclosures.callChainCount': '个函数节点',
+    'disclosures.noContext': '当前扫描没有保存可展示的调用链证据，请打开完整披露文件查看详情。',
+    'disclosures.noSourceToSink': '未保存 source → sink 路径摘要。',
+    'disclosures.callChainOmitted': '另有 {count} 个节点因上下文上限未展开。',
     'disclosures.notProvided': '未提供',
     'disclosures.noSummary': '披露文件未提供摘要。',
     'unit.seconds': '秒',
@@ -973,9 +1000,24 @@ const translations = {
     'disclosures.subtitle': 'Standalone disclosure files generated for confirmed findings.',
     'disclosures.status': 'Verdict',
     'disclosures.type': 'Vulnerability type',
+    'disclosures.cwe': 'CWE',
     'disclosures.file': 'File path',
     'disclosures.function': 'Function',
+    'disclosures.lines': 'Code lines',
+    'disclosures.affected': 'Affected version',
+    'disclosures.repair': 'Repair status',
+    'disclosures.repair.generated': 'Repair code generated',
+    'disclosures.repair.provided': 'Repair guidance available',
+    'disclosures.repair.unavailable': 'Insufficient evidence; manual fix',
+    'disclosures.repair.unknown': 'Not recorded',
     'disclosures.summary': 'Summary',
+    'disclosures.evidence': 'Evidence and call chain',
+    'disclosures.sourceToSink': 'Source → Sink',
+    'disclosures.callChain': 'Call chain',
+    'disclosures.callChainCount': 'function nodes',
+    'disclosures.noContext': 'No displayable call-chain evidence was saved for this scan. Open the full disclosure for details.',
+    'disclosures.noSourceToSink': 'No source-to-sink path summary was saved.',
+    'disclosures.callChainOmitted': '{count} additional nodes were omitted by the context limit.',
     'disclosures.notProvided': 'Not provided',
     'disclosures.noSummary': 'No summary was provided in the disclosure file.',
     'unit.seconds': 's',
@@ -1300,6 +1342,7 @@ let pipelineTimer = null;
 let artifactTimer = null;
 let lastPipelineView = null;
 let lastArtifacts = null;
+let lastDisclosures = [];
 let selectedStage = 'parse';
 let stageWasChosen = false;
 const stageCounts = {};
@@ -1361,6 +1404,7 @@ function applyLanguage(language) {
   });
   renderStageWorkbench();
   renderArtifacts(lastArtifacts || []);
+  renderDisclosures(lastDisclosures || []);
   if (explorerArtifact) renderExplorer();
 }
 
@@ -3236,66 +3280,153 @@ function appendLine(rawLine) {
   tryExtractCounts(rawLine);
 }
 
+function disclosureRepairLabel(value) {
+  const status = String(value || '').toLowerCase();
+  if (status === 'generated' || status === 'code_generated') return t('disclosures.repair.generated');
+  if (status === 'provided' || status === 'available') return t('disclosures.repair.provided');
+  if (status === 'unavailable' || status === 'manual_review' || status === 'manual') return t('disclosures.repair.unavailable');
+  return value || t('disclosures.repair.unknown');
+}
+
+function disclosureLineRange(disclosure) {
+  const start = Number(disclosure.start_line || 0);
+  const end = Number(disclosure.end_line || 0);
+  if (start > 0 && end > 0) return start + '-' + end;
+  if (start > 0) return String(start);
+  return '';
+}
+
+function renderDisclosures(list) {
+  lastDisclosures = Array.isArray(list) ? list : [];
+  const container = document.getElementById('disclosures');
+  const links = document.getElementById('disclosure-links');
+  if (!container || !links) return;
+  links.replaceChildren();
+  if (lastDisclosures.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  lastDisclosures.forEach(function(disclosure) {
+    const card = document.createElement('article');
+    card.className = 'disclosure-card';
+    const link = document.createElement('a');
+    link.href = disclosure.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.className = 'disclosure-card-link';
+
+    const title = disclosure.vulnerability_type || disclosure.name || t('disclosures.status');
+    link.setAttribute('aria-label', title + ': ' + (disclosure.summary || t('disclosures.noSummary')));
+
+    const head = document.createElement('div');
+    head.className = 'disclosure-card-head';
+    const titleNode = document.createElement('div');
+    titleNode.className = 'disclosure-card-title';
+    titleNode.textContent = title;
+    const status = document.createElement('span');
+    status.className = 'disclosure-card-status';
+    status.textContent = disclosure.label || t('disclosures.notProvided');
+    head.append(titleNode, status);
+    link.appendChild(head);
+
+    const meta = document.createElement('div');
+    meta.className = 'disclosure-card-meta';
+    function appendMeta(labelKey, value, mono) {
+      const row = document.createElement('div');
+      row.className = 'disclosure-card-meta-row';
+      const label = document.createElement('span');
+      label.className = 'disclosure-card-meta-label';
+      label.textContent = t(labelKey);
+      const valueNode = document.createElement('span');
+      valueNode.className = 'disclosure-card-meta-value' + (mono ? ' mono' : '');
+      valueNode.textContent = value || t('disclosures.notProvided');
+      row.append(label, valueNode);
+      meta.appendChild(row);
+    }
+    const cwe = disclosure.cwe_id ? 'CWE-' + disclosure.cwe_id + (disclosure.cwe_name ? ' (' + disclosure.cwe_name + ')' : '') : disclosure.vulnerability_type;
+    appendMeta('disclosures.cwe', cwe, false);
+    appendMeta('disclosures.file', disclosure.file_path, true);
+    appendMeta('disclosures.function', disclosure.function, true);
+    appendMeta('disclosures.lines', disclosureLineRange(disclosure), false);
+    appendMeta('disclosures.affected', disclosure.affected_version, true);
+    appendMeta('disclosures.repair', disclosureRepairLabel(disclosure.repair_status), false);
+    link.appendChild(meta);
+
+    const summary = document.createElement('p');
+    summary.className = 'disclosure-card-summary';
+    const summaryLabel = document.createElement('span');
+    summaryLabel.className = 'disclosure-card-summary-label';
+    summaryLabel.textContent = t('disclosures.summary') + ': ';
+    summary.append(summaryLabel, document.createTextNode(disclosure.summary || t('disclosures.noSummary')));
+    link.appendChild(summary);
+    card.appendChild(link);
+
+    const evidence = document.createElement('details');
+    evidence.className = 'disclosure-evidence';
+    const evidenceSummary = document.createElement('summary');
+    evidenceSummary.textContent = t('disclosures.evidence');
+    evidence.appendChild(evidenceSummary);
+    const evidenceBody = document.createElement('div');
+    evidenceBody.className = 'disclosure-evidence-body';
+    function appendEvidence(labelKey, value, mono) {
+      const row = document.createElement('div');
+      row.className = 'disclosure-evidence-row';
+      const label = document.createElement('span');
+      label.className = 'disclosure-evidence-label';
+      label.textContent = t(labelKey);
+      const valueNode = document.createElement('span');
+      valueNode.className = 'disclosure-evidence-value' + (mono ? ' mono' : '');
+      valueNode.textContent = value || t('disclosures.notProvided');
+      row.append(label, valueNode);
+      evidenceBody.appendChild(row);
+    }
+    appendEvidence('disclosures.sourceToSink', disclosure.source_to_sink || t('disclosures.noSourceToSink'), true);
+    const chain = Array.isArray(disclosure.call_chain) ? disclosure.call_chain : [];
+    const chainLabel = document.createElement('span');
+    chainLabel.className = 'disclosure-evidence-label';
+    chainLabel.textContent = t('disclosures.callChain') + (disclosure.call_chain_count ? ' (' + disclosure.call_chain_count + ' ' + t('disclosures.callChainCount') + ')' : '');
+    evidenceBody.appendChild(chainLabel);
+    if (chain.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'disclosure-evidence-value';
+      empty.textContent = disclosure.context_available ? t('disclosures.notProvided') : t('disclosures.noContext');
+      evidenceBody.appendChild(empty);
+    } else {
+      const listNode = document.createElement('ol');
+      listNode.className = 'disclosure-call-chain';
+      chain.forEach(function(node) {
+        const item = document.createElement('li');
+        item.className = 'disclosure-call-node';
+        const fn = node.function || t('disclosures.notProvided');
+        const file = node.file || t('disclosures.notProvided');
+        const lines = node.start_line && node.end_line ? ':' + node.start_line + '-' + node.end_line : '';
+        item.append(document.createTextNode(fn + ' · '), element('code', '', file + lines));
+        if (node.role) {
+          item.append(document.createTextNode(' '));
+          item.append(element('span', 'disclosure-call-role', '[' + node.role + ']'));
+        }
+        listNode.appendChild(item);
+      });
+      evidenceBody.appendChild(listNode);
+    }
+    if (Number(disclosure.call_chain_omitted || 0) > 0) {
+      const omitted = document.createElement('div');
+      omitted.className = 'disclosure-evidence-value';
+      omitted.textContent = t('disclosures.callChainOmitted').replace('{count}', String(disclosure.call_chain_omitted));
+      evidenceBody.appendChild(omitted);
+    }
+    evidence.appendChild(evidenceBody);
+    card.appendChild(evidence);
+    links.appendChild(card);
+  });
+  container.style.display = 'block';
+}
+
 function loadDisclosures() {
   fetch('/disclosures/' + jobID)
     .then(function(response) { return response.ok ? response.json() : []; })
-    .then(function(list) {
-      if (!list || list.length === 0) return;
-      const container = document.getElementById('disclosures');
-      const links = document.getElementById('disclosure-links');
-      links.replaceChildren();
-      list.forEach(function(disclosure) {
-        const link = document.createElement('a');
-        link.href = disclosure.url;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.className = 'disclosure-card';
-
-        const title = disclosure.vulnerability_type || disclosure.name || t('disclosures.status');
-        link.setAttribute('aria-label', title + ': ' + (disclosure.summary || t('disclosures.noSummary')));
-
-        const head = document.createElement('div');
-        head.className = 'disclosure-card-head';
-        const titleNode = document.createElement('div');
-        titleNode.className = 'disclosure-card-title';
-        titleNode.textContent = title;
-        const status = document.createElement('span');
-        status.className = 'disclosure-card-status';
-        status.textContent = disclosure.label || t('disclosures.notProvided');
-        head.append(titleNode, status);
-        link.appendChild(head);
-
-        const meta = document.createElement('div');
-        meta.className = 'disclosure-card-meta';
-        function appendMeta(labelKey, value, mono) {
-          const row = document.createElement('div');
-          row.className = 'disclosure-card-meta-row';
-          const label = document.createElement('span');
-          label.className = 'disclosure-card-meta-label';
-          label.textContent = t(labelKey);
-          const valueNode = document.createElement('span');
-          valueNode.className = 'disclosure-card-meta-value' + (mono ? ' mono' : '');
-          valueNode.textContent = value || t('disclosures.notProvided');
-          row.append(label, valueNode);
-          meta.appendChild(row);
-        }
-        appendMeta('disclosures.type', disclosure.vulnerability_type, false);
-        appendMeta('disclosures.file', disclosure.file_path, true);
-        appendMeta('disclosures.function', disclosure.function, true);
-        link.appendChild(meta);
-
-        const summary = document.createElement('p');
-        summary.className = 'disclosure-card-summary';
-        const summaryLabel = document.createElement('span');
-        summaryLabel.className = 'disclosure-card-summary-label';
-        summaryLabel.textContent = t('disclosures.summary') + ': ';
-        summary.append(summaryLabel, document.createTextNode(disclosure.summary || t('disclosures.noSummary')));
-        link.appendChild(summary);
-        links.appendChild(link);
-      });
-      container.style.display = 'block';
-    })
-    .catch(function() {});
+    .then(function(list) { renderDisclosures(list); })
+    .catch(function() { renderDisclosures([]); });
 }
 
 function onDone(status) {
