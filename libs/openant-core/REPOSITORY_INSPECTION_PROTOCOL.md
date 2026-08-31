@@ -311,9 +311,13 @@ python experiment.py --dataset <repo>_exploitable --verify-verbose
 
 ## Step 8: Stage 2 Attacker Simulation
 
-**Purpose:** Verify Stage 1 findings using attacker simulation on **vulnerable and bypassable units only**.
+**Purpose:** Verify Stage 1 findings using attacker simulation on vulnerable/bypassable units and
+run evidence-recovery review on Stage-1 `inconclusive` units. Safe/protected units are not sent
+to the model.
 
-**Input:** Only units from Step 7 whose Stage 1 verdict is `vulnerable` or `bypassable`. Do NOT send `safe`, `protected`, `inconclusive`, or error results to Stage 2.
+**Input:** Units from Step 7 whose Stage 1 verdict is `vulnerable`, `bypassable`, or
+`inconclusive`. `inconclusive` entries are reviewed to recover missing downstream/call-path
+evidence; hard errors, `safe`, and `protected` results remain out of scope.
 
 **Command:**
 ```bash

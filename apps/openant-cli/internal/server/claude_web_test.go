@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,37 @@ func TestClaudeOutputIsTerminalSafeAndReplayable(t *testing.T) {
 	remaining := session.eventsAfter(events[0].ID)
 	if len(remaining) != 1 || remaining[0].Kind != "input" {
 		t.Fatalf("unexpected replay events: %#v", remaining)
+	}
+}
+
+func TestClaudeOutputDecoderHandlesSplitANSIAndUTF8(t *testing.T) {
+	var decoder claudeOutputDecoder
+	if got := decoder.decode([]byte("prefix \x1b[3")); got != "prefix " {
+		t.Fatalf("first chunk = %q, want visible prefix only", got)
+	}
+	if got := decoder.decode([]byte("2m就绪\x1b[0m\r\nnext")); got != "就绪\nnext" {
+		t.Fatalf("second chunk = %q, want split escape and CRLF normalized", got)
+	}
+
+	// A UTF-8 code point may be split independently of an ANSI sequence.
+	var utfDecoder claudeOutputDecoder
+	runes := []byte("中文")
+	if got := utfDecoder.decode(runes[:1]); got != "" {
+		t.Fatalf("partial UTF-8 byte was rendered as %q", got)
+	}
+	if got := utfDecoder.decode(runes[1:3]); got != "中" {
+		t.Fatalf("completed first UTF-8 code point = %q, want 中", got)
+	}
+	if got := utfDecoder.decode(runes[3:]); got != "文" {
+		t.Fatalf("second UTF-8 code point = %q, want 文", got)
+	}
+}
+
+func TestClaudeOutputDecoderDropsOSCAndControlNoise(t *testing.T) {
+	var decoder claudeOutputDecoder
+	input := "before\x1b(B\x1b]0;Claude Code\x07after\x1b[2K\r\b\x00done"
+	if got := decoder.decode([]byte(input)); got != "beforeafter\ndone" {
+		t.Fatalf("decoded output = %q, want OSC/CSI/control-free text", got)
 	}
 }
 
@@ -208,6 +240,39 @@ func TestClaudeSessionCanRelayARealPTYProcess(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("PTY output was not captured: %#v", events)
+	}
+}
+
+func TestClaudeSessionDecodesPTYControlSequences(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "fake-claude-control-output")
+	script := "#!/bin/sh\nprintf '\\033[3'\nprintf '2mready\\033[0m\\r\\n'\nprintf '\\033(Bdone\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := os.Getenv("OPENANT_CLAUDE_BIN")
+	if err := os.Setenv("OPENANT_CLAUDE_BIN", bin); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("OPENANT_CLAUDE_BIN", old) })
+
+	session := newClaudeSession(t.TempDir())
+	if err := session.start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	session.wait()
+	_, _, events := session.snapshot()
+	var output strings.Builder
+	for _, event := range events {
+		if event.Kind == "output" {
+			output.WriteString(event.Text)
+		}
+	}
+	got := output.String()
+	if strings.ContainsAny(got, "\x1b\x07") || strings.Contains(got, "[32m") {
+		t.Fatalf("terminal control noise leaked into output: %q", got)
+	}
+	if !strings.Contains(got, "ready\n") || !strings.Contains(got, "done\n") {
+		t.Fatalf("decoded output = %q, want readable lines", got)
 	}
 }
 

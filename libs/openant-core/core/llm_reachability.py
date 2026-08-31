@@ -48,6 +48,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from core.platforms.prompt_context import PlatformPromptContext
+from core.observability import print_chinese_log
 from prompts._fence import collapse_inline
 
 if TYPE_CHECKING:
@@ -284,7 +285,14 @@ def parse_response(
     callback receives a one-line description per skipped item, useful for
     logging.
     """
-    log = on_error or (lambda msg: print(f"[LLMReach] {msg}", file=sys.stderr))
+    def _default_log(msg: str) -> None:
+        print(f"[LLMReach] {msg}", file=sys.stderr)
+        print_chinese_log(
+            f"可达性响应校验：{msg}；无效信号会被丢弃，不会污染 dataset。",
+            category="可达性决策",
+        )
+
+    log = on_error or _default_log
 
     data = _extract_json(response_text)
     if not isinstance(data, dict):
@@ -385,7 +393,17 @@ def analyze_reachability(
     if max_units is not None and max_units >= 0:
         units = units[:max_units]
     if not units:
+        print_chinese_log(
+            "可达性复核结束：输入单元为空，没有向模型发送请求，也不会生成虚构信号。",
+            category="可达性决策",
+        )
         return []
+
+    print_chinese_log(
+        f"可达性复核计划：共 {len(units)} 个单元，批大小={batch_size}，"
+        f"每单元代码上限={max_code_bytes} 字节；模型只输出入口、外部输入或跨进程信号。",
+        category="可达性决策",
+    )
 
     if binding is None:
         # Self-contained fallback for callers that don't have a
@@ -415,6 +433,11 @@ def analyze_reachability(
     signals: List[ReachabilitySignal] = []
     batches = _chunk(units, batch_size)
     for i, batch in enumerate(batches):
+        print_chinese_log(
+            f"可达性批次 {i + 1}/{len(batches)}：发送 {len(batch)} 个单元，"
+            "提示中保留结构化入口标记作为参考，但要求模型只补充遗漏信号。",
+            category="可达性进度",
+        )
         prompt = build_prompt(
             batch, app_context=app_context, max_code_bytes=max_code_bytes
         )
@@ -431,13 +454,27 @@ def analyze_reachability(
                 on_error(msg)
             else:
                 print(f"[LLMReach] {msg}", file=sys.stderr)
+                print_chinese_log(
+                    f"可达性批次失败：{msg}；跳过该批次并继续处理其它批次。",
+                    category="可达性决策",
+                )
             continue
 
         parsed = parse_response(
             text, valid_unit_ids=valid_ids, on_error=on_error
         )
         signals.extend(parsed)
+        print_chinese_log(
+            f"可达性批次完成：模型返回 {len(parsed)} 条通过校验的信号，"
+            f"累计 {len(signals)} 条；未知 unit_id、错误类型和低质量结构已过滤。",
+            category="可达性进度",
+        )
 
+    print_chinese_log(
+        f"可达性复核完成：共得到 {len(signals)} 条有效信号，"
+        "下一步由扫描编排器决定是否提升入口并重新执行结构 BFS。",
+        category="可达性结果",
+    )
     return signals
 
 

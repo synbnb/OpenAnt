@@ -129,15 +129,15 @@ def _build_baseline_sections(
                         "exposed Binder/System Ability endpoint."
                     ),
                     "capabilities": [
-                        "send Binder/SA transactions",
-                        "control MessageParcel field values, lengths, and request frequency",
+                        "attempt exposed Binder/SA transactions available to this caller",
+                        "control MessageParcel field values, lengths, and request frequency, including malformed values after authorization",
                     ],
                     "cannot": [
                         "assume shell, root, or host-file access",
-                        "bypass a valid permission check without exploiting a defect",
+                        "bypass authorization logic itself, except by exploiting an authorization defect",
                     ],
                     "entry_via": ["Binder IPC", "System Ability transaction"],
-                    "impact": "Gain an unauthorized capability or corrupt service state.",
+                    "impact": "Cause service crash/DoS, resource exhaustion, state corruption, or another security impact; privilege gain is not required.",
                 },
                 {
                     "id": "openharmony_restricted_system_app",
@@ -148,13 +148,13 @@ def _build_baseline_sections(
                     ),
                     "capabilities": [
                         "invoke IPC methods available to the application's granted permissions",
-                        "supply repeated or malformed transaction fields",
+                        "supply repeated or malformed transaction fields; authorization does not make those values well-formed",
                     ],
                     "cannot": [
                         "assume unrestricted system or root privileges",
                     ],
                     "entry_via": ["System Ability transaction"],
-                    "impact": "Cross a service authorization or data-validation boundary.",
+                    "impact": "Trigger service crash/DoS, resource exhaustion, state corruption, or a service authorization/data-validation failure.",
                 },
             ]
         )
@@ -462,4 +462,3 @@ def merge_openharmony_context(
         repository_advisory_exclusions=repository_exclusions,
         context_provenance=merged_provenance,
     )
-

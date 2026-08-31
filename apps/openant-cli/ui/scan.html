@@ -160,12 +160,25 @@
   }
   .stage-results-header h4 { margin: 0; color: #164d5c; font-size: 0.86rem; }
   .stage-results-header p { margin: 4px 0 0; color: #58727b; font-size: 0.72rem; line-height: 1.45; }
+  .stage-result-lead {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start;
+    margin: 12px 12px 0; padding: 11px 12px; border: 1px solid #cfe0e4; border-left: 4px solid #7fb5bf; border-radius: 8px; background: #ffffff;
+  }
+  .stage-result-lead.success { border-color: #b7dec7; border-left-color: var(--success); background: #f5fbf7; }
+  .stage-result-lead.warning { border-color: #ead7a8; border-left-color: #c28728; background: #fffaf0; }
+  .stage-result-lead.danger { border-color: #efb6bb; border-left-color: var(--danger); background: #fff7f7; }
+  .stage-result-lead-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: #e8f4f6; color: #286576; font-size: 0.83rem; font-weight: 900; }
+  .stage-result-lead.success .stage-result-lead-icon { background: var(--success-soft); color: var(--success); }
+  .stage-result-lead.warning .stage-result-lead-icon { background: var(--warning-soft); color: var(--warning); }
+  .stage-result-lead.danger .stage-result-lead-icon { background: var(--danger-soft); color: var(--danger); }
+  .stage-result-lead-title { display: block; color: #164d5c; font-size: 0.78rem; font-weight: 850; line-height: 1.35; }
+  .stage-result-lead-body { margin: 3px 0 0; color: #58727b; font-size: 0.72rem; line-height: 1.55; }
   .stage-results-badge {
     flex: 0 0 auto; padding: 4px 8px; border: 1px solid #a9cbd2; border-radius: 999px;
     color: #286576; font: 700 0.67rem var(--mono); white-space: nowrap;
   }
   .stage-result-groups {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; padding: 12px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 10px; padding: 12px;
   }
   .stage-result-group { min-width: 0; border: 1px solid #d1e1e5; border-radius: 8px; background: #fff; overflow: hidden; }
   .stage-result-group-header {
@@ -175,13 +188,19 @@
   .stage-result-group-title { min-width: 0; color: #244c58; font-size: 0.74rem; font-weight: 800; }
   .stage-result-group-source { max-width: 54%; overflow: hidden; color: #718b93; font: 0.64rem var(--mono); text-overflow: ellipsis; white-space: nowrap; }
   .stage-result-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; padding: 10px; }
-  .stage-result-field { min-width: 0; padding: 8px 9px; border-left: 3px solid #7fb5bf; border-radius: 5px; background: #f3f8f9; }
+  .stage-result-field { min-width: 0; min-height: 72px; padding: 8px 9px; border-left: 3px solid #7fb5bf; border-radius: 5px; background: #f3f8f9; }
+  .stage-result-field.success { border-left-color: var(--success); background: #f5fbf7; }
+  .stage-result-field.warning { border-left-color: #c28728; background: #fffaf0; }
+  .stage-result-field.danger { border-left-color: var(--danger); background: #fff7f7; }
   .stage-result-field-expanded { grid-column: 1 / -1; }
   .stage-result-label { display: block; color: #607b84; font-size: 0.68rem; line-height: 1.35; }
   .stage-result-value {
-    display: block; margin-top: 4px; overflow-wrap: anywhere; color: #0f5364;
+    display: block; max-height: 104px; margin-top: 4px; overflow: auto; overflow-wrap: anywhere; color: #0f5364;
     font-size: 0.92rem; font-weight: 850; line-height: 1.45; white-space: pre-wrap;
   }
+  .stage-result-field.success .stage-result-value { color: #176b4a; }
+  .stage-result-field.warning .stage-result-value { color: #8a5a0a; }
+  .stage-result-field.danger .stage-result-value { color: #a52d38; }
   .stage-result-value.mono { font-family: var(--mono); font-size: 0.74rem; }
   .stage-result-details { display: grid; gap: 6px; margin-top: 9px; }
   .stage-result-detail { border: 1px solid #cfe0e4; border-radius: 7px; background: #fff; }
@@ -254,17 +273,20 @@
   .claude-meta-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #264552; font: 0.68rem var(--mono); }
   .claude-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, 34%); gap: 14px; align-items: stretch; }
   .claude-chat, .claude-files { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
-  .claude-chat { display: grid; grid-template-rows: auto minmax(420px, min(62vh, 720px)) auto; }
+  .claude-chat { display: grid; grid-template-rows: auto minmax(500px, min(72vh, 860px)) auto; }
   .claude-chat-header, .claude-files-header { padding: 9px 11px; border-bottom: 1px solid var(--line); background: var(--surface-muted); }
   .claude-chat-header strong, .claude-files-header strong { font-size: 0.76rem; }
   .claude-chat-header p, .claude-files-header p { margin: 3px 0 0; color: var(--ink-faint); font-size: 0.68rem; line-height: 1.4; }
-  .claude-transcript { overflow: auto; padding: 14px; background: #101b22; color: #dce5ea; font: 0.84rem/1.65 var(--mono); }
+  .claude-transcript { overflow: auto; padding: 16px; background: #101b22; color: #dce5ea; font: 0.84rem/1.65 var(--mono); tab-size: 4; }
   .claude-message { margin: 0 0 12px; padding: 10px 11px; border-left: 3px solid #61727d; border-radius: 5px; background: rgba(255, 255, 255, 0.04); white-space: pre-wrap; overflow-wrap: anywhere; }
   .claude-message:last-child { margin-bottom: 0; }
   .claude-message.input { border-left-color: #75c6d5; background: rgba(117, 198, 213, 0.11); }
   .claude-message.system { border-left-color: #e7c36f; color: #f1d78c; }
   .claude-message.error { border-left-color: #f28b93; color: #ffb9be; }
   .claude-message-label { display: block; margin-bottom: 4px; color: #8fa3ad; font: 700 0.64rem var(--sans); }
+  .claude-output-message { margin: 0 0 12px; padding: 10px 11px; border-left: 3px solid #75c6d5; border-radius: 5px; background: rgba(117, 198, 213, 0.06); }
+  .claude-output-stream { display: block; max-width: 100%; margin: 0; color: #dce5ea; font: inherit; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+  .claude-output-stream:empty { display: none; }
   .claude-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 9px; border-top: 1px solid #2c3c46; background: #172630; }
   .claude-composer textarea { min-height: 78px; max-height: 220px; resize: vertical; padding: 9px 10px; border: 1px solid #48606d; border-radius: 7px; background: #101b22; color: #f5f8fa; font: 0.82rem/1.55 var(--sans); }
   .claude-composer textarea:focus { border-color: #82c8d5; outline: 2px solid rgba(130, 200, 213, 0.24); }
@@ -415,7 +437,7 @@
     .step { min-height: 52px; }
     .log-body { height: 360px; }
     .stage-io { grid-template-columns: 1fr; }
-    .claude-chat { grid-template-rows: auto minmax(340px, 55vh) auto; }
+    .claude-chat { grid-template-rows: auto minmax(380px, 62vh) auto; }
     .claude-transcript { font-size: 0.8rem; }
   }
   @media (max-width: 420px) {
@@ -534,6 +556,7 @@
                 <div><h4 id="stage-results-title" data-i18n="details.resultsTitle">关键结果</h4><p data-i18n="details.resultsSubtitle">从阶段产物中筛选重要字段和值，便于快速判断阶段是否达到预期。</p></div>
                 <span class="stage-results-badge" id="stage-results-badge"></span>
               </div>
+              <div class="stage-result-lead" id="stage-results-lead" hidden aria-live="polite"></div>
               <div class="stage-result-groups" id="selected-stage-results" aria-live="polite">
                 <div class="pipeline-empty" data-i18n="details.resultsLoading">正在读取阶段关键结果...</div>
               </div>
@@ -566,7 +589,7 @@
           </div>
           <div class="claude-layout">
             <section class="claude-chat" aria-labelledby="claude-chat-title">
-              <div class="claude-chat-header"><strong id="claude-chat-title" data-i18n="claude.chatTitle">Claude Code 对话</strong><p data-i18n="claude.chatHint">消息会写入同一个 PTY 会话；Claude 产生的命令、结果和说明会实时显示。</p></div>
+              <div class="claude-chat-header"><strong id="claude-chat-title" data-i18n="claude.chatTitle">Claude Code 对话</strong><p data-i18n="claude.chatHint">消息会写入同一个 PTY 会话；终端控制符会转换为可读记录，Claude 的命令、结果和说明会实时显示。</p></div>
               <div class="claude-transcript" id="claude-transcript" role="log" aria-live="polite" aria-label="Claude Code transcript"><div class="claude-empty" data-i18n="claude.waiting">等待 Claude Code 连接...</div></div>
               <form class="claude-composer" id="claude-composer">
                 <textarea id="claude-message" rows="3" maxlength="32000" data-i18n-placeholder="claude.messagePlaceholder" placeholder="例如：先阅读候选清单，验证第一个候选并把证据写入 results/。"></textarea>
@@ -677,7 +700,7 @@ const translations = {
     'log.live': '实时更新',
     'log.following': '自动跟随最新输出',
     'details.title': '阶段详情',
-    'details.subtitle': '查看当前阶段为什么执行、使用什么输入以及生成哪些结果。',
+    'details.subtitle': '先看本阶段结论和关键指标，再查看输入、输出及完整产物。',
     'details.loading': '正在读取阶段状态...',
     'details.empty': '还没有可展示的阶段报告。',
     'details.truncated': '[浏览器中已截断]',
@@ -692,6 +715,19 @@ const translations = {
     'details.outputs': '预期输出',
     'details.resultsTitle': '关键结果',
     'details.resultsSubtitle': '从阶段产物中筛选重要字段和值，便于快速判断阶段是否达到预期。',
+    'details.outcomeKicker': '本阶段结论',
+    'details.outcomePending': '阶段仍在运行，结论会随着产物生成自动更新。',
+    'details.outcomeSkipped': '本阶段未启用或按当前流程跳过，下面可能没有对应产物。',
+    'details.outcomeUnavailable': '暂时没有足够的阶段数据生成结论，请查看下方产物或运行日志。',
+    'details.outcomeParse': '已解析 {parsed} / {discovered} 个文件；生成 {units} 个进入后续分析的单元，原生调用图包含 {edges} 条调用边。',
+    'details.outcomeContext': '已建立安全上下文：{attackers} 个攻击者画像、{inputs} 个输入源、{boundaries} 个信任边界。',
+    'details.outcomeReachability': '可达性复核记录 {signals} 条模型信号，其中入口候选 {entries} 条。',
+    'details.outcomeEnhance': '已为 {units} 个单元补充上下文；当前增强模式为“{mode}”，错误 {errors} 个。',
+    'details.outcomeAnalyze': '初步分析得到：漏洞候选 {vulnerable} 个、可绕过 {bypassable} 个、待定 {inconclusive} 个。',
+    'details.outcomeVerify': '验证结果：确认漏洞 {confirmed} 个，一致 {agreed} 个，不一致 {disagreed} 个，需人工复核 {review} 个。',
+    'details.outcomeBuild': '统一输出包含 {findings} 个问题，实际分析 {analyzed} 个单元，其中可达单元 {reachable} 个。',
+    'details.outcomeDynamic': '动态测试状态为“{status}”，记录 {observations} 条观察、{steps} 个步骤。',
+    'details.outcomeReport': '已生成 {formats}；可从下方产物或顶部报告入口继续查看。',
     'details.resultsLoading': '正在读取阶段关键结果...',
     'details.resultsEmpty': '阶段产物尚未生成，完成后会显示关键结果。',
     'details.resultsUnavailable': '当前阶段没有可提取的关键结果。',
@@ -708,7 +744,7 @@ const translations = {
     'claude.tools': '公开工具库',
     'claude.manifest': '任务清单',
     'claude.chatTitle': 'Claude Code 对话',
-    'claude.chatHint': '消息会写入同一个 PTY 会话；Claude 产生的命令、结果和说明会实时显示。',
+    'claude.chatHint': '消息会写入同一个 PTY 会话；终端控制符和 Ink 装饰会转换或隐藏为可读记录，正文、命令结果和说明会实时显示。',
     'claude.waiting': '等待 Claude Code 连接...',
     'claude.messagePlaceholder': '例如：先阅读候选清单，验证第一个候选并把证据写入 results/。',
     'claude.send': '发送',
@@ -824,7 +860,7 @@ const translations = {
     'log.live': 'Live updates',
     'log.following': 'Following latest output',
     'details.title': 'Stage details',
-    'details.subtitle': 'See why this stage runs, what it consumes, and what it produces.',
+    'details.subtitle': 'Start with the stage conclusion and key metrics, then inspect inputs, outputs, and complete artifacts.',
     'details.loading': 'Loading stage status...',
     'details.empty': 'No stage reports are available yet.',
     'details.truncated': '[truncated in browser]',
@@ -839,6 +875,19 @@ const translations = {
     'details.outputs': 'Expected outputs',
     'details.resultsTitle': 'Key results',
     'details.resultsSubtitle': 'Important fields and values selected from stage artifacts for a quick outcome check.',
+    'details.outcomeKicker': 'Stage conclusion',
+    'details.outcomePending': 'The stage is still running; this conclusion updates as artifacts arrive.',
+    'details.outcomeSkipped': 'This stage was not enabled or was skipped by the current workflow, so artifacts may be absent.',
+    'details.outcomeUnavailable': 'There is not enough stage data for a conclusion yet. Review the artifacts or runtime log below.',
+    'details.outcomeParse': 'Parsed {parsed} / {discovered} files; produced {units} units for downstream analysis, with {edges} native call-graph edges.',
+    'details.outcomeContext': 'Security context built: {attackers} attacker profiles, {inputs} input sources, and {boundaries} trust boundaries.',
+    'details.outcomeReachability': 'Recorded {signals} model reachability signals, including {entries} entry candidates.',
+    'details.outcomeEnhance': 'Added context to {units} units; enhancement mode is “{mode}” with {errors} errors.',
+    'details.outcomeAnalyze': 'Initial analysis found {vulnerable} vulnerable candidates, {bypassable} bypassable candidates, and {inconclusive} inconclusive results.',
+    'details.outcomeVerify': 'Verification: {confirmed} confirmed vulnerabilities, {agreed} agreed results, {disagreed} disagreements, and {review} items needing manual review.',
+    'details.outcomeBuild': 'Normalized output contains {findings} findings; {analyzed} units were analyzed, including {reachable} reachable units.',
+    'details.outcomeDynamic': 'Dynamic testing status is “{status}”, with {observations} observations across {steps} steps.',
+    'details.outcomeReport': 'Generated {formats}; continue with the artifacts below or the report links above.',
     'details.resultsLoading': 'Loading key stage results...',
     'details.resultsEmpty': 'Stage artifacts are not available yet. Key results will appear when the stage completes.',
     'details.resultsUnavailable': 'No key results are available for this stage.',
@@ -855,7 +904,7 @@ const translations = {
     'claude.tools': 'Public tool library',
     'claude.manifest': 'Task manifest',
     'claude.chatTitle': 'Claude Code conversation',
-    'claude.chatHint': 'Messages go to the same PTY session; Claude commands, results, and explanations appear live.',
+    'claude.chatHint': 'Messages go to the same PTY session; terminal controls and Ink chrome are converted or hidden, while Claude text, command results, and explanations appear live.',
     'claude.waiting': 'Waiting for Claude Code to connect...',
     'claude.messagePlaceholder': 'For example: Read the candidate list, verify the first candidate, and write evidence to results/.',
     'claude.send': 'Send',
@@ -1086,6 +1135,16 @@ const stageResultDefinitions = {
       { name: 'call_graph.json', title: ['调用图统计', 'Call-graph statistics'], fields: [
         ['statistics.total_functions', '函数总数', 'Total functions'], ['statistics.total_edges', '调用边总数', 'Total edges'],
         ['statistics.avg_out_degree', '平均出度', 'Average out-degree'], ['statistics.isolated_functions', '孤立函数数', 'Isolated functions']
+      ] },
+      { name: 'pipeline_results.json', title: ['解析与可达性统计', 'Parser and reachability statistics'], fields: [
+        ['stages.c_parser.summary.total_files', '解析器发现文件数', 'Parser files'],
+        ['stages.c_parser.summary.parsed_files', '解析器已解析文件数', 'Parser parsed files'],
+        ['stages.c_parser.summary.total_functions', '解析器函数数', 'Parser functions'],
+        ['stages.c_parser.summary.total_units', '原始分析单元数', 'Original analysis units'],
+        ['stages.c_parser.summary.call_graph_edges', '原生调用边数', 'Native call-graph edges'],
+        ['stages.reachability_filter.summary.entry_points', '入口函数数', 'Entry points'],
+        ['stages.reachability_filter.summary.reachable_units', '可达分析单元数', 'Reachable units'],
+        ['stages.reachability_filter.summary.reduction_percentage', '可达性裁剪比例', 'Reachability reduction']
       ] }
     ]
   },
@@ -1133,6 +1192,12 @@ const stageResultDefinitions = {
       ['summary.verdicts', '初步判定统计', 'Initial verdict counts']
     ],
     artifacts: [
+      { name: 'analyze.report.json', title: ['漏洞分析阶段记录', 'Analysis-stage record'], fields: [
+        ['summary.total_units', '待分析单元数', 'Units to analyze'], ['summary.analyzed', '已分析单元数', 'Analyzed units'],
+        ['summary.verdicts.vulnerable', '漏洞候选数', 'Vulnerable candidates'], ['summary.verdicts.bypassable', '可绕过候选数', 'Bypassable candidates'],
+        ['summary.verdicts.inconclusive', '待定数', 'Inconclusive results'], ['summary.verdicts.protected', '受保护数', 'Protected units'],
+        ['summary.verdicts.safe', '安全数', 'Safe units'], ['summary.verdicts.errors', '错误数', 'Errors']
+      ] },
       { name: 'results.json', title: ['初步分析结果', 'Stage 1 analysis results'], fields: [
         ['model', '分析模型', 'Analysis model'], ['provider', '模型服务商', 'Model provider'],
         ['metrics.total', '结果总数', 'Total results'], ['metrics.vulnerable', '漏洞候选数', 'Vulnerable candidates'],
@@ -1144,10 +1209,17 @@ const stageResultDefinitions = {
   'verify': {
     summary: [],
     artifacts: [
+      { name: 'verify.report.json', title: ['验证阶段统计', 'Verification-stage statistics'], fields: [
+        ['summary.findings_input', '输入候选数', 'Input candidates'], ['summary.findings_verified', '已验证数', 'Verified findings'],
+        ['summary.confirmed_vulnerabilities', '确认漏洞数', 'Confirmed vulnerabilities'], ['summary.agreed', '验证一致数', 'Agreed results'],
+        ['summary.disagreed', '验证不一致数', 'Disagreed results'], ['summary.needs_review', '需人工复核数', 'Needs manual review'],
+        ['summary.error_count', '验证错误数', 'Verification errors']
+      ] },
       { name: 'results_verified.json', title: ['验证后结果', 'Stage 2 verified results'], fields: [
-        ['metrics.total', '验证结果总数', 'Total verified results'], ['metrics.agreed', '验证一致数', 'Agreed results'],
-        ['metrics.disagreed', '验证不一致数', 'Disagreed results'], ['metrics.confirmed', '确认漏洞数', 'Confirmed vulnerabilities'],
-        ['results', '验证记录数', 'Verification records'], ['summary', '验证摘要', 'Verification summary']
+        ['metrics.total', '验证结果总数', 'Total verified results'], ['metrics.vulnerable', '仍标为漏洞数', 'Still vulnerable'],
+        ['metrics.inconclusive', '验证后待定数', 'Inconclusive after verification'], ['metrics.protected', '受保护数', 'Protected units'],
+        ['metrics.safe', '安全数', 'Safe units'], ['metrics.errors', '验证错误数', 'Verification errors'],
+        ['confirmed_findings', '确认问题记录数', 'Confirmed finding records']
       ] }
     ]
   },
@@ -1161,9 +1233,11 @@ const stageResultDefinitions = {
         ['pipeline_stats.units_analyzed', '实际分析单元数', 'Analyzed units'], ['pipeline_stats.reachable_units', '可达单元数', 'Reachable units']
       ] },
       { name: 'pipeline_results.json', title: ['管线阶段结果', 'Pipeline stage results'], fields: [
-        ['success', '管线是否成功', 'Pipeline success'], ['total_functions', '函数总数', 'Total functions'],
-        ['call_graph_edges', '调用边数', 'Call-graph edges'], ['reachable_units', '可达单元数', 'Reachable units'],
-        ['reduction_percentage', '裁剪比例', 'Reduction percentage']
+        ['success', '管线是否成功', 'Pipeline success'],
+        ['stages.c_parser.summary.total_functions', '函数总数', 'Total functions'],
+        ['stages.c_parser.summary.call_graph_edges', '调用边数', 'Call-graph edges'],
+        ['stages.reachability_filter.summary.reachable_units', '可达单元数', 'Reachable units'],
+        ['stages.reachability_filter.summary.reduction_percentage', '裁剪比例', 'Reduction percentage']
       ] }
     ]
   },
@@ -1247,9 +1321,26 @@ let claudeInfoTimer = null;
 let claudeFileTimer = null;
 let claudeSelectedFile = '';
 const claudeEventIDs = new Set();
+let claudeOutputStream = null;
+// Keep the raw text for the current PTY burst separately from its rendered
+// form. Claude Code uses Ink's full-screen renderer; after ANSI sequences are
+// removed, its decorative frame, prompt and status bar would otherwise be
+// mistaken for ordinary assistant text. Re-rendering the bounded burst lets
+// us remove those terminal-only rows without mutating the actual event log.
+let claudeOutputRaw = '';
 
 function t(key) {
   return (translations[currentLanguage] && translations[currentLanguage][key]) || translations['zh-CN'][key] || key;
+}
+
+// Small DOM helper used by the stage-result summary. Keep all user/model
+// supplied values assigned through textContent so a malformed artifact can
+// never become executable markup.
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
 }
 
 function applyLanguage(language) {
@@ -1418,10 +1509,14 @@ const stageResultFallbackLabels = {
   verdicts: ['判定统计', 'Verdict counts'], metrics: ['指标统计', 'Metrics'], vulnerable: ['漏洞数', 'Vulnerable'],
   bypassable: ['可绕过数', 'Bypassable'], protected: ['受保护数', 'Protected'], safe: ['安全数', 'Safe'],
   inconclusive: ['待定数', 'Inconclusive'], confirmed: ['确认数', 'Confirmed'], agreed: ['一致数', 'Agreed'],
-  disagreed: ['不一致数', 'Disagreed'], findings: ['问题数', 'Findings'], observations: ['观察数', 'Observations'],
+  disagreed: ['不一致数', 'Disagreed'], confirmed_vulnerabilities: ['确认漏洞数', 'Confirmed vulnerabilities'],
+  findings_input: ['输入候选数', 'Input candidates'], findings_verified: ['已验证数', 'Verified findings'],
+  needs_review: ['需人工复核数', 'Needs manual review'], findings: ['问题数', 'Findings'], observations: ['观察数', 'Observations'],
   results: ['结果数', 'Results'], steps: ['步骤数', 'Steps'], formats_generated: ['生成格式', 'Generated formats'],
+  confirmed_findings: ['确认问题记录数', 'Confirmed finding records'],
   steps_completed: ['已完成阶段', 'Completed stages'], steps_skipped: ['已跳过阶段', 'Skipped stages'],
-  total_functions: ['函数总数', 'Total functions'], total_edges: ['调用边总数', 'Total edges'],
+  total_files: ['文件总数', 'Total files'], total_functions: ['函数总数', 'Total functions'], total_edges: ['调用边总数', 'Total edges'],
+  original_units: ['原始分析单元数', 'Original analysis units'], semantic_context_functions: ['语义上下文函数数', 'Semantic-context functions'],
   reachable_units: ['可达单元数', 'Reachable units'], reduction_percentage: ['裁剪比例', 'Reduction percentage'],
   platform: ['平台', 'Platform'], source_scope: ['源码范围', 'Source scope'], coverage: ['源码覆盖', 'Source coverage'],
   build_metadata: ['构建元数据', 'Build metadata'], discovered_files: ['发现文件', 'Discovered files'],
@@ -1521,7 +1616,8 @@ const stageResultCollectionLabels = {
   observations: ['条观察记录', 'observations'],
   results: ['条结果', 'results'],
   entries: ['个入口候选', 'entry candidates'],
-  entry_points: ['个入口函数', 'entry functions']
+  entry_points: ['个入口函数', 'entry functions'],
+  confirmed_findings: ['条确认问题记录', 'confirmed finding records']
 };
 
 function stageResultCollectionSummary(value, path) {
@@ -1657,13 +1753,182 @@ function stageResultArtifactRevision(name) {
   return artifact ? String(artifact.size) + ':' + String(artifact.modified_at || '') : '';
 }
 
+function stageResultPick(groups, paths) {
+  const wanted = Array.isArray(paths) ? paths : [paths];
+  for (const path of wanted) {
+    for (const group of groups || []) {
+      const field = (group.fields || []).find(function(candidate) { return candidate.path === path; });
+      if (field) return { found: true, value: field.value, path: field.path };
+    }
+  }
+  return { found: false };
+}
+
+function stageResultCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === 'object') return Object.keys(value).length;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  return 0;
+}
+
+function stageResultMetric(groups, paths) {
+  const result = stageResultPick(groups, paths);
+  return result.found ? stageResultCount(result.value) : 0;
+}
+
+// A missing field is different from a real numeric zero.  Stage conclusions
+// use this helper so an unavailable artifact is shown as "-" instead of being
+// reported as a fabricated zero.
+function stageResultMetricDisplay(groups, paths) {
+  const result = stageResultPick(groups, paths);
+  if (!result.found) return '-';
+  return stageResultCount(result.value).toLocaleString(currentLanguage);
+}
+
+function stageResultMetricText(groups, paths) {
+  const result = stageResultPick(groups, paths);
+  if (!result.found) return '-';
+  return result.value && typeof result.value === 'object'
+    ? stageResultDetailText(result.value, result.path)
+    : stageResultPrimitive(result.value, result.path);
+}
+
+function stageResultInterpolate(template, values) {
+  return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, function(_, key) {
+    return Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : '-';
+  });
+}
+
+function stageResultFieldTone(path, value) {
+  const key = String(path || '').toLowerCase();
+  const isEmpty = (typeof value === 'number' && value === 0) || (typeof value === 'boolean' && !value);
+  if (/vulnerable|bypassable|error|failed|disagreed|inconclusive/.test(key)) return isEmpty ? 'success' : 'danger';
+  if (/safe|protected|confirmed|agreed|success|parsed|reachable|applied/.test(key)) return isEmpty ? '' : 'success';
+  if (/confidence|status|remote/.test(key)) return 'warning';
+  return '';
+}
+
+function renderStageResultLead(step, groups) {
+  const lead = document.getElementById('stage-results-lead');
+  if (!lead) return;
+  lead.replaceChildren();
+  lead.className = 'stage-result-lead';
+  if (!groups.length || !step) {
+    lead.hidden = false;
+    lead.classList.add('warning');
+    lead.appendChild(element('span', 'stage-result-lead-icon', '…'));
+    const body = element('div');
+    body.appendChild(element('strong', 'stage-result-lead-title', t('details.outcomeKicker')));
+    body.appendChild(element('p', 'stage-result-lead-body', t(!step || step.status === 'success' ? 'details.outcomeUnavailable' : 'details.outcomePending')));
+    lead.appendChild(body);
+    return;
+  }
+  const status = String(step.status || 'pending');
+  const stageTitle = t('stage.' + selectedStage);
+  let tone = status === 'error' ? 'danger' : (status === 'success' ? 'success' : 'warning');
+  let title = stageTitle + ' · ' + t('step.' + status);
+  let body = '';
+  if (status === 'error') {
+    const errors = Array.isArray(step.errors) ? step.errors.filter(Boolean).slice(0, 2).join('；') : '';
+    body = errors || t('details.outcomeUnavailable');
+  } else if (status === 'skipped' || status === 'not_requested') {
+    body = t('details.outcomeSkipped');
+  } else if (status === 'running' || status === 'pending') {
+    body = t('details.outcomePending');
+  } else {
+    switch (selectedStage) {
+      case 'parse': {
+        const discovered = stageResultMetricDisplay(groups, ['coverage.discovered_files', 'metadata.openharmony_scope.coverage.discovered_files', 'stages.c_parser.summary.total_files']);
+        const parsed = stageResultMetricDisplay(groups, ['coverage.parsed_files', 'metadata.openharmony_scope.coverage.parsed_files', 'stages.c_parser.summary.parsed_files']);
+        const units = stageResultMetricDisplay(groups, ['summary.total_units', 'stages.reachability_filter.summary.reachable_units']);
+        const edges = stageResultMetricDisplay(groups, ['stages.c_parser.summary.call_graph_edges', 'statistics.total_edges']);
+        body = stageResultInterpolate(t('details.outcomeParse'), { parsed: parsed, discovered: discovered, units: units, edges: edges });
+        break;
+      }
+      case 'app-context': {
+        const attackers = stageResultMetric(groups, ['attacker_profiles']);
+        const inputs = stageResultMetric(groups, ['input_sources']);
+        const boundaries = stageResultMetric(groups, ['trust_boundaries']);
+        body = stageResultInterpolate(t('details.outcomeContext'), { attackers: attackers.toLocaleString(currentLanguage), inputs: inputs.toLocaleString(currentLanguage), boundaries: boundaries.toLocaleString(currentLanguage) });
+        break;
+      }
+      case 'llm-reachability': {
+        const signals = stageResultMetric(groups, ['signals']);
+        const entries = stageResultMetric(groups, ['entry_points', 'entries']);
+        body = stageResultInterpolate(t('details.outcomeReachability'), { signals: signals.toLocaleString(currentLanguage), entries: entries.toLocaleString(currentLanguage) });
+        break;
+      }
+      case 'enhance': {
+        const units = stageResultMetric(groups, ['summary.units_enhanced', 'statistics.units_enhanced']);
+        const errors = stageResultMetric(groups, ['summary.error_count']);
+        const mode = stageResultMetricText(groups, ['summary.mode', 'metadata.enhancement_mode']);
+        body = stageResultInterpolate(t('details.outcomeEnhance'), { units: units.toLocaleString(currentLanguage), errors: errors.toLocaleString(currentLanguage), mode: mode });
+        break;
+      }
+      case 'analyze': {
+        const vulnerable = stageResultMetric(groups, ['metrics.vulnerable', 'summary.verdicts.vulnerable']);
+        const bypassable = stageResultMetric(groups, ['metrics.bypassable', 'summary.verdicts.bypassable']);
+        const inconclusive = stageResultMetric(groups, ['metrics.inconclusive', 'summary.verdicts.inconclusive']);
+        tone = vulnerable || bypassable ? 'danger' : 'success';
+        body = stageResultInterpolate(t('details.outcomeAnalyze'), { vulnerable: vulnerable.toLocaleString(currentLanguage), bypassable: bypassable.toLocaleString(currentLanguage), inconclusive: inconclusive.toLocaleString(currentLanguage) });
+        break;
+      }
+      case 'verify': {
+        const confirmed = stageResultMetric(groups, ['summary.confirmed_vulnerabilities', 'summary.confirmed', 'metrics.confirmed']);
+        const agreed = stageResultMetricDisplay(groups, ['summary.agreed', 'metrics.agreed']);
+        const disagreed = stageResultMetricDisplay(groups, ['summary.disagreed', 'metrics.disagreed']);
+        const review = stageResultMetricDisplay(groups, ['summary.needs_review', 'metrics.needs_review']);
+        tone = confirmed ? 'danger' : 'success';
+        body = stageResultInterpolate(t('details.outcomeVerify'), { confirmed: stageResultMetricDisplay(groups, ['summary.confirmed_vulnerabilities', 'summary.confirmed', 'metrics.confirmed']), agreed: agreed, disagreed: disagreed, review: review });
+        break;
+      }
+      case 'build-output': {
+        const findings = stageResultMetric(groups, ['findings', 'results.vulnerable']);
+        const analyzed = stageResultMetric(groups, ['pipeline_stats.units_analyzed']);
+        const reachable = stageResultMetric(groups, ['pipeline_stats.reachable_units']);
+        tone = findings ? 'danger' : 'success';
+        body = stageResultInterpolate(t('details.outcomeBuild'), { findings: findings.toLocaleString(currentLanguage), analyzed: analyzed.toLocaleString(currentLanguage), reachable: reachable.toLocaleString(currentLanguage) });
+        break;
+      }
+      case 'dynamic-test': {
+        const statusText = stageResultMetricText(groups, ['status']) || t('step.success');
+        const observations = stageResultMetric(groups, ['observations']);
+        const stepsCount = stageResultMetric(groups, ['steps']);
+        body = stageResultInterpolate(t('details.outcomeDynamic'), { status: statusText, observations: observations.toLocaleString(currentLanguage), steps: stepsCount.toLocaleString(currentLanguage) });
+        break;
+      }
+      case 'report': {
+        const formats = stageResultMetricText(groups, ['summary.formats_generated']);
+        body = stageResultInterpolate(t('details.outcomeReport'), { formats: formats });
+        break;
+      }
+      default:
+        body = t('details.outcomeUnavailable');
+    }
+  }
+  lead.hidden = false;
+  lead.classList.add(tone);
+  lead.appendChild(element('span', 'stage-result-lead-icon', tone === 'danger' ? '!' : (tone === 'success' ? '✓' : '…')));
+  const content = element('div');
+  content.appendChild(element('strong', 'stage-result-lead-title', title));
+  content.appendChild(element('p', 'stage-result-lead-body', body));
+  lead.appendChild(content);
+}
+
 function loadStageResultArtifact(name) {
   const revision = stageResultArtifactRevision(name);
   const cached = stageResultJSONCache.get(name);
   if (cached && cached.revision === revision) return Promise.resolve(cached.data);
-  return fetch(rawArtifactEndpoint(name), { cache: 'no-store' })
+  // Use the bounded explorer endpoint rather than fetching the complete raw
+  // artifact.  For collection artifacts it returns only root_summary, which
+  // contains the counters needed by this panel; large datasets therefore do
+  // not block the browser or hit the raw-file size guard.
+  const endpoint = '/scan/' + encodeURIComponent(jobID) + '/explore/' + encodeURIComponent(name) + '?limit=1';
+  return fetch(endpoint, { cache: 'no-store' })
     .then(function(response) { if (!response.ok) throw new Error('artifact unavailable'); return response.json(); })
-    .then(function(data) {
+    .then(function(view) {
+      const data = view && view.kind === 'collection' ? (view.root_summary || {}) : (view && Object.prototype.hasOwnProperty.call(view, 'data') ? view.data : view);
       stageResultJSONCache.set(name, { revision: revision, data: data });
       return data;
     });
@@ -1692,6 +1957,7 @@ function renderStageResultGroups(groups) {
   const container = document.getElementById('selected-stage-results');
   const badge = document.getElementById('stage-results-badge');
   if (!container) return;
+  renderStageResultLead(selectedStepView(), groups);
   container.replaceChildren();
   if (!groups.length) {
     const empty = document.createElement('div');
@@ -1723,6 +1989,8 @@ function renderStageResultGroups(groups) {
       card.className = 'stage-result-field';
       const isProfileField = field.path && field.path.split('.').pop() === 'attacker_profiles';
       if (isProfileField) card.classList.add('stage-result-field-expanded');
+      const tone = stageResultFieldTone(field.path, field.value);
+      if (tone) card.classList.add(tone);
       const label = document.createElement('span');
       label.className = 'stage-result-label';
       label.textContent = currentLanguage === 'zh-CN' ? field.label.zh : field.label.en;
@@ -2604,13 +2872,136 @@ function renderClaudeInfo(info) {
   }
 }
 
+// Older sessions may contain PTY bytes captured before the server-side
+// decoder was introduced.  Keep a defensive client-side pass so replaying
+// those sessions cannot put cursor/control noise back into the transcript.
+function cleanClaudeDisplayText(value) {
+  return String(value || '')
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b(?:[()][0-2A-Z]|[=>]?[\x20-\x7e])/g, '')
+    .replace(/\u001b/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    // U+FFFD means that a previous reader split or discarded a UTF-8 byte.
+    // It is never useful in a terminal transcript and was the source of the
+    // visible "��" fragments in replayed sessions.
+    .replace(/\uFFFD+/g, '');
+}
+
+function isClaudeTerminalChrome(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) return false;
+  // Ink's top/bottom borders are made entirely of box-drawing characters.
+  // Restrict this to long rows so ordinary Markdown separators are retained.
+  const withoutDecoration = trimmed.replace(/[\s\u2500-\u257f\u2580-\u259f\u2014\u2015_\-�]+/g, '');
+  if (trimmed.length >= 8 && withoutDecoration === '') return true;
+  // Ink's thinking spinner and token timer are status chrome, not a model
+  // message. Keep the actual progress sentence (for example, "Worked for
+  // 10s") but discard repeated one-glyph frames and compact timers.
+  if (/^[✳✶✻✽✢·]+$/u.test(trimmed)) return true;
+  if (/^\(\d+(?:\.\d+)?s[·•].*\)$/u.test(trimmed)) return true;
+  // A redraw can leave the elapsed-second counter on its own row (the
+  // observed replay contained a lone "3"). It is terminal status, not a
+  // response line; short numeric-only rows are safe to suppress here.
+  if (/^\d{1,3}$/u.test(trimmed)) return true;
+  // The editable prompt is not an assistant message. Drop the whole row,
+  // including any text that Ink left after the prompt marker.
+  if (/^❯(?:\s|$)/u.test(trimmed)) return true;
+  if (trimmed === 'Claude') return true;
+  // Claude Code's status footer may arrive without spaces after terminal
+  // cursor redraws, so compare a compact form as well as the readable one.
+  const compact = trimmed.replace(/\s+/g, '').toLowerCase();
+  return compact.includes('bypasspermissions') ||
+    compact.includes('shift+tab') ||
+    compact.includes('esctointerrupt') ||
+    compact.includes('updateavailable!run:brewupgradeclaude-code');
+}
+
+function formatClaudeTranscript(value) {
+  const lines = String(value || '').split('\n');
+  const visible = [];
+  let previousBlank = false;
+  lines.forEach(function(line) {
+    if (isClaudeTerminalChrome(line)) return;
+    if (/^\s*$/.test(line)) {
+      if (previousBlank) return;
+      previousBlank = true;
+      visible.push('');
+      return;
+    }
+    previousBlank = false;
+    visible.push(line);
+  });
+  // Avoid an empty block when the PTY only emitted a redraw frame.
+  while (visible.length && visible[0] === '') visible.shift();
+  while (visible.length && visible[visible.length - 1] === '') visible.pop();
+  return visible.join('\n');
+}
+
+function appendClaudeOutput(text, transcript) {
+  const clean = cleanClaudeDisplayText(text);
+  if (!clean) return false;
+  const last = transcript.lastElementChild;
+  const hasStream = Boolean(claudeOutputStream && claudeOutputStream.parentElement === transcript &&
+      last && last.classList.contains('claude-output-message'));
+  // Avoid quadratic DOM work and unbounded memory if a long-running agent
+  // emits a large stream. The raw buffer is also what we pass through the
+  // terminal-chrome filter, rather than filtering each PTY chunk in isolation.
+  const maxStreamChars = 2 * 1024 * 1024;
+  const candidateRaw = (hasStream ? claudeOutputRaw : '') + clean;
+  let nextRaw = candidateRaw;
+  let truncated = false;
+  if (nextRaw.length > maxStreamChars) {
+    nextRaw = nextRaw.slice(-maxStreamChars);
+    truncated = true;
+  }
+  const rendered = formatClaudeTranscript(nextRaw);
+  // Ink emits complete redraw frames that may contain only borders, a prompt,
+  // a spinner, or the status footer. Do not create a visible message card for
+  // such a frame: doing so produced repeated blank "Claude" cards in the Web
+  // transcript while the agent was thinking.
+  if (!rendered.trim()) return false;
+  if (!hasStream) {
+    const row = document.createElement('div');
+    row.className = 'claude-output-message';
+    const label = document.createElement('span');
+    label.className = 'claude-message-label';
+    label.textContent = 'Claude';
+    const stream = document.createElement('pre');
+    stream.className = 'claude-output-stream';
+    row.append(label, stream);
+    transcript.appendChild(row);
+    claudeOutputStream = stream;
+  }
+  claudeOutputRaw = nextRaw;
+  claudeOutputStream.textContent = (truncated ? '…（较早的终端输出已截断）…\n' : '') + rendered;
+  while (transcript.children.length > 1500) {
+    const removed = transcript.firstElementChild;
+    if (removed === claudeOutputStream) claudeOutputStream = null;
+    removed.remove();
+  }
+  return true;
+}
+
 function appendClaudeEvent(event) {
   if (!event || typeof event.id !== 'number' || claudeEventIDs.has(event.id)) return;
   claudeEventIDs.add(event.id);
   const transcript = document.getElementById('claude-transcript');
   if (!transcript) return;
+  if (event.kind === 'output') {
+    if (appendClaudeOutput(event.text || '', transcript)) {
+      const empty = transcript.querySelector('.claude-empty');
+      if (empty) empty.remove();
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+    return;
+  }
   const empty = transcript.querySelector('.claude-empty');
   if (empty) empty.remove();
+  claudeOutputStream = null;
+  claudeOutputRaw = '';
   const row = document.createElement('div');
   row.className = 'claude-message ' + (event.kind || 'output');
   const label = document.createElement('span');

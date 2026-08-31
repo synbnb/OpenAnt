@@ -172,6 +172,68 @@ def test_prompt_uses_length_aware_fence_for_untrusted_residual_text():
     assert '"task": "openharmony_call_edge_recovery"' in body
 
 
+def test_worklist_can_attach_cross_function_registration_context(tmp_path: Path):
+    source = tmp_path / SOURCE
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "\n".join(
+            [
+                "void NetStub::Initialize() {",
+                "    requestTable[1] = &NetStub::HandleRequest;",
+                "}",
+                "int32_t NetStub::OnRemoteRequest(uint32_t code)",
+                "{",
+                "    return (this->*requestFunc)(data, reply);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    diagnostics = {
+        "repository": str(tmp_path),
+        "unresolved_call_sites": [
+            {
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line": 6,
+                "expression": "return (this->*requestFunc)(data, reply);",
+                "reason": "parenthesized_member_function_pointer",
+                "symbols": {"dispatch_table": "requestTable", "target_variable": "requestFunc"},
+                "candidate_target_ids": [HANDLER],
+            }
+        ],
+    }
+
+    worklist = build_recovery_worklist(
+        diagnostics,
+        _functions(),
+        max_sites=-1,
+        include_candidate_sites=True,
+        include_registration_context=True,
+        registration_context_max_chars=4_000,
+    )
+
+    assert len(worklist) == 1
+    context = worklist[0]["registration_context"]
+    assert context["status"] == "found"
+    combined = "\n".join(item["text"] for item in context["snippets"])
+    assert "requestTable[1] = &NetStub::HandleRequest;" in combined
+    prompt = build_recovery_prompt(worklist)
+    assert '"registration_context"' in prompt
+    assert '"line_numbered_text"' in prompt
+    assert "requestTable[1] = &NetStub::HandleRequest;" in prompt
+
+
+def test_registration_context_is_opt_in_for_direct_worklist_call():
+    worklist = build_recovery_worklist(
+        _diagnostics(),
+        _functions(),
+        max_sites=1,
+    )
+
+    assert "registration_context" not in worklist[0]
+
+
 def test_parser_and_validator_require_known_ids_and_source_evidence():
     functions = _functions()
     worklist = build_recovery_worklist(
@@ -245,6 +307,46 @@ def test_parser_and_validator_require_known_ids_and_source_evidence():
     assert [item["target_id"] for item in validated["accepted"]] == [HANDLER]
     assert len(validated["kept_unresolved"]) == 1
     assert validated["rejected"] == []
+
+
+def test_parser_rejects_multiline_evidence_text():
+    functions = _functions()
+    worklist = build_recovery_worklist(
+        _diagnostics(), functions, max_sites=1, max_shortlist=2
+    )
+    site_id = worklist[0]["site_id"]
+    response = {
+        "schema_version": 1,
+        "decisions": [
+            {
+                "site_id": site_id,
+                "decision": "keep_unresolved",
+                "target_id": "",
+                "confidence": "low",
+                "reason": "The source is ambiguous.",
+                "evidence": [
+                    {
+                        "kind": "call_site",
+                        "file": SOURCE,
+                        "start_line": 12,
+                        "end_line": 13,
+                        "text": "line one\nline two",
+                    }
+                ],
+            }
+        ],
+    }
+    errors: list[str] = []
+
+    parsed = parse_recovery_response(
+        json.dumps(response),
+        valid_site_ids={site_id},
+        valid_function_ids=set(functions),
+        on_error=errors.append,
+    )
+
+    assert parsed == []
+    assert any("evidence.text must be single-line" in message for message in errors)
 
 
 def test_low_confidence_edge_is_kept_out_of_accepted_review_set():

@@ -685,6 +685,8 @@ class EvidenceStore:
         tool_name: str = "opengrok.read_source",
         query_id: str | None = None,
         source_endpoint: str | None = None,
+        relation_from: str | None = None,
+        relation_to: str | None = None,
     ) -> Evidence:
         """Extract a bounded line range while hashing the full document."""
 
@@ -713,6 +715,8 @@ class EvidenceStore:
             query_id=query_id,
             content=document.content,
             source_endpoint=source_endpoint,
+            relation_from=relation_from,
+            relation_to=relation_to,
         )
 
     # Explicit alias for callers that use the noun from the design document.

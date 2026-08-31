@@ -51,6 +51,7 @@ from .path_classifier import (
     PathClassificationError,
     PathFeature,
     classify_path,
+    is_attribution_eligible,
     rank_paths,
 )
 from .evidence_store import (
@@ -124,6 +125,7 @@ from .service_attributor import (
     ServiceAttributor,
     SourceLocation,
     combine_attributions,
+    partition_attribution_evidence,
 )
 from .client_locator import (
     ClientAttributionResult,
@@ -140,6 +142,16 @@ from .llm_search_planner import (
     LLMSearchPlannerError,
     ModelCall,
     PlannerBudget,
+)
+from .llm_role_attributor import (
+    LLMRoleAttributionError,
+    LLMRoleAttributionResult,
+    LLMRoleAttributor,
+    LLMRoleDecision,
+    ROLE_ATTRIBUTION_PROMPT_VERSION,
+    ROLE_ATTRIBUTION_SCHEMA_VERSION,
+    ROLE_ATTRIBUTION_SYSTEM,
+    build_role_attribution_prompt,
 )
 from .prompts import (
     SEARCH_PLANNER_SYSTEM,
@@ -168,6 +180,18 @@ from .orchestrator import (
     SourceLocatorOrchestrator,
     SourceLocatorOrchestratorError,
     normalize_stage,
+)
+from .worker import (
+    SourceLocatorRuntime,
+    SourceLocatorWorker,
+    SourceLocatorWorkerError,
+    runtime_from_config,
+)
+from .local_corpus import (
+    LocalCorpusClient,
+    LocalCorpusError,
+    LocalCorpusStats,
+    LocalCorpusTargetMatch,
 )
 
 __all__ = [
@@ -208,6 +232,7 @@ __all__ = [
     "PathClassificationError",
     "PathFeature",
     "classify_path",
+    "is_attribution_eligible",
     "rank_paths",
     "Evidence",
     "EvidenceEdge",
@@ -267,6 +292,7 @@ __all__ = [
     "ServiceAttributor",
     "SourceLocation",
     "combine_attributions",
+    "partition_attribution_evidence",
     "ClientAttributionResult",
     "ClientLocator",
     "ClientLocatorError",
@@ -279,6 +305,14 @@ __all__ = [
     "LLMSearchPlannerError",
     "ModelCall",
     "PlannerBudget",
+    "LLMRoleAttributionError",
+    "LLMRoleAttributionResult",
+    "LLMRoleAttributor",
+    "LLMRoleDecision",
+    "ROLE_ATTRIBUTION_PROMPT_VERSION",
+    "ROLE_ATTRIBUTION_SCHEMA_VERSION",
+    "ROLE_ATTRIBUTION_SYSTEM",
+    "build_role_attribution_prompt",
     "SEARCH_PLANNER_SYSTEM",
     "build_search_planner_prompt",
     "build_search_planner_repair_prompt",
@@ -299,4 +333,12 @@ __all__ = [
     "SourceLocatorOrchestrator",
     "SourceLocatorOrchestratorError",
     "normalize_stage",
+    "SourceLocatorRuntime",
+    "SourceLocatorWorker",
+    "SourceLocatorWorkerError",
+    "runtime_from_config",
+    "LocalCorpusClient",
+    "LocalCorpusError",
+    "LocalCorpusStats",
+    "LocalCorpusTargetMatch",
 ]

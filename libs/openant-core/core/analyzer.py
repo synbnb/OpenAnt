@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.schemas import AnalyzeResult, AnalysisMetrics, UsageInfo
+from core.observability import print_chinese_log
 from core import tracking
 from core.checkpoint import StepCheckpoint
 from core.progress import ProgressReporter
@@ -219,6 +220,11 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
         if checkpointed:
             print(f"[Detect] Restored {len(checkpointed)} units from checkpoints",
                   file=sys.stderr, flush=True)
+            print_chinese_log(
+                f"检测恢复：发现 {len(checkpointed)} 个已保存单元，"
+                "只重跑未完成或可重试的单元，避免重复消耗模型调用。",
+                category="检测决策",
+            )
 
     progress = ProgressReporter("Detect", total, tracker=tracker, completed=len(checkpointed))
 
@@ -226,6 +232,11 @@ def _run_detection(units, binding: PhaseBinding, json_corrector, app_context, wo
     remaining = total - len(checkpointed)
     print(f"[Detect] Mode: {mode}, {remaining} units to process ({len(checkpointed)} already done)",
           file=sys.stderr, flush=True)
+    print_chinese_log(
+        f"检测执行方式：{mode}；待处理 {remaining} 个单元，"
+        f"已完成 {len(checkpointed)} 个。并行只影响调度，不改变结果合并顺序。",
+        category="检测决策",
+    )
 
     # Pre-populate results from checkpoints, but ONLY for successfully-completed
     # units. Errored units are loaded into the "units_to_process" list so they
@@ -488,6 +499,11 @@ def run_analysis(
         probe_registry_or_raise(registry)
     binding = registry.get("analyze")
     print(f"[Analyze] Provider: {binding.provider_name}, Model: {binding.model}", file=sys.stderr)
+    print_chinese_log(
+        f"漏洞检测模型：{binding.provider_name}/{binding.model}；"
+        "模型身份会写入分析指纹，换模型后不会复用旧检查点。",
+        category="检测决策",
+    )
 
     # I2 adopt gate: BEFORE loading any prior checkpoints, verify the backend
     # identity that produced them matches the current one. A changed model /
@@ -508,11 +524,27 @@ def run_analysis(
     if app_context_path and HAS_APP_CONTEXT and os.path.exists(app_context_path):
         app_context = load_context(Path(app_context_path))
         print(f"[Analyze] App context: {app_context.application_type}", file=sys.stderr)
+        print_chinese_log(
+            f"检测上下文：已加载 {app_context.application_type} 应用上下文，"
+            "漏洞判定会结合输入源、信任边界和攻击者画像。",
+            category="检测决策",
+        )
+    else:
+        print_chinese_log(
+            "检测上下文：没有可用 application_context.json，"
+            "本阶段仅依赖函数代码、调用图和默认安全规则。",
+            category="检测决策",
+        )
 
     # Load dataset
     print(f"[Analyze] Loading dataset: {dataset_path}", file=sys.stderr)
     dataset = read_json(dataset_path)
     units = dataset.get("units", [])
+    print_chinese_log(
+        f"检测输入：从 {dataset_path} 读取 {len(units)} 个单元；"
+        "后续筛选只减少待分析范围，不会修改原始 dataset 文件。",
+        category="检测决策",
+    )
 
     # Diff filter: if upstream parse stamped diff_selected on units (PR-diff
     # mode), drop the unselected ones. Pre-diff datasets have no field and
@@ -521,6 +553,11 @@ def run_analysis(
         _pre = len(units)
         units = [u for u in units if u.get("diff_selected")]
         print(f"[Analyze] Diff filter: {_pre} -> {len(units)} units", file=sys.stderr)
+        print_chinese_log(
+            f"差异范围筛选：从 {_pre} 个单元保留 {len(units)} 个与变更相关的单元，"
+            "用于增量扫描。",
+            category="检测决策",
+        )
 
     # Optional: filter by enhancement security classification
     if exploitable_filter:
@@ -546,15 +583,34 @@ def run_analysis(
                 "Filter matched 0 units.",
                 file=sys.stderr,
             )
+            print_chinese_log(
+                f"可利用性筛选警告：请求 {exploitable_filter}，但 {original_count} 个单元没有安全分类，"
+                "筛选结果为空可能表示忘记先运行上下文增强，而不一定代表源码没有风险。",
+                category="检测决策",
+            )
         print(f"[Analyze] Exploitable filter ({exploitable_filter}): {original_count} -> {len(units)} units", file=sys.stderr)
+        print_chinese_log(
+            f"可利用性筛选：模式={exploitable_filter}，待分析单元从 {original_count} 个变为 {len(units)} 个。",
+            category="检测决策",
+        )
 
     if limit:
         # Priority-sort before truncating so a --limit run keeps the most
         # security-relevant units rather than the alphabetically-first ones.
         units = _apply_limit(units, limit)
+        print_chinese_log(
+            f"数量上限筛选：limit={limit}，按安全相关性优先保留高风险分类单元，"
+            f"最终分析 {len(units)} 个单元。",
+            category="检测决策",
+        )
 
     total = len(units)
     print(f"[Analyze] Analyzing {total} units...", file=sys.stderr)
+    print_chinese_log(
+        f"开始逐单元漏洞判定：实际发送给检测模型 {total} 个单元；"
+        "每个单元结果会先写检查点，再汇总到 results.json。",
+        category="检测进度",
+    )
 
     # Initialize summary tracking for _summary.json
     # Count checkpointed units to seed the counters and sum existing usage
@@ -652,6 +708,11 @@ def run_analysis(
         else:
             print(f"[Analyze] Retrying {len(retryable_indices)} failed units (transient errors)...",
                   file=sys.stderr)
+        print_chinese_log(
+            f"检测重试决策：{len(retryable_indices)} 个单元失败原因属于限流、网络、超时或服务端临时错误，"
+            "先等待限流窗口并改为顺序重试；非临时错误不会盲目重复。",
+            category="检测决策",
+        )
 
         # Retry sequentially to avoid re-triggering rate limit
         for i in retryable_indices:
@@ -684,6 +745,11 @@ def run_analysis(
 
             print(f"  Retry {i+1}/{len(retryable_indices)}: {out['finding']} (retry)",
                   file=sys.stderr, flush=True)
+            print_chinese_log(
+                f"重试结果：第 {i + 1}/{len(retryable_indices)} 个单元得到 {out['finding']}，"
+                "已更新检查点和阶段计数。",
+                category="检测进度",
+            )
 
     # Write final summary with phase="done"
     checkpoint.write_summary(total, _summary_completed, _summary_errors,
@@ -700,6 +766,11 @@ def run_analysis(
     try:
         from utilities.stage1_consistency import run_stage1_consistency_check
         print("\n[Analyze] Running consistency check...", file=sys.stderr)
+        print_chinese_log(
+            "一致性复核：检查模型返回的 verdict、finding、代码证据和调用路径是否相互矛盾；"
+            "这是结果写入前的纠错步骤。",
+            category="检测决策",
+        )
         results = run_stage1_consistency_check(results, code_by_route, binding, get_global_tracker())
         # Count corrections
         for r in results:
@@ -707,11 +778,24 @@ def run_analysis(
                 consistency_corrections += 1
         if consistency_corrections:
             print(f"  Consistency corrections: {consistency_corrections}", file=sys.stderr)
+            print_chinese_log(
+                f"一致性复核已修正 {consistency_corrections} 个结果，"
+                "后续指标以修正后的 verdict 重新统计。",
+                category="检测决策",
+            )
             counts = _count_verdicts(results)
     except ImportError:
         print("[Analyze] Stage 1 consistency check not available, skipping.", file=sys.stderr)
+        print_chinese_log(
+            "一致性复核不可用：模块未安装，保留模型原始结果并记录跳过。",
+            category="检测决策",
+        )
     except Exception as e:
         print(f"[Analyze] Consistency check error (non-fatal): {e}", file=sys.stderr)
+        print_chinese_log(
+            f"一致性复核出现非致命错误（{e}），保留原结果继续写入。",
+            category="检测决策",
+        )
 
     # --- Write results ---
     results_path = os.path.join(output_dir, "results.json")
@@ -738,6 +822,11 @@ def run_analysis(
 
     write_json(results_path, experiment_result)
     print(f"\n[Analyze] Results written to {results_path}", file=sys.stderr)
+    print_chinese_log(
+        f"漏洞检测产物：results.json 已写入 {results_path}，"
+        f"最终指标为 {counts}；检查点目录保留用于中断恢复。",
+        category="检测结果",
+    )
 
     # Checkpoints are preserved as a permanent artifact alongside results.
     # Final summary (phase="done") was already written before result writing.

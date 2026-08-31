@@ -18,6 +18,7 @@ import traceback
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+from core.observability import print_chinese_log
 from core.schemas import StepReport
 
 
@@ -53,6 +54,11 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
         report.status = "error"
         report.errors.append(str(exc))
         print(f"[{step}] ERROR: {exc}", file=sys.stderr)
+        print_chinese_log(
+            f"{step} 阶段发生异常：{exc}；"
+            "上游已完成的产物会保留，是否能继续由扫描编排器的降级策略决定。",
+            category="阶段错误",
+        )
         traceback.print_exc(file=sys.stderr)
         raise
     finally:
@@ -83,6 +89,13 @@ def step_context(step: str, output_dir: str, inputs: dict | None = None):
             f"[{step}] Report: {output_dir}/{step}.report.json "
             f"({report.duration_seconds}s, {_format_costs(report.costs_by_currency)})",
             file=sys.stderr,
+        )
+        print_chinese_log(
+            f"{step} 阶段的结构化记录已写入 "
+            f"{output_dir}/{step}.report.json；耗时 {report.duration_seconds}s，"
+            f"模型用量 {report.token_usage.get('total_tokens', 0)} tokens，"
+            f"成本 {_format_costs(report.costs_by_currency)}，状态={report.status}。",
+            category="阶段记录",
         )
 
 

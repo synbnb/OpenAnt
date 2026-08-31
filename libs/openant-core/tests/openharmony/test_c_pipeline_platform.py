@@ -33,6 +33,9 @@ def test_c_pipeline_persists_openharmony_scope_in_scan_and_dataset(tmp_path):
     assert pipeline.run_parser_pipeline() is True
     scan_result = json.loads((tmp_path / "out" / "scan_results.json").read_text())
     dataset = json.loads((tmp_path / "out" / "dataset.json").read_text())
+    diagnostics = json.loads(
+        (tmp_path / "out" / "call_graph_residuals.json").read_text()
+    )
 
     assert scan_result["scope"]["platform"] == "openharmony"
     assert scan_result["scope"]["coverage"]["roles"]["fuzz"] == 1
@@ -40,3 +43,41 @@ def test_c_pipeline_persists_openharmony_scope_in_scan_and_dataset(tmp_path):
         "health_sensor_service"
     ]
     assert dataset["metadata"]["openharmony_scope"] == scan_result["scope"]
+    assert diagnostics["platform"] == "openharmony"
+    assert diagnostics["status"] == "complete"
+    assert diagnostics["summary"]["unresolved_call_sites"] == 0
+
+
+def test_call_graph_diagnostics_failure_is_recorded_without_failing_parser(
+    monkeypatch, tmp_path
+):
+    def fail_diagnostics(*_args, **_kwargs):
+        raise RuntimeError("diagnostic probe failed")
+
+    monkeypatch.setattr(
+        "core.platforms.openharmony.call_graph_diagnostics."
+        "build_call_graph_diagnostics",
+        fail_diagnostics,
+    )
+    pipeline = CPipelineTest(
+        str(FIXTURE_ROOT),
+        output_dir=str(tmp_path / "out"),
+        processing_level=ProcessingLevel.ALL,
+        platform="openharmony",
+    )
+
+    assert pipeline.setup() is True
+    assert pipeline.run_parser_pipeline() is True
+
+    diagnostics = json.loads(
+        (tmp_path / "out" / "call_graph_residuals.json").read_text()
+    )
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["error"] == {
+        "type": "RuntimeError",
+        "message": "diagnostic probe failed",
+    }
+    dataset = json.loads((tmp_path / "out" / "dataset.json").read_text())
+    assert dataset["metadata"]["openharmony_call_graph_diagnostics"][
+        "status"
+    ] == "failed"

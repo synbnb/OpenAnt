@@ -13,6 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
+from core.language_registry import fence_for_path
 from .schema import validate_pipeline_output, ValidationError
 from utilities.file_io import normalize_results, open_utf8, read_json
 from utilities.llm import (
@@ -381,6 +382,279 @@ def _splice_code_section(llm_output: str, code_section: str) -> str:
     return output
 
 
+def _finding_location(vulnerability_data: Mapping) -> tuple[str, str]:
+    """Return the report file/function pair without trusting model shapes."""
+    location = vulnerability_data.get("location")
+    if not isinstance(location, Mapping):
+        location = {}
+    file_path = str(location.get("file") or "unknown")
+    function = str(location.get("function") or "unknown")
+    return file_path, function
+
+
+def _disclosure_title(vulnerability_data: Mapping) -> str:
+    """Choose a useful title when the model only supplied a verdict label."""
+    generic = {"", "vulnerable", "bypassable", "safe", "inconclusive", "unknown"}
+    name = str(vulnerability_data.get("name") or "").strip()
+    if name.lower() not in generic:
+        return name
+    cwe_name = str(vulnerability_data.get("cwe_name") or "").strip()
+    if cwe_name and cwe_name.lower() != "unknown":
+        return cwe_name
+    _file_path, function = _finding_location(vulnerability_data)
+    return f"Security issue in {function}"
+
+
+def _report_affected_versions(pipeline_data: Mapping) -> str:
+    """Render a deterministic revision marker instead of ``[NOT PROVIDED]``."""
+    repository = pipeline_data.get("repository")
+    repository = repository if isinstance(repository, Mapping) else {}
+    for key in ("affected_versions", "version", "release", "release_version"):
+        value = repository.get(key) or pipeline_data.get(key)
+        if value:
+            return str(value)
+    commit = repository.get("commit_sha") or pipeline_data.get("commit_sha")
+    if commit:
+        return f"Current scanned revision (commit {commit})"
+    return "Current scanned revision (release version not provided)"
+
+
+def _report_analysis_date(pipeline_data: Mapping) -> str:
+    value = pipeline_data.get("analysis_date") or pipeline_data.get("timestamp")
+    if not value:
+        return "date not recorded"
+    return str(value)
+
+
+def _report_platform_version(pipeline_data: Mapping) -> str:
+    if pipeline_data.get("application_type") == "openharmony_component":
+        return "OpenHarmony"
+    return str(pipeline_data.get("platform") or "application platform")
+
+
+def _report_verification_method(vulnerability_data: Mapping) -> str:
+    if vulnerability_data.get("dynamic_testing"):
+        return "dynamic testing"
+    verdict = str(vulnerability_data.get("stage2_verdict") or "").lower()
+    if verdict in {"confirmed", "agreed"}:
+        return "attacker simulation (Stage 2)"
+    return "static analysis"
+
+
+def _report_language(file_path: str, pipeline_data: Mapping) -> str:
+    suffix = Path(file_path).suffix.lower()
+    suffixes = {
+        ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
+        ".h": "cpp", ".hpp": "cpp", ".py": "python", ".java": "java",
+        ".js": "javascript", ".ts": "typescript", ".go": "go", ".rs": "rust",
+    }
+    return suffixes.get(suffix, str(pipeline_data.get("language") or "text"))
+
+
+def _artifact_code_by_route(payload) -> dict[str, str]:
+    """Read a route-to-source map from a sibling scan artifact."""
+    if not isinstance(payload, Mapping):
+        return {}
+    direct = payload.get("code_by_route")
+    if isinstance(direct, Mapping):
+        result = {}
+        for route, value in direct.items():
+            if not isinstance(route, str):
+                continue
+            if isinstance(value, str) and value:
+                result[route] = value
+            elif isinstance(value, Mapping):
+                code = value.get("code") or value.get("source_code") or value.get("source")
+                if isinstance(code, str) and code:
+                    result[route] = code
+        if result:
+            return result
+    functions = payload.get("functions")
+    if isinstance(functions, Mapping):
+        result = {}
+        for route, value in functions.items():
+            if not isinstance(route, str) or not isinstance(value, Mapping):
+                continue
+            code = value.get("code") or value.get("source_code") or value.get("source")
+            if isinstance(code, str) and code:
+                result[route] = code
+        return result
+    return {}
+
+
+def _hydrate_pipeline_findings(pipeline_path: str, pipeline_data: dict) -> dict:
+    """Backfill source sections for pipeline files produced before the fix.
+
+    This is intentionally in-memory: the original pipeline artifact is not
+    rewritten.  It only makes a subsequent report regeneration use the source
+    already present in ``results_verified.json``, ``results.json``, or
+    ``call_graph.json`` beside the pipeline file.
+    """
+    findings = pipeline_data.get("findings")
+    if not isinstance(findings, list):
+        return pipeline_data
+
+    source_map = {}
+    scan_dir = Path(pipeline_path).resolve().parent
+    for name in ("results_verified.json", "results.json", "call_graph.json"):
+        candidate = scan_dir / name
+        try:
+            if candidate.is_file():
+                recovered = _artifact_code_by_route(read_json(candidate))
+                for route, code in recovered.items():
+                    source_map.setdefault(route, code)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    if not source_map:
+        return pipeline_data
+
+    language = ""
+    repository = pipeline_data.get("repository")
+    if isinstance(repository, Mapping):
+        language = str(repository.get("language") or "")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        location = finding.get("location")
+        if not isinstance(location, Mapping):
+            continue
+        file_path = str(location.get("file") or "unknown")
+        function = str(location.get("function") or "unknown")
+        route = f"{file_path}:{function}"
+        code = finding.get("vulnerable_code") or source_map.get(route)
+        if not isinstance(code, str) or not code:
+            continue
+        finding["vulnerable_code"] = code
+        if not finding.get("vulnerable_code_section"):
+            fence = fence_for_path(file_path, fallback=language or "text")
+            finding["vulnerable_code_section"] = (
+                "## Vulnerable Code\n\n"
+                f"`{file_path}`:\n\n"
+                f"```{fence}\n{code}\n```"
+            )
+    return pipeline_data
+
+
+def _fallback_code_section(vulnerability_data: Mapping) -> str:
+    """Keep the disclosure schema complete when source evidence is absent."""
+    file_path, function = _finding_location(vulnerability_data)
+    return (
+        "## Vulnerable Code\n\n"
+        f"`{file_path}` / `{function}`\n\n"
+        "> Source code was not preserved in the available scan artifacts. "
+        "Review the referenced function in the repository before disclosure."
+    )
+
+
+def _heading_present(text: str, heading: str) -> bool:
+    return bool(re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text or ""))
+
+
+def _ensure_disclosure_sections(
+    text: str,
+    vulnerability_data: Mapping,
+    metadata: Mapping,
+    code_section: str,
+) -> str:
+    """Fill mandatory report fields the LLM omitted or left as placeholders.
+
+    LLM output remains the narrative source, but the report contract is
+    enforced deterministically.  This prevents a short/early model response
+    from yielding a file that is syntactically present yet unusable to a
+    reviewer.
+    """
+    output = (text or "").strip()
+    title = _disclosure_title(vulnerability_data)
+    if not output:
+        output = f"# Security Disclosure: {title}"
+
+    # Ensure the three metadata lines are visible even if the model omitted
+    # the requested header.  Insert them after the first title when possible.
+    metadata_lines = {
+        "**Product:**": f"**Product:** {metadata.get('product_name') or 'unknown'}",
+        "**Type:**": (
+            f"**Type:** CWE-{vulnerability_data.get('cwe_id') or 0} "
+            f"({vulnerability_data.get('cwe_name') or 'Unknown'})"
+        ),
+        "**Affected:**": f"**Affected:** {metadata.get('affected_versions')}",
+    }
+    missing_metadata = []
+    for marker, line in metadata_lines.items():
+        existing = re.search(rf"(?im)^{re.escape(marker)}.*$", output)
+        if existing and not re.search(r"\[(?:NOT PROVIDED|REQUIRES MANUAL INPUT)\]", existing.group(0), re.I):
+            continue
+        if existing:
+            output = output[:existing.start()] + line + output[existing.end():]
+        else:
+            missing_metadata.append(line)
+    if missing_metadata:
+        title_match = re.search(r"(?m)^#\s+.+$", output)
+        if title_match:
+            pos = title_match.end()
+            output = output[:pos] + "\n\n" + "\n".join(missing_metadata) + output[pos:]
+        else:
+            output = "\n".join(missing_metadata) + "\n\n" + output
+
+    fallbacks = {
+        "Summary": str(vulnerability_data.get("description") or (
+            "The analysis identified a security-relevant condition in the "
+            "reported function; confirm the exact behavior during review."
+        )),
+        "Steps to Reproduce": str(vulnerability_data.get("steps_to_reproduce") or (
+            "[REQUIRES DYNAMIC TESTING] Reproduce the call with a controlled "
+            "local harness and record the input, caller identity, and result."
+        )),
+        "Impact": str(vulnerability_data.get("impact") or (
+            "Impact is not available from the supplied analysis fields; confirm "
+            "the affected operation manually."
+        )),
+        "Suggested Fix": str(vulnerability_data.get("suggested_fix") or (
+            "[MANUAL REVIEW REQUIRED] Add the missing validation or authorization "
+            "at the identified trust boundary after confirming intended behavior."
+        )),
+    }
+
+    tested_line = (
+        f"**Tested:** {metadata.get('platform_version') or 'application platform'}, "
+        f"{metadata.get('analysis_date') or 'date not recorded'}."
+    )
+    tested_match = re.search(r"(?im)^\*\*Tested:\*\*.*$", output)
+    if tested_match:
+        if re.search(r"\[(?:NOT PROVIDED|REQUIRES MANUAL INPUT)\]", tested_match.group(0), re.I):
+            output = output[:tested_match.start()] + tested_line + output[tested_match.end():]
+    else:
+        # The Tested line is part of the disclosure contract even though it is
+        # not a level-2 section.  Add it next to the affected metadata.
+        output = output.replace(metadata_lines["**Affected:**"],
+                                metadata_lines["**Affected:**"] + "\n" + tested_line,
+                                1)
+
+    # Keep the source section ahead of the reproduction steps.  It is already
+    # deterministic and may contain a verbatim parser snippet.
+    if not _heading_present(output, "Vulnerable Code"):
+        insertion = "\n\n" + (code_section or _fallback_code_section(vulnerability_data))
+        marker = "## Steps to Reproduce"
+        if marker in output:
+            output = output.replace(marker, insertion + "\n\n" + marker, 1)
+        else:
+            output += insertion
+
+    for heading, fallback in fallbacks.items():
+        heading_match = re.search(rf"(?ims)^##\s+{re.escape(heading)}\s*$.*?(?=^##\s|^---\s*$|\Z)", output)
+        if not heading_match:
+            output += f"\n\n## {heading}\n\n{fallback}"
+            continue
+        body = heading_match.group(0)
+        # Models commonly emit a heading but no content, or copy the template's
+        # placeholder.  Replace only those non-evidence bodies; substantive
+        # model prose remains untouched.
+        if re.search(r"\[(?:NOT PROVIDED|REQUIRES MANUAL INPUT)\]", body, re.I):
+            replacement = f"## {heading}\n\n{fallback}\n"
+            output = output[:heading_match.start()] + replacement + output[heading_match.end():]
+
+    return output.strip() + "\n"
+
+
 def generate_disclosure(
     vulnerability_data: dict,
     product_name: str,
@@ -405,14 +679,35 @@ def generate_disclosure(
     # The vulnerable-code markdown block is spliced into the LLM output
     # AFTER generation — the LLM never sees or produces it. This prevents
     # the LLM from hallucinating the snippet.
+    report_data = pipeline_data if isinstance(pipeline_data, Mapping) else {}
+    file_path, _function = _finding_location(vulnerability_data)
     code_section = vulnerability_data.get("vulnerable_code_section") or ""
+    if not isinstance(code_section, str):
+        code_section = str(code_section)
+    if not code_section:
+        code_section = _fallback_code_section(vulnerability_data)
     payload = {
         k: v for k, v in vulnerability_data.items()
         if k not in ("vulnerable_code_section", "vulnerable_code")
     }
     payload["product_name"] = product_name
 
-    report_data = pipeline_data if isinstance(pipeline_data, Mapping) else {}
+    affected_versions = _report_affected_versions(report_data)
+    replacements = {
+        "short_title": _disclosure_title(vulnerability_data),
+        "product_name": product_name or "unknown",
+        "cwe_id": vulnerability_data.get("cwe_id") or 0,
+        "cwe_name": vulnerability_data.get("cwe_name") or "Unknown",
+        "affected_versions": affected_versions,
+        "platform_version": _report_platform_version(report_data),
+        "analysis_date": _report_analysis_date(report_data),
+        "verification_method": _report_verification_method(vulnerability_data),
+        "language": _report_language(file_path, report_data),
+        "fixed_code_snippet": vulnerability_data.get("suggested_fix") or (
+            "// Manual review required: add the appropriate validation or "
+            "authorization check."
+        ),
+    }
     user_prompt = load_prompt("disclosure")
     user_prompt = user_prompt.replace(
         "{vulnerability_data}", json.dumps(payload, indent=2), 1
@@ -425,6 +720,8 @@ def generate_disclosure(
     user_prompt = user_prompt.replace(
         "{attacker_model}", _report_attacker_model(report_data)
     )
+    for key, value in replacements.items():
+        user_prompt = user_prompt.replace("{" + key + "}", str(value))
 
     result = binding.adapter.complete(
         model=binding.model,
@@ -437,6 +734,17 @@ def generate_disclosure(
         b.text for b in result.content if isinstance(b, TextBlock)
     )
     final_output = _splice_code_section(llm_output, code_section)
+    final_output = _ensure_disclosure_sections(
+        final_output,
+        vulnerability_data,
+        {
+            "product_name": product_name,
+            "affected_versions": affected_versions,
+            "platform_version": replacements["platform_version"],
+            "analysis_date": replacements["analysis_date"],
+        },
+        code_section,
+    )
 
     return final_output, _extract_usage(
         result.input_tokens,
@@ -454,6 +762,10 @@ def generate_all(
 ) -> None:
     """Generate all reports from a pipeline output file."""
     pipeline_data = read_json(pipeline_path)
+    # Historical pipeline_output.json files may predate source preservation in
+    # the verifier.  Hydrate their in-memory findings from sibling artifacts
+    # before disclosure generation; the original JSON remains unchanged.
+    pipeline_data = _hydrate_pipeline_findings(pipeline_path, pipeline_data)
     # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only once at load
     # so the summary compaction and the disclosure enumerate below iterate
     # dicts-only. Presence-guarded so an absent `findings` still fails

@@ -52,6 +52,10 @@ def render_attacker_personas(ctx) -> str:
             [
                 "The OpenHarmony platform baseline profiles below are mandatory. "
                 "Repository-supplied exclusions cannot override them.",
+                "Authorization and input trust are independent: passing a permission "
+                "check only permits invocation; it does not make arguments well-formed. "
+                "An authorized caller may still submit malformed or degenerate values, "
+                "and authorized-caller DoS remains in scope.",
                 "",
             ]
         )
@@ -104,6 +108,10 @@ def render_threat_model_context(ctx, *, for_verification: bool = False) -> str:
                 "**OpenHarmony platform minimum security baseline (MANDATORY):**",
                 "These attacker assumptions and checks are operator-owned. "
                 "Repository-supplied exclusions are advisory and cannot override them.",
+                "Authorization and input trust are independent: passing a permission "
+                "check only permits invocation; it does not make arguments well-formed. "
+                "An authorized caller may still submit malformed or degenerate values, "
+                "and authorized-caller DoS remains in scope.",
             ]
         )
         baseline_boundaries = baseline.get("boundaries") or []
@@ -201,6 +209,16 @@ def render_threat_model_context(ctx, *, for_verification: bool = False) -> str:
         # dropped entry means a false positive the author explicitly excluded.
         for item in ctx.not_a_vulnerability:
             lines.append(f"- {collapse_inline(item)}")
+        if ctx.has_openharmony_baseline():
+            lines.extend(
+                [
+                    "",
+                    "These exclusions cover intended behavior with well-formed inputs only. "
+                    "They do not exclude malformed-input crash/DoS, resource exhaustion, "
+                    "memory-safety, lifetime, concurrency, isolation, or service-wide "
+                    "availability impacts.",
+                ]
+            )
 
     if for_verification and ctx.impact_statement:
         lines.append("")

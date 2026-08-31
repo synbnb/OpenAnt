@@ -58,6 +58,10 @@ var (
 	scanDiffScope                   string
 	scanLLMReachability             bool
 	scanLLMReachabilityMaxCodeBytes int
+	scanLLMCallGraphRecovery        bool
+	scanLLMCallGraphIterative       bool
+	scanLLMCallGraphCandidateReview bool
+	scanLLMCallGraphProjection      bool
 	scanLibraryMode                 bool
 )
 
@@ -92,6 +96,10 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&scanDiffScope, "diff-scope", "changed_functions", "Diff scope: changed_files, changed_functions, callers")
 	cmd.Flags().BoolVar(&scanLLMReachability, "llm-reachability", false, "Enable the LLM reachability review stage (Opus). Surfaces entry points and external-input sites the structural pass would miss by reviewing the full codebase before the reachability filter is applied. Off by default — enabling this incurs cost proportional to total repo size, not the filtered unit count (~one Opus call per 25 units across the whole codebase).")
 	cmd.Flags().IntVar(&scanLLMReachabilityMaxCodeBytes, "llm-reachability-max-code-bytes", 1500, "Max code bytes per unit sent to the LLM reachability stage (default: 1500). Higher values (e.g. 4096, 8192) catch entry-point indicators past byte 1500 in long handlers / generated code, at proportional Opus cost increase. Only meaningful with --llm-reachability.")
+	cmd.Flags().BoolVar(&scanLLMCallGraphRecovery, "llm-call-graph-recovery", false, "Enable the advisory OpenHarmony indirect-call recovery review. Writes llm_call_graph_recovery.json without modifying the native call graph.")
+	cmd.Flags().BoolVar(&scanLLMCallGraphIterative, "llm-call-graph-iterative-recovery", false, "Enable the entry-driven, bounded multi-round OpenHarmony indirect-call recovery. Writes llm_call_graph_recovery_rounds.json without modifying the native call graph.")
+	cmd.Flags().BoolVar(&scanLLMCallGraphCandidateReview, "llm-call-graph-candidate-review", false, "Enable the advisory OpenHarmony candidate-edge review. Writes llm_call_graph_candidate_review.json without modifying the native call graph.")
+	cmd.Flags().BoolVar(&scanLLMCallGraphProjection, "llm-call-graph-projection", false, "Project validated high-confidence OpenHarmony recovery decisions into llm_call_graph_overlay.json and, for reachable scans, use it in a promote-only BFS re-filter. The native call graph is never rewritten.")
 	cmd.Flags().BoolVar(&scanLibraryMode, "library-mode", false, "Seed the exported public API as reachability entry points, for a library whose public API is being dropped by the structural filter. Blunt: keeps most units — prefer letting fuzz/bin/route entry points seed reachability first.")
 }
 
@@ -249,6 +257,7 @@ func runScan(cmd *cobra.Command, args []string) {
 	if scanLLMReachabilityMaxCodeBytes != 1500 {
 		pyArgs = append(pyArgs, "--llm-reachability-max-code-bytes", fmt.Sprintf("%d", scanLLMReachabilityMaxCodeBytes))
 	}
+	pyArgs = appendScanLLMCallGraphPyArgs(pyArgs)
 
 	// Pass repository metadata from project context so reports don't show
 	// [NOT PROVIDED] placeholders.
@@ -293,6 +302,26 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 
 	os.Exit(result.ExitCode)
+}
+
+// appendScanLLMCallGraphPyArgs keeps the OpenHarmony recovery/projection
+// switches in one testable bridge. The Python scanner remains the source of
+// truth for their semantics; the Go CLI only forwards explicitly enabled
+// options.
+func appendScanLLMCallGraphPyArgs(pyArgs []string) []string {
+	if scanLLMCallGraphRecovery {
+		pyArgs = append(pyArgs, "--llm-call-graph-recovery")
+	}
+	if scanLLMCallGraphIterative {
+		pyArgs = append(pyArgs, "--llm-call-graph-iterative-recovery")
+	}
+	if scanLLMCallGraphCandidateReview {
+		pyArgs = append(pyArgs, "--llm-call-graph-candidate-review")
+	}
+	if scanLLMCallGraphProjection {
+		pyArgs = append(pyArgs, "--llm-call-graph-projection")
+	}
+	return pyArgs
 }
 
 // finalizeScanMetaIfProject updates the scan-run meta.json with a terminal

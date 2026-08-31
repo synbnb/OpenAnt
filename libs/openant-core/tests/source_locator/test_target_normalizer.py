@@ -39,6 +39,16 @@ def test_macro_assignment_keeps_macro_hint_and_socket_value():
     assert any("PIPE_NAME" in note for note in target.normalization_notes)
 
 
+@pytest.mark.parametrize(
+    "socket_name",
+    ["faultloggerd.server", "faultloggerd.sdkdump.server", "faultloggerd.crash.server"],
+)
+def test_socket_service_names_may_contain_dots(socket_name: str):
+    target = normalize_target(f"/dev/unix/socket/{socket_name}")
+    assert target.basename == socket_name
+    assert target.service_hint == socket_name
+
+
 def test_bare_macro_and_service_name_are_distinguished_without_guessing_repo():
     macro = normalize_target("请定位 PIPE_NAME")
     assert macro.target_type == "macro"

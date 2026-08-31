@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping
 from .evidence_store import Evidence, EvidenceStore
 from .manifest_resolver import RepositoryMapping
 from .opengrok_client import normalize_source_path
+from .path_classifier import classify_path
 
 
 _SCHEMA_VERSION = "openant.source-locator.server-attribution.v1"
@@ -36,8 +37,8 @@ _STATUSES = frozenset({"HIGH", "PARTIAL", "UNRESOLVED"})
 _IDENTITY_KINDS = frozenset(
     {"literal_match", "macro_definition", "constant_definition", "symbol_reference"}
 )
-_CREATOR_KINDS = frozenset({"service_config", "socket_acquire"})
-_OWNER_KINDS = frozenset({"socket_acquire", "socket_bind_listen"})
+_CREATOR_KINDS = frozenset({"service_config", "socket_server_registration", "socket_acquire"})
+_OWNER_KINDS = frozenset({"socket_server_registration", "socket_acquire", "socket_bind_listen"})
 _CONSUMER_KINDS = frozenset({"socket_accept_read"})
 _HANDLER_KINDS = frozenset({"protocol_dispatch"})
 _SERVER_KINDS = (
@@ -55,6 +56,7 @@ _KIND_WEIGHTS: Mapping[str, int] = {
     "symbol_reference": 8,
     "service_config": 15,
     "executable_build": 10,
+    "socket_server_registration": 30,
     "socket_acquire": 25,
     "socket_bind_listen": 25,
     "socket_accept_read": 25,
@@ -91,6 +93,35 @@ def _evidence_items(value: EvidenceStore | Iterable[Evidence]) -> tuple[Evidence
         seen.add(item.evidence_id)
         unique.append(item)
     return tuple(unique)
+
+
+def partition_attribution_evidence(
+    value: EvidenceStore | Iterable[Evidence],
+) -> tuple[tuple[Evidence, ...], tuple[str, ...]]:
+    """Split evidence into role-eligible and test/fuzz-only records.
+
+    Search evidence is intentionally append-only and can contain useful clues
+    from tests or fuzzers.  Those records remain in the evidence graph, but
+    they must not satisfy service/client attribution predicates.  All other
+    path scopes (kernel, third-party, generated, build, and so on) stay
+    eligible and are left for semantic role attribution.
+    """
+
+    items = _evidence_items(value)
+    eligible: list[Evidence] = []
+    excluded: list[str] = []
+    for item in items:
+        try:
+            allowed = classify_path(item.source_path).attribution_eligible
+        except (TypeError, ValueError):
+            # Evidence paths are validated at storage time, but fail closed if
+            # an older checkpoint contains a path the classifier cannot parse.
+            allowed = False
+        if allowed:
+            eligible.append(item)
+        else:
+            excluded.append(item.evidence_id)
+    return tuple(eligible), tuple(excluded)
 
 
 def _mapping_is_resolved(mapping: RepositoryMapping | None) -> bool:
@@ -180,7 +211,13 @@ class AttributionCandidate:
 
 @dataclass(frozen=True)
 class ServerAttributionResult:
-    """Auditable server attribution with hard predicates and triage status."""
+    """Auditable server attribution with structural predicates and triage status.
+
+    The predicates determine the attribution status and remain visible to the
+    reviewer.  The worker may use an incomplete result as an advisory
+    confirmation candidate after a resolved repository mapping is available;
+    they are not a hidden permission to clone.
+    """
 
     status: str
     confirmed: bool
@@ -192,6 +229,8 @@ class ServerAttributionResult:
     reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     schema_version: str = _SCHEMA_VERSION
+    excluded_evidence_ids: tuple[str, ...] = ()
+    semantic_decision: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -209,6 +248,13 @@ class ServerAttributionResult:
         object.__setattr__(self, "evidence_ids", tuple(dict.fromkeys(self.evidence_ids)))
         object.__setattr__(self, "reasons", tuple(_clean(item) for item in self.reasons))
         object.__setattr__(self, "warnings", tuple(_clean(item) for item in self.warnings))
+        excluded = tuple(dict.fromkeys(self.excluded_evidence_ids))
+        if any(not isinstance(item, str) or not item.startswith("E-") for item in excluded):
+            raise ServiceAttributionError("excluded_evidence_ids 无效")
+        object.__setattr__(self, "excluded_evidence_ids", excluded)
+        if self.semantic_decision is not None and not isinstance(self.semantic_decision, Mapping):
+            raise ServiceAttributionError("semantic_decision 必须是 JSON 对象或 null")
+        object.__setattr__(self, "semantic_decision", dict(self.semantic_decision) if self.semantic_decision else None)
 
     @property
     def roles(self) -> dict[str, tuple[AttributionCandidate, ...]]:
@@ -237,6 +283,8 @@ class ServerAttributionResult:
             "server_repo": self.server_repo,
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
+            "excluded_evidence_ids": list(self.excluded_evidence_ids),
+            "semantic_decision": dict(self.semantic_decision) if self.semantic_decision else None,
         }
 
 
@@ -305,7 +353,7 @@ class ServiceAttributor:
         *,
         mapping: RepositoryMapping | None = None,
     ) -> ServerAttributionResult:
-        items = _evidence_items(evidence)
+        items, excluded_evidence_ids = partition_attribution_evidence(evidence)
         active_mapping = mapping if mapping is not None else self.mapping
         if active_mapping is not None and not isinstance(active_mapping, RepositoryMapping):
             raise ServiceAttributionError("mapping 必须是 RepositoryMapping 或 null")
@@ -318,7 +366,10 @@ class ServiceAttributor:
 
         has_identity = any(item.kind in _IDENTITY_KINDS for item in items)
         has_service_relation = any(item.kind in {"service_config", "executable_build"} for item in items)
-        has_acquire_or_bind = any(item.kind in {"socket_acquire", "socket_bind_listen"} for item in items)
+        has_acquire_or_bind = any(
+            item.kind in {"socket_server_registration", "socket_acquire", "socket_bind_listen"}
+            for item in items
+        )
         has_consumer = bool(consumer_candidates or handler_candidates)
         has_dispatch = bool(handler_candidates)
         has_mapping = (
@@ -362,6 +413,7 @@ class ServiceAttributor:
             mapping=active_mapping,
             reasons=tuple(dict.fromkeys(reasons)),
             warnings=tuple(dict.fromkeys(warnings)),
+            excluded_evidence_ids=excluded_evidence_ids,
         )
 
 
@@ -429,5 +481,6 @@ __all__ = [
     "ServiceAttributionError",
     "ServiceAttributor",
     "SourceLocation",
+    "partition_attribution_evidence",
     "combine_attributions",
 ]

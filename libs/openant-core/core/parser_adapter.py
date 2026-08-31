@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -434,6 +434,7 @@ def apply_reachability_filter(
     extra_entry_points: "set[str] | None" = None,
     library_mode: bool = False,
     platform: str = "generic",
+    semantic_graph_overlay: Mapping | None = None,
 ) -> dict:
     """Filter dataset units to only those reachable from entry points.
 
@@ -459,6 +460,10 @@ def apply_reachability_filter(
         extra_entry_points: Additional unit IDs to seed the BFS (e.g. from LLM).
         platform: Platform-specific entry-point mode. Defaults to generic for
             backward compatibility; ``openharmony`` enables native hooks.
+        semantic_graph_overlay: Optional additive semantic-graph payload (for
+            example ``llm_call_graph_overlay.json`` or one language's overlay
+            section). It is consumed only for this in-memory BFS and is never
+            written back to ``semantic_graph.json`` or ``call_graph.json``.
 
     Returns:
         The (possibly filtered) dataset dict.
@@ -523,35 +528,6 @@ def apply_reachability_filter(
     units = dataset.get("units", [])
     original_count = len(units)
 
-    # Empty-seed safety-net: a zero entry-point seed would prune EVERY unit
-    # (the BFS frontier starts empty), silently emptying the dataset and
-    # reporting a 100% reduction as success. That is the dominant failure mode
-    # for non-web library / stdlib targets, whose ordinary functions are not a
-    # seedable entry type. Rather than a silent total blackout, degrade to
-    # pass-through (keep all units, unfiltered) and record a loud warning so the
-    # degraded result is never silent. Higher-level callers may still seed
-    # ``extra_entry_points`` to get real filtering.
-    real_eps = real_entry_point_ids(entry_points, functions)
-    if not real_eps and original_count > 0:
-        why = ("Only synthetic fuzz-harness entry points detected"
-               if entry_points else "No entry points detected")
-        warning = (
-            f"{why} — reachability cannot seed a real frontier. "
-            "Returning all units unfiltered to avoid a silent blackout; "
-            f"'{processing_level}' filtering was NOT applied. "
-            "Use --library-mode to seed the exported public API surface."
-        )
-        print(f"  [Warning] {warning}", file=sys.stderr)
-        dataset.setdefault("metadata", {})["reachability_filter"] = {
-            "original_units": original_count,
-            "entry_points": len(entry_points),
-            "reachable_units": original_count,
-            "filtered_out": 0,
-            "reduction_percentage": 0,
-            "warning": warning,
-        }
-        return dataset
-
     # Compute the native result first.  OpenHarmony semantic IPC edges are an
     # additive, in-memory overlay; the persisted native call graph remains the
     # source of truth for ordinary call-graph consumers.
@@ -569,56 +545,171 @@ def apply_reachability_filter(
             "enabled": False,
             "candidate_edges": 0,
             "edges_added": 0,
+            "entry_points_added": 0,
             "edge_kinds": [],
             "monotonicity_violation": False,
+            "sources": [],
         }
+        semantic_graph_inputs: list[tuple[str, Mapping]] = []
         semantic_graph_path = os.path.join(output_dir, "semantic_graph.json")
         if os.path.exists(semantic_graph_path):
             try:
-                from core.platforms.openharmony.reachability import (
-                    build_semantic_reachability_overlay,
-                    merge_reachability_graph,
-                )
-
                 semantic_graph = read_json(semantic_graph_path)
-                overlay = build_semantic_reachability_overlay(
-                    semantic_graph,
-                    functions.keys(),
-                )
-                _, reachability_reverse_call_graph = merge_reachability_graph(
-                    call_graph,
-                    reverse_call_graph,
-                    overlay,
-                )
-                native_pairs = {
-                    (caller, callee)
-                    for callee, callers in reverse_call_graph.items()
-                    for caller in callers
-                }
-                edges_added = sum(
-                    1
-                    for edge in overlay.get("edges", [])
-                    if (edge.get("source_id"), edge.get("target_id"))
-                    not in native_pairs
-                )
-                semantic_overlay_metadata.update(
-                    {
-                        "enabled": bool(overlay.get("edges")),
-                        "candidate_edges": overlay.get("candidate_edges", 0),
-                        "edges_added": edges_added,
-                        "edge_kinds": overlay.get("edge_kinds", []),
-                        "ignored_edge_count": overlay.get("ignored_edge_count", 0),
-                        "invalid_endpoint_count": overlay.get(
-                            "invalid_endpoint_count", 0
-                        ),
-                    }
-                )
+                if not isinstance(semantic_graph, Mapping):
+                    raise TypeError("semantic_graph.json must contain an object")
+                semantic_graph_inputs.append(("semantic_graph.json", semantic_graph))
             except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 print(
                     f"  [Warning] Ignoring malformed semantic graph: {exc}",
                     file=sys.stderr,
                 )
-                reachability_reverse_call_graph = reverse_call_graph
+
+        # The LLM projection is deliberately supplied in memory by the
+        # scanner.  It is kept separate from semantic_graph.json so a bad or
+        # stale overlay cannot overwrite deterministic platform evidence.
+        if semantic_graph_overlay is not None:
+            if isinstance(semantic_graph_overlay, Mapping):
+                semantic_graph_inputs.append(
+                    ("llm_call_graph_overlay.json", semantic_graph_overlay)
+                )
+            else:
+                print(
+                    "  [Warning] Ignoring non-object LLM semantic overlay",
+                    file=sys.stderr,
+                )
+
+        if semantic_graph_inputs:
+            from core.platforms.openharmony.reachability import (
+                build_semantic_reachability_overlay,
+                merge_reachability_graph,
+            )
+
+            merged_call_graph = call_graph
+            merged_reverse_call_graph = reverse_call_graph
+            source_metadata: list[dict] = []
+            edge_kinds: set[str] = set()
+            candidate_edges = 0
+            ignored_edge_count = 0
+            invalid_endpoint_count = 0
+            semantic_entry_points: set[str] = set()
+            existing_entry_points = set(entry_points)
+            for source_name, semantic_graph in semantic_graph_inputs:
+                try:
+                    overlay = build_semantic_reachability_overlay(
+                        semantic_graph,
+                        functions.keys(),
+                    )
+                    merged_call_graph, merged_reverse_call_graph = (
+                        merge_reachability_graph(
+                            merged_call_graph,
+                            merged_reverse_call_graph,
+                            overlay,
+                        )
+                    )
+                    candidate_edges += int(overlay.get("candidate_edges", 0) or 0)
+                    ignored_edge_count += int(
+                        overlay.get("ignored_edge_count", 0) or 0
+                    )
+                    invalid_endpoint_count += int(
+                        overlay.get("invalid_endpoint_count", 0) or 0
+                    )
+                    semantic_entry_points.update(
+                        item
+                        for item in overlay.get("entry_points", []) or []
+                        if isinstance(item, str) and item in functions
+                    )
+                    edge_kinds.update(
+                        kind
+                        for kind in overlay.get("edge_kinds", []) or []
+                        if isinstance(kind, str)
+                    )
+                    source_metadata.append({
+                        "source": source_name,
+                        "candidate_edges": overlay.get("candidate_edges", 0),
+                        "entry_points": overlay.get("entry_points", []),
+                        "edge_kinds": overlay.get("edge_kinds", []),
+                        "ignored_edge_count": overlay.get(
+                            "ignored_edge_count", 0
+                        ),
+                        "invalid_endpoint_count": overlay.get(
+                            "invalid_endpoint_count", 0
+                        ),
+                    })
+                except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    print(
+                        f"  [Warning] Ignoring malformed semantic overlay "
+                        f"({source_name}): {exc}",
+                        file=sys.stderr,
+                    )
+                    source_metadata.append({
+                        "source": source_name,
+                        "error": str(exc)[:500],
+                    })
+
+            # A transaction-to-handler contract edge may be the only evidence
+            # of an externally callable service when generated Stub source is
+            # unavailable.  Union those proven native handlers into the seed
+            # set; this is additive and therefore cannot prune native entries.
+            entry_points |= semantic_entry_points
+            semantic_entry_points_added = semantic_entry_points - existing_entry_points
+
+            reachability_reverse_call_graph = merged_reverse_call_graph
+            native_pairs = {
+                (caller, callee)
+                for callee, callers in reverse_call_graph.items()
+                for caller in callers
+            }
+            combined_pairs = {
+                (caller, callee)
+                for callee, callers in merged_reverse_call_graph.items()
+                for caller in callers
+            }
+            semantic_overlay_metadata.update(
+                {
+                    "enabled": bool(
+                        (combined_pairs - native_pairs) or semantic_entry_points_added
+                    ),
+                    "candidate_edges": candidate_edges,
+                    "edges_added": len(combined_pairs - native_pairs),
+                    "entry_points_added": len(semantic_entry_points_added),
+                    "entry_points": sorted(semantic_entry_points),
+                    "edge_kinds": sorted(edge_kinds),
+                    "ignored_edge_count": ignored_edge_count,
+                    "invalid_endpoint_count": invalid_endpoint_count,
+                    "sources": source_metadata,
+                }
+            )
+
+    # Empty-seed safety-net is intentionally evaluated after the semantic
+    # overlay.  A source-only OpenHarmony checkout may have no structural
+    # entry point but can now provide a validated IPC handler seed.
+    real_eps = real_entry_point_ids(entry_points, functions)
+    if not real_eps and original_count > 0:
+        why = ("Only synthetic fuzz-harness entry points detected"
+               if entry_points else "No entry points detected")
+        warning = (
+            f"{why} — reachability cannot seed a real frontier. "
+            "Returning all units unfiltered to avoid a silent blackout; "
+            f"'{processing_level}' filtering was NOT applied. "
+            "Use --library-mode to seed the exported public API surface."
+        )
+        print(f"  [Warning] {warning}", file=sys.stderr)
+        filter_metadata = {
+            "original_units": original_count,
+            "entry_points": len(entry_points),
+            "reachable_units": original_count,
+            "filtered_out": 0,
+            "reduction_percentage": 0,
+            "warning": warning,
+        }
+        if semantic_overlay_metadata is not None:
+            filter_metadata["native_reachable_units"] = len(
+                native_reachable_ids & {u.get("id", "") for u in units}
+            )
+            filter_metadata["semantic_reachable_added"] = 0
+            filter_metadata["semantic_overlay"] = semantic_overlay_metadata
+        dataset.setdefault("metadata", {})["reachability_filter"] = filter_metadata
+        return dataset
 
     # BFS over the native graph plus any validated semantic overlay.
     reachability = ReachabilityAnalyzer(

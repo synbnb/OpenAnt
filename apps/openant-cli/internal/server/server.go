@@ -190,20 +190,22 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
-	pythonPath     string
-	outDir         string
-	mgr            *manager
-	tmplIndex      *template.Template
-	tmplScan       *template.Template
-	tmplArtifact   *template.Template
-	tmplSum        *template.Template
-	tmplDisclosure *template.Template
-	sem            chan struct{}
-	csrfToken      string
-	wg             sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
-	shutdownDone   chan struct{}  // closed once cancel+drain completes
-	drainMu        sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
-	draining       bool           // set at shutdown so no new job is added after Wait starts
+	pythonPath        string
+	outDir            string
+	mgr               *manager
+	tmplIndex         *template.Template
+	tmplScan          *template.Template
+	tmplArtifact      *template.Template
+	tmplSum           *template.Template
+	tmplDisclosure    *template.Template
+	tmplSourceLocator *template.Template
+	sem               chan struct{}
+	csrfToken         string
+	sourceLocatorMu   sync.Mutex     // serializes Web source-locator mutations, including deletion
+	wg                sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
+	shutdownDone      chan struct{}  // closed once cancel+drain completes
+	drainMu           sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
+	draining          bool           // set at shutdown so no new job is added after Wait starts
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
@@ -229,6 +231,10 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse disclosure.html: %w", err)
 	}
+	tmplSourceLocator, err := template.ParseFS(uifiles.FS, "source-locator.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse source-locator.html: %w", err)
+	}
 
 	// Per-instance CSRF synchronizer token: 32 hex chars from crypto/rand,
 	// stable for the server's lifetime and embedded in served pages.
@@ -238,17 +244,18 @@ func New(pythonPath, outDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		pythonPath:     pythonPath,
-		outDir:         outDir,
-		mgr:            newManager(outDir),
-		tmplIndex:      tmplIndex,
-		tmplScan:       tmplScan,
-		tmplArtifact:   tmplArtifact,
-		tmplSum:        tmplSum,
-		tmplDisclosure: tmplDisclosure,
-		sem:            make(chan struct{}, 4),
-		csrfToken:      hex.EncodeToString(tokBytes),
-		shutdownDone:   make(chan struct{}),
+		pythonPath:        pythonPath,
+		outDir:            outDir,
+		mgr:               newManager(outDir),
+		tmplIndex:         tmplIndex,
+		tmplScan:          tmplScan,
+		tmplArtifact:      tmplArtifact,
+		tmplSum:           tmplSum,
+		tmplDisclosure:    tmplDisclosure,
+		tmplSourceLocator: tmplSourceLocator,
+		sem:               make(chan struct{}, 4),
+		csrfToken:         hex.EncodeToString(tokBytes),
+		shutdownDone:      make(chan struct{}),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -420,6 +427,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /disclosures/{id}", s.handleDisclosureList)
 	mux.HandleFunc("GET /disclosure/{id}/{filename}", s.handleDisclosure)
 	mux.HandleFunc("DELETE /scan/{id}", s.handleDeleteScan)
+	// Source locator routes share this loopback server, CSRF protection and
+	// security headers with scan jobs; no second port or cross-origin bridge is
+	// introduced.
+	mux.HandleFunc("GET /source-locator", s.handleSourceLocatorIndex)
+	mux.HandleFunc("GET /source-locator/sessions", s.handleSourceLocatorSessions)
+	mux.HandleFunc("POST /source-locator/sessions", s.handleSourceLocatorCreate)
+	mux.HandleFunc("GET /source-locator/sessions/{id}", s.handleSourceLocatorStatus)
+	mux.HandleFunc("GET /source-locator/sessions/{id}/handoff", s.handleSourceLocatorHandoff)
+	mux.HandleFunc("GET /source-locator/sessions/{id}/events/snapshot", s.handleSourceLocatorEventSnapshot)
+	mux.HandleFunc("GET /source-locator/sessions/{id}/events", s.handleSourceLocatorEvents)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/message", s.handleSourceLocatorMessage)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/advance", s.handleSourceLocatorAdvance)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/approve", s.handleSourceLocatorApprove)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/reject", s.handleSourceLocatorReject)
+	mux.HandleFunc("POST /source-locator/sessions/{id}/cancel", s.handleSourceLocatorCancel)
+	mux.HandleFunc("DELETE /source-locator/sessions/{id}", s.handleSourceLocatorDelete)
+	mux.HandleFunc("GET /source-locator/sessions/{id}/artifact/{name...}", s.handleSourceLocatorArtifact)
 	return securityHeaders(mux)
 }
 
@@ -1081,7 +1105,7 @@ var scanArtifactSpecs = []artifactSpec{
 	{Name: "platform_profile.json", Label: "OpenHarmony platform profile", Category: "platform", Stage: "parse", Description: "Detected OpenHarmony components, languages, build metadata, platform boundaries, and source coverage evidence."},
 	{Name: "application_context.json", Label: "Application security context", Category: "context", Stage: "app-context", Description: "Threat model describing application purpose, attacker profiles, trust boundaries, input sources, and vulnerability criteria."},
 	{Name: "dataset.json", Label: "Parsed dataset", Category: "dataset", Stage: "parse", Description: "Function-level analysis units produced from source code, including origin locations and direct call relationships."},
-	{Name: "dataset_enhanced.json", Label: "Enhanced dataset", Category: "dataset", Stage: "enhance", Description: "Analysis units after caller, callee, semantic, platform, and guard context has been attached."},
+	{Name: "dataset_enhanced.json", Label: "Enhanced dataset", Category: "dataset", Stage: "enhance", Description: "Analysis units after caller, callee, semantic, platform, and guard context has been attached. The Web viewer can also derive an Agentic context graph from the model-selected functions without changing the native call graph."},
 	{Name: "analyzer_output.json", Label: "Native analyzer output", Category: "graph", Stage: "parse", Description: "Native parser output containing function definitions, source locations, code, forward calls, and reverse calls."},
 	{Name: "call_graph.json", Label: "Raw call-graph index", Category: "graph", Stage: "parse", Description: "Native call-graph index containing functions, forward edges, reverse edges, and graph statistics."},
 	{Name: "call_graphs.json", Label: "Call-graph index", Category: "graph", Stage: "parse", Description: "Language-to-file index locating the call graph generated for each parsed language."},
@@ -1103,7 +1127,15 @@ var scanArtifactSpecByName = func() map[string]artifactSpec {
 	return byName
 }()
 
-const maxArtifactBytes = 8 << 20
+const (
+	// maxArtifactBytes bounds the largest allow-listed artifact that the web
+	// server will serve.  Some real OpenHarmony datasets are 100MB+, so the
+	// previous 8MB ceiling made valid results impossible to inspect.  The
+	// structured explorer below still streams large collections instead of
+	// decoding them into one in-memory object.
+	maxArtifactBytes         = 256 << 20
+	maxInMemoryArtifactBytes = 8 << 20
+)
 
 type artifactView struct {
 	Name        string    `json:"name"`
@@ -1404,6 +1436,12 @@ func explorerLabel(artifact, id string, value any) string {
 				return name
 			}
 		case "results.json", "results_verified.json":
+			if functionName := mapString(object, "function_analyzed", "function_name"); functionName != "" {
+				return functionName
+			}
+			if route := mapString(object, "route_key", "unit_id"); route != "" {
+				return route
+			}
 			if finding := mapString(object, "finding", "verdict"); finding != "" {
 				return finding
 			}
@@ -1517,12 +1555,7 @@ func explorerCollection(artifact string, data any, requested string) (string, []
 		keys = []string{requested}
 	}
 	for _, key := range keys {
-		if artifact == "analyzer_output.json" && key != "functions" {
-			if key != "call_graph" && key != "reverse_call_graph" {
-				continue
-			}
-		}
-		if artifact == "dataset.json" && key != "units" {
+		if !explorerCollectionAllowed(artifact, key) {
 			continue
 		}
 		if values, ok := object[key].([]any); ok {
@@ -1555,13 +1588,7 @@ func explorerCollectionKeys(artifact string, data any) []string {
 	}
 	keys := make([]string, 0)
 	for _, key := range []string{"units", "functions", "call_graph", "reverse_call_graph", "results", "findings", "signals"} {
-		if _, ok := object[key]; !ok {
-			continue
-		}
-		if artifact == "analyzer_output.json" && key != "functions" && key != "call_graph" && key != "reverse_call_graph" {
-			continue
-		}
-		if artifact == "dataset.json" && key != "units" {
+		if _, ok := object[key]; !ok || !explorerCollectionAllowed(artifact, key) {
 			continue
 		}
 		switch object[key].(type) {
@@ -1596,6 +1623,294 @@ func explorerRootSummary(artifact, collectionKey string, collectionKeys []string
 	return summary
 }
 
+// explorerCollectionAllowed keeps the collection allowlist deliberately
+// small.  It is shared by the regular and streaming explorers so a large
+// artifact cannot expose arbitrary top-level data as a paginated collection.
+func explorerCollectionAllowed(artifact, key string) bool {
+	switch artifact {
+	case "analyzer_output.json":
+		return key == "functions" || key == "call_graph" || key == "reverse_call_graph"
+	case "dataset.json", "dataset_enhanced.json":
+		return key == "units"
+	case "pipeline_output.json":
+		// `results` is a small verdict-counter object in this artifact, not a
+		// browsable collection. Only the normalized findings list is paginated.
+		return key == "findings"
+	default:
+		switch key {
+		case "units", "functions", "call_graph", "reverse_call_graph", "results", "findings", "signals":
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+type streamedExplorerCollection struct {
+	Key           string
+	Total         int
+	Items         []explorerCollectionItem
+	Matched       *explorerCollectionItem
+	WasCollection bool
+}
+
+// streamExplorerCollectionBody consumes one large array/map value from a
+// top-level JSON object.  It retains only the requested page (or requested
+// item) while still counting all matching records, so a 100MB dataset does not
+// become a 100MB Go object on every request.
+func streamExplorerCollectionBody(dec *json.Decoder, opening json.Delim, artifact, key string, filters explorerFilters, offset, limit int, itemID string) (streamedExplorerCollection, error) {
+	result := streamedExplorerCollection{Key: key, WasCollection: true, Items: make([]explorerCollectionItem, 0, limit)}
+	process := func(index int, mapKey string, value any) {
+		if !explorerMatches(artifact, explorerItemID(index, mapKey, value), value, filters) {
+			return
+		}
+		candidate := explorerCollectionItem{ID: explorerItemID(index, mapKey, value), Value: value}
+		if itemID != "" {
+			if candidate.ID == itemID {
+				copy := candidate
+				result.Matched = &copy
+			}
+		} else if result.Total >= offset && result.Total < offset+limit {
+			result.Items = append(result.Items, candidate)
+		}
+		result.Total++
+	}
+
+	switch opening {
+	case '[':
+		index := 0
+		for dec.More() {
+			var value any
+			if err := dec.Decode(&value); err != nil {
+				return streamedExplorerCollection{}, err
+			}
+			process(index, "", value)
+			index++
+		}
+	case '{':
+		index := 0
+		for dec.More() {
+			token, err := dec.Token()
+			if err != nil {
+				return streamedExplorerCollection{}, err
+			}
+			mapKey, ok := token.(string)
+			if !ok {
+				return streamedExplorerCollection{}, fmt.Errorf("collection map key is not a string")
+			}
+			var value any
+			if err := dec.Decode(&value); err != nil {
+				return streamedExplorerCollection{}, err
+			}
+			process(index, mapKey, value)
+			index++
+		}
+	default:
+		return streamedExplorerCollection{}, fmt.Errorf("collection value is not an array or object")
+	}
+	if _, err := dec.Token(); err != nil {
+		return streamedExplorerCollection{}, err
+	}
+	return result, nil
+}
+
+func chooseExplorerCollection(artifact string, available []string, requested string) string {
+	if requested != "" {
+		for _, key := range available {
+			if key == requested {
+				return requested
+			}
+		}
+		return ""
+	}
+	for _, key := range []string{"units", "functions", "call_graph", "reverse_call_graph", "results", "findings", "signals"} {
+		if !explorerCollectionAllowed(artifact, key) {
+			continue
+		}
+		for _, candidate := range available {
+			if candidate == key {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
+// Some artifacts contain large secondary indexes (for example the fully
+// inlined code_by_route map in results.json, or include/macro maps in the
+// call-graph index). They are useful for the raw download but would make a
+// one-page explorer response needlessly large. Consume them with the decoder
+// and leave them out of root_summary; their primary paginated collections and
+// statistics remain available for inspection.
+func explorerOmitLargeRootField(artifact, key string) bool {
+	if artifact == "results.json" && key == "code_by_route" {
+		return true
+	}
+	if artifact == "call_graph.json" || artifact == "analyzer_output.json" {
+		switch key {
+		case "includes", "macros", "macro_aliases", "prototypes":
+			return true
+		}
+	}
+	return false
+}
+
+func discardJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+	switch delim {
+	case '{':
+		for decoder.More() {
+			if _, err := decoder.Token(); err != nil { // object key
+				return err
+			}
+			if err := discardJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := discardJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delim)
+	}
+	_, err = decoder.Token() // closing delimiter
+	return err
+}
+
+// exploreLargeArtifact is the streaming counterpart of handleExploreArtifact
+// for artifacts larger than maxInMemoryArtifactBytes.  It returns itemMissing
+// separately so the HTTP handler can preserve the normal 404 semantics for a
+// requested item.
+func exploreLargeArtifact(f *os.File, artifact string, filters explorerFilters, offset, limit int, requestedCollection, itemID string) (view explorerView, itemMissing bool, err error) {
+	decoder := json.NewDecoder(f)
+	opening, err := decoder.Token()
+	if err != nil {
+		return explorerView{}, false, err
+	}
+	if delimiter, ok := opening.(json.Delim); !ok || delimiter != '{' {
+		return explorerView{}, false, fmt.Errorf("artifact root is not an object")
+	}
+
+	root := make(map[string]any)
+	available := make([]string, 0, 3)
+	collections := make(map[string]streamedExplorerCollection)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return explorerView{}, false, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return explorerView{}, false, fmt.Errorf("artifact field name is not a string")
+		}
+		if explorerCollectionAllowed(artifact, key) {
+			valueToken, err := decoder.Token()
+			if err != nil {
+				return explorerView{}, false, err
+			}
+			valueDelimiter, isDelimiter := valueToken.(json.Delim)
+			if isDelimiter && (valueDelimiter == '[' || valueDelimiter == '{') {
+				collection, err := streamExplorerCollectionBody(decoder, valueDelimiter, artifact, key, filters, offset, limit, itemID)
+				if err != nil {
+					return explorerView{}, false, err
+				}
+				available = append(available, key)
+				collections[key] = collection
+				continue
+			}
+			// A field with a collection-like name but a scalar value is kept in
+			// the root summary rather than being silently discarded.
+			root[key] = valueToken
+			continue
+		}
+		if explorerOmitLargeRootField(artifact, key) {
+			if err := discardJSONValue(decoder); err != nil {
+				return explorerView{}, false, err
+			}
+			continue
+		}
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return explorerView{}, false, err
+		}
+		root[key] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return explorerView{}, false, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return explorerView{}, false, fmt.Errorf("artifact contains trailing data")
+		}
+		return explorerView{}, false, err
+	}
+
+	if requestedCollection != "" {
+		if _, ok := collections[requestedCollection]; !ok {
+			return explorerView{}, false, fmt.Errorf("unknown explorer collection")
+		}
+	}
+	collectionKey := chooseExplorerCollection(artifact, available, requestedCollection)
+	view = explorerView{
+		Artifact:             artifact,
+		Kind:                 "json",
+		Query:                filters.Query,
+		Offset:               offset,
+		Limit:                limit,
+		AvailableCollections: available,
+	}
+	if collectionKey == "" {
+		view.Data = root
+		keys := make([]string, 0, len(root))
+		for key := range root {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		view.AvailableFields = keys
+		return view, false, nil
+	}
+	collection := collections[collectionKey]
+	view.Kind = "collection"
+	view.CollectionKey = collectionKey
+	view.RootSummary = explorerRootSummary(artifact, collectionKey, available, root)
+	view.Total = collection.Total
+	if itemID != "" {
+		if collection.Matched == nil {
+			return explorerView{}, true, nil
+		}
+		view.ItemID = itemID
+		view.Item = collection.Matched.Value
+		return view, false, nil
+	}
+	if offset > collection.Total {
+		view.Offset = collection.Total
+	}
+	view.Items = make([]explorerItemView, 0, len(collection.Items))
+	for _, candidate := range collection.Items {
+		file, start, finish := explorerLocation(artifact, candidate.Value)
+		view.Items = append(view.Items, explorerItemView{
+			ID: candidate.ID, Label: explorerLabel(artifact, candidate.ID, candidate.Value),
+			File: file, StartLine: start, EndLine: finish, Summary: explorerSummary(artifact, candidate.Value),
+		})
+	}
+	next := view.Offset + len(view.Items)
+	if next < collection.Total {
+		view.NextOffset = &next
+	}
+	return view, false, nil
+}
+
 func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := s.mgr.get(id); !ok {
@@ -1613,6 +1928,16 @@ func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	requestedCollection := strings.TrimSpace(r.URL.Query().Get("collection"))
+	if len(requestedCollection) > maxExplorerQuery {
+		http.Error(w, "collection name is too long", http.StatusBadRequest)
+		return
+	}
+	itemID := strings.TrimSpace(r.URL.Query().Get("item"))
+	if len(itemID) > maxExplorerItemID {
+		http.Error(w, "item id is too long", http.StatusBadRequest)
+		return
+	}
 	jobDir := filepath.Join(s.outDir, id)
 	path := filepath.Join(jobDir, spec.Name)
 	f, fi, err := openRegularInRoot(jobDir, path)
@@ -1625,8 +1950,26 @@ func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "artifact is too large to explore", http.StatusRequestEntityTooLarge)
 		return
 	}
+	if fi.Size() > maxInMemoryArtifactBytes {
+		view, itemMissing, err := exploreLargeArtifact(f, name, filters, offset, limit, requestedCollection, itemID)
+		if err != nil {
+			if strings.Contains(err.Error(), "unknown explorer collection") {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			} else {
+				http.Error(w, "artifact is not valid JSON", http.StatusUnprocessableEntity)
+			}
+			return
+		}
+		if itemMissing {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(view)
+		return
+	}
 	var data any
-	decoder := json.NewDecoder(io.LimitReader(f, maxArtifactBytes+1))
+	decoder := json.NewDecoder(io.LimitReader(f, maxInMemoryArtifactBytes+1))
 	if err := decoder.Decode(&data); err != nil {
 		http.Error(w, "artifact is not valid JSON", http.StatusUnprocessableEntity)
 		return
@@ -1637,11 +1980,6 @@ func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestedCollection := strings.TrimSpace(r.URL.Query().Get("collection"))
-	if len(requestedCollection) > maxExplorerQuery {
-		http.Error(w, "collection name is too long", http.StatusBadRequest)
-		return
-	}
 	availableCollections := explorerCollectionKeys(name, data)
 	if requestedCollection != "" {
 		found := false
@@ -1694,11 +2032,6 @@ func (s *Server) handleExploreArtifact(w http.ResponseWriter, r *http.Request) {
 		end := offset + limit
 		if end > len(filtered) {
 			end = len(filtered)
-		}
-		itemID := strings.TrimSpace(r.URL.Query().Get("item"))
-		if len(itemID) > maxExplorerItemID {
-			http.Error(w, "item id is too long", http.StatusBadRequest)
-			return
 		}
 		if itemID != "" {
 			for _, candidate := range filtered {

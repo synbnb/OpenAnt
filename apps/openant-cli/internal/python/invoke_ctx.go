@@ -3,12 +3,16 @@ package python
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
+
+	"github.com/knostic/open-ant-cli/internal/types"
 )
 
 // lineWriter forwards complete stderr lines to onLog as they arrive. Used as
@@ -66,6 +70,52 @@ func InvokeCtx(ctx context.Context, pythonPath string, args []string, workDir, a
 // captures and returns the full stdout content (e.g. JSON output).
 func InvokeCtxCapture(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string)) (stdout string, exitCode int, err error) {
 	return invokeCtxInner(ctx, pythonPath, args, workDir, apiKey, onLog, true)
+}
+
+// DecodeEnvelope strictly decodes the single JSON document emitted by the
+// Python CLI.  Source-locator workers use this helper instead of accepting
+// arbitrary stdout: progress belongs on stderr, and trailing JSON/text would
+// otherwise make a Web session appear successful while silently dropping data.
+func DecodeEnvelope(raw string) (types.Envelope, error) {
+	var envelope types.Envelope
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	if err := decoder.Decode(&envelope); err != nil {
+		return types.Envelope{}, fmt.Errorf("decode Python JSON envelope: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return types.Envelope{}, errors.New("decode Python JSON envelope: multiple JSON documents")
+		}
+		return types.Envelope{}, fmt.Errorf("decode Python JSON envelope: trailing data: %w", err)
+	}
+	if envelope.Status != "success" && envelope.Status != "error" && envelope.Status != "interrupted" {
+		return types.Envelope{}, fmt.Errorf("decode Python JSON envelope: unsupported status %q", envelope.Status)
+	}
+	if envelope.Errors == nil {
+		envelope.Errors = []string{}
+	}
+	return envelope, nil
+}
+
+// InvokeSourceLocator invokes exactly one source-locator CLI operation and
+// decodes its JSON envelope.  It deliberately does not expose a generic shell
+// command: callers provide parsed argv tokens, while the Python command owns
+// all filesystem/path validation.
+func InvokeSourceLocator(ctx context.Context, pythonPath string, args []string, workDir string, onLog func(string)) (*InvokeResult, error) {
+	commandArgs := append([]string{"source-locator"}, args...)
+	stdout, exitCode, err := InvokeCtxCapture(ctx, pythonPath, commandArgs, workDir, "", onLog)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := DecodeEnvelope(stdout)
+	if err != nil {
+		return nil, err
+	}
+	return &InvokeResult{
+		Envelope: envelope,
+		ExitCode: normalizeExit(exitCode, envelope.Status == "error"),
+	}, nil
 }
 
 func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string), captureStdout bool) (string, int, error) {

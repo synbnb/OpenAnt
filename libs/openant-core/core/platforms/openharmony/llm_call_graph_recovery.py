@@ -17,9 +17,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from prompts._fence import safe_code_fence
+
+from .registration_context import (
+    DEFAULT_MAX_CONTEXT_CHARS,
+    DEFAULT_MAX_FILE_BYTES,
+    DEFAULT_MAX_FILES,
+    build_registration_context,
+)
+from .evidence_line_resolver import (
+    normalize_recovery_evidence,
+    summarize_line_resolution,
+)
 
 
 RECOVERY_SCHEMA_VERSION = 1
@@ -27,6 +40,9 @@ RECOVERY_TASK = "openharmony_call_edge_recovery"
 DEFAULT_MAX_SITES = 50
 DEFAULT_MAX_SHORTLIST = 12
 DEFAULT_MAX_CODE_BYTES = 2_000
+DEFAULT_REGISTRATION_CONTEXT_MAX_FILES = DEFAULT_MAX_FILES
+DEFAULT_REGISTRATION_CONTEXT_MAX_FILE_BYTES = DEFAULT_MAX_FILE_BYTES
+DEFAULT_REGISTRATION_CONTEXT_MAX_CHARS = min(DEFAULT_MAX_CONTEXT_CHARS, 6_000)
 _VALID_SOURCES = {"native", "lambda"}
 _VALID_DECISIONS = {"add_edge", "keep_unresolved"}
 _VALID_CONFIDENCES = {"high", "medium", "low"}
@@ -349,6 +365,7 @@ def _shortlist_functions(
     *,
     max_items: int,
     max_code_bytes: int,
+    required_function_ids: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     caller_file = _text(caller.get("file_path") or caller.get("filePath"))
     caller_owner = _owner(caller)
@@ -380,10 +397,36 @@ def _shortlist_functions(
         if score:
             ranked.append((score, function_id, function))
     ranked.sort(key=lambda item: (-item[0], item[1]))
-    return [
-        _project_function(function_id, function, max_code_bytes=max_code_bytes)
-        for _score, function_id, function in ranked[: max(0, max_items)]
+
+    # Candidate-bearing sites need a different bound from ordinary retrieval.
+    # ``max_items`` limits speculative context, but dropping a parser-provided
+    # candidate would make the model unable to review that edge and would
+    # contradict the prompt's "only propose a retrieval candidate" rule.  Keep
+    # every known required target, then fill the remaining slots with the
+    # ordinary ranked shortlist.  Candidate counts are parser-bounded upstream
+    # and the full prompt size is still protected by the code-byte cap.
+    required = sorted({
+        _text(function_id)
+        for function_id in required_function_ids
+        if _text(function_id) in functions
+        and _text(function_id) != _text(site.get("caller_id"))
+    })
+    required_set = set(required)
+    projected: list[dict[str, Any]] = [
+        _project_function(
+            function_id,
+            functions[function_id],
+            max_code_bytes=max_code_bytes,
+        )
+        for function_id in required
     ]
+    remaining = [item for item in ranked if item[1] not in required_set]
+    remaining_limit = max(0, max_items - len(projected))
+    projected.extend(
+        _project_function(function_id, function, max_code_bytes=max_code_bytes)
+        for _score, function_id, function in remaining[:remaining_limit]
+    )
+    return projected
 
 
 def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
@@ -467,6 +510,11 @@ def build_recovery_worklist(
     max_code_bytes: int = DEFAULT_MAX_CODE_BYTES,
     include_candidate_sites: bool = False,
     security_relevant_only: bool = False,
+    include_registration_context: bool = False,
+    registration_context_max_files: int = DEFAULT_REGISTRATION_CONTEXT_MAX_FILES,
+    registration_context_max_file_bytes: int = DEFAULT_REGISTRATION_CONTEXT_MAX_FILE_BYTES,
+    registration_context_max_chars: int = DEFAULT_REGISTRATION_CONTEXT_MAX_CHARS,
+    repository: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Build a bounded, prioritized list of residual sites for an LLM.
 
@@ -482,6 +530,7 @@ def build_recovery_worklist(
         return []
     index = _normalize_functions(functions)
     entry_ids = {_text(item) for item in (entry_point_ids or []) if _text(item)}
+    source_root = repository if repository is not None else diagnostics.get("repository")
     grouped: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     for source, raw_site in _raw_sites(diagnostics):
         candidate_ids = raw_site.get("candidate_target_ids", [])
@@ -572,44 +621,62 @@ def build_recovery_worklist(
         raw_site["reason"] = item["reason"]
         raw_site["symbols"] = item["symbols"]
         raw_site["candidate_target_ids"] = item["candidate_target_ids"]
-        worklist.append(
-            {
-                "site_id": _site_id(
-                    item["source"],
-                    caller_id,
-                    item["line"],
-                    item["expression"],
-                    file_path=item["file"],
+        work_item = {
+            "site_id": _site_id(
+                item["source"],
+                caller_id,
+                item["line"],
+                item["expression"],
+                file_path=item["file"],
+            ),
+            "source": item["source"],
+            "caller_id": caller_id,
+            "caller_ids": caller_ids,
+            "duplicate_count": item["duplicate_count"],
+            "caller": _project_function(
+                caller_id, caller, max_code_bytes=max_code_bytes
+            ),
+            "file": item["file"],
+            "line": item["line"],
+            "expression": item["expression"],
+            "reason": item["reason"],
+            "symbols": item["symbols"],
+            "candidate_target_ids": sorted(item["candidate_target_ids"]),
+            "candidate_count": len(item["candidate_target_ids"]),
+            "priority": item["priority"],
+            "security_relevant": item["security_relevant"],
+            "priority_reason": item["priority_reason"],
+            "classification": classification,
+            "analysis_route": classification["analysis_route"],
+            "llm_eligible": classification["llm_eligible"],
+            "review_scope": (
+                "candidate_edges"
+                if item["candidate_target_ids"]
+                else "unknown_indirect"
+            ),
+            "retrieval_candidates": _shortlist_functions(
+                raw_site,
+                caller,
+                index,
+                max_items=max_shortlist,
+                max_code_bytes=max_code_bytes,
+                required_function_ids=(
+                    item["candidate_target_ids"]
+                    if include_candidate_sites
+                    else ()
                 ),
-                "source": item["source"],
-                "caller_id": caller_id,
-                "caller_ids": caller_ids,
-                "duplicate_count": item["duplicate_count"],
-                "caller": _project_function(
-                    caller_id, caller, max_code_bytes=max_code_bytes
-                ),
-                "file": item["file"],
-                "line": item["line"],
-                "expression": item["expression"],
-                "reason": item["reason"],
-                "symbols": item["symbols"],
-                "candidate_target_ids": sorted(item["candidate_target_ids"]),
-                "candidate_count": len(item["candidate_target_ids"]),
-                "priority": item["priority"],
-                "security_relevant": item["security_relevant"],
-                "priority_reason": item["priority_reason"],
-                "classification": classification,
-                "analysis_route": classification["analysis_route"],
-                "llm_eligible": classification["llm_eligible"],
-                "retrieval_candidates": _shortlist_functions(
-                    raw_site,
-                    caller,
-                    index,
-                    max_items=max_shortlist,
-                    max_code_bytes=max_code_bytes,
-                ),
-            }
-        )
+            ),
+        }
+        if include_registration_context:
+            work_item["registration_context"] = build_registration_context(
+                work_item,
+                index,
+                repository=source_root,
+                max_files=registration_context_max_files,
+                max_file_bytes=registration_context_max_file_bytes,
+                max_context_chars=registration_context_max_chars,
+            )
+        worklist.append(work_item)
     worklist.sort(
         key=lambda item: (
             -_CONFIDENCE_RANK.get(item["priority"], 0),
@@ -636,6 +703,9 @@ def build_recovery_prompt(
         "rules": [
             "Only propose a target_id that appears in retrieval_candidates.",
             "A proposal needs both call_site and target/registration evidence.",
+            "Use registration_context source excerpts to verify table writes, initialization, and parameter flow; do not treat a file path or a name alone as registration evidence.",
+            "registration_context.snippets may include line_numbered_text; use those numbers for evidence spans, but keep evidence.text as source code without the '<line> |' prefix.",
+            "Each evidence.text must be a single-line JSON string. Do not put literal line breaks inside it; quote one key source line, or encode a source newline as the JSON escape sequence \\n.",
             "Do not infer an edge from a name alone or from a generic callback type.",
             "For external_boundary sites, do not invent an in-repository target; keep_unresolved.",
             "If the source is ambiguous, return keep_unresolved.",
@@ -648,9 +718,15 @@ def build_recovery_prompt(
     fence = safe_code_fence(serialized)
     return f"""你是 OpenHarmony C/C++ 调用图复核器。你只能在给定的残余调用点和检索候选中判断，不能创造函数 ID。
 
-对每个 site 输出一个 decision：
+    对每个 site 输出一个或多个 decision（候选列表中每条确认边输出一条 add_edge）：
 - add_edge：只有调用点、目标函数和注册/类型证据都明确时使用；
 - keep_unresolved：证据不足、来源有歧义或目标不在候选列表时使用。
+
+对 candidate-bearing site，add_edge 的 target_id 必须同时出现在
+candidate_target_ids 和 retrieval_candidates；不要因为名称相似而补充其他函数。
+如果 registration_context.status 不是 found，或片段没有显示注册/初始化关系，保持
+keep_unresolved；文件路径和函数名本身不算注册证据。`evidence.text` 必须是单行字符串，
+不得把真实换行直接放入 JSON 字符串；需要多行时只引用其中一条关键源码行。
 
 严格返回 JSON，不要 Markdown，不要额外说明：
 {{"schema_version": 1, "decisions": [{{"site_id": "...", "decision": "add_edge|keep_unresolved", "target_id": "", "confidence": "high|medium|low", "reason": "", "evidence": [{{"kind": "call_site|registration|target|type", "file": "", "start_line": 1, "end_line": 1, "text": ""}}]}}]}}
@@ -660,6 +736,38 @@ def build_recovery_prompt(
 {serialized}
 {fence}
 """
+
+
+def _retry_prompt(prompt: str, parse_errors: Sequence[str]) -> str:
+    """Add a bounded, format-specific correction without duplicating context."""
+    details = "; ".join(_text(error)[:240] for error in parse_errors[:4])
+    if not details:
+        details = "the previous response did not satisfy the response contract"
+    return (
+        f"{prompt}\n\n"
+        "上一轮响应未通过严格 JSON 校验。请在保持相同输入和 site_id 的前提下重新输出，"
+        "只允许一个 JSON 对象，不要 Markdown、解释或思考过程；每个 evidence.text 必须是"
+        "不含真实换行的单行 JSON 字符串（源码换行请写成 \\n 转义，或只引用一行）。"
+        f"上一轮校验提示：{details}"
+    )
+
+
+def _response_metadata(response: str) -> dict[str, Any]:
+    """Return non-sensitive diagnostics for a response that failed parsing."""
+    first_brace = response.find("{")
+    last_brace = response.rfind("}")
+    return {
+        "response_chars": len(response),
+        "response_sha256": hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest(),
+        "first_brace_offset": first_brace,
+        "last_brace_offset": last_brace,
+        "candidate_chars": (
+            last_brace - first_brace + 1
+            if first_brace >= 0 and last_brace > first_brace
+            else 0
+        ),
+        "contains_markdown_fence": "```" in response,
+    }
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -714,6 +822,12 @@ def _parse_evidence(
         end_line = _line(item.get("end_line", start_line))
         if kind not in _VALID_EVIDENCE_KINDS or not file_path or not text:
             _error(log, f"decision #{index} evidence #{evidence_index}: incomplete evidence")
+            return None
+        if "\n" in text or "\r" in text:
+            _error(
+                log,
+                f"decision #{index} evidence #{evidence_index}: evidence.text must be single-line",
+            )
             return None
         if end_line < start_line:
             _error(log, f"decision #{index} evidence #{evidence_index}: invalid line range")
@@ -833,6 +947,25 @@ def validate_recovery_proposals(
             item["rejection_reason"] = "unknown_target"
             rejected.append(item)
             continue
+        site = sites[site_id]
+        candidate_ids = {
+            _text(candidate_id)
+            for candidate_id in site.get("candidate_target_ids", [])
+            if _text(candidate_id)
+        }
+        if candidate_ids and target_id not in candidate_ids:
+            item["rejection_reason"] = "target_not_in_candidate_targets"
+            rejected.append(item)
+            continue
+        retrieval_ids = {
+            _text(candidate.get("function_id"))
+            for candidate in site.get("retrieval_candidates", [])
+            if isinstance(candidate, Mapping) and _text(candidate.get("function_id"))
+        }
+        if target_id not in retrieval_ids:
+            item["rejection_reason"] = "target_not_in_retrieval_candidates"
+            rejected.append(item)
+            continue
         confidence = _text(item.get("confidence"))
         if _CONFIDENCE_RANK.get(confidence, -1) < threshold:
             item["rejection_reason"] = "confidence_below_threshold"
@@ -871,6 +1004,263 @@ def validate_recovery_proposals(
     }
 
 
+def run_recovery_review(
+    diagnostics: Mapping[str, Any],
+    functions: Any,
+    *,
+    binding: Any = None,
+    completion: Callable[[str], str] | None = None,
+    entry_point_ids: Iterable[str] | None = None,
+    max_sites: int = DEFAULT_MAX_SITES,
+    max_shortlist: int = DEFAULT_MAX_SHORTLIST,
+    max_code_bytes: int = DEFAULT_MAX_CODE_BYTES,
+    include_candidate_sites: bool = False,
+    security_relevant_only: bool = False,
+    include_registration_context: bool = True,
+    registration_context_max_files: int = DEFAULT_REGISTRATION_CONTEXT_MAX_FILES,
+    registration_context_max_file_bytes: int = DEFAULT_REGISTRATION_CONTEXT_MAX_FILE_BYTES,
+    registration_context_max_chars: int = DEFAULT_REGISTRATION_CONTEXT_MAX_CHARS,
+    repository: str | Path | None = None,
+    max_retries: int = 2,
+    retry_backoff_seconds: float = 1.0,
+    max_tokens: int = 20_000,
+    tracker: Any = None,
+    site_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Execute one bounded LLM review without changing any graph artifact.
+
+    ``completion`` is an injectable ``prompt -> text`` function used by
+    offline tests and integrations that own their adapter call.  Production
+    callers can omit it and provide a phase ``binding``; the shared
+    :func:`utilities.llm.simple_text` helper then performs the request and
+    records token usage on the supplied tracker.
+
+    Retries cover transport failures and malformed/invalid JSON responses.  A
+    valid response that deliberately keeps a site unresolved is not retried.
+    ``site_ids`` optionally limits the review to a previously built subset;
+    this is used by the entry-driven round scheduler so one call does not
+    resubmit residual sites that belong to a later BFS frontier.  The returned
+    object contains only JSON-serialisable worklist, decisions, validation,
+    and telemetry; callers may persist it as an advisory artifact but must not
+    treat it as a replacement for ``call_graph.json``.
+    """
+    worklist = build_recovery_worklist(
+        diagnostics,
+        functions,
+        entry_point_ids=entry_point_ids,
+        max_sites=max_sites,
+        max_shortlist=max_shortlist,
+        max_code_bytes=max_code_bytes,
+        include_candidate_sites=include_candidate_sites,
+        security_relevant_only=security_relevant_only,
+        include_registration_context=include_registration_context,
+        registration_context_max_files=registration_context_max_files,
+        registration_context_max_file_bytes=registration_context_max_file_bytes,
+        registration_context_max_chars=registration_context_max_chars,
+        repository=repository,
+    )
+    if site_ids is not None:
+        selected_site_ids = {
+            _text(site_id) for site_id in site_ids if _text(site_id)
+        }
+        worklist = [
+            item for item in worklist
+            if _text(item.get("site_id")) in selected_site_ids
+        ]
+    prompt = build_recovery_prompt(worklist)
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    base_summary = {
+        "worklist_sites": len(worklist),
+        "attempts": 0,
+        "llm_calls": 0,
+        "retry_count": 0,
+        "parsed_decisions": 0,
+        "accepted": 0,
+        "kept_unresolved": 0,
+        "rejected": 0,
+        "unreviewed_sites": len(worklist),
+    }
+    if not worklist:
+        return {
+            "schema_version": RECOVERY_SCHEMA_VERSION,
+            "task": RECOVERY_TASK,
+            "status": "no_sites",
+            "prompt_sha256": prompt_hash,
+            "worklist": [],
+            "decisions": [],
+            "validation": {"accepted": [], "kept_unresolved": [], "rejected": []},
+            "errors": [],
+            "response_diagnostics": [],
+            "summary": base_summary,
+        }
+
+    try:
+        retries = max(0, int(max_retries))
+    except (TypeError, ValueError):
+        retries = 2
+    try:
+        backoff = max(0.0, float(retry_backoff_seconds))
+    except (TypeError, ValueError):
+        backoff = 1.0
+
+    errors: list[dict[str, Any]] = []
+    parsed: list[dict[str, Any]] = []
+    validation: dict[str, list[dict[str, Any]]] = {
+        "accepted": [],
+        "kept_unresolved": [],
+        "rejected": [],
+    }
+    attempts = 0
+    successful_parse = False
+    attempt_prompt = prompt
+    response_diagnostics: list[dict[str, Any]] = []
+
+    for attempt in range(1, retries + 2):
+        attempts = attempt
+        try:
+            if completion is not None:
+                response = completion(attempt_prompt)
+            else:
+                if binding is None:
+                    raise ValueError(
+                        "run_recovery_review requires completion or binding"
+                    )
+                from utilities.llm import simple_text
+
+                response = simple_text(
+                    binding,
+                    attempt_prompt,
+                    max_tokens=max_tokens,
+                    tracker=tracker,
+                )
+            if not isinstance(response, str):
+                raise TypeError("model completion must return text")
+        except Exception as exc:  # noqa: BLE001 - retry boundary is intentional
+            response_diagnostics.append(
+                {
+                    "attempt": attempt,
+                    "status": "transport_error",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            errors.append(
+                {
+                    "attempt": attempt,
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                }
+            )
+        else:
+            parse_errors: list[str] = []
+            parsed_candidate = parse_recovery_response(
+                response,
+                valid_site_ids={item["site_id"] for item in worklist},
+                valid_function_ids=set(_normalize_functions(functions)),
+                on_error=parse_errors.append,
+            )
+            response_meta = _response_metadata(response)
+            if parse_errors:
+                response_diagnostics.append(
+                    {
+                        "attempt": attempt,
+                        "status": "invalid",
+                        "response": response_meta,
+                        "parse_errors": parse_errors[:8],
+                    }
+                )
+                errors.extend(
+                    {
+                        "attempt": attempt,
+                        "type": "response_validation",
+                        "message": message[:500],
+                        "response": response_meta,
+                    }
+                    for message in parse_errors
+                )
+                parsed = parsed_candidate
+                if attempt <= retries:
+                    attempt_prompt = _retry_prompt(prompt, parse_errors)
+            else:
+                response_diagnostics.append(
+                    {
+                        "attempt": attempt,
+                        "status": "valid",
+                        "response": response_meta,
+                    }
+                )
+                source_root = (
+                    repository
+                    if repository is not None
+                    else diagnostics.get("repository")
+                )
+                parsed = normalize_recovery_evidence(
+                    parsed_candidate,
+                    worklist,
+                    functions,
+                    repository=source_root,
+                )
+                validation = validate_recovery_proposals(
+                    parsed,
+                    worklist,
+                    functions,
+                )
+                successful_parse = True
+                break
+
+        if attempt <= retries and backoff:
+            time.sleep(backoff * attempt)
+
+    if not successful_parse:
+        # Keep any syntactically valid subset visible to the reviewer, but do
+        # not label it accepted because the overall response never passed the
+        # strict parser contract.
+        if parsed:
+            source_root = (
+                repository
+                if repository is not None
+                else diagnostics.get("repository")
+            )
+            parsed = normalize_recovery_evidence(
+                parsed,
+                worklist,
+                functions,
+                repository=source_root,
+            )
+            validation = validate_recovery_proposals(parsed, worklist, functions)
+        status = "failed"
+    else:
+        status = "complete"
+
+    summary = {
+        **base_summary,
+        "attempts": attempts,
+        "llm_calls": attempts,
+        "retry_count": max(0, attempts - 1),
+        "parsed_decisions": len(parsed),
+        "accepted": len(validation["accepted"]),
+        "kept_unresolved": len(validation["kept_unresolved"]),
+        "rejected": len(validation["rejected"]),
+        "unreviewed_sites": max(
+            0,
+            len(worklist)
+            - len({item.get("site_id") for item in parsed}),
+        ),
+        "evidence_line_resolution": summarize_line_resolution(parsed),
+    }
+    return {
+        "schema_version": RECOVERY_SCHEMA_VERSION,
+        "task": RECOVERY_TASK,
+        "status": status,
+        "prompt_sha256": prompt_hash,
+        "worklist": worklist,
+        "decisions": parsed,
+        "validation": validation,
+        "errors": errors,
+        "response_diagnostics": response_diagnostics,
+        "summary": summary,
+    }
+
+
 __all__ = [
     "DEFAULT_MAX_CODE_BYTES",
     "DEFAULT_MAX_SHORTLIST",
@@ -880,5 +1270,6 @@ __all__ = [
     "build_recovery_worklist",
     "classify_recovery_site",
     "parse_recovery_response",
+    "run_recovery_review",
     "validate_recovery_proposals",
 ]

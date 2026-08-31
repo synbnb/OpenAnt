@@ -3,10 +3,13 @@
 This resolver deliberately stays bounded and evidence-backed.  It consumes
 already parsed IDL declarations, function metadata, and (when available) the
 native call graph; it never executes build files, generated code, or repository
-callbacks.  A relationship is emitted only when the native side provides
-dispatch evidence (a transaction token, numeric IPC literal, method call,
-explicit handler reference, or a direct call-graph edge).  Name-only guesses
-become orphan diagnostics.
+callbacks.  A relationship is emitted when the native side provides dispatch
+evidence (a transaction token, numeric IPC literal, method call, explicit
+handler reference, or a direct call-graph edge).  If generated dispatch code is
+not present in the checkout, a narrower contract fallback may connect an IDL
+method to an exact service method only when the extractor also proves that the
+service class inherits the interface's Stub base.  Pure name matches remain
+orphan diagnostics.
 """
 
 from __future__ import annotations
@@ -214,6 +217,165 @@ def _line_for_function(function: Mapping[str, Any]) -> int:
         return 0
 
 
+def _class_bases_from_payload(functions: Mapping[str, Any] | None) -> dict[str, list[str]]:
+    """Normalize the extractor's top-level ``class_bases`` evidence.
+
+    ``FunctionExtractor.export()`` returns ``class_bases`` beside the nested
+    ``functions`` map.  Older callers may pass only that nested map, so the
+    absence of this evidence is intentionally represented by an empty mapping
+    rather than reconstructed from a class name.
+    """
+    if not isinstance(functions, Mapping):
+        return {}
+    raw_bases = functions.get("class_bases")
+    if not isinstance(raw_bases, Mapping):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for class_name, bases in raw_bases.items():
+        class_text = _text(class_name)
+        if not class_text:
+            continue
+        if isinstance(bases, (list, tuple, set)):
+            values = bases
+        else:
+            values = [bases]
+        cleaned = []
+        for base in values:
+            base_text = _text(base)
+            if base_text and base_text not in cleaned:
+                cleaned.append(base_text)
+        if cleaned:
+            normalized[class_text] = cleaned
+    return normalized
+
+
+def _normalize_cpp_type(value: Any) -> str:
+    """Normalize a C++/IDL type for a conservative shape comparison."""
+    text = _text(value).lower()
+    if not text:
+        return ""
+    text = re.sub(r"\b(?:const|volatile|class|struct|typename)\b", " ", text)
+    text = text.replace("std::", "").replace("::", "")
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("&", "").replace("*", "")
+    return text
+
+
+def _parameter_type(value: Any) -> str:
+    """Remove a C++ formal parameter name while preserving its type shape."""
+    text = _text(value)
+    if not text or text == "...":
+        return text
+    # Defaults are not part of an IPC contract's type.
+    text = text.split("=", 1)[0].strip()
+    # FunctionExtractor records declarations with the parameter name at the
+    # end.  Avoid stripping a final type token from a nameless declaration by
+    # requiring a preceding type/pointer/reference separator.
+    match = re.match(r"^(?P<type>.+?)(?:\s+|[*&])(?P<name>[A-Za-z_]\w*)$", text)
+    if match and match.group("type").strip():
+        return match.group("type").strip()
+    return text
+
+
+def _parameter_shape(value: Any) -> str:
+    """Map equivalent IDL/C++ spellings to a small comparison vocabulary."""
+    normalized = _normalize_cpp_type(_parameter_type(value))
+    if not normalized:
+        return "unknown"
+    if normalized == "...":
+        return "variadic"
+    if any(token in normalized for token in ("vector", "list", "sequence", "array", "set")):
+        return "sequence"
+    if any(token in normalized for token in ("map", "unorderedmap", "hashmap")):
+        return "map"
+    if "string" in normalized or normalized in {"char", "char8", "char16", "char32"}:
+        return "string"
+    if normalized in {"bool", "boolean"}:
+        return "bool"
+    if re.fullmatch(
+        r"(?:u?int(?:8|16|32|64)?(?:_t)?|u?long(?:long)?|short|size_t|ssize_t|"
+        r"unsigned|unsignedint|unsignedlong|signed|signedint|float|double)",
+        normalized,
+    ):
+        return "scalar"
+    if normalized in {"void", "unit"}:
+        return "void"
+    return "object"
+
+
+def _parameter_shapes(parameters: Any, *, idl: bool = False) -> list[str]:
+    """Return normalized parameter shapes for IDL records or C++ strings."""
+    if not isinstance(parameters, (list, tuple)):
+        return []
+    shapes = []
+    for parameter in parameters:
+        value = _field(parameter, "type", parameter) if idl else parameter
+        shapes.append(_parameter_shape(value))
+    return shapes
+
+
+def _stub_base_names(interface_name: str) -> set[str]:
+    """Return normalized Stub spellings derived from the IDL interface name."""
+    leaf = _text(interface_name).rsplit(".", 1)[-1].rsplit(":", 1)[-1]
+    stem = _interface_stem(interface_name)
+    names = {
+        _normalize(f"{stem}Stub"),
+        _normalize(f"{leaf}Stub"),
+    }
+    return {name for name in names if name}
+
+
+def _inherits_stub(
+    owner: str,
+    interface_name: str,
+    class_bases: Mapping[str, list[str]],
+) -> tuple[str, str] | None:
+    """Find a bounded inheritance path from ``owner`` to the interface Stub."""
+    if not owner or not class_bases:
+        return None
+    expected = _stub_base_names(interface_name)
+    if not expected:
+        return None
+    by_class = {
+        _normalize(class_name): (class_name, list(bases))
+        for class_name, bases in class_bases.items()
+        if _normalize(class_name)
+    }
+    start = _normalize(owner)
+    if not start:
+        return None
+    queue: list[tuple[str, int]] = [(start, 0)]
+    visited = {start}
+    while queue:
+        current, depth = queue.pop(0)
+        if depth >= 8:
+            continue
+        entry = by_class.get(current)
+        if entry is None:
+            continue
+        for base in entry[1]:
+            base_text = _text(base)
+            base_normalized = _normalize(base_text)
+            if not base_normalized:
+                continue
+            # The extractor normally emits a simple type_identifier.  The
+            # extra template check supports callers that preserve
+            # ``IRemoteStub<IAudioPolicy>`` as a raw base string without
+            # treating every IRemoteStub as this interface's Stub.
+            interface_token = _normalize(_text(interface_name).rsplit(".", 1)[-1])
+            is_interface_remote_stub = (
+                "iremotestub" in base_normalized
+                and interface_token
+                and interface_token in base_normalized
+            )
+            if base_normalized in expected or is_interface_remote_stub:
+                return base_text, entry[0]
+            if base_normalized not in visited and base_normalized in by_class:
+                visited.add(base_normalized)
+                queue.append((base_normalized, depth + 1))
+    return None
+
+
 def _function_records(functions: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if isinstance(functions, Mapping):
         nested = functions.get("functions")
@@ -237,6 +399,13 @@ def _function_records(functions: Mapping[str, Any] | None) -> list[dict[str, Any
                 "start_line": _line_for_function(raw),
                 "end_line": _field(raw, "end_line", _field(raw, "endLine", 0)),
                 "unit_type": _text(_field(raw, "unit_type", _field(raw, "unitType", ""))),
+                "parameters": list(_field(raw, "parameters", []) or [])
+                if isinstance(_field(raw, "parameters", []), (list, tuple))
+                else [],
+                "return_type": _text(_field(raw, "return_type", _field(raw, "returnType", ""))),
+                "class_name": _text(_field(raw, "class_name", _field(raw, "className", ""))),
+                "is_static": bool(_field(raw, "is_static", _field(raw, "isStatic", False))),
+                "is_exported": bool(_field(raw, "is_exported", _field(raw, "isExported", False))),
             }
         )
     return sorted(records, key=lambda item: (item["id"], item["name"]))
@@ -497,6 +666,7 @@ class OpenHarmonyIPCResolver:
         call_graph: Mapping[str, Any] | None = None,
     ) -> SemanticGraph:
         graph = SemanticGraph()
+        class_bases = _class_bases_from_payload(functions)
         function_records = _function_records(functions)
         call_graph_edges = _call_graph_edges(call_graph)
         call_graph_targets = _dispatch_call_graph_targets(
@@ -544,6 +714,7 @@ class OpenHarmonyIPCResolver:
                     overload_index=ordinal if method_counts[method_name] > 1 else None,
                     call_graph=call_graph_edges,
                     call_graph_targets=call_graph_targets,
+                    class_bases=class_bases,
                 )
         if sa_result is not None:
             self._attach_system_abilities(graph, interfaces, function_records, sa_result)
@@ -701,6 +872,7 @@ class OpenHarmonyIPCResolver:
         overload_index: int | None = None,
         call_graph: Mapping[str, list[str]] | None = None,
         call_graph_targets: Mapping[str, list[dict[str, Any]]] | None = None,
+        class_bases: Mapping[str, list[str]] | None = None,
     ) -> None:
         interface_name = method["interface"]
         method_name = method["method"]
@@ -794,6 +966,52 @@ class OpenHarmonyIPCResolver:
             call_graph_targets=call_graph_targets,
         )
         if not stubs:
+            # Generated ZIDL stubs are often produced under the build output
+            # directory and are therefore absent from a source-only checkout.
+            # A contract match is safe only when the service class is proven to
+            # inherit the interface-specific Stub base; it is not a name-only
+            # fallback.
+            contract_handlers = self._contract_handler_candidates(
+                method,
+                functions,
+                class_bases=class_bases,
+            )
+            if len(contract_handlers) == 1:
+                handler = contract_handlers[0]
+                handler_record = handler["function"]
+                graph.add_node(
+                    {
+                        "schema_version": graph.schema_version,
+                        "id": _function_node_id(handler_record),
+                        "kind": "function",
+                        "attributes": _function_attributes(handler_record),
+                    }
+                )
+                graph.add_edge(
+                    {
+                        "schema_version": graph.schema_version,
+                        "source_id": transaction_id,
+                        "target_id": _function_node_id(handler_record),
+                        "kind": "transaction_to_handler",
+                        "evidence": [handler["evidence"]],
+                        "confidence": handler["confidence"],
+                        "resolver_version": self.resolver_version,
+                        "attributes": {
+                            "interface": interface_name,
+                            "method": method_name,
+                            "dispatch_mode": "generated_code_missing",
+                            "evidence_source": "idl_handler_contract",
+                        },
+                    }
+                )
+                return
+            if len(contract_handlers) > 1:
+                graph.add_orphan(
+                    kind="ambiguous_ipc_handler_contract",
+                    reason="multiple Stub-derived service methods matched the IDL contract",
+                    evidence=[item["evidence"] for item in contract_handlers],
+                    attributes={"interface": interface_name, "method": method_name},
+                )
             graph.add_orphan(
                 kind="unresolved_ipc_stub",
                 reason="no native dispatch evidence matched the IDL method",
@@ -841,6 +1059,47 @@ class OpenHarmonyIPCResolver:
             call_graph_targets=call_graph_targets,
         )
         if not handlers:
+            contract_handlers = self._contract_handler_candidates(
+                method,
+                functions,
+                class_bases=class_bases,
+            )
+            if len(contract_handlers) == 1:
+                handler = contract_handlers[0]
+                handler_record = handler["function"]
+                graph.add_node(
+                    {
+                        "schema_version": graph.schema_version,
+                        "id": _function_node_id(handler_record),
+                        "kind": "function",
+                        "attributes": _function_attributes(handler_record),
+                    }
+                )
+                graph.add_edge(
+                    {
+                        "schema_version": graph.schema_version,
+                        "source_id": transaction_id,
+                        "target_id": _function_node_id(handler_record),
+                        "kind": "transaction_to_handler",
+                        "evidence": [handler["evidence"]],
+                        "confidence": handler["confidence"],
+                        "resolver_version": self.resolver_version,
+                        "attributes": {
+                            "interface": interface_name,
+                            "method": method_name,
+                            "dispatch_mode": "generated_code_missing",
+                            "evidence_source": "idl_handler_contract",
+                        },
+                    }
+                )
+                return
+            if len(contract_handlers) > 1:
+                graph.add_orphan(
+                    kind="ambiguous_ipc_handler_contract",
+                    reason="multiple Stub-derived service methods matched the IDL contract",
+                    evidence=[item["evidence"] for item in contract_handlers],
+                    attributes={"interface": interface_name, "method": method_name},
+                )
             graph.add_orphan(
                 kind="unresolved_ipc_handler",
                 reason="dispatch evidence exists but no native handler matched",
@@ -1212,6 +1471,104 @@ class OpenHarmonyIPCResolver:
                 }
             )
         return candidates
+
+    def _contract_handler_candidates(
+        self,
+        method: Mapping[str, Any],
+        functions: list[dict[str, Any]],
+        *,
+        class_bases: Mapping[str, list[str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find an exact Stub-derived implementation when generated code is absent.
+
+        This is deliberately narrower than ``_handler_candidates``: it only
+        considers an exact IDL method name, a non-static member function, and
+        a class whose inheritance evidence reaches the interface-specific Stub
+        base.  Parameter arity and normalized type shapes rank overloads, but
+        the IDL return type is not required to equal the native return type
+        because OpenHarmony server callbacks commonly return an IPC status
+        while the IDL declaration is ``void``.
+        """
+        if not class_bases:
+            return []
+        method_name = _text(method.get("method", ""))
+        interface_name = _text(method.get("interface", ""))
+        if not method_name or not interface_name:
+            return []
+        idl_shapes = _parameter_shapes(method.get("parameters", []), idl=True)
+        candidates: list[dict[str, Any]] = []
+        for function in functions:
+            if function.get("leaf") != method_name or function.get("is_static"):
+                continue
+            owner = _text(function.get("class_name")) or _text(function.get("owner"))
+            inheritance = _inherits_stub(owner, interface_name, class_bases)
+            if inheritance is None:
+                continue
+
+            native_parameters = function.get("parameters", [])
+            native_has_signature = isinstance(native_parameters, (list, tuple)) and bool(
+                native_parameters
+            )
+            native_shapes = _parameter_shapes(native_parameters)
+            if native_has_signature and len(native_shapes) != len(idl_shapes):
+                # Arity is a hard contract boundary.  It prevents an overload
+                # with a coincidentally identical name from being selected.
+                continue
+            known_pairs = [
+                (expected, actual)
+                for expected, actual in zip(idl_shapes, native_shapes)
+                if expected != "unknown" and actual != "unknown"
+            ]
+            matches = sum(expected == actual for expected, actual in known_pairs)
+            mismatches = sum(expected != actual for expected, actual in known_pairs)
+            if known_pairs and mismatches and matches == 0:
+                # A wholly incompatible shape is stronger evidence against a
+                # candidate than a missing/aliased type is in favour of it.
+                continue
+            score = 100
+            if native_has_signature:
+                score += 20
+                score += matches * 8
+                score -= mismatches * 8
+            else:
+                native_shapes = []
+            base_class, declaring_class = inheritance
+            evidence = {
+                "source": "idl_handler_contract",
+                "path": function["file_path"],
+                "line": function["start_line"],
+                "function": function["name"],
+                "signal": "service_inherits_stub",
+                "class": declaring_class,
+                "base_class": base_class,
+                "idl_path": method.get("path", ""),
+                "idl_line": method.get("line", 0),
+                "parameter_match": {
+                    "mode": "shape" if native_has_signature else "arity_unknown",
+                    "idl_count": len(idl_shapes),
+                    "native_count": len(native_shapes) if native_has_signature else None,
+                    "idl_shapes": idl_shapes,
+                    "native_shapes": native_shapes,
+                    "matched": matches,
+                    "mismatched": mismatches,
+                },
+            }
+            candidates.append(
+                {
+                    "function": function,
+                    "confidence": 0.9 if native_has_signature and mismatches == 0 else 0.84,
+                    "evidence": evidence,
+                    "_score": score,
+                }
+            )
+
+        if not candidates:
+            return []
+        best_score = max(item["_score"] for item in candidates)
+        selected = [item for item in candidates if item["_score"] == best_score]
+        for item in selected:
+            item.pop("_score", None)
+        return selected
 
 
 IPCGraphResolver = OpenHarmonyIPCResolver

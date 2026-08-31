@@ -245,6 +245,8 @@ class SourceHandoff:
     schema_version: str = _SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if self.schema_version != _SCHEMA_VERSION:
+            raise PostCloneVerifierError("SourceHandoff schema_version 不受支持")
         if self.status != "ready_for_analysis":
             raise PostCloneVerifierError("SourceHandoff 只能是 ready_for_analysis")
         for value, name in (
@@ -253,13 +255,29 @@ class SourceHandoff:
             (self.revision, "revision"),
         ):
             _bounded_text(value, name=name, limit=_MAX_PATH_LENGTH)
+        repository_path = _bounded_text(
+            self.repository_path,
+            name="repository_path",
+            limit=_MAX_PATH_LENGTH,
+        )
+        if not os.path.isabs(repository_path) or "\x00" in repository_path:
+            raise PostCloneVerifierError("SourceHandoff repository_path 必须是绝对路径")
         if _safe_commit(self.resolved_commit) is None:
             raise PostCloneVerifierError("SourceHandoff resolved_commit 无效")
         if not self.source_paths:
             raise PostCloneVerifierError("SourceHandoff 必须包含已验证源码文件")
         object.__setattr__(self, "resolved_commit", self.resolved_commit.strip().lower())
-        object.__setattr__(self, "source_paths", tuple(self.source_paths))
-        object.__setattr__(self, "evidence_ids", tuple(dict.fromkeys(self.evidence_ids)))
+        normalized_paths: list[str] = []
+        for index, path in enumerate(self.source_paths):
+            relative = _normalise_path(path, name=f"source_paths[{index}]")
+            if relative not in normalized_paths:
+                normalized_paths.append(relative)
+        object.__setattr__(self, "repository_path", repository_path)
+        object.__setattr__(self, "source_paths", tuple(normalized_paths))
+        evidence_ids = tuple(dict.fromkeys(self.evidence_ids))
+        if any(not isinstance(item, str) or not re.fullmatch(r"E-[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", item) for item in evidence_ids):
+            raise PostCloneVerifierError("SourceHandoff evidence_ids 无效")
+        object.__setattr__(self, "evidence_ids", evidence_ids)
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -767,6 +767,11 @@ class FindingVerifier:
             )
 
             result["verification"] = verification.to_dict()
+            # Preserve the pre-verification verdict so Stage 2 can distinguish
+            # an inconclusive result that was promoted/resolved from an ordinary
+            # vulnerable/bypassable disagreement.  This is also persisted in
+            # checkpoints and keeps outcome metrics auditable after write-back.
+            result["verification"]["stage1_finding"] = stage1_finding
 
             if verification.agree:
                 detail = f"agreed:{verification.correct_finding}"
@@ -796,6 +801,7 @@ class FindingVerifier:
             # it as needs-review rather than a clean verdict.
             result.setdefault("verification", {})
             result["verification"]["incomplete"] = True
+            result["verification"]["stage1_finding"] = stage1_finding
             result["verification_note"] = f"Verification errored: {err_msg}"
             print(f"[Verify] ERROR {route_key}: {err_msg}", file=sys.stderr, flush=True)
 

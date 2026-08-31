@@ -213,6 +213,29 @@ def test_planner_prompt_contains_bounded_context_and_forbids_hidden_chain():
     assert len(prompt) <= PlannerBudget().max_prompt_chars
 
 
+def test_planner_prompt_shrinks_noisy_evidence_without_dropping_the_budget():
+    store = EvidenceStore()
+    for index in range(100):
+        store.add_evidence(
+            kind="literal_match",
+            source_path="/openharmony/" + ("x" * 900) + f"/{index}.c",
+            line_start=index + 1,
+            symbol="s" * 100,
+            excerpt="e" * 4096,
+            tool_name="opengrok.search",
+            source_mode="search",
+        )
+    context = LLMSearchPlannerContext(
+        target={"service_hint": "PARAM_SERVICE_SOCKET"},
+        evidence=store,
+    )
+
+    prompt = LLMSearchPlanner().build_prompt(context)
+
+    assert len(prompt) <= PlannerBudget().max_prompt_chars
+    assert "evidence_ids" in prompt
+
+
 def test_repair_prompt_respects_the_same_prompt_budget():
     context, evidence_id = _context()
     planner = LLMSearchPlanner(budget=PlannerBudget(max_prompt_chars=2_000))

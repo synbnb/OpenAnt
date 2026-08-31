@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from core.observability import print_chinese_log
 from utilities.file_io import open_utf8, read_json, read_repo_file, write_json
 from utilities.llm import PhaseBinding, simple_text
 
@@ -311,6 +312,16 @@ CONTEXT_FILES = [
 
 MAX_PLATFORM_PROFILE_CHARS = 2400
 
+# Context files are repository-authored input.  Keep a per-file cap so a single
+# README cannot consume the whole prompt, and a total cap so increasing the
+# per-file allowance does not silently double the worst-case API request.
+# These are byte-oriented policy values; ``read_repo_file`` enforces the same
+# bound before reading and the prompt remains additionally bounded by the
+# provider adapter.
+CONTEXT_FILE_MAX_BYTES = 20_000
+CONTEXT_TOTAL_MAX_BYTES = 120_000
+_CONTEXT_TRUNCATION_MARKER = "\n\n[... truncated ...]"
+
 # Patterns that indicate application type
 ENTRY_POINT_PATTERNS = {
     "cli": [
@@ -347,22 +358,57 @@ def gather_context_sources(repo_path: Path) -> dict[str, str]:
     """
     sources = {}
 
-    # Read priority files
+    # Read priority files.  Oversized files are truncated rather than dropped:
+    # a repository README commonly contains useful architecture and trust-boundary
+    # information after the first 10 KB.  The total budget keeps this bounded when
+    # several priority files are present.
+    total_context_bytes = 0
+    budget_exhausted = False
     for filename in CONTEXT_FILES:
+        remaining = CONTEXT_TOTAL_MAX_BYTES - total_context_bytes
+        if remaining <= 0:
+            budget_exhausted = True
+            break
         filepath = repo_path / filename
         try:
-            # Guarded, and bounded at the syscall rather than after the fact: the
-            # old form read the whole file and *then* truncated to 10 000 chars, so
-            # a README symlinked to /dev/zero or a multi-GB file was fully resident
-            # before the cap ever applied.
-            content = read_repo_file(filepath, max_bytes=10_000)
+            # Guarded and bounded before reading.  ``oversize="truncate"`` keeps
+            # the useful prefix while preserving the symlink/special-file checks.
+            per_file_limit = min(CONTEXT_FILE_MAX_BYTES, remaining)
+            content = read_repo_file(
+                filepath,
+                max_bytes=per_file_limit,
+                oversize="truncate",
+            )
             if content is None:
                 continue
-            if len(content) >= 10_000:
-                content = content + "\n\n[... truncated ...]"
+            was_truncated = len(content) >= per_file_limit
+            if was_truncated:
+                content = content + _CONTEXT_TRUNCATION_MARKER
+                print_chinese_log(
+                    f"上下文预算：{filename} 超过单文件上限 {per_file_limit} 字节，"
+                    "保留前缀并追加截断标记，避免单个 README 占满模型上下文。",
+                    category="上下文决策",
+                )
+            total_context_bytes += min(len(content), per_file_limit)
             sources[filename] = content
         except Exception as e:  # noqa: BLE001 - context gathering is best-effort
             print(f"Warning: Could not read {filename}: {e}", file=sys.stderr)
+            print_chinese_log(
+                f"上下文读取降级：{filename} 无法读取（{e}），"
+                "跳过该文件并继续收集其它可信来源。",
+                category="上下文决策",
+            )
+
+    if budget_exhausted:
+        sources["[context_budget]"] = (
+            "Priority context file budget exhausted at "
+            f"{CONTEXT_TOTAL_MAX_BYTES} bytes; remaining priority files were not read."
+        )
+        print_chinese_log(
+            f"上下文预算耗尽：已达到总上限 {CONTEXT_TOTAL_MAX_BYTES} 字节，"
+            "剩余优先文件不再读取，以控制模型成本和提示长度。",
+            category="上下文决策",
+        )
 
     # Get directory structure (top 2 levels)
     dir_structure = get_directory_structure(repo_path, max_depth=2)
@@ -790,11 +836,27 @@ def generate_application_context(
         manual_context = check_manual_override(repo_path)
         if manual_context:
             print(f"Using manual override from repository", file=sys.stderr)
+            print_chinese_log(
+                "上下文决策：检测到仓库手工上下文覆盖文件，直接采用人工声明，"
+                "不再为同一仓库重复调用上下文生成模型。",
+                category="上下文决策",
+            )
             return manual_context
 
     # Gather sources
     print(f"Gathering context sources from {repo_path}...", file=sys.stderr)
+    print_chinese_log(
+        f"上下文收集：按优先级读取仓库说明和构建清单，单文件上限={CONTEXT_FILE_MAX_BYTES} 字节，"
+        f"总上限={CONTEXT_TOTAL_MAX_BYTES} 字节；同时收集目录结构和入口模式。",
+        category="上下文进度",
+    )
     sources = gather_context_sources(repo_path)
+
+    print_chinese_log(
+        f"上下文收集完成：得到 {len(sources)} 个来源片段，"
+        "后续会以带边界的代码块传给模型，防止仓库文本伪装成系统指令。",
+        category="上下文结果",
+    )
 
     if not sources:
         raise ValueError(f"No context sources found in {repo_path}")
@@ -816,6 +878,11 @@ def generate_application_context(
     print(
         f"Generating context with {binding.provider_name}/{binding.model}...",
         file=sys.stderr,
+    )
+    print_chinese_log(
+        f"上下文生成：使用 {binding.provider_name}/{binding.model}，"
+        "要求返回结构化安全模型；解析失败时扫描会记录降级而不会伪造上下文。",
+        category="上下文决策",
     )
     prompt = CONTEXT_GENERATION_PROMPT.format(sources=sources_text)
     platform_prompt = _render_platform_profile_for_app_context(platform_profile)
@@ -866,6 +933,11 @@ def generate_application_context(
             f"(missing required field): {e}. Skipping app context.",
             file=sys.stderr,
         )
+        print_chinese_log(
+            f"上下文生成降级：模型返回缺少必要字段（{e}），"
+            "不保存不完整对象，后续阶段按无上下文策略运行。",
+            category="上下文决策",
+        )
         return None
 
 
@@ -882,6 +954,11 @@ def save_context(context: ApplicationContext, output_path: Path) -> None:
     write_json(output_path, asdict(context))
 
     print(f"Context saved to {output_path}", file=sys.stderr)
+    print_chinese_log(
+        f"上下文产物：application_context.json 已写入 {output_path}，"
+        "后续检测和验证阶段将复用同一份安全背景。",
+        category="上下文结果",
+    )
 
 
 def load_context(input_path: Path) -> ApplicationContext:

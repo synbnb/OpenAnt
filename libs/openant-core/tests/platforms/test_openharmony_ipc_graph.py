@@ -249,6 +249,77 @@ def test_resolver_does_not_guess_from_unrelated_same_named_method():
     assert any(orphan["kind"] == "unresolved_ipc_stub" for orphan in graph.orphans)
 
 
+def test_resolver_uses_idl_handler_contract_when_generated_stub_is_missing():
+    """A source-only checkout can still expose a proven Stub-derived handler."""
+    idl = _idl(
+        """
+        interface OHOS.Audio.IAudioPolicy {
+            void UnexcludeOutputDevices([in] int audioDevUsage,
+                [in] List<sharedptr<AudioDeviceDescriptor>> descriptors);
+        }
+        """
+    )
+    handler_id = "services/audio_policy_server.cpp:AudioPolicyServer::UnexcludeOutputDevices"
+    functions = {
+        handler_id: {
+            **_function("AudioPolicyServer::UnexcludeOutputDevices", "return eventEntry_->UnexcludeOutputDevices();"),
+            "parameters": [
+                "int32_t audioDevUsageIn",
+                "const vector<shared_ptr<AudioDeviceDescriptor>> &audioDeviceDescriptors",
+            ],
+            "return_type": "int32_t",
+            "class_name": "AudioPolicyServer",
+            "is_static": False,
+        }
+    }
+    payload = {
+        "functions": functions,
+        "class_bases": {
+            "AudioPolicyServer": ["SystemAbility", "AudioPolicyStub"],
+        },
+    }
+
+    graph = OpenHarmonyIPCResolver().resolve(idl, payload)
+    transaction = "idl:transaction:OHOS.Audio.IAudioPolicy:UnexcludeOutputDevices"
+    target = f"function:{handler_id}"
+    edge = next(
+        edge
+        for edge in graph.edges.values()
+        if edge.source_id == transaction
+        and edge.target_id == target
+        and edge.kind == "transaction_to_handler"
+    )
+
+    assert edge.attributes["dispatch_mode"] == "generated_code_missing"
+    assert edge.attributes["evidence_source"] == "idl_handler_contract"
+    assert edge.evidence[0]["base_class"] == "AudioPolicyStub"
+    assert edge.evidence[0]["parameter_match"]["matched"] == 2
+    assert not any(edge.kind == "stub_to_transaction" for edge in graph.edges.values())
+    assert not any(orphan["kind"] == "unresolved_ipc_stub" for orphan in graph.orphans)
+
+
+def test_resolver_contract_fallback_requires_stub_inheritance():
+    idl = _idl("interface OHOS.Audio.IAudioPolicy { void Enable(); }")
+    handler_id = "services/audio_policy_server.cpp:UnrelatedService::Enable"
+    functions = {
+        handler_id: {
+            **_function("UnrelatedService::Enable", "return 0;"),
+            "parameters": [],
+            "class_name": "UnrelatedService",
+        }
+    }
+    graph = OpenHarmonyIPCResolver().resolve(
+        idl,
+        {
+            "functions": functions,
+            "class_bases": {"UnrelatedService": ["OtherBase"]},
+        },
+    )
+
+    assert not any(edge.kind == "transaction_to_handler" for edge in graph.edges.values())
+    assert any(orphan["kind"] == "unresolved_ipc_stub" for orphan in graph.orphans)
+
+
 def test_resolver_ignores_method_names_in_comments_and_string_literals():
     idl = _idl("interface OHOS.Health.IHealthService { int Enable(); }")
     functions = {

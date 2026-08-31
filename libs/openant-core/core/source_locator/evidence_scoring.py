@@ -21,6 +21,7 @@ _KIND_WEIGHTS: Mapping[str, tuple[int, str]] = {
     "symbol_reference": (10, "符号引用证据"),
     "service_config": (18, "服务配置证据"),
     "executable_build": (12, "可执行文件/构建证据"),
+    "socket_server_registration": (26, "服务端注册结构或创建包装证据"),
     "socket_acquire": (14, "创建或获取 socket 证据"),
     "socket_bind_listen": (28, "bind/listen 服务端证据"),
     "socket_accept_read": (30, "accept/read 服务端消费证据"),
@@ -32,7 +33,7 @@ _KIND_WEIGHTS: Mapping[str, tuple[int, str]] = {
     "manifest_mapping": (16, "Manifest 映射证据"),
     "post_clone_verification": (20, "拉取后复核证据"),
 }
-_SERVER_CREATOR_KINDS = frozenset({"socket_bind_listen"})
+_SERVER_CREATOR_KINDS = frozenset({"socket_bind_listen", "socket_server_registration"})
 _SERVER_CONSUMER_KINDS = frozenset({"socket_accept_read", "protocol_dispatch"})
 _IDENTITY_KINDS = frozenset({"literal_match", "macro_definition", "constant_definition", "service_config"})
 _MAPPING_KINDS = frozenset({"manifest_mapping", "executable_build", "service_config"})

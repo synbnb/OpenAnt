@@ -3,7 +3,9 @@
 The ordinary C/C++ call graph is deliberately kept as the source graph.  This
 module only projects a small, validated subset of the OpenHarmony IPC semantic
 graph onto native function IDs so that an IPC stub can reach its handler when
-the generated/native call graph does not contain that edge.
+the generated/native call graph does not contain that edge.  When generated
+stub code is absent entirely, a transaction-to-handler edge can additionally
+provide a validated external IPC entry-point seed.
 """
 
 from __future__ import annotations
@@ -24,6 +26,10 @@ SEMANTIC_REACHABILITY_EDGE_KINDS = frozenset(
         # exact assignment/call-site evidence to the edge.
         "native_dispatch_to_handler",
         "native_dispatch_to_service",
+        # Produced only by the validated LLM recovery projection stage. The
+        # projection boundary checks caller/target membership, confidence,
+        # and source-backed evidence before this edge can reach BFS.
+        "llm_confirmed_indirect_call",
     }
 )
 
@@ -54,6 +60,10 @@ def build_semantic_reachability_overlay(
     result: Dict[str, Any] = {
         "edges": [],
         "candidate_edges": 0,
+        # Native IDs reached directly from an IPC transaction.  These are
+        # external roots, not synthetic call-graph edges, and are consumed by
+        # the pipeline's BFS seed set.
+        "entry_points": [],
         "edge_kinds": [],
         "ignored_edge_count": 0,
         "invalid_endpoint_count": 0,
@@ -65,6 +75,11 @@ def build_semantic_reachability_overlay(
     nodes = semantic_graph.get("nodes", [])
     declared_nodes = {
         node.get("id")
+        for node in nodes
+        if isinstance(node, Mapping) and isinstance(node.get("id"), str)
+    }
+    node_kinds = {
+        node.get("id"): node.get("kind")
         for node in nodes
         if isinstance(node, Mapping) and isinstance(node.get("id"), str)
     }
@@ -112,6 +127,35 @@ def build_semantic_reachability_overlay(
             for endpoint in [source_id, *(target for target, _ in targets)]
             if _function_id(endpoint) in known
         }
+
+    # A source-only checkout can contain the IDL and the service implementation
+    # but not the generated Stub::OnRemoteRequest source.  In that case there
+    # is no native function node from which to start the usual semantic path.
+    # Treat only a declared/explicit transaction -> known function edge as an
+    # external entry seed.  Interface declarations never become roots because
+    # traversal starts at transaction nodes and the interface_to_transaction
+    # edge points in the opposite direction.
+    transaction_nodes = {
+        node_id
+        for node_id in declared_nodes
+        if node_kinds.get(node_id) == "ipc_transaction"
+    }
+    if not strict_nodes:
+        transaction_nodes.update(
+            endpoint
+            for source_id, targets in adjacency.items()
+            for endpoint in [source_id, *(target for target, _ in targets)]
+            if isinstance(endpoint, str) and endpoint.startswith("idl:transaction:")
+        )
+    external_entry_points: Set[str] = set()
+    for transaction_id in sorted(transaction_nodes):
+        for target, kind in adjacency.get(transaction_id, []):
+            if kind != "transaction_to_handler":
+                continue
+            target_id = _function_id(target)
+            if target_id in known:
+                external_entry_points.add(target_id)
+    result["entry_points"] = sorted(external_entry_points)
 
     # Keep the chosen path deterministic when a resolver emits duplicate or
     # competing evidence for the same pair.

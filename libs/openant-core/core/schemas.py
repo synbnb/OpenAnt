@@ -136,6 +136,13 @@ class AnalysisMetrics:
     # potential vulnerabilities awaiting manual review — they must NOT be
     # folded into ``safe``.
     needs_review: int = 0
+    # Stage 2 may run an evidence-recovery pass for Stage-1 inconclusive
+    # findings.  These additive counters make promotions/resolutions visible
+    # without inferring them from ``safe`` or ``disagreed``.
+    stage2_inconclusive_input: int = 0
+    stage2_inconclusive_promoted: int = 0
+    stage2_inconclusive_resolved: int = 0
+    stage2_inconclusive_remaining: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -185,6 +192,25 @@ class ScanResult:
     report_path: str | None = None
     summary_path: str | None = None
     dynamic_test_path: str | None = None
+    # Optional OpenHarmony indirect-call review artifact.  The review is
+    # advisory in the first integration stage and never mutates the graph.
+    llm_call_graph_recovery_path: str | None = None
+    # Optional OpenHarmony candidate-edge review artifact.  This is a
+    # separate, opt-in advisory pass for residual sites with deterministic
+    # candidate targets and likewise never mutates the graph.
+    llm_call_graph_candidate_review_path: str | None = None
+    # Optional OpenHarmony semantic overlay produced from validated LLM
+    # recovery decisions. The overlay is separate from the native call graph;
+    # a later reachability stage may consume it explicitly.
+    llm_call_graph_overlay_path: str | None = None
+    # Optional OpenHarmony entry-driven iterative recovery artifact.  It
+    # contains per-round review/projection records and is kept separate from
+    # the legacy one-shot recovery report for backwards compatibility.
+    llm_call_graph_rounds_path: str | None = None
+    # Optional deterministic OpenHarmony selector/value evidence artifact.
+    # It is source-backed metadata for later dynamic-test payloads and does
+    # not mutate the call graph.
+    openharmony_dispatch_code_evidence_path: str | None = None
     units_count: int = 0
     language: str = "unknown"
     metrics: AnalysisMetrics = field(default_factory=AnalysisMetrics)
@@ -257,6 +283,15 @@ class ScanResult:
             "report_path": self.report_path,
             "summary_path": self.summary_path,
             "dynamic_test_path": self.dynamic_test_path,
+            "llm_call_graph_recovery_path": self.llm_call_graph_recovery_path,
+            "llm_call_graph_candidate_review_path": (
+                self.llm_call_graph_candidate_review_path
+            ),
+            "llm_call_graph_overlay_path": self.llm_call_graph_overlay_path,
+            "llm_call_graph_rounds_path": self.llm_call_graph_rounds_path,
+            "openharmony_dispatch_code_evidence_path": (
+                self.openharmony_dispatch_code_evidence_path
+            ),
             "units_count": self.units_count,
             "language": self.language,
             "metrics": self.metrics.to_dict(),
@@ -330,6 +365,16 @@ class VerifyResult:
     # never folds them into ``safe``.
     needs_review: int = 0
     error_count: int = 0
+    # Additive counters for Stage-2 evidence recovery on Stage-1
+    # inconclusive findings.
+    inconclusive_input: int = 0
+    inconclusive_promoted: int = 0
+    inconclusive_resolved: int = 0
+    inconclusive_remaining: int = 0
+    # Final verdict counts are computed from the merged verification output.
+    # The scanner uses them to avoid double-counting inconclusive findings
+    # that Stage 2 resolves to safe/protected or promotes to vulnerable.
+    final_counts: dict = field(default_factory=dict)
     usage: UsageInfo = field(default_factory=UsageInfo)
 
     def to_dict(self) -> dict:
@@ -342,6 +387,11 @@ class VerifyResult:
             "confirmed_vulnerabilities": self.confirmed_vulnerabilities,
             "needs_review": self.needs_review,
             "error_count": self.error_count,
+            "inconclusive_input": self.inconclusive_input,
+            "inconclusive_promoted": self.inconclusive_promoted,
+            "inconclusive_resolved": self.inconclusive_resolved,
+            "inconclusive_remaining": self.inconclusive_remaining,
+            "final_counts": self.final_counts,
             "usage": self.usage.to_dict(),
         }
 

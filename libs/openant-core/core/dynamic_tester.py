@@ -11,6 +11,7 @@ import shutil
 import sys
 
 from core.schemas import DynamicTestStepResult, UsageInfo
+from core.observability import print_chinese_log
 from core.verdict_taxonomy import DYNAMIC_TESTABLE
 from core import tracking
 from utilities.file_io import normalize_results, read_json, write_json
@@ -65,6 +66,11 @@ def run_tests(
             output_dir=output_dir,
             repo_path=repo_path,
         )
+        print_chinese_log(
+            f"动态验证任务：Claude Code 工作目录已创建为 {task['task_workspace']}，"
+            f"候选条目数={task['candidate_count']}；该模式只准备上下文和工具，不在 OpenAnt 内执行 Docker。",
+            category="动态验证",
+        )
         task_workspace = task["task_workspace"]
         return DynamicTestStepResult(
             results_json_path=task["candidate_manifest"],
@@ -101,10 +107,19 @@ def run_tests(
 
     print(f"[Dynamic Test] {len(testable)} testable findings "
           f"(out of {len(findings)} total)", file=sys.stderr)
+    print_chinese_log(
+        f"动态验证筛选：从 {len(findings)} 个汇总问题中只选出 {len(testable)} 个"
+        "满足第二阶段验证条件的条目，避免对未经确认的结果执行载荷。",
+        category="动态验证",
+    )
 
     if not testable:
         results_path = os.path.join(output_dir, "dynamic_test_results.json")
         write_json(results_path, {"findings_tested": 0, "results": []})
+        print_chinese_log(
+            f"动态验证自动结束：没有可测试条目，已写入 {results_path}，未调用运行时执行器。",
+            category="动态验证",
+        )
 
         return DynamicTestStepResult(
             results_json_path=results_path,
@@ -117,6 +132,11 @@ def run_tests(
 
     print(f"[Dynamic Test] Running with max_retries={max_retries}...",
           file=sys.stderr)
+    print_chinese_log(
+        f"动态验证执行：开始运行 {len(testable)} 个载荷，单条最多重试 {max_retries} 次；"
+        "失败、阻塞和未复现会分别记录，不会直接当作安全。",
+        category="动态验证",
+    )
 
     results = run_dynamic_tests(
         pipeline_output_path,
@@ -159,6 +179,11 @@ def run_tests(
     print(f"\n[Dynamic Test] Results: {confirmed} confirmed, "
           f"{not_reproduced} not reproduced, {blocked} blocked, "
           f"{inconclusive} inconclusive, {errors} errors", file=sys.stderr)
+    print_chinese_log(
+        f"动态验证结果：确认={confirmed}，未复现={not_reproduced}，阻塞={blocked}，"
+        f"待定={inconclusive}，错误={errors}；结果文件={results_json_path}。",
+        category="动态验证",
+    )
 
     return DynamicTestStepResult(
         results_json_path=results_json_path,

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "baseline_id": "openant-pre-openharmony-v1",
-  "mode": "observed_current_behavior",
-  "openant_commit": "2476527b9d6f929a5c987bd3d5df414da04f1eaf",
+  "baseline_id": "openant-after-header-language-selection-v1",
+  "mode": "observed_post_fix_behavior",
+  "openant_commit": "a27d6c79c34430490db8fffa7abd6bd1078121c9",
   "known_gaps": [
     "no_platform_profile",
     "build_metadata_not_discovered",
@@ -11,7 +11,6 @@
     "idl_not_registered",
     "on_remote_request_not_an_entry_point",
     "no_ipc_semantic_edge",
-    "namespace_nodes_misclassified",
     "name_only_call_graph_edge",
     "dataset_language_missing"
   ],
@@ -114,29 +113,21 @@
     ],
     "function_ids": [
       "frameworks/health_sensor_service_proxy.cpp:HealthSensorServiceProxy::EnableSensor",
-      "interfaces/i_health_sensor_service.h:OHOS",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture.IHealthSensorService",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture.IHealthSensorService.GetDescriptor",
+      "interfaces/i_health_sensor_service.h:OHOS::OpenAntFixture::IHealthSensorService::GetDescriptor",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::EnableSensorInner",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::HealthSensorServiceStub",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::OnRemoteRequest"
     ],
     "unit_ids": [
       "frameworks/health_sensor_service_proxy.cpp:HealthSensorServiceProxy::EnableSensor",
-      "interfaces/i_health_sensor_service.h:OHOS",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture.IHealthSensorService",
-      "interfaces/i_health_sensor_service.h:OHOS.OpenAntFixture.IHealthSensorService.GetDescriptor",
+      "interfaces/i_health_sensor_service.h:OHOS::OpenAntFixture::IHealthSensorService::GetDescriptor",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::EnableSensorInner",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::HealthSensorServiceStub",
       "services/health_sensor_service_stub.cpp:HealthSensorServiceStub::OnRemoteRequest"
     ],
     "unit_types": {
       "constructor": 1,
-      "function": 3,
-      "method": 3,
-      "static_function": 1
+      "method": 4
     },
     "call_graph_edges": [
       {

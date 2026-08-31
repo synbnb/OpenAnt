@@ -309,6 +309,32 @@ def test_request_rejects_unsafe_paths_and_unbounded_values():
         PostCloneVerificationRequest(symbols=("x" * 257,))
 
 
+def test_handoff_rejects_relative_repository_or_untrusted_evidence_ids():
+    with pytest.raises(PostCloneVerifierError):
+        from core.source_locator import SourceHandoff
+
+        SourceHandoff(
+            project_name="startup_init",
+            repository_path="source_code_base/startup_init",
+            repo_url="https://gitcode.com/openharmony/startup_init",
+            revision="OpenHarmony-6.1-LTS",
+            resolved_commit="abc1234",
+            source_paths=("param_service.c",),
+        )
+    with pytest.raises(PostCloneVerifierError):
+        from core.source_locator import SourceHandoff
+
+        SourceHandoff(
+            project_name="startup_init",
+            repository_path="/tmp/source_code_base/startup_init",
+            repo_url="https://gitcode.com/openharmony/startup_init",
+            revision="OpenHarmony-6.1-LTS",
+            resolved_commit="abc1234",
+            source_paths=("param_service.c",),
+            evidence_ids=("not-an-evidence-id",),
+        )
+
+
 def test_result_serialization_keeps_checks_and_handoff_without_source_dump(tmp_path):
     acquisition, mapping, destination = _acquisition(tmp_path)
     (destination / "param_service.c").write_text("int param_service(void) {}", encoding="utf-8")

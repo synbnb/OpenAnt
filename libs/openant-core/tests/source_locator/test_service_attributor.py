@@ -107,6 +107,20 @@ def test_fd_acquire_receive_and_dispatch_confirm_server():
     assert result.roles["server_handler"][0].subject == "ParamService::HandleRequest"
 
 
+def test_server_registration_wrapper_can_confirm_server_without_posix_bind():
+    store = EvidenceStore()
+    _add(store, "macro_definition", 10, symbol="PIPE_NAME")
+    _add(store, "socket_server_registration", 20, relation_to="ParamService::Start")
+    _add(store, "socket_accept_read", 30, relation_to="ParamService::ReadRequest")
+    _add(store, "protocol_dispatch", 40, relation_to="ParamService::HandleRequest")
+
+    result = ServiceAttributor(mapping=_mapping()).attribute(store)
+
+    assert result.status == "HIGH"
+    assert result.confirmed is True
+    assert result.predicates["socket_acquire_or_bind"] is True
+
+
 def test_bind_and_dispatch_are_equivalent_consumer_path():
     store = EvidenceStore()
     _add(store, "literal_match", 10, symbol="PIPE_NAME")
@@ -195,3 +209,24 @@ def test_invalid_evidence_and_mapping_input_fails_loudly():
             score=0,
             predicates={"socket_identity": "false"},  # type: ignore[dict-item]
         )
+
+
+def test_test_path_evidence_is_retained_but_cannot_confirm_server():
+    store = EvidenceStore()
+    production_id = _add(store, "literal_match", 10, symbol="PIPE_NAME")
+    test_id = store.add_evidence(
+        kind="socket_accept_read",
+        source_path="/openharmony/kernel/linux/linux-6.6/tools/testing/selftests/bpf/prog_tests/sk_assign.c",
+        line_start=20,
+        excerpt="accept(fd, addr);",
+        tool_name="test.fixture",
+        source_mode="fixture",
+        relation_from="/dev/unix/socket/paramservice",
+        relation_to="FakeTestServer::accept",
+    ).evidence_id
+    result = ServiceAttributor().attribute(store, mapping=_mapping())
+
+    assert test_id in result.excluded_evidence_ids
+    assert test_id not in result.evidence_ids
+    assert result.predicates["server_consumer"] is False
+    assert production_id in result.evidence_ids

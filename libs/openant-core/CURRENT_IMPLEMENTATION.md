@@ -154,7 +154,9 @@ Provide your assessment as JSON:
 
 **Files:**
 - `prompts/verification_prompts.py` - Attacker simulation prompt (moved from utilities/ on Jan 14)
-- `utilities/finding_verifier.py` - Opus with tools: search_usages, search_definitions, read_function, list_functions, finish
+- `utilities/finding_verifier.py` - Opus with tools: search_usages, search_definitions, read_function, list_functions, finish;
+  Stage 2 reviews vulnerable/bypassable findings and performs bounded evidence recovery for
+  Stage-1 inconclusive findings.
 
 **Key Breakthrough (Jan 14, 2026): Attacker Simulation**
 

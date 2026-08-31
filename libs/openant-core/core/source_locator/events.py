@@ -1,9 +1,9 @@
 """Source-locator session events and append-only persistence.
 
-事件是 Web/SSE、CLI worker 和恢复逻辑共享的最小审计单位。事件只保存动作
-摘要、状态、artifact 引用和 evidence ID，不保存模型原文、思维链、源码全文或
-凭据。写入采用追加 + flush + fsync；checkpoint 由 :mod:`state_machine` 以
-临时文件 + ``os.replace`` 写入。
+事件是 Web/SSE、CLI worker 和恢复逻辑共享的最小审计单位。事件保存动作摘要、
+状态、artifact 引用、evidence ID 以及经过大小限制的结构化工具审计详情；不保存
+模型原文、隐藏思维链、完整提示词、源码全文或凭据。写入采用追加 + flush +
+fsync；checkpoint 由 :mod:`state_machine` 以临时文件 + ``os.replace`` 写入。
 """
 
 from __future__ import annotations

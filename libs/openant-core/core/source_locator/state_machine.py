@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import tempfile
 from typing import Any, Iterable, Mapping
 
@@ -42,6 +43,7 @@ FLOW_STATES = (
     "LOCATE_CLIENT_COMM",
     "RESOLVE_REPOSITORIES",
     "VERIFY_EVIDENCE",
+    "RECOVER_EVIDENCE",
     "AWAIT_USER_CONFIRMATION",
     "APPLY_FEEDBACK",
     "CLONE",
@@ -74,7 +76,8 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "ATTRIBUTION_SERVER": frozenset({"LOCATE_CLIENT_COMM", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
     "LOCATE_CLIENT_COMM": frozenset({"RESOLVE_REPOSITORIES", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
     "RESOLVE_REPOSITORIES": frozenset({"VERIFY_EVIDENCE", "VERSION_MISMATCH", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
-    "VERIFY_EVIDENCE": frozenset({"AWAIT_USER_CONFIRMATION", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
+    "VERIFY_EVIDENCE": frozenset({"AWAIT_USER_CONFIRMATION", "RECOVER_EVIDENCE", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
+    "RECOVER_EVIDENCE": frozenset({"TRACE_EVIDENCE", "VERIFY_EVIDENCE", "PARTIAL", "NEEDS_REVIEW", "CANCELLED"}),
     "AWAIT_USER_CONFIRMATION": frozenset({"APPLY_FEEDBACK", "CLONE", "CANCELLED", "NEEDS_REVIEW"}),
     "APPLY_FEEDBACK": frozenset({"SEARCH_INITIAL", "NEEDS_REVIEW", "CANCELLED"}),
     "CLONE": frozenset({"POST_CLONE_VERIFY", "CLONE_FAILED", "PARTIAL", "CANCELLED"}),
@@ -379,6 +382,30 @@ class LocatorSessionStore:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise LocatorStateError("session checkpoint 无法读取") from exc
         return SourceLocatorStateMachine(self, LocatorSession.from_dict(payload))
+
+    def delete(self, session_id: str) -> bool:
+        """删除一个明确指定的 session 目录及其定位产物。
+
+        该方法只操作 ``session root/<validated-id>``，不会触碰项目源码仓库
+        或 ``source_code_base``。根目录和 session 目录均拒绝符号链接，避免
+        清理动作越出持久化边界；内部文件由 ``shutil.rmtree`` 安全移除。
+        """
+
+        path = self.session_dir(session_id)
+        if not path.exists():
+            raise LocatorStateError("session 不存在")
+        if path.is_symlink() or not path.is_dir():
+            raise LocatorStateError("session 目录不是安全的普通目录")
+        resolved = path.resolve(strict=False)
+        if not _within(resolved, self.root) or resolved == self.root:
+            raise LocatorStateError("session 路径越界")
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            raise LocatorStateError(f"删除 session 失败：{exc}") from exc
+        if path.exists():
+            raise LocatorStateError("删除 session 后目录仍然存在")
+        return True
 
     def events(self, session_id: str) -> LocatorEventLog:
         directory = self.session_dir(session_id)

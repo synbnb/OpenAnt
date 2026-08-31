@@ -118,3 +118,21 @@ def test_unknown_file_is_kept_with_explainable_unknown_role():
     assert result.role == "unknown"
     assert any(feature.code == "unknown" and feature.weight < 0 for feature in result.features)
     assert result.features[0].code == "unknown"
+
+
+def test_only_explicit_test_or_fuzz_signals_are_attribution_ineligible():
+    selftest = classify_path(
+        "/openharmony/kernel/linux/linux-6.6/tools/testing/selftests/bpf/prog_tests/sk_assign.c"
+    )
+    assert selftest.attribution_eligible is False
+    assert "test" in selftest.path_signals
+    assert "kernel" in selftest.path_signals
+
+    for path in (
+        "/openharmony/kernel/linux/linux-6.6/net/unix/af_unix.c",
+        "/openharmony/third_party/libfoo/src/socket.cpp",
+        "/openharmony/generated/ipc/socket_stub.cpp",
+        "/openharmony/out/rk3568/gen/socket.cpp",
+        "/openharmony/build/socket.cpp",
+    ):
+        assert classify_path(path).attribution_eligible is True

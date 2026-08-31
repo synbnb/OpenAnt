@@ -44,6 +44,22 @@ def test_create_writes_checkpoint_and_initial_event(tmp_path):
     assert (tmp_path / "sessions" / machine.session.session_id / "session.json").exists()
 
 
+def test_delete_removes_only_one_session_directory(tmp_path):
+    root = tmp_path / "sessions"
+    store = LocatorSessionStore(root)
+    removed = store.create("/dev/unix/socket/paramservice", session_id="loc_delete123456")
+    kept = store.create("/dev/unix/socket/other", session_id="loc_keep123456")
+    removed_dir = root / removed.session.session_id
+    kept_dir = root / kept.session.session_id
+    (removed_dir / "artifact.json").write_text("{}", encoding="utf-8")
+
+    assert store.delete(removed.session.session_id) is True
+    assert not removed_dir.exists()
+    assert (kept_dir / "session.json").exists()
+    with pytest.raises(LocatorStateError, match="不存在"):
+        store.delete(removed.session.session_id)
+
+
 def test_orchestrator_follows_strict_flow_and_pauses_for_confirmation(tmp_path):
     machine = _machine(tmp_path)
     states = list(FLOW_STATES)
@@ -98,6 +114,31 @@ def test_illegal_transition_and_terminal_resume_are_rejected(tmp_path):
     assert machine.session.state == "CANCELLED"
     with pytest.raises(LocatorStateError, match="终态"):
         machine.transition("NORMALIZE_TARGET", summary_zh="late")
+
+
+def test_recovery_transition_is_explicit_and_returns_to_trace(tmp_path):
+    machine = _machine(tmp_path)
+    for state in (
+        "NORMALIZE_TARGET",
+        "PROBE_OPENGROK",
+        "SEARCH_INITIAL",
+        "TRACE_EVIDENCE",
+        "ATTRIBUTION_SERVER",
+        "LOCATE_CLIENT_COMM",
+        "RESOLVE_REPOSITORIES",
+        "VERIFY_EVIDENCE",
+    ):
+        machine.transition(state, summary_zh=state)
+    machine.transition(
+        "RECOVER_EVIDENCE",
+        summary_zh="补充缺失证据",
+        details={"missing_predicates": ["socket_acquire_or_bind"]},
+    )
+    machine.transition("TRACE_EVIDENCE", summary_zh="重新追踪")
+    assert machine.session.state == "TRACE_EVIDENCE"
+    events = machine.store.events(machine.session.session_id).load()
+    assert events[-2].state == "RECOVER_EVIDENCE"
+    assert events[-2].details["missing_predicates"] == ["socket_acquire_or_bind"]
 
 
 def test_query_history_survives_reload_and_duplicates_never_execute(tmp_path):

@@ -14,6 +14,7 @@ import os
 import sys
 
 from core.schemas import EnhanceResult, UsageInfo
+from core.observability import print_chinese_log
 from core import tracking
 from core.progress import ProgressReporter
 from utilities.rate_limiter import configure_rate_limiter
@@ -76,6 +77,11 @@ def enhance_dataset(
     binding = registry.get("enhance")
     print(f"[Enhance] Mode: {mode}", file=sys.stderr)
     print(f"[Enhance] Provider: {binding.provider_name}, Model: {binding.model}", file=sys.stderr)
+    print_chinese_log(
+        f"上下文增强模型：{binding.provider_name}/{binding.model}，模式={mode}；"
+        "agentic 会读取函数索引并按需补充文件，single-shot 只做一次批量上下文生成。",
+        category="增强决策",
+    )
 
     # Auto-derive checkpoint path for BOTH modes so single-shot also resumes
     # after an interrupt / cost-cap instead of reprocessing every unit
@@ -96,10 +102,16 @@ def enhance_dataset(
     print(f"[Enhance] Loading dataset: {dataset_path}", file=sys.stderr)
     dataset = read_json(dataset_path)
     units = dataset.get("units", [])
+    original_units = len(units)
     if limit:
         units = units[:limit]
         dataset["units"] = units  # so the agentic/single-shot paths enhance only these
     print(f"[Enhance] Units to enhance: {len(units)}", file=sys.stderr)
+    print_chinese_log(
+        f"增强输入：读取 {original_units} 个单元，实际增强 {len(units)} 个；"
+        f"limit={limit or '不限制'}，不会改写原始解析文件 {dataset_path}。",
+        category="增强决策",
+    )
 
     # Set up progress reporter
     progress = ProgressReporter("Enhance", len(units), tracker=tracker)
@@ -128,12 +140,21 @@ def enhance_dataset(
             restored_callback=_on_restored,
             workers=workers,
         )
+        print_chinese_log(
+            "增强策略：agentic 模式允许模型通过受限工具查看函数索引和相关源码，"
+            "但最终只把安全上下文写入增强数据集。",
+            category="增强决策",
+        )
     elif mode == "single-shot":
         enhanced = enhancer.enhance_dataset(
             dataset,
             progress_callback=_on_unit_done,
             workers=workers,
             checkpoint_path=checkpoint_path,
+        )
+        print_chinese_log(
+            "增强策略：single-shot 模式不进行多轮工具搜索，成本较低但跨文件上下文可能较少。",
+            category="增强决策",
         )
     else:
         raise ValueError(f"Unknown enhancement mode: {mode}. Use 'agentic' or 'single-shot'.")
@@ -170,6 +191,16 @@ def enhance_dataset(
     print(f"[Enhance] Classifications: {classifications}", file=sys.stderr)
     if error_count:
         print(f"[Enhance] Errors: {error_count} ({error_summary})", file=sys.stderr)
+        print_chinese_log(
+            f"增强结果：{error_count} 个单元未生成上下文，错误分类={error_summary}；"
+            "这些单元仍保留在输出中，检测阶段会看到其缺失状态。",
+            category="增强结果",
+        )
+    print_chinese_log(
+        f"增强结果：输出 {output_path}，成功增强 {len(units) - error_count} 个单元，"
+        f"分类统计={classifications}。",
+        category="增强结果",
+    )
 
     tracking.log_usage("Enhance")
 

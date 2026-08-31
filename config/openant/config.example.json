@@ -17,5 +17,31 @@
       "llm_reach": {"provider": "autodl-openai", "model": "gpt-5.6-luna"},
       "app_context": {"provider": "autodl-openai", "model": "gpt-5.6-luna"}
     }
+  },
+  "source_locator": {
+    "enabled": true,
+    "target_revision": "OpenHarmony-6.1-LTS",
+    "opengrok": {
+      "base_url": "https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source",
+      "project": "openharmony",
+      "api_prefix": "/api/v1",
+      "timeout_seconds": 20,
+      "max_retries": 1,
+      "max_source_bytes": 32768,
+      "max_results": 50,
+      "max_hits_per_file": 3,
+      "verify_tls": true,
+      "auth": {"mode": "none"}
+    },
+    "manifest": {
+      "source": "local",
+      "path": "config/openharmony/ohos-6.1-LTS.xml",
+      "manifest_file": "ohos-6.1-LTS.xml"
+    },
+    "gitcode": {
+      "allowed_hosts": ["gitcode.com"],
+      "allowed_orgs": ["openharmony"],
+      "destination_root": "source_code_base"
+    }
   }
 }

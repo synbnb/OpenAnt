@@ -37,7 +37,7 @@ OUTPUT FORMAT:
 
 [Continue for all steps]
 
-**Tested:** {platform/version}, {date}.
+**Tested:** {platform_version}, {analysis_date}.
 
 ## Impact
 
@@ -55,7 +55,7 @@ OUTPUT FORMAT:
 
 ---
 
-Verified via {"dynamic testing" if dynamic_testing else "attacker simulation (Stage 2)" if stage2_verdict in ("confirmed", "agreed") else "static analysis"}.
+Verified via {verification_method}.
 
 ---
 

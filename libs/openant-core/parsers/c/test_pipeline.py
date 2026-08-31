@@ -48,10 +48,19 @@ from typing import Any, Dict, Set
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from utilities.file_io import open_utf8, read_json, run_utf8, write_json
 from utilities.context_enhancer import ContextEnhancer
-from utilities.agentic_enhancer import EntryPointDetector, ReachabilityAnalyzer, blackout_warning, library_seed_ids
+from utilities.agentic_enhancer import (
+    EntryPointDetector,
+    ReachabilityAnalyzer,
+    blackout_warning,
+    library_seed_ids,
+)
+from utilities.agentic_enhancer.entry_point_detector import real_entry_point_ids
 from core.platforms.openharmony.reachability import (
     build_semantic_reachability_overlay,
     merge_reachability_graph,
+)
+from core.platforms.openharmony.dispatch_recovery_diff import (
+    build_dispatch_recovery_diff,
 )
 
 # Local imports
@@ -260,6 +269,7 @@ class CPipelineTest:
         self.dataset_file = None
         self.semantic_graph_file = None
         self.call_graph_residuals_file = None
+        self.dispatch_recovery_diff_file = None
 
         # Reachability data
         self.entry_points: Set[str] = set()
@@ -284,12 +294,45 @@ class CPipelineTest:
         print()
         return True
 
+    def _write_openharmony_dispatch_recovery_diff(
+        self,
+        call_graph_result: dict,
+        diagnostics: dict | None,
+        semantic_graph: dict | None,
+        *,
+        baseline_reachable: Set[str] | None = None,
+        recovered_reachable: Set[str] | None = None,
+    ) -> dict | None:
+        """Persist the additive OpenHarmony dispatch-recovery audit report."""
+        if self.platform != 'openharmony':
+            return None
+        self.dispatch_recovery_diff_file = os.path.join(
+            self.output_dir, 'dispatch_recovery_diff.json'
+        )
+        try:
+            report = build_dispatch_recovery_diff(
+                call_graph_result,
+                diagnostics,
+                semantic_graph,
+                baseline_reachable=baseline_reachable,
+                recovered_reachable=recovered_reachable,
+            )
+            write_json(self.dispatch_recovery_diff_file, report)
+            return report
+        except Exception as exc:  # noqa: BLE001 - audit output is optional
+            print(
+                f"  [Warning] Dispatch-recovery diff unavailable: {exc}",
+                file=sys.stderr,
+            )
+            return None
+
     def run_parser_pipeline(self) -> bool:
         """Run the full C/C++ parser pipeline (scan, extract, call graph, generate)."""
         self.dataset_file = os.path.join(self.output_dir, 'dataset.json')
         self.analyzer_output_file = os.path.join(self.output_dir, 'analyzer_output.json')
         self.semantic_graph_file = None
         self.call_graph_residuals_file = None
+        self.dispatch_recovery_diff_file = None
 
         print("=" * 60)
         print("STAGE: c_parser_pipeline")
@@ -365,6 +408,7 @@ class CPipelineTest:
             opts = {'max_depth': self.depth}
             if self.dataset_name:
                 opts['dataset_name'] = self.dataset_name
+            semantic_graph = None
             if self.platform == 'openharmony':
                 platform_context = _build_openharmony_unit_context(
                     self.repo_path, scan_result
@@ -405,6 +449,23 @@ class CPipelineTest:
                         'status': call_graph_diagnostics.get('status', 'unknown'),
                         **call_graph_diagnostics.get('summary', {}),
                     }
+            dispatch_recovery_diff = None
+            if self.platform == 'openharmony':
+                dispatch_recovery_diff = (
+                    self._write_openharmony_dispatch_recovery_diff(
+                        graph_result,
+                        call_graph_diagnostics,
+                        semantic_graph,
+                    )
+                )
+                if dispatch_recovery_diff is not None:
+                    dataset.setdefault('metadata', {})[
+                        'openharmony_dispatch_recovery_diff'
+                    ] = {
+                        'path': 'dispatch_recovery_diff.json',
+                        'status': dispatch_recovery_diff.get('status', 'unknown'),
+                        **dispatch_recovery_diff.get('summary', {}),
+                    }
             unit_count = dataset['statistics']['total_units']
             print(f"         Generated {unit_count} units")
             print(f"         Enhanced: {dataset['statistics']['units_enhanced']}")
@@ -436,6 +497,12 @@ class CPipelineTest:
                     'path': 'call_graph_residuals.json',
                     'status': call_graph_diagnostics.get('status', 'unknown'),
                     **call_graph_diagnostics.get('summary', {}),
+                }
+            if dispatch_recovery_diff is not None:
+                summary['dispatch_recovery_diff'] = {
+                    'path': 'dispatch_recovery_diff.json',
+                    'status': dispatch_recovery_diff.get('status', 'unknown'),
+                    **dispatch_recovery_diff.get('summary', {}),
                 }
 
             result = {
@@ -546,23 +613,36 @@ class CPipelineTest:
             native_reachable_units = native_reachability.get_all_reachable()
             reachability_reverse_call_graph = reverse_call_graph
             semantic_overlay_metadata = None
+            semantic_graph_payload = None
             if self.platform == 'openharmony':
                 semantic_overlay = {
                     'enabled': False,
                     'candidate_edges': 0,
                     'edges_added': 0,
+                    'entry_points_added': 0,
+                    'entry_points': [],
                     'edge_kinds': [],
                     'monotonicity_violation': False,
                 }
+                existing_entry_points = set(self.entry_points)
                 semantic_path = self.semantic_graph_file or os.path.join(
                     self.output_dir, 'semantic_graph.json'
                 )
                 if semantic_path and os.path.exists(semantic_path):
                     try:
                         semantic_graph = read_json(semantic_path)
+                        semantic_graph_payload = semantic_graph
                         overlay = build_semantic_reachability_overlay(
                             semantic_graph,
                             normalized_functions.keys(),
+                        )
+                        semantic_entry_points = {
+                            item for item in overlay.get('entry_points', []) or []
+                            if isinstance(item, str) and item in normalized_functions
+                        }
+                        self.entry_points |= semantic_entry_points
+                        semantic_entry_points_added = (
+                            semantic_entry_points - existing_entry_points
                         )
                         _, reachability_reverse_call_graph = merge_reachability_graph(
                             call_graph,
@@ -582,9 +662,13 @@ class CPipelineTest:
                             ) not in native_pairs
                         )
                         semantic_overlay = {
-                            'enabled': bool(overlay.get('edges')),
+                            'enabled': bool(
+                                overlay.get('edges') or semantic_entry_points_added
+                            ),
                             'candidate_edges': overlay.get('candidate_edges', 0),
                             'edges_added': edges_added,
+                            'entry_points_added': len(semantic_entry_points_added),
+                            'entry_points': sorted(semantic_entry_points),
                             'edge_kinds': overlay.get('edge_kinds', []),
                             'ignored_edge_count': overlay.get('ignored_edge_count', 0),
                             'invalid_endpoint_count': overlay.get(
@@ -625,10 +709,54 @@ class CPipelineTest:
             # entry points => the reachable set is empty => every unit is pruned,
             # silently blacking out the dataset (dominant failure for library /
             # no-entry-point targets). Degrade to keep-all + warn instead.
-            if not self.entry_points and units:
-                print("  [Warning] No entry points detected — keeping all units "
+            if not real_entry_point_ids(self.entry_points, normalized_functions) and units:
+                print("  [Warning] No real entry points detected — keeping all units "
                       "unfiltered to avoid a silent blackout.", file=sys.stderr)
                 self.reachable_units = {u.get("id", "") for u in units}
+
+            # Write the audit after the empty-seed safety-net has established
+            # the actual recovered set, so the report matches the dataset.
+            dispatch_recovery_diff = None
+            if self.platform == 'openharmony':
+                call_graph_result = {
+                    'functions': functions,
+                    'call_graph': call_graph,
+                    'reverse_call_graph': reverse_call_graph,
+                }
+                if getattr(self, 'call_graph_file', None) and os.path.exists(
+                    self.call_graph_file
+                ):
+                    try:
+                        call_graph_result = read_json(self.call_graph_file)
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                diagnostics = {}
+                if (
+                    self.call_graph_residuals_file
+                    and os.path.exists(self.call_graph_residuals_file)
+                ):
+                    try:
+                        diagnostics = read_json(self.call_graph_residuals_file)
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                        diagnostics = {}
+                if semantic_graph_payload is None:
+                    semantic_path = self.semantic_graph_file or os.path.join(
+                        self.output_dir, 'semantic_graph.json'
+                    )
+                    if semantic_path and os.path.exists(semantic_path):
+                        try:
+                            semantic_graph_payload = read_json(semantic_path)
+                        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                            semantic_graph_payload = None
+                dispatch_recovery_diff = (
+                    self._write_openharmony_dispatch_recovery_diff(
+                        call_graph_result,
+                        diagnostics,
+                        semantic_graph_payload,
+                        baseline_reachable=native_reachable_units,
+                        recovered_reachable=self.reachable_units,
+                    )
+                )
 
             filtered_units = []
             for u in units:
@@ -658,6 +786,12 @@ class CPipelineTest:
                     combined_unit_ids - native_unit_ids
                 )
                 filter_metadata['semantic_overlay'] = semantic_overlay_metadata
+            if dispatch_recovery_diff is not None:
+                filter_metadata['dispatch_recovery_diff'] = {
+                    'path': 'dispatch_recovery_diff.json',
+                    'status': dispatch_recovery_diff.get('status', 'unknown'),
+                    **dispatch_recovery_diff.get('summary', {}),
+                }
             dataset["metadata"]["reachability_filter"] = filter_metadata
 
             _blackout = blackout_warning(detector.entry_point_details, original_count,
@@ -677,6 +811,12 @@ class CPipelineTest:
                 'reachable_units': len(filtered_units),
                 'reduction_percentage': dataset["metadata"]["reachability_filter"]["reduction_percentage"]
             }
+            if dispatch_recovery_diff is not None:
+                summary['dispatch_recovery_diff'] = {
+                    'path': 'dispatch_recovery_diff.json',
+                    'status': dispatch_recovery_diff.get('status', 'unknown'),
+                    **dispatch_recovery_diff.get('summary', {}),
+                }
 
             result = {
                 'success': True,

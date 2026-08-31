@@ -125,6 +125,33 @@ def test_interface_only_edges_are_not_used_and_overlay_is_monotonic():
     assert HANDLER not in combined_reachable
 
 
+def test_transaction_handler_edge_can_seed_external_ipc_entry_point():
+    """A missing generated Stub node must not hide a validated service handler."""
+    graph = {
+        "nodes": [
+            {"id": TX, "kind": "ipc_transaction"},
+            {"id": f"function:{HANDLER}", "kind": "function"},
+        ],
+        "edges": [
+            {
+                "source_id": TX,
+                "target_id": f"function:{HANDLER}",
+                "kind": "transaction_to_handler",
+            },
+        ],
+    }
+    overlay = build_semantic_reachability_overlay(graph, {HANDLER, DEAD})
+
+    assert overlay["edges"] == []
+    assert overlay["entry_points"] == [HANDLER]
+    _, merged_reverse = merge_reachability_graph({}, {}, overlay)
+    reachable = ReachabilityAnalyzer(
+        {HANDLER: {}, DEAD: {}}, merged_reverse, set(overlay["entry_points"])
+    ).get_all_reachable()
+    assert HANDLER in reachable
+    assert DEAD not in reachable
+
+
 def test_compact_semantic_graph_without_nodes_keeps_explicit_function_endpoints():
     compact_graph = _semantic_graph()
     compact_graph.pop("nodes")
@@ -308,3 +335,159 @@ def test_generic_parser_adapter_ignores_openharmony_semantic_graph(tmp_path):
 
     assert {unit["id"] for unit in filtered["units"]} == {entry, bridge}
     assert "semantic_overlay" not in filtered["metadata"]["reachability_filter"]
+
+
+def test_parser_adapter_accepts_llm_overlay_as_additive_bfs_input(tmp_path):
+    parser_adapter = _load_parser_adapter()
+    entry = "adapter.cpp:main"
+    bridge = "adapter.cpp:bridge"
+    handler = "adapter.cpp:llm_handle"
+    dead = "adapter.cpp:dead"
+    functions = {
+        entry: {"name": "main", "unit_type": "main", "code": "bridge();"},
+        bridge: {"name": "bridge", "unit_type": "function", "code": ""},
+        handler: {"name": "llm_handle", "unit_type": "function", "code": ""},
+        dead: {"name": "dead", "unit_type": "function", "code": ""},
+    }
+    (tmp_path / "call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": functions,
+                "call_graph": {entry: [bridge]},
+                "reverse_call_graph": {bridge: [entry]},
+            }
+        )
+    )
+    (tmp_path / "semantic_graph.json").write_text(
+        json.dumps({"schema_version": 1, "nodes": [], "edges": []})
+    )
+    dataset = {
+        "units": [{"id": item} for item in (entry, bridge, handler, dead)],
+        "metadata": {},
+    }
+    llm_overlay = {
+        "schema_version": 1,
+        "nodes": [
+            {"id": f"function:{bridge}", "kind": "function"},
+            {"id": f"function:{handler}", "kind": "function"},
+        ],
+        "edges": [
+            {
+                "source_id": f"function:{bridge}",
+                "target_id": f"function:{handler}",
+                "kind": "llm_confirmed_indirect_call",
+            },
+        ],
+        "orphans": [],
+    }
+
+    filtered = parser_adapter.apply_reachability_filter(
+        dataset,
+        str(tmp_path),
+        "reachable",
+        platform="openharmony",
+        semantic_graph_overlay=llm_overlay,
+    )
+
+    assert {unit["id"] for unit in filtered["units"]} == {entry, bridge, handler}
+    metadata = filtered["metadata"]["reachability_filter"]
+    assert metadata["native_reachable_units"] == 2
+    assert metadata["semantic_reachable_added"] == 1
+    assert metadata["semantic_overlay"]["edges_added"] == 1
+    assert metadata["semantic_overlay"]["sources"][-1]["source"] == (
+        "llm_call_graph_overlay.json"
+    )
+
+
+def test_parser_adapter_seeds_handler_from_transaction_contract(tmp_path):
+    parser_adapter = _load_parser_adapter()
+    entry = "adapter.cpp:main"
+    handler = "service.cpp:Service::Enable"
+    dead = "service.cpp:Service::unused"
+    tx = "idl:transaction:OHOS.IService:ENABLE"
+    functions = {
+        entry: {"name": "main", "unit_type": "main", "code": ""},
+        handler: {"name": "Service::Enable", "unit_type": "method", "code": ""},
+        dead: {"name": "Service::unused", "unit_type": "method", "code": ""},
+    }
+    (tmp_path / "call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": functions,
+                "call_graph": {},
+                "reverse_call_graph": {},
+            }
+        )
+    )
+    (tmp_path / "semantic_graph.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": tx, "kind": "ipc_transaction"},
+                    {"id": f"function:{handler}", "kind": "function"},
+                ],
+                "edges": [
+                    {
+                        "source_id": tx,
+                        "target_id": f"function:{handler}",
+                        "kind": "transaction_to_handler",
+                    }
+                ],
+            }
+        )
+    )
+    dataset = {
+        "units": [{"id": item} for item in (entry, handler, dead)],
+        "metadata": {},
+    }
+
+    filtered = parser_adapter.apply_reachability_filter(
+        dataset,
+        str(tmp_path),
+        "reachable",
+        platform="openharmony",
+    )
+
+    assert {unit["id"] for unit in filtered["units"]} == {entry, handler}
+    metadata = filtered["metadata"]["reachability_filter"]
+    assert metadata["semantic_overlay"]["entry_points_added"] == 1
+    assert metadata["semantic_reachable_added"] == 1
+
+
+def test_parser_adapter_ignores_malformed_llm_overlay_without_pruning_native_units(
+    tmp_path,
+):
+    parser_adapter = _load_parser_adapter()
+    entry = "adapter.cpp:main"
+    bridge = "adapter.cpp:bridge"
+    dead = "adapter.cpp:dead"
+    (tmp_path / "call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": {
+                    entry: {"name": "main", "unit_type": "main", "code": ""},
+                    bridge: {"name": "bridge", "unit_type": "function", "code": ""},
+                    dead: {"name": "dead", "unit_type": "function", "code": ""},
+                },
+                "call_graph": {entry: [bridge]},
+                "reverse_call_graph": {bridge: [entry]},
+            }
+        )
+    )
+    dataset = {
+        "units": [{"id": item} for item in (entry, bridge, dead)],
+        "metadata": {},
+    }
+
+    filtered = parser_adapter.apply_reachability_filter(
+        dataset,
+        str(tmp_path),
+        "reachable",
+        platform="openharmony",
+        semantic_graph_overlay=["not", "an", "object"],
+    )
+
+    assert {unit["id"] for unit in filtered["units"]} == {entry, bridge}
+    assert filtered["metadata"]["reachability_filter"]["semantic_overlay"][
+        "edges_added"
+    ] == 0

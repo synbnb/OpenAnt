@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -165,7 +166,12 @@ func TestArtifactReadRejectsSymlinkAndOversize(t *testing.T) {
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(link, []byte(strings.Repeat("x", maxArtifactBytes+1)), 0600); err != nil {
+	// Use a sparse file so this limit regression test does not allocate a
+	// quarter-gigabyte buffer after the production artifact ceiling increased.
+	if err := os.WriteFile(link, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(link, maxArtifactBytes+1); err != nil {
 		t.Fatal(err)
 	}
 	largeReq := httptest.NewRequest(http.MethodGet, "/scan/"+jobID+"/artifact/pipeline_output.json", nil)
@@ -262,6 +268,93 @@ func TestExploreDatasetSupportsSearchPaginationAndFullItem(t *testing.T) {
 	code, ok := item["code"].(map[string]any)
 	if !ok || code["primary_code"] != "return Dispatch(data);" {
 		t.Fatalf("dataset detail lost full code = %#v", item["code"])
+	}
+}
+
+func TestExploreLargeDatasetStreamsWithoutInMemoryDecode(t *testing.T) {
+	outDir := t.TempDir()
+	jobID := "1234567890abcdef"
+	jobDir := filepath.Join(outDir, jobID)
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	builder.WriteString(`{"name":"large-fixture","units":[`)
+	const unitCount = 10000
+	for i := 0; i < unitCount; i++ {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		fmt.Fprintf(&builder, `{"id":"src/service_%d.cpp:Service::Run","language":"cpp","unit_type":"function","code":{"primary_origin":{"file_path":"src/service_%d.cpp","start_line":10,"end_line":12}},"padding":"%s"}`,
+			i, i, strings.Repeat("x", 1000))
+	}
+	builder.WriteString(fmt.Sprintf(`],"statistics":{"total_units":%d}}`, unitCount))
+	largePath := filepath.Join(jobDir, "dataset.json")
+	if err := os.WriteFile(largePath, []byte(builder.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(largePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() <= maxInMemoryArtifactBytes {
+		t.Fatalf("fixture must exercise streaming path; size=%d", fi.Size())
+	}
+
+	mgr := newManager(outDir)
+	mgr.add(&Job{ID: jobID, Status: StatusDone})
+	s := &Server{outDir: outDir, mgr: mgr}
+	req := httptest.NewRequest(http.MethodGet, "/scan/"+jobID+"/explore/dataset.json?limit=2", nil)
+	req.Host = "127.0.0.1"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("large dataset explore status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	var view explorerView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Kind != "collection" || view.CollectionKey != "units" || view.Total != unitCount || len(view.Items) != 2 {
+		t.Fatalf("large dataset view = kind=%q collection=%q total=%d items=%d", view.Kind, view.CollectionKey, view.Total, len(view.Items))
+	}
+	if view.RootSummary["statistics"].(map[string]any)["total_units"].(float64) != unitCount {
+		t.Fatalf("large dataset root summary = %#v", view.RootSummary)
+	}
+}
+
+func TestExplorePipelineOutputKeepsVerdictSummary(t *testing.T) {
+	outDir := t.TempDir()
+	jobID := "abcdef0123456789"
+	jobDir := filepath.Join(outDir, jobID)
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	writeJSONArtifact(t, filepath.Join(jobDir, "pipeline_output.json"), map[string]any{
+		"findings":       []any{map[string]any{"finding_id": "OH-001", "verdict": "VULNERABLE"}},
+		"results":        map[string]any{"total": 3, "vulnerable": 1, "safe": 2},
+		"pipeline_stats": map[string]any{"units_analyzed": 3},
+	})
+	mgr := newManager(outDir)
+	mgr.add(&Job{ID: jobID, Status: StatusDone})
+	s := &Server{outDir: outDir, mgr: mgr}
+	req := httptest.NewRequest(http.MethodGet, "/scan/"+jobID+"/explore/pipeline_output.json?limit=1", nil)
+	req.Host = "127.0.0.1"
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline output explore status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	var view explorerView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.CollectionKey != "findings" || view.Total != 1 || len(view.Items) != 1 {
+		t.Fatalf("pipeline output collection = %#v", view)
+	}
+	results, ok := view.RootSummary["results"].(map[string]any)
+	if !ok || results["vulnerable"].(float64) != 1 {
+		t.Fatalf("pipeline output verdict summary = %#v", view.RootSummary)
 	}
 }
 

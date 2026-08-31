@@ -18,15 +18,56 @@ func readUITemplate(t *testing.T, name string) string {
 }
 
 func TestWebTemplatesParseAfterRedesign(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html"} {
+	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html"} {
 		if _, err := template.ParseFS(uifiles.FS, name); err != nil {
 			t.Errorf("parse %s: %v", name, err)
 		}
 	}
 }
 
+func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) {
+	body := readUITemplate(t, "source-locator.html")
+	for _, want := range []string{
+		"{{.CSRF}}",
+		"/source-locator/sessions",
+		"/advance",
+		"/approve",
+		"/reject",
+		"/cancel",
+		"EventSource",
+		"/events/snapshot",
+		"X-CSRF-Token",
+		"id=\"artifacts\"",
+		"id=\"events\"",
+		"id=\"llm-search\"",
+		"id=\"llm-config\"",
+		"id=\"llm-rounds\"",
+		"id=\"search-insights\"",
+		"id=\"search-metrics\"",
+		"id=\"search-graph\"",
+		"id=\"search-evidence-list\"",
+		"searchGraphZoom",
+		"searchEvidenceFilter",
+		"searchView.graphTitle",
+		"fetchSearchArtifact",
+		"action.help",
+		"minmax(260px,280px)",
+		"aria-busy",
+		"notice.running",
+		"llm.search.round",
+		"最多 20 轮",
+		"up to 20 rounds",
+		"隐藏思维链",
+		"textContent",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("source-locator.html missing interactive marker %q", want)
+		}
+	}
+}
+
 func TestWebTemplatesProvidePersistentChineseEnglishSwitch(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html"} {
+	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html"} {
 		body := readUITemplate(t, name)
 		for _, want := range []string{
 			"id=\"language-select\"",
@@ -83,7 +124,12 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 		"class=\"section-panel runtime-log-panel\"",
 		"id=\"selected-stage-results\"",
 		"const stageResultDefinitions = {",
+		"function element(tag, className, text)",
 		"function renderStageResultHighlights()",
+		"stages.c_parser.summary.call_graph_edges",
+		"summary.confirmed_vulnerabilities",
+		"stageResultMetricDisplay",
+		"'/explore/' + encodeURIComponent(name)",
 		"height: 460px",
 		"@media (max-width: 767px)",
 		"@media (prefers-reduced-motion: reduce)",
@@ -313,6 +359,24 @@ func TestStandaloneArtifactViewerExplainsExtendedFields(t *testing.T) {
 	}
 }
 
+func TestStandaloneArtifactViewerPrioritizesFields(t *testing.T) {
+	viewer := readUITemplate(t, "artifact-view.html")
+	for _, want := range []string{
+		"const focusFieldPaths = {",
+		"element('section', 'focus-summary')",
+		"function createFocusSummary(value, itemMode)",
+		"function createFullFields(value)",
+		"focus.expand",
+		"focus.collapse",
+		"arrayItemLabel(value, index)",
+		"details.open = false",
+	} {
+		if !strings.Contains(viewer, want) {
+			t.Errorf("artifact-view.html missing progressive viewing marker %q", want)
+		}
+	}
+}
+
 func TestStandaloneArtifactViewerLocalizesSecurityValues(t *testing.T) {
 	viewer := readUITemplate(t, "artifact-view.html")
 	for _, want := range []string{
@@ -343,6 +407,10 @@ func TestStandaloneArtifactViewerProvidesCallGraphCanvas(t *testing.T) {
 		"function graphVisibleSubgraph()",
 		"function graphEntryRecords(dataset)",
 		"function graphRenderSvg()",
+		"const graphArtifacts = { 'call_graph.json': true, 'analyzer_output.json': true, 'dataset_enhanced.json': true }",
+		"function graphBuildAgentic(graphJSON, datasetJSON)",
+		"graph.agenticCanvasTitle",
+		"agentic-context",
 		"dataset.json entry marker",
 		"graphCanvas.addEventListener('wheel'",
 	} {
@@ -364,6 +432,23 @@ func TestReportLanguageLinksArePresent(t *testing.T) {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing localized report link %q", name, want)
 			}
+		}
+	}
+}
+
+func TestScanPageProvidesStageOutcomeSummary(t *testing.T) {
+	scan := readUITemplate(t, "scan.html")
+	for _, want := range []string{
+		"id=\"stage-results-lead\"",
+		"function renderStageResultLead(step, groups)",
+		"details.outcomeParse",
+		"details.outcomeAnalyze",
+		"details.outcomeVerify",
+		"stage-result-lead.success",
+		"stage-result-field.danger",
+	} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("scan.html missing stage outcome marker %q", want)
 		}
 	}
 }

@@ -20,10 +20,10 @@ from .service_attributor import (
     ServiceAttributionError,
     SourceLocation,
     _clean,
-    _evidence_items,
     _mapping_evidence_present,
     _mapping_is_resolved,
     combine_attributions,
+    partition_attribution_evidence,
 )
 
 
@@ -127,6 +127,8 @@ class ClientAttributionResult:
     warnings: tuple[str, ...] = ()
     forbidden_actions: tuple[str, ...] = ("find_business_callers",)
     schema_version: str = _SCHEMA_VERSION
+    excluded_evidence_ids: tuple[str, ...] = ()
+    semantic_decision: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in _STATUSES:
@@ -148,6 +150,13 @@ class ClientAttributionResult:
         object.__setattr__(self, "forbidden_actions", actions)
         object.__setattr__(self, "reasons", tuple(_clean(item) for item in self.reasons))
         object.__setattr__(self, "warnings", tuple(_clean(item) for item in self.warnings))
+        excluded = tuple(dict.fromkeys(self.excluded_evidence_ids))
+        if any(not isinstance(item, str) or not item.startswith("E-") for item in excluded):
+            raise ClientLocatorError("excluded_evidence_ids 无效")
+        object.__setattr__(self, "excluded_evidence_ids", excluded)
+        if self.semantic_decision is not None and not isinstance(self.semantic_decision, Mapping):
+            raise ClientLocatorError("semantic_decision 必须是 JSON 对象或 null")
+        object.__setattr__(self, "semantic_decision", dict(self.semantic_decision) if self.semantic_decision else None)
 
     @property
     def roles(self) -> dict[str, tuple[AttributionCandidate, ...]]:
@@ -196,6 +205,8 @@ class ClientAttributionResult:
             "forbidden_actions": list(self.forbidden_actions),
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
+            "excluded_evidence_ids": list(self.excluded_evidence_ids),
+            "semantic_decision": dict(self.semantic_decision) if self.semantic_decision else None,
         }
 
 
@@ -213,7 +224,7 @@ class ClientLocator:
         *,
         mapping: RepositoryMapping | None = None,
     ) -> ClientAttributionResult:
-        items = _evidence_items(evidence)
+        items, excluded_evidence_ids = partition_attribution_evidence(evidence)
         active_mapping = mapping if mapping is not None else self.mapping
         if active_mapping is not None and not isinstance(active_mapping, RepositoryMapping):
             raise ClientLocatorError("mapping 必须是 RepositoryMapping 或 null")
@@ -281,6 +292,7 @@ class ClientLocator:
             mapping=active_mapping,
             reasons=tuple(dict.fromkeys(reasons)),
             warnings=warnings,
+            excluded_evidence_ids=excluded_evidence_ids,
         )
 
     @staticmethod

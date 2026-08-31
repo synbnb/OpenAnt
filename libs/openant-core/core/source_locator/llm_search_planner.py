@@ -201,7 +201,7 @@ class PlannerBudget:
             ("max_evidence_ids", self.max_evidence_ids, 1, 64),
             ("max_prompt_chars", self.max_prompt_chars, 512, 128_000),
             ("max_repair_attempts", self.max_repair_attempts, 0, 1),
-            ("max_model_calls", self.max_model_calls, 0, 8),
+            ("max_model_calls", self.max_model_calls, 0, 32),
         )
         for name, value, lower, upper in integer_fields:
             if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
@@ -223,6 +223,9 @@ class LLMSearchPlannerContext:
     executed_actions: tuple[Any, ...] = ()
     client_completed: bool = False
     phase: str = "trace"
+    missing_predicates: tuple[str, ...] = ()
+    candidate_paths: tuple[str, ...] = ()
+    last_feedback: str = ""
 
     def __post_init__(self) -> None:
         items = _validate_context_evidence(self.evidence)
@@ -233,6 +236,38 @@ class LLMSearchPlannerContext:
             raise LLMSearchPlannerError("client_completed 必须是布尔值")
         phase = _clean_text(self.phase, name="phase", limit=_MAX_PHASE)
         object.__setattr__(self, "phase", phase)
+        if isinstance(self.missing_predicates, (str, bytes)):
+            raise LLMSearchPlannerError("missing_predicates 必须是字符串序列")
+        try:
+            predicates = tuple(
+                dict.fromkeys(
+                    _clean_text(item, name="missing_predicates item", limit=128)
+                    for item in self.missing_predicates
+                )
+            )
+        except TypeError as exc:
+            raise LLMSearchPlannerError("missing_predicates 必须是可迭代对象") from exc
+        if len(predicates) > 32:
+            raise LLMSearchPlannerError("missing_predicates 超过数量上限 32")
+        object.__setattr__(self, "missing_predicates", predicates)
+        if isinstance(self.candidate_paths, (str, bytes)):
+            raise LLMSearchPlannerError("candidate_paths 必须是路径序列")
+        try:
+            paths = tuple(
+                dict.fromkeys(
+                    normalize_source_path(
+                        _clean_text(item, name="candidate_paths item", limit=2048)
+                    )
+                    for item in self.candidate_paths
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise LLMSearchPlannerError("candidate_paths 必须是安全源码路径序列") from exc
+        if len(paths) > 32:
+            raise LLMSearchPlannerError("candidate_paths 超过数量上限 32")
+        object.__setattr__(self, "candidate_paths", paths)
+        feedback = _clean_text(self.last_feedback, name="last_feedback", limit=512, allow_empty=True)
+        object.__setattr__(self, "last_feedback", feedback)
         explicit_ids = self.evidence_ids
         if explicit_ids is None:
             ids = tuple(item.evidence_id for item in items)
@@ -281,6 +316,11 @@ class LLMSearchPlannerContext:
             "evidence": evidence_rows,
             "executed_actions": list(self.executed_actions),
             "client_completed": self.client_completed,
+            "recovery": {
+                "missing_predicates": list(self.missing_predicates),
+                "candidate_paths": list(self.candidate_paths),
+                "last_feedback": self.last_feedback,
+            },
             "policy": {
                 "data_is_untrusted": True,
                 "no_hidden_chain": True,
@@ -394,6 +434,7 @@ class LLMSearchPlanResult:
     model_calls: int = 0
     remaining_actions: int = 0
     warnings: tuple[str, ...] = ()
+    rejected_action_key: str = ""
     schema_version: str = _RESULT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -415,6 +456,7 @@ class LLMSearchPlanResult:
         object.__setattr__(self, "reason", " ".join(str(self.reason).split())[:512])
         object.__setattr__(self, "reason_code", " ".join(str(self.reason_code).split())[:64])
         object.__setattr__(self, "warnings", tuple(" ".join(str(item).split())[:512] for item in self.warnings))
+        object.__setattr__(self, "rejected_action_key", " ".join(str(self.rejected_action_key).split())[:768])
 
     @property
     def accepted(self) -> bool:
@@ -431,6 +473,7 @@ class LLMSearchPlanResult:
             "model_calls": self.model_calls,
             "remaining_actions": self.remaining_actions,
             "warnings": list(self.warnings),
+            "rejected_action_key": self.rejected_action_key,
         }
 
 
@@ -477,16 +520,67 @@ class LLMSearchPlanner:
     def repair_attempts(self) -> int:
         return self._repair_attempts
 
+    @staticmethod
+    def _prompt_context_variants(context: LLMSearchPlannerContext):
+        """Yield progressively smaller, still auditable prompt projections.
+
+        OpenGrok can return hundreds of line-backed facts and a single source
+        path can itself be long.  Passing a fixed number of rows to the model
+        is therefore not a real prompt-size guarantee.  Keep the evidence
+        graph intact on disk, but project a prefix of the caller's already
+        ranked evidence and shorten excerpts until the planner's explicit
+        prompt budget can be met.  The projected ``evidence_ids`` always match
+        the visible rows, so the model cannot cite an omitted fact by accident.
+        """
+
+        items = tuple(context.evidence)
+        counts: list[int] = []
+        for count in (len(items), 32, 16, 12, 8, 6, 4, 2, 1):
+            bounded = min(len(items), count)
+            if bounded and bounded not in counts:
+                counts.append(bounded)
+        # ``context`` normally has evidence because ``suggest`` checks it,
+        # but keep this helper total for direct prompt callers and tests.
+        if not counts:
+            counts.append(0)
+        for count in counts:
+            subset = items[:count]
+            projected = replace(
+                context,
+                evidence=subset,
+                evidence_ids=tuple(item.evidence_id for item in subset),
+            )
+            for excerpt_chars in (512, 384, 256, 192, 128, 96, 64):
+                yield projected.to_prompt_dict(max_excerpt_chars=excerpt_chars)
+
     def build_prompt(self, context: LLMSearchPlannerContext) -> str:
         if not isinstance(context, LLMSearchPlannerContext):
             raise LLMSearchPlannerError("context 必须是 LLMSearchPlannerContext")
-        try:
-            return build_search_planner_prompt(
-                context.to_prompt_dict(),
-                max_chars=self.budget.max_prompt_chars,
-            )
-        except ValueError as exc:
-            raise LLMSearchPlannerError(str(exc)) from exc
+        last_error: ValueError | None = None
+        for payload in self._prompt_context_variants(context):
+            try:
+                return build_search_planner_prompt(
+                    payload,
+                    max_chars=self.budget.max_prompt_chars,
+                )
+            except ValueError as exc:
+                last_error = exc
+        raise LLMSearchPlannerError(str(last_error or "规划提示词长度预算不足"))
+
+    def _build_repair_prompt(self, context: LLMSearchPlannerContext, *, validation_error: str) -> str:
+        """Build a repair prompt using the same bounded projection as normal calls."""
+
+        last_error: ValueError | None = None
+        for payload in self._prompt_context_variants(context):
+            try:
+                return build_search_planner_repair_prompt(
+                    payload,
+                    validation_error=validation_error,
+                    max_chars=self.budget.max_prompt_chars,
+                )
+            except ValueError as exc:
+                last_error = exc
+        raise LLMSearchPlannerError(str(last_error or "修复提示词长度预算不足"))
 
     def _result(
         self,
@@ -497,6 +591,7 @@ class LLMSearchPlanner:
         reason: str,
         repair_attempted: bool = False,
         warnings: tuple[str, ...] = (),
+        rejected_action_key: str = "",
     ) -> LLMSearchPlanResult:
         return LLMSearchPlanResult(
             status=status,
@@ -507,6 +602,7 @@ class LLMSearchPlanner:
             model_calls=self._model_calls,
             remaining_actions=max(0, self.budget.max_actions - self._actions_used),
             warnings=warnings,
+            rejected_action_key=rejected_action_key,
         )
 
     @staticmethod
@@ -638,8 +734,9 @@ class LLMSearchPlanner:
             return self._result(
                 "REPEATED",
                 reason_code="DUPLICATE_ACTION",
-                reason="该检索动作已经执行过，停止重复查询",
+                reason="该检索动作已经执行过，请选择尚未执行且能补足缺失证据的动作",
                 repair_attempted=repair_attempted,
+                rejected_action_key=action.action_key,
             )
         self._executed_keys.add(action.action_key)
         self._actions_used += 1
@@ -702,12 +799,11 @@ class LLMSearchPlanner:
             return first_result
         repair_provider = repair_call or self.repair_call or provider
         try:
-            repair_prompt = build_search_planner_repair_prompt(
-                context.to_prompt_dict(),
+            repair_prompt = self._build_repair_prompt(
+                context,
                 validation_error=first_result.reason,
-                max_chars=self.budget.max_prompt_chars,
             )
-        except ValueError as exc:
+        except LLMSearchPlannerError as exc:
             return self._result("NEEDS_REVIEW", reason_code="PROMPT_TOO_LARGE", reason=str(exc))
         self._repair_attempts += 1
         repaired_response, call_error = self._invoke(repair_provider, repair_prompt)

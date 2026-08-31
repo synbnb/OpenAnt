@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -103,6 +104,99 @@ def _coerce_to_str(value) -> str:
         return str(value)
 
 
+def _source_code_from_value(value) -> str:
+    """Extract source text from a parser/model record.
+
+    ``code_by_route`` is written by several parser generations.  Older
+    versions stored a string directly while call-graph artifacts store a
+    function record (whose source is under ``code``).  Reports must accept
+    both forms without ever rendering a Python representation of a dict as
+    if it were source code.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        for key in ("code", "source_code", "source", "snippet", "primary_code"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+    return ""
+
+
+def _normalise_code_by_route(value) -> dict[str, str]:
+    """Return a safe route-to-source map from an artifact field."""
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, str] = {}
+    for route, record in value.items():
+        if not isinstance(route, str) or not route:
+            continue
+        code = _source_code_from_value(record)
+        if code:
+            result[route] = code
+    return result
+
+
+def _extract_code_by_route(payload) -> dict[str, str]:
+    """Extract source snippets from a results or call-graph JSON payload."""
+    if not isinstance(payload, Mapping):
+        return {}
+
+    direct = _normalise_code_by_route(payload.get("code_by_route"))
+    if direct:
+        return direct
+
+    # ``call_graph.json`` keeps source in functions[route].code.  Supporting
+    # this fallback makes report generation robust for scans produced before
+    # results.json started carrying code_by_route.
+    functions = payload.get("functions")
+    if isinstance(functions, Mapping):
+        extracted = _normalise_code_by_route(functions)
+        if extracted:
+            return extracted
+
+    # A few intermediate artifacts put the same records under ``units``.
+    units = payload.get("units")
+    if isinstance(units, Mapping):
+        return _normalise_code_by_route(units)
+    return {}
+
+
+def _load_code_by_route(results_path: str, experiment: Mapping) -> dict[str, str]:
+    """Load source snippets, recovering them from sibling scan artifacts.
+
+    Stage 2 historically wrote ``results_verified.json`` without copying the
+    Stage-1 ``code_by_route`` map.  When reading such an artifact, first use a
+    map embedded in the selected file, then consult the sibling results and
+    call-graph files in the same scan directory.  All failures are treated as
+    missing optional evidence; report generation should still produce a
+    disclosure with an explicit "source unavailable" note.
+    """
+    # Do not stop at a partial map.  A resumed/partially written scan can have
+    # some routes in the selected artifact and the remaining routes in the
+    # sibling Stage-1 or call-graph artifact; merge them without replacing the
+    # selected file's values.
+    merged = _extract_code_by_route(experiment)
+
+    scan_dir = Path(results_path).resolve().parent
+    candidates = []
+    selected = Path(results_path).name
+    if selected != "results.json":
+        candidates.append(scan_dir / "results.json")
+    candidates.append(scan_dir / "call_graph.json")
+
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            recovered = _extract_code_by_route(read_json(candidate))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        for route, code in recovered.items():
+            merged.setdefault(route, code)
+    return merged
+
+
 def _build_vulnerable_code_section(file_path: str, code: str, language: str | None) -> str:
     """Build a pre-rendered Markdown `## Vulnerable Code` section.
 
@@ -110,6 +204,7 @@ def _build_vulnerable_code_section(file_path: str, code: str, language: str | No
     model cannot rewrite the snippet. Prior behaviour (asking the LLM for a
     "minimal code snippet") produced fabricated code in DISCLOSURE_01/05.
     """
+    code = _source_code_from_value(code)
     if not code:
         return ""
     # Resolve by the finding's own file; fall back to the scan language only
@@ -303,7 +398,11 @@ def build_pipeline_output(
     # confirmed filter and the full_result `next(...)` lookup below never call
     # `.get()` on a non-dict.
     all_results = [r for r in experiment.get("results", []) if isinstance(r, dict)]
-    code_by_route = experiment.get("code_by_route", {})
+    # Verified results produced by older runs did not carry the Stage-1 source
+    # map.  Recover it from the sibling results/call-graph artifact before
+    # building findings so disclosures remain source-faithful even when the
+    # scan itself predates the verifier fix.
+    code_by_route = _load_code_by_route(results_path, experiment)
     metrics = experiment.get("metrics", {})
 
     # Use confirmed_findings if present (verified results), else filter manually
@@ -358,16 +457,40 @@ def build_pipeline_output(
             or finding.get("reasoning")
             or full_result.get("reasoning")
         )
+        if not description:
+            description = (
+                "The analysis marked this function as a security finding, but "
+                "did not provide a detailed description. Manual source review "
+                "is required before disclosure."
+            )
 
-        vulnerable_code = vuln.get("vulnerable_code") or code_by_route.get(route_key)
+        vulnerable_code = _source_code_from_value(
+            vuln.get("vulnerable_code") or code_by_route.get(route_key)
+        )
         file_path = route_key.split(":")[0] if ":" in route_key else "unknown"
         vulnerable_code_section = _build_vulnerable_code_section(
             file_path=file_path,
             code=vulnerable_code,
             language=language,
         )
+        if not vulnerable_code_section:
+            # Never silently omit the heading.  A missing snippet is an
+            # artifact-quality problem, not evidence that the vulnerability
+            # has no source location; make the limitation explicit for both
+            # the LLM and the human reviewer.
+            vulnerable_code_section = (
+                "## Vulnerable Code\n\n"
+                f"`{file_path}` / `{route_key.split(':', 1)[1] if ':' in route_key else route_key}`\n\n"
+                "> Source code was not preserved in the available scan artifacts. "
+                "Review this function in the repository before disclosure."
+            )
 
         impact = vuln.get("impact") or finding.get("attack_vector")
+        if not impact:
+            impact = (
+                "The security impact could not be determined from the available "
+                "analysis fields; confirm the affected operation manually."
+            )
 
         steps_to_reproduce = vuln.get("steps_to_reproduce")
         if not steps_to_reproduce:
@@ -400,6 +523,19 @@ def build_pipeline_output(
             if finding.get("verification_explanation"):
                 parts.append("Verification: " + _coerce_to_str(finding["verification_explanation"]))
             steps_to_reproduce = "\n\n".join(parts) if parts else None
+        if not steps_to_reproduce:
+            steps_to_reproduce = (
+                "[REQUIRES DYNAMIC TESTING] Reproduce the call with a controlled "
+                "local harness and record the input, caller identity, and result."
+            )
+
+        suggested_fix = vuln.get("suggested_fix")
+        if not suggested_fix:
+            suggested_fix = (
+                "[MANUAL REVIEW REQUIRED] Add the missing validation, authorization, "
+                "or bounds check at the identified trust boundary after confirming "
+                "the intended behavior."
+            )
 
         # Determine stage2 verdict.
         #
@@ -425,7 +561,32 @@ def build_pipeline_output(
         elif verification.get("incomplete"):
             stage2_verdict = "unverified"
         elif verification:
-            stage2_verdict = "rejected"
+            # A Stage-2 disagreement can still *promote* an inconclusive
+            # result, or refine vulnerable -> bypassable.  Treat the final
+            # finding as authoritative instead of labeling every agree=False
+            # result "rejected" (which would drop a real vulnerability from
+            # disclosure).  Only a conclusive non-vulnerable final finding is
+            # a rejection.
+            final_finding = str(
+                finding.get("finding")
+                or finding.get("verdict")
+                or verification.get("correct_finding", "")
+            ).strip().lower()
+            if final_finding in ("vulnerable", "bypassable"):
+                exploit_path = verification.get("exploit_path")
+                complete_path = (
+                    isinstance(exploit_path, dict)
+                    and bool(exploit_path.get("sink_reached"))
+                    and exploit_path.get("attacker_control_at_sink") in ("full", "partial")
+                    and not exploit_path.get("path_broken_at")
+                )
+                stage2_verdict = "confirmed" if complete_path else final_finding
+            elif final_finding == "inconclusive":
+                # Still unresolved after the recovery attempt: surface it for
+                # manual review rather than treating it as a clean rejection.
+                stage2_verdict = "unverified"
+            else:
+                stage2_verdict = "rejected"
         else:
             stage2_verdict = finding.get("finding", "vulnerable")
 
@@ -450,7 +611,7 @@ def build_pipeline_output(
             "vulnerable_code": vulnerable_code,
             "vulnerable_code_section": vulnerable_code_section,
             "impact": impact,
-            "suggested_fix": vuln.get("suggested_fix"),
+            "suggested_fix": suggested_fix,
             "steps_to_reproduce": steps_to_reproduce,
         })
 
@@ -814,7 +975,12 @@ def generate_disclosure_docs(
     """
     import json
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from report.generator import generate_disclosure as _generate_disclosure, _merge_usage, merge_dynamic_results
+    from report.generator import (
+        generate_disclosure as _generate_disclosure,
+        _hydrate_pipeline_findings,
+        _merge_usage,
+        merge_dynamic_results,
+    )
     from report.schema import validate_pipeline_output, ValidationError
     from utilities.llm import (
         build_phase_registry,
@@ -826,6 +992,11 @@ def generate_disclosure_docs(
     print("[Report] Generating disclosure documents (LLM)...", file=sys.stderr)
 
     pipeline_data = read_json(results_path)
+    # Repair report input from old scans in memory.  Before the verifier kept
+    # code_by_route, pipeline_output.json had no source section; the sibling
+    # results/call-graph artifact still contains enough evidence to regenerate
+    # a complete disclosure without rerunning analysis.
+    pipeline_data = _hydrate_pipeline_findings(results_path, pipeline_data)
     # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only at load,
     # BEFORE merge_dynamic_results / the disclosure-eligibility enumerate below,
     # so a non-dict element can't crash `finding.get("stage2_verdict")`.

@@ -82,8 +82,8 @@ def _analyze_ipc_fixture() -> dict:
 
 def test_current_baseline_is_portable_versioned_observation(current_baseline):
     assert current_baseline["schema_version"] == 1
-    assert current_baseline["baseline_id"] == "openant-pre-openharmony-v1"
-    assert current_baseline["mode"] == "observed_current_behavior"
+    assert current_baseline["baseline_id"] == "openant-after-header-language-selection-v1"
+    assert current_baseline["mode"] == "observed_post_fix_behavior"
     assert re.fullmatch(r"[0-9a-f]{40}", current_baseline["openant_commit"])
 
     serialized = json.dumps(current_baseline)

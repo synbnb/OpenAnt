@@ -77,6 +77,22 @@ def _safe_revision(value: Any) -> str | None:
     return value
 
 
+def _git_transport_url(decision: "RepositoryPolicyDecision") -> str:
+    """Return the Git transport endpoint without weakening redirect policy.
+
+    GitCode's web URL without a suffix redirects its smart-HTTP endpoint to a
+    trailing-slash form.  The repository manager deliberately disables Git's
+    automatic redirect following, so use GitCode's native ``.git`` endpoint
+    directly.  The policy/confirmation URL remains the suffix-free canonical
+    repository identity; this helper only changes the wire endpoint.
+    """
+
+    url = decision.canonical_url or ""
+    if decision.host == "gitcode.com" and not url.endswith(".git"):
+        return f"{url}.git"
+    return url
+
+
 def _within(child: Path, parent: Path) -> bool:
     try:
         return os.path.commonpath((str(child), str(parent))) == str(parent)
@@ -541,9 +557,10 @@ class RepositoryManager:
                     pass
             return "failed", (f"无法创建 Git staging 目录：{_clean(exc)}",), None
         try:
+            transport_url = _git_transport_url(decision)
             base = (
                 self.runner_git_prefix
-                + ("clone", "--depth", "1", "--no-tags", "--no-checkout", "--", decision.canonical_url or "", str(staging))
+                + ("clone", "--depth", "1", "--no-tags", "--no-checkout", "--", transport_url, str(staging))
             )
             clone = self._record_command(base, cwd=None, records=records)
             if clone is None or clone.returncode != 0:

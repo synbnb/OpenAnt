@@ -25,6 +25,7 @@ _MAX_QUERY_LENGTH = 512
 _MAX_QUERIES = 32
 _REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,127}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_SERVICE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 _PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_])/(?:[A-Za-z0-9._+@=-]+/)+[A-Za-z0-9._+@=-]+"
 )
@@ -84,6 +85,20 @@ def _validate_revision(value: str) -> str:
 def _validate_identifier(value: str, *, name: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER_RE.fullmatch(value):
         raise TargetNormalizationError(f"{name} 不是安全的标识符")
+    return value
+
+
+def _validate_service_identifier(value: str, *, name: str) -> str:
+    """Validate a service/socket basename without weakening macro checks.
+
+    OpenHarmony service names legitimately contain dots and hyphens (for
+    example ``faultloggerd.crash.server``).  C/C++ macro names continue to use
+    the stricter identifier validator above; only user-facing service/socket
+    names use this grammar.
+    """
+
+    if not isinstance(value, str) or not _SERVICE_IDENTIFIER_RE.fullmatch(value):
+        raise TargetNormalizationError(f"{name} 不是安全的服务标识符")
     return value
 
 
@@ -180,9 +195,11 @@ class TargetSpec:
             _validate_revision(self.target_revision)
         if self.socket_path is not None:
             _clean_path(self.socket_path, notes=[])
-        for value, name in ((self.basename, "basename"), (self.service_hint, "service_hint"), (self.macro_hint, "macro_hint")):
+        for value, name in ((self.basename, "basename"), (self.service_hint, "service_hint")):
             if value is not None:
-                _validate_identifier(value, name=name)
+                _validate_service_identifier(value, name=name)
+        if self.macro_hint is not None:
+            _validate_identifier(self.macro_hint, name="macro_hint")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -264,8 +281,8 @@ def normalize_target(raw_input: str, *, target_revision: str | None = None) -> T
             raw_input=raw_input,
             target_type=target_type,
             socket_path=socket_path,
-            basename=_validate_identifier(basename, name="basename"),
-            service_hint=_validate_identifier(service_hint, name="service_hint"),
+            basename=_validate_service_identifier(basename, name="basename"),
+            service_hint=_validate_service_identifier(service_hint, name="service_hint"),
             macro_hint=macro_hint,
             target_revision=revision,
             path_components=tuple(part for part in socket_path.split("/") if part),
@@ -324,6 +341,12 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
         add("path", target.basename, "按 socket basename 限定源码路径")
         add("full", target.socket_path, "检索完整 socket 路径及其配置/宏引用")
         add("full", target.socket_path.lstrip("/"), "去掉首斜杠后再次检索 OpenGrok 分词结果")
+        # A listener often uses the short init name (for example
+        # ``GetControlSocket(\"fwmarkd\")``) rather than the full Unix path.
+        # Keep a bounded basename full-text query in both C and C++ so that
+        # server implementations are reachable even when the path is only in
+        # a client header.
+        add("full", target.basename, "按 socket basename 全文检索短名称监听/连接实现")
     elif target.service_hint:
         add("path", target.service_hint, "按服务名检索可能的实现文件")
         add("full", target.service_hint, "全文检索服务名作为兜底召回")

@@ -51,6 +51,30 @@ CPP_LANGUAGE = Language(tscpp.language())
 C_EXTENSIONS = {'.c', '.h'}
 CPP_EXTENSIONS = {'.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.hh'}
 
+# ``.h`` is shared by C and C++ in OpenHarmony.  These nodes are either
+# specific to C++ or are strong evidence that a function is defined as a
+# member of a C++ record.  The set intentionally describes syntax, not
+# project-specific names.
+CPP_HEADER_NODE_TYPES = frozenset({
+    'access_specifier',
+    'alias_declaration',
+    'base_class_clause',
+    'class_specifier',
+    'concept_definition',
+    'explicit_instantiation',
+    'explicit_specialization',
+    'lambda_expression',
+    'namespace_alias_definition',
+    'namespace_definition',
+    'operator_cast',
+    'operator_name',
+    'qualified_identifier',
+    'reference_declarator',
+    'template_declaration',
+    'template_function',
+    'using_declaration',
+})
+
 
 class FunctionExtractor:
     """
@@ -91,16 +115,59 @@ class FunctionExtractor:
             'by_type': {},
         }
 
-    def _get_parser(self, file_path: str) -> Parser:
-        """Get the appropriate parser for a file extension."""
+    def _get_parser(self, file_path: str, source: Optional[bytes] = None,
+                    is_cpp: Optional[bool] = None) -> Parser:
+        """Get the parser for a path, probing ambiguous ``.h`` headers.
+
+        Callers that already selected a parser may pass ``is_cpp`` to avoid
+        parsing an ambiguous header twice.  The no-source form preserves the
+        historical extension-only behaviour for external callers.
+        """
+        if is_cpp is None:
+            is_cpp = self._is_cpp_file(file_path, source)
+        return self.cpp_parser if is_cpp else self.c_parser
+
+    def _is_cpp_file(self, file_path: str, source: Optional[bytes] = None) -> bool:
+        """Return whether a file should be parsed with the C++ grammar.
+
+        Most extensions are unambiguous.  A ``.h`` file is probed only when
+        source is available; this handles C++ headers used by OpenHarmony
+        without changing the treatment of ordinary C headers.
+        """
         ext = os.path.splitext(file_path)[1].lower()
         if ext in CPP_EXTENSIONS:
-            return self.cpp_parser
-        return self.c_parser
+            return True
+        if ext != '.h' or source is None:
+            return False
+        return self._header_uses_cpp_syntax(source)
 
-    def _is_cpp_file(self, file_path: str) -> bool:
-        ext = os.path.splitext(file_path)[1].lower()
-        return ext in CPP_EXTENSIONS
+    def _header_uses_cpp_syntax(self, source: bytes) -> bool:
+        """Detect C++ constructs in a shared-extension header structurally.
+
+        Parsing the header with C++ grammar avoids brittle lexical checks that
+        could match comments or string literals.  A function definition nested
+        inside a C++ record is also conclusive for ``struct``-based C++ code:
+        C grammar can represent a function-pointer field there, but not a
+        method body.
+        """
+        try:
+            tree = self.cpp_parser.parse(source)
+        except Exception:
+            return False
+
+        stack = [(tree.root_node, False)]
+        while stack:
+            node, in_record = stack.pop()
+            record = in_record or node.type in (
+                'class_specifier', 'struct_specifier', 'union_specifier'
+            )
+            if node.type in CPP_HEADER_NODE_TYPES:
+                return True
+            if record and node.type == 'function_definition':
+                return True
+            for child in reversed(node.children):
+                stack.append((child, record))
+        return False
 
     def read_file(self, file_path: Path) -> bytes:
         """Read and cache file contents as bytes (tree-sitter needs bytes)."""
@@ -731,8 +798,8 @@ class FunctionExtractor:
             return
 
         relative_path = file_path.relative_to(self.repo_path).as_posix()
-        is_cpp = self._is_cpp_file(str(file_path))
-        parser = self._get_parser(str(file_path))
+        is_cpp = self._is_cpp_file(str(file_path), source)
+        parser = self._get_parser(str(file_path), source, is_cpp=is_cpp)
 
         try:
             tree = parser.parse(source)

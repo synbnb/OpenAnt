@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 )
@@ -59,6 +59,10 @@ type claudeSession struct {
 	eventBytes   int
 	eventsCapped bool
 	nextID       int64
+	// outputDecoder is owned by the PTY reader goroutine.  Keeping decoder
+	// state across reads is important because ANSI escape sequences and UTF-8
+	// code points can be split at any byte boundary by os.File.Read.
+	outputDecoder claudeOutputDecoder
 
 	cmd    *exec.Cmd
 	pty    *os.File
@@ -199,7 +203,7 @@ func (s *claudeSession) start(parent context.Context, onLog func(string)) error 
 		for {
 			n, readErr := terminal.Read(buffer)
 			if n > 0 {
-				text := cleanClaudeOutput(string(buffer[:n]))
+				text := s.outputDecoder.decode(buffer[:n])
 				if text != "" {
 					s.appendEvent("output", text)
 					if onLog != nil {
@@ -211,6 +215,10 @@ func (s *claudeSession) start(parent context.Context, onLog func(string)) error 
 				break
 			}
 		}
+		// Any unterminated escape sequence is intentionally discarded.  It is
+		// terminal state, not user-visible text, and retaining it would leak a
+		// fragment into the next browser replay.
+		_ = s.outputDecoder.flush()
 		_ = terminal.Close()
 		close(readDone)
 		waitErr := cmd.Wait()
@@ -291,23 +299,146 @@ func (s *claudeSession) stop() {
 
 func (s *claudeSession) wait() { <-s.done }
 
-var claudeANSI = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))`)
+// claudeOutputDecoder converts PTY bytes into append-only, browser-safe text.
+// Claude Code uses Ink and therefore emits ANSI cursor movement, screen-clear,
+// colour and OSC sequences.  A regular expression is insufficient here: a
+// read may end in the middle of an escape sequence (or UTF-8 character), and
+// the next read must continue parsing from that exact boundary.
+type claudeOutputDecoder struct {
+	pending   []byte
+	lastWasCR bool
+}
+
+func (d *claudeOutputDecoder) decode(input []byte) string {
+	if len(input) == 0 && len(d.pending) == 0 {
+		return ""
+	}
+	data := make([]byte, 0, len(d.pending)+len(input))
+	data = append(data, d.pending...)
+	data = append(data, input...)
+	d.pending = nil
+
+	out := make([]rune, 0, len(data))
+	for i := 0; i < len(data); {
+		if data[i] == 0x1b { // ESC
+			consumed, complete := consumeClaudeEscape(data[i:])
+			if !complete {
+				d.pending = append(d.pending, data[i:]...)
+				break
+			}
+			i += consumed
+			continue
+		}
+
+		// C0 controls are terminal protocol, not text.  Keep tabs/newlines,
+		// turn CR redraws into line breaks, and discard the remaining controls.
+		switch data[i] {
+		case '\r':
+			out = append(out, '\n')
+			d.lastWasCR = true
+			i++
+			continue
+		case '\n':
+			if !d.lastWasCR {
+				out = append(out, '\n')
+			}
+			d.lastWasCR = false
+			i++
+			continue
+		case '\t':
+			out = append(out, '\t')
+			d.lastWasCR = false
+			i++
+			continue
+		case 0x08: // backspace is often used by spinners; do not expose it
+			d.lastWasCR = false
+			i++
+			continue
+		}
+		if data[i] < 0x20 || data[i] == 0x7f || (data[i] >= 0x80 && data[i] <= 0x9f) {
+			d.lastWasCR = false
+			i++
+			continue
+		}
+
+		if data[i] < utf8.RuneSelf {
+			out = append(out, rune(data[i]))
+			d.lastWasCR = false
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRune(data[i:])
+		if r == utf8.RuneError && size == 1 {
+			// Hold an incomplete multi-byte sequence for the next read.  A
+			// genuinely invalid byte is dropped rather than rendered as �,
+			// which keeps terminal output readable under mixed binary noise.
+			if !utf8.FullRune(data[i:]) {
+				d.pending = append(d.pending, data[i:]...)
+				break
+			}
+			d.lastWasCR = false
+			i++
+			continue
+		}
+		out = append(out, r)
+		d.lastWasCR = false
+		i += size
+	}
+	return string(out)
+}
+
+func (d *claudeOutputDecoder) flush() string {
+	d.pending = nil
+	d.lastWasCR = false
+	return ""
+}
+
+// consumeClaudeEscape returns the byte length of one ANSI/OSC escape.  The
+// caller only drops a sequence once its terminator has arrived; incomplete
+// sequences are retained in claudeOutputDecoder.pending.
+func consumeClaudeEscape(data []byte) (int, bool) {
+	if len(data) < 2 || data[0] != 0x1b {
+		return 0, false
+	}
+	switch data[1] {
+	case '[': // CSI: final byte is 0x40..0x7e
+		for i := 2; i < len(data); i++ {
+			if data[i] >= 0x40 && data[i] <= 0x7e {
+				return i + 1, true
+			}
+		}
+		return 0, false
+	case ']', 'P', '^', '_', 'X': // OSC/DCS/PM/APC; terminated by BEL or ST
+		for i := 2; i < len(data); i++ {
+			if data[i] == 0x07 {
+				return i + 1, true
+			}
+			if data[i] == 0x1b {
+				if i+1 >= len(data) {
+					return 0, false
+				}
+				if data[i+1] == '\\' {
+					return i + 2, true
+				}
+			}
+		}
+		return 0, false
+	case '(', ')', '*', '+', '-', '.', '/', '%', '#':
+		// Character-set and DEC private sequences carry one selector byte.
+		// Keep the selector out of the transcript as well (for example ESC(B).
+		if len(data) < 3 {
+			return 0, false
+		}
+		return 3, true
+	default:
+		// Two-byte ESC sequences (save/restore cursor, keypad mode, etc.).
+		return 2, true
+	}
+}
 
 func cleanClaudeOutput(value string) string {
-	value = claudeANSI.ReplaceAllString(value, "")
-	value = strings.ReplaceAll(value, "\x1b", "")
-	var builder strings.Builder
-	for _, r := range value {
-		switch {
-		case r == '\n' || r == '\t':
-			builder.WriteRune(r)
-		case r == '\r':
-			builder.WriteRune('\n')
-		case r >= 0x20 && r != 0x7f:
-			builder.WriteRune(r)
-		}
-	}
-	return builder.String()
+	var decoder claudeOutputDecoder
+	return decoder.decode([]byte(value))
 }
 
 func compactClaudeLog(value string) string {

@@ -56,9 +56,9 @@ class ScriptedGit:
         if "checkout" in command:
             return CommandResult(0, stderr="HEAD detached")
         if "FETCH_HEAD" in command:
-            return CommandResult(0, stdout="abc123\n")
+            return CommandResult(0, stdout="abc1234\n")
         if command[-1] == "HEAD":
-            return CommandResult(0, stdout="abc123\n")
+            return CommandResult(0, stdout="abc1234\n")
         if "--is-inside-work-tree" in command:
             if self.mode == "nongit":
                 return CommandResult(128, stderr="not a git repository")
@@ -70,7 +70,7 @@ class ScriptedGit:
         if "--verify" in command:
             if self.mode == "wrong-revision":
                 return CommandResult(0, stdout="different\n")
-            return CommandResult(0, stdout="abc123\n")
+            return CommandResult(0, stdout="abc1234\n")
         return CommandResult(0)
 
 
@@ -162,7 +162,7 @@ def test_new_repository_is_fetched_with_fixed_git_options_and_no_shell(tmp_path)
         assert "http.followRedirects=false" in call
     clone_call = next(call for call in runner.calls if "clone" in call)
     assert "--" in clone_call
-    assert clone_call[clone_call.index("--") + 1] == decision.canonical_url
+    assert clone_call[clone_call.index("--") + 1] == f"{decision.canonical_url}.git"
 
 
 def test_clone_failure_cleans_only_its_staging_directory(tmp_path):

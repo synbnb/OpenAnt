@@ -20,6 +20,7 @@ Exit codes: 0 = clean, 1 = vulnerabilities found, 2 = error.
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 
@@ -97,6 +98,21 @@ def cmd_scan(args):
             llm_reachability=getattr(args, "llm_reachability", False),
             llm_reachability_max_code_bytes=getattr(
                 args, "llm_reachability_max_code_bytes", 1500
+            ),
+            llm_call_graph_recovery=getattr(
+                args, "llm_call_graph_recovery", False
+            ),
+            llm_call_graph_iterative_recovery=getattr(
+                args, "llm_call_graph_iterative_recovery", False
+            ),
+            llm_call_graph_candidate_review=getattr(
+                args, "llm_call_graph_candidate_review", False
+            ),
+            llm_call_graph_projection=getattr(
+                args, "llm_call_graph_projection", False
+            ),
+            openharmony_dispatch_code_evidence=getattr(
+                args, "openharmony_dispatch_code_evidence", False
             ),
         )
 
@@ -513,6 +529,11 @@ def cmd_analyze(args):
                         "agreed": vresult.agreed,
                         "disagreed": vresult.disagreed,
                         "confirmed_vulnerabilities": vresult.confirmed_vulnerabilities,
+                        "inconclusive_input": vresult.inconclusive_input,
+                        "inconclusive_promoted": vresult.inconclusive_promoted,
+                        "inconclusive_resolved": vresult.inconclusive_resolved,
+                        "inconclusive_remaining": vresult.inconclusive_remaining,
+                        "needs_review": vresult.needs_review,
                     }
                     vctx.outputs = {
                         "verified_results_path": vresult.verified_results_path,
@@ -575,6 +596,11 @@ def cmd_verify(args):
                 "agreed": result.agreed,
                 "disagreed": result.disagreed,
                 "confirmed_vulnerabilities": result.confirmed_vulnerabilities,
+                "inconclusive_input": result.inconclusive_input,
+                "inconclusive_promoted": result.inconclusive_promoted,
+                "inconclusive_resolved": result.inconclusive_resolved,
+                "inconclusive_remaining": result.inconclusive_remaining,
+                "needs_review": result.needs_review,
             }
             ctx.outputs = {
                 "verified_results_path": result.verified_results_path,
@@ -828,6 +854,446 @@ def cmd_checkpoint_status(args):
         return 2
 
 
+def _source_locator_store(root: str):
+    from core.source_locator import LocatorSessionStore
+
+    return LocatorSessionStore(root)
+
+
+def _source_locator_payload(machine):
+    events = machine.store.events(machine.session.session_id).load()
+    return {
+        "session": machine.session.to_dict(),
+        "event_count": len(events),
+        "last_event": events[-1].to_dict() if events else None,
+    }
+
+
+def _load_source_locator_machine(args):
+    return _source_locator_store(args.root).load(args.session_id)
+
+
+def _source_locator_project_root(args) -> str:
+    """Resolve the trusted OpenAnt root used by locator-side file operations."""
+
+    explicit = getattr(args, "project_root", None)
+    if explicit:
+        return os.path.abspath(os.path.expanduser(str(explicit)))
+    # The CLI module is installed below ``<root>/libs/openant-core/openant``.
+    # Do not use the scanned repository's cwd as an implicit trusted root.
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+
+def _source_locator_config_path(args) -> str:
+    explicit = getattr(args, "config_path", None)
+    if explicit:
+        return os.path.abspath(os.path.expanduser(str(explicit)))
+    environment = os.environ.get("OPENANT_CONFIG_FILE", "").strip()
+    if environment:
+        return os.path.abspath(os.path.expanduser(environment))
+    return os.path.join(_source_locator_project_root(args), "config", "openant", "config.json")
+
+
+def _source_locator_runtime(args):
+    """Build a configured runtime when source_locator is present.
+
+    An absent optional section is deliberately represented by an empty runtime;
+    the worker then records ``OPENGROK_UNAVAILABLE`` instead of guessing a
+    public endpoint or silently reading a user credential file.
+    """
+
+    from core.source_locator import SourceLocatorRuntime, runtime_from_config
+    from core.source_locator.config import load_source_locator_config
+
+    config_path = _source_locator_config_path(args)
+    config = load_source_locator_config(config_path, required=False)
+    if config is None:
+        return SourceLocatorRuntime(project_root=_source_locator_project_root(args))
+    llm_planner = _source_locator_llm_planner(args)
+    llm_role_attributor = _source_locator_llm_role_attributor(args)
+    return runtime_from_config(
+        config_path,
+        project_root=_source_locator_project_root(args),
+        max_paths=getattr(args, "max_paths", 32),
+        max_source_bytes=getattr(args, "max_source_bytes", None),
+        llm_planner=llm_planner,
+        llm_role_attributor=llm_role_attributor,
+    )
+
+
+def _source_locator_llm_planner(args):
+    """Build the optional semantic search planner from the normal LLM registry.
+
+    The planner is opt-in (``--llm-search``) so a normal locator run remains
+    deterministic and does not unexpectedly spend tokens.  When enabled the
+    worker may perform a small, bounded sequence of semantic rounds. Any adapter/config
+    failure is downgraded to deterministic search; the worker records no
+    credential and never exposes a provider exception to the model context.
+    """
+
+    if not bool(getattr(args, "llm_search", False)):
+        return None
+    try:
+        from core.source_locator import LLMSearchPlanner, PlannerBudget
+        from core.source_locator.prompts import SEARCH_PLANNER_SYSTEM
+        from utilities.llm import (
+            build_phase_registry,
+            load_config_file,
+            resolve_llm_config,
+            simple_text,
+        )
+
+        config_path = _source_locator_config_path(args)
+        config_file = load_config_file(Path(config_path))
+        llm_config = resolve_llm_config(config_file, getattr(args, "llm_config", None))
+        registry = build_phase_registry(config_file, llm_config)
+        # app_context is a simple-completion phase and works with providers
+        # that do not implement tools; use llm_reach only as a compatibility
+        # fallback for older configurations.
+        try:
+            binding = registry.get("app_context")
+        except KeyError:
+            binding = registry.get("llm_reach")
+
+        def call(prompt: str):
+            # Keep this narrow adapter local to the CLI.  The planner itself
+            # remains provider-agnostic and is fully testable with a callable.
+            return simple_text(
+                binding,
+                prompt,
+                system=SEARCH_PLANNER_SYSTEM,
+                max_tokens=2048,
+            )
+
+        # The worker applies the per-session ``max_llm_actions`` cap (twenty by
+        # default, twenty at most).  Give the planner enough internal model-call
+        # budget to complete that bounded loop while reserving one repair call;
+        # without this explicit budget the planner's historical default of two
+        # model calls would silently stop before the configured rounds finish.
+        return LLMSearchPlanner(
+            model_call=call,
+            budget=PlannerBudget(max_actions=20, max_model_calls=21),
+        )
+    except Exception as exc:  # optional enhancement must never block locator
+        print(f"source-locator 语义规划器不可用，继续确定性检索：{_compact_cli_error(exc)}", file=sys.stderr)
+        return None
+
+
+def _source_locator_llm_role_attributor(args):
+    """Build the optional evidence-constrained server/client adjudicator.
+
+    It shares the selected provider/configuration with the search planner but
+    uses a dedicated system instruction.  The worker calls it at most once per
+    locator session and stores only the validated JSON decision.
+    """
+
+    if not bool(getattr(args, "llm_search", False)):
+        return None
+    try:
+        from core.source_locator import LLMRoleAttributor
+        from core.source_locator.llm_role_attributor import ROLE_ATTRIBUTION_SYSTEM
+        from utilities.llm import (
+            build_phase_registry,
+            load_config_file,
+            resolve_llm_config,
+            simple_text,
+        )
+
+        config_path = _source_locator_config_path(args)
+        config_file = load_config_file(Path(config_path))
+        llm_config = resolve_llm_config(config_file, getattr(args, "llm_config", None))
+        registry = build_phase_registry(config_file, llm_config)
+        try:
+            binding = registry.get("app_context")
+        except KeyError:
+            binding = registry.get("llm_reach")
+
+        def call(prompt: str):
+            return simple_text(
+                binding,
+                prompt,
+                system=ROLE_ATTRIBUTION_SYSTEM,
+                max_tokens=2048,
+            )
+
+        return LLMRoleAttributor(model_call=call)
+    except Exception as exc:  # optional enhancement must never block locator
+        print(f"source-locator LLM 角色复核不可用，继续确定性归因：{_compact_cli_error(exc)}", file=sys.stderr)
+        return None
+
+
+def _compact_cli_error(value, limit: int = 256) -> str:
+    return " ".join(str(value).split())[:limit]
+
+
+def _parse_locator_updates(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("--updates-json 必须是合法 JSON 对象") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("--updates-json 必须是 JSON 对象")
+    return payload
+
+
+def cmd_source_locator_create(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _source_locator_store(args.root).create(
+            args.target,
+            target_revision=args.target_revision,
+            budget=_parse_locator_updates(args.budget_json),
+            session_id=args.session_id,
+        )
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_status(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_handoff(args):
+    """Return the verified scanner handoff for a completed locator session.
+
+    The command is intentionally read-only and does not accept an arbitrary
+    path.  It only returns ``source_handoff.json`` after the persisted session
+    is DONE and the artifact is explicitly registered by the state machine.
+    """
+
+    from core.schemas import error, success
+    from core.source_locator import SourceHandoff
+
+    try:
+        machine = _load_source_locator_machine(args)
+        session = machine.session
+        if session.state != "DONE" or not session.handoff:
+            raise ValueError("源码定位 session 尚未完成，不能交接给静态扫描")
+        if "source_handoff.json" not in session.artifacts:
+            raise ValueError("已完成 session 缺少 source_handoff.json 交接产物")
+        handoff_path = machine.store.session_dir(session.session_id) / "source_handoff.json"
+        if handoff_path.is_symlink() or not handoff_path.is_file():
+            raise ValueError("source_handoff.json 不是安全的普通文件")
+        if handoff_path.stat().st_size > 4 * 1024 * 1024:
+            raise ValueError("source_handoff.json 超过大小上限")
+        payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("status") != "ready_for_analysis":
+            raise ValueError("交接产物不是 ready_for_analysis")
+        # Re-validate the persisted object at the process boundary.  The
+        # state machine normally writes this file, but a user may inspect or
+        # restore a session from disk; returning a merely status-labelled JSON
+        # object would bypass SourceHandoff's absolute-path, commit, source
+        # path and evidence-ID invariants.
+        handoff = SourceHandoff(
+            project_name=payload.get("project_name"),
+            repository_path=payload.get("repository_path"),
+            repo_url=payload.get("repo_url"),
+            revision=payload.get("revision"),
+            resolved_commit=payload.get("resolved_commit"),
+            source_paths=tuple(payload.get("source_paths", ())),
+            evidence_ids=tuple(payload.get("evidence_ids", ())),
+            status=payload.get("status", ""),
+            schema_version=payload.get("schema_version", ""),
+        )
+        output = {
+            "session_id": session.session_id,
+            "primary_analysis_repo": handoff.repository_path,
+            "handoff": handoff.to_dict(),
+            "artifact": "source_handoff.json",
+        }
+        _output_json(success(output))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_list(args):
+    from core.schemas import error, success
+
+    try:
+        store = _source_locator_store(args.root)
+        sessions = store.list_sessions()
+        _output_json(
+            success(
+                {
+                    "root": str(store.root),
+                    "sessions": [session.to_dict() for session in sessions],
+                }
+            )
+        )
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_delete(args):
+    from core.schemas import error, success
+
+    try:
+        store = _source_locator_store(args.root)
+        store.delete(args.session_id)
+        _output_json(
+            success(
+                {
+                    "session_id": args.session_id,
+                    "deleted": True,
+                    "note": "仅删除 source-locator session 目录及其产物，不删除 source_code_base 中的源码仓库",
+                }
+            )
+        )
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_events(args):
+    from core.schemas import error, success
+
+    try:
+        log = _source_locator_store(args.root).events(args.session_id)
+        events = log.after(args.after)
+        _output_json(success({"session_id": args.session_id, "events": [event.to_dict() for event in events]}))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_message(args):
+    from core.schemas import error, success
+
+    try:
+        message = str(args.message).strip()
+        if not message:
+            raise ValueError("--message 不能为空")
+        if len(message) > 4096:
+            raise ValueError("--message 超过长度上限 4096")
+        if any(ord(char) < 0x20 and char not in "\n\t" or ord(char) == 0x7F for char in message):
+            raise ValueError("--message 包含控制字符")
+        machine = _load_source_locator_machine(args)
+        machine.record_event(
+            event_type="user.message",
+            summary_zh="已收到用户补充说明",
+            details={"message": message},
+        )
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_transition(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        machine.transition(
+            args.next_state,
+            summary_zh=args.summary_zh,
+            event_type=args.event_type,
+            updates=_parse_locator_updates(args.updates_json),
+            evidence_ids=args.evidence_id,
+        )
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_confirm(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        machine.confirm(confirmation_id=args.confirmation_id)
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_reject(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        machine.reject(
+            args.reason,
+            excluded_paths=args.exclude_path,
+            excluded_repos=args.exclude_repo,
+            required_role=args.required_role,
+        )
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_apply_feedback(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        machine.resume_after_feedback()
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_cancel(args):
+    from core.schemas import error, success
+
+    try:
+        machine = _load_source_locator_machine(args)
+        machine.cancel(reason=args.reason)
+        _output_json(success(_source_locator_payload(machine)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_source_locator_advance(args):
+    """Execute at most N deterministic source-locator stages and checkpoint."""
+
+    from core.schemas import error, success
+    from core.source_locator import SourceLocatorWorker
+
+    try:
+        machine = _load_source_locator_machine(args)
+        runtime = _source_locator_runtime(args)
+        worker = SourceLocatorWorker(machine, runtime=runtime)
+        session = worker.run_until_pause(max_steps=args.max_steps)
+        _output_json(success(_source_locator_payload(machine)))
+        return 0 if session.state not in {"FAILED", "CLONE_FAILED", "POST_CLONE_VERIFY_FAILED"} else 2
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
 def cmd_report_data(args):
     """Prepare pre-computed report data as JSON for the Go HTML renderer.
 
@@ -839,6 +1305,7 @@ def cmd_report_data(args):
     """
     import html as html_mod
     from core.schemas import success, error
+    from core.observability import print_chinese_log
     from core.step_report import step_context
     from utilities.llm_client import get_global_tracker
     from utilities.llm import (
@@ -873,6 +1340,11 @@ def cmd_report_data(args):
             # (matching len(findings)) instead of the raw, poisoned array.
             normalize_results(experiment)
             dataset = read_json(dataset_path)
+            print_chinese_log(
+                f"HTML 报告数据准备：读取结果 {results_path} 和数据集 {dataset_path}，"
+                f"报告语言={language}；先规范化外部结果，再进行统计和渲染。",
+                category="报告决策",
+            )
 
             # --- Load dynamic test results if available ---
             # Dynamic tests use VULN-XXX IDs from pipeline_output.json,
@@ -915,6 +1387,10 @@ def cmd_report_data(args):
                         dt_by_route_key[route] = dr
 
                 print(f"[Report] Loaded {len(dt_by_route_key)} dynamic test results", file=sys.stderr)
+                print_chinese_log(
+                    f"报告数据准备：已将 {len(dt_by_route_key)} 条动态验证结果按文件和函数关联到静态问题。",
+                    category="报告决策",
+                )
 
             # --- Prepare findings ---
             units_by_id = {u["id"]: u for u in dataset.get("units", [])}
@@ -998,6 +1474,12 @@ def cmd_report_data(args):
             for i, f in enumerate(findings, 1):
                 f["number"] = i
 
+            print_chinese_log(
+                f"报告统计：按 verdict 整理 {len(findings)} 个结果，覆盖 {len(file_verdicts)} 个文件；"
+                "同一文件取最严重 verdict 展示，问题详情仍保留完整分析文本。",
+                category="报告决策",
+            )
+
             # --- Group findings by verdict, sub-grouped by dynamic test outcome ---
             dt_subgroup_defs = [
                 ("Confirmed", lambda s: s == "CONFIRMED"),
@@ -1067,6 +1549,11 @@ def cmd_report_data(args):
                     "<p>No vulnerabilities or security concerns found. All code units are either safe or properly protected.</p>"
                 )
             else:
+                print_chinese_log(
+                    f"报告决策：发现 {len(actionable)} 个漏洞/可绕过/待定条目，"
+                    "调用报告模型生成修复建议；安全条目不会进入修复提示。",
+                    category="报告决策",
+                )
                 # attack_vector and analysis are untrusted Stage-1/2 LLM output.
                 # Interpolated raw they could inject prompt instructions (or a
                 # fake `### Finding` header) into the remediation prompt. Fence
@@ -1273,6 +1760,11 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
             }
 
             ctx.summary = {"findings": len(findings), "actionable": len(actionable)}
+            print_chinese_log(
+                f"HTML 报告数据准备完成：可渲染问题={len(findings)}，可行动问题={len(actionable)}，"
+                "报告数据将通过标准 JSON envelope 返回给 Web 渲染器。",
+                category="报告结果",
+            )
 
         _output_json(success(report_data))
         return 0
@@ -1550,6 +2042,63 @@ def build_parser() -> argparse.ArgumentParser:
              "entry-point indicators past byte 1500 in long handlers / "
              "generated code, at proportional Opus cost increase. Only "
              "meaningful with --llm-reachability.",
+    )
+    scan_p.add_argument(
+        "--llm-call-graph-recovery",
+        action="store_true",
+        dest="llm_call_graph_recovery",
+        help=(
+            "Enable the advisory OpenHarmony indirect-call review stage. "
+            "It consumes call_graph_residuals.json and writes "
+            "llm_call_graph_recovery.json without modifying the call graph. "
+            "Only active for OpenHarmony scans; off by default."
+        ),
+    )
+    scan_p.add_argument(
+        "--llm-call-graph-iterative-recovery",
+        action="store_true",
+        dest="llm_call_graph_iterative_recovery",
+        help=(
+            "Enable the entry-driven, bounded multi-round OpenHarmony "
+            "indirect-call recovery. It writes "
+            "llm_call_graph_recovery_rounds.json and keeps the native call "
+            "graph unchanged. This option is explicit and does not replace "
+            "the legacy one-shot recovery path."
+        ),
+    )
+    scan_p.add_argument(
+        "--llm-call-graph-candidate-review",
+        action="store_true",
+        dest="llm_call_graph_candidate_review",
+        help=(
+            "Enable a separate advisory OpenHarmony review for residual "
+            "sites that already have deterministic candidate handlers. "
+            "It writes llm_call_graph_candidate_review.json without "
+            "modifying the call graph. Off by default."
+        ),
+    )
+    scan_p.add_argument(
+        "--llm-call-graph-projection",
+        action="store_true",
+        dest="llm_call_graph_projection",
+        help=(
+            "Project validated high-confidence OpenHarmony recovery decisions "
+            "into llm_call_graph_overlay.json. The overlay is independent and "
+            "does not modify call_graph.json, dataset.json, or reachability. "
+            "It consumes existing recovery/candidate-review artifacts and is "
+            "off by default."
+        ),
+    )
+    scan_p.add_argument(
+        "--openharmony-dispatch-code-evidence",
+        action="store_true",
+        dest="openharmony_dispatch_code_evidence",
+        help=(
+            "Extract integer values for OpenHarmony dispatch selectors from "
+            "enum/macro/constexpr source definitions. Writes an independent "
+            "openharmony_dispatch_code_evidence.json artifact without "
+            "modifying the call graph. Off by default."
+        ),
     )
     scan_p.set_defaults(func=cmd_scan)
 
@@ -1885,6 +2434,144 @@ def build_parser() -> argparse.ArgumentParser:
     tm_p.set_defaults(func=cmd_threat_model)
 
     cs_p.set_defaults(func=cmd_checkpoint_status)
+
+    # ---------------------------------------------------------------
+    # source-locator — persistent, one-step JSON bridge for Web/worker
+    # ---------------------------------------------------------------
+    sl_p = subparsers.add_parser(
+        "source-locator",
+        help="管理 OpenHarmony 源码定位 session（每次调用只执行一个状态操作）",
+    )
+    sl_sub = sl_p.add_subparsers(dest="source_locator_command", required=True)
+
+    sl_create = sl_sub.add_parser("create", help="创建源码定位 session")
+    sl_create.add_argument("target", help="用户描述的服务名、socket 路径或源码目标")
+    sl_create.add_argument("--root", required=True, help="session 持久化根目录")
+    sl_create.add_argument("--target-revision", default=None)
+    sl_create.add_argument("--budget-json", default=None, help="预算 JSON 对象，例如 '{\"max_queries\":20}'")
+    sl_create.add_argument("--session-id", default=None)
+    sl_create.set_defaults(func=cmd_source_locator_create)
+
+    sl_status = sl_sub.add_parser("status", help="读取 session 当前状态")
+    sl_status.add_argument("session_id")
+    sl_status.add_argument("--root", required=True)
+    sl_status.set_defaults(func=cmd_source_locator_status)
+
+    sl_handoff = sl_sub.add_parser("handoff", help="读取已验证的静态扫描交接对象（只读）")
+    sl_handoff.add_argument("session_id")
+    sl_handoff.add_argument("--root", required=True)
+    sl_handoff.set_defaults(func=cmd_source_locator_handoff)
+
+    sl_list = sl_sub.add_parser("list", help="列出历史源码定位 session")
+    sl_list.add_argument("--root", required=True)
+    sl_list.set_defaults(func=cmd_source_locator_list)
+
+    sl_delete = sl_sub.add_parser("delete", help="删除一个源码定位 session 及其产物")
+    sl_delete.add_argument("session_id")
+    sl_delete.add_argument("--root", required=True)
+    sl_delete.set_defaults(func=cmd_source_locator_delete)
+
+    sl_events = sl_sub.add_parser("events", help="读取 session 事件（可用于 SSE 恢复）")
+    sl_events.add_argument("session_id")
+    sl_events.add_argument("--root", required=True)
+    sl_events.add_argument("--after", type=int, default=0, help="只返回 seq 大于该值的事件")
+    sl_events.set_defaults(func=cmd_source_locator_events)
+
+    sl_message = sl_sub.add_parser("message", help="记录用户补充说明，不改变状态")
+    sl_message.add_argument("session_id")
+    sl_message.add_argument("--root", required=True)
+    sl_message.add_argument("--message", required=True)
+    sl_message.set_defaults(func=cmd_source_locator_message)
+
+    sl_transition = sl_sub.add_parser("transition", help="执行一个受约束的状态转换")
+    sl_transition.add_argument("session_id")
+    sl_transition.add_argument("next_state")
+    sl_transition.add_argument("--root", required=True)
+    sl_transition.add_argument("--summary-zh", required=True)
+    sl_transition.add_argument("--event-type", default="state.changed")
+    sl_transition.add_argument("--updates-json", default=None)
+    sl_transition.add_argument("--evidence-id", action="append", default=[])
+    sl_transition.set_defaults(func=cmd_source_locator_transition)
+
+    sl_confirm = sl_sub.add_parser("confirm", help="确认候选仓库并进入拉取阶段")
+    sl_confirm.add_argument("session_id")
+    sl_confirm.add_argument("--root", required=True)
+    sl_confirm.add_argument("--confirmation-id", default=None)
+    sl_confirm.set_defaults(func=cmd_source_locator_confirm)
+
+    sl_reject = sl_sub.add_parser("reject", help="拒绝候选并登记重新检索约束")
+    sl_reject.add_argument("session_id")
+    sl_reject.add_argument("--root", required=True)
+    sl_reject.add_argument("--reason", required=True)
+    sl_reject.add_argument("--exclude-path", action="append", default=[])
+    sl_reject.add_argument("--exclude-repo", action="append", default=[])
+    sl_reject.add_argument("--required-role", default=None)
+    sl_reject.set_defaults(func=cmd_source_locator_reject)
+
+    sl_feedback = sl_sub.add_parser("apply-feedback", help="应用拒绝反馈并重新开始检索")
+    sl_feedback.add_argument("session_id")
+    sl_feedback.add_argument("--root", required=True)
+    sl_feedback.set_defaults(func=cmd_source_locator_apply_feedback)
+
+    sl_cancel = sl_sub.add_parser("cancel", help="取消源码定位 session")
+    sl_cancel.add_argument("session_id")
+    sl_cancel.add_argument("--root", required=True)
+    sl_cancel.add_argument("--reason", default="用户取消定位")
+    sl_cancel.set_defaults(func=cmd_source_locator_cancel)
+
+    sl_advance = sl_sub.add_parser(
+        "advance",
+        help="执行最多 N 个源码定位阶段；遇到确认、终态或错误自动暂停",
+    )
+    sl_advance.add_argument("session_id")
+    sl_advance.add_argument("--root", required=True, help="session 持久化根目录")
+    sl_advance.add_argument(
+        "--config-path",
+        default=None,
+        help="包含 source_locator 配置的显式 config.json（默认使用项目内配置）",
+    )
+    sl_advance.add_argument(
+        "--project-root",
+        default=None,
+        help="OpenAnt 项目根目录；用于 Manifest 和 source_code_base 写入",
+    )
+    sl_advance.add_argument("--max-steps", type=int, default=1, help="本次最多推进阶段数（1-32）")
+    sl_advance.add_argument("--max-paths", type=int, default=32, help="源码读取最多候选路径数（1-32）")
+    sl_advance.add_argument("--max-source-bytes", type=int, default=None, help="单个源码读取上限")
+    sl_advance.add_argument(
+        "--llm-search",
+        action="store_true",
+        help="启用有界多轮 LLM 语义检索循环（默认关闭，避免意外产生模型费用）",
+    )
+    sl_advance.add_argument(
+        "--llm-config",
+        default=None,
+        help="语义检索使用的模型配置名；未指定时沿用配置文件默认模型",
+    )
+    sl_advance.set_defaults(func=cmd_source_locator_advance)
+
+    sl_run = sl_sub.add_parser(
+        "run",
+        help="连续执行源码定位，直到用户确认、终态或达到步数上限",
+    )
+    sl_run.add_argument("session_id")
+    sl_run.add_argument("--root", required=True, help="session 持久化根目录")
+    sl_run.add_argument("--config-path", default=None)
+    sl_run.add_argument("--project-root", default=None)
+    sl_run.add_argument("--max-steps", type=int, default=16, help="本次最多推进阶段数（1-32）")
+    sl_run.add_argument("--max-paths", type=int, default=32)
+    sl_run.add_argument("--max-source-bytes", type=int, default=None)
+    sl_run.add_argument(
+        "--llm-search",
+        action="store_true",
+        help="启用有界多轮 LLM 语义检索循环（默认关闭，避免意外产生模型费用）",
+    )
+    sl_run.add_argument(
+        "--llm-config",
+        default=None,
+        help="语义检索使用的模型配置名；未指定时沿用配置文件默认模型",
+    )
+    sl_run.set_defaults(func=cmd_source_locator_advance)
 
     return parser
 

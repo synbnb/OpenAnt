@@ -52,6 +52,11 @@
   .brand-copy h1 { margin: 0; font-size: 1rem; line-height: 1.25; letter-spacing: -0.02em; }
   .brand-copy p { margin: 2px 0 0; color: #a9bac4; font-size: 0.76rem; }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .locator-link {
+    padding: 6px 9px; border: 1px solid #455b67; border-radius: 8px;
+    color: #d7e5e9; text-decoration: none; font-size: 0.75rem; white-space: nowrap;
+  }
+  .locator-link:hover { background: #213640; }
   .local-note {
     padding: 5px 9px; border: 1px solid #3b505c; border-radius: 8px;
     color: #c6d4dc; font-size: 0.74rem; white-space: nowrap;
@@ -237,6 +242,7 @@
     </div>
   </div>
   <div class="topbar-actions">
+    <a class="locator-link" href="/source-locator" data-i18n="header.locator">OpenHarmony 源码定位</a>
     <span class="local-note" data-i18n="header.local" title="服务只监听本机回环地址，不会暴露到局域网。">仅本机访问</span>
     <div class="language-field">
       <label for="language-select" data-i18n="language.label">语言</label>
@@ -436,6 +442,7 @@ const translations = {
     'brand.subtitle': '源码安全扫描工作台',
     'header.local': '仅本机访问',
     'header.localTitle': '服务只监听本机回环地址，不会暴露到局域网。',
+    'header.locator': 'OpenHarmony 源码定位',
     'language.label': '语言',
     'intro.body': '选择仓库和扫描范围。vulnfounder 会解析函数、构建上下文、调用模型分析，并保存每个阶段的可审阅产物。',
     'workflow.title': '扫描流程',
@@ -508,6 +515,7 @@ const translations = {
     'brand.subtitle': 'Source security scanning workspace',
     'header.local': 'Local access only',
     'header.localTitle': 'The server listens on loopback only and is not exposed to your local network.',
+    'header.locator': 'OpenHarmony source locator',
     'language.label': 'Language',
     'intro.body': 'Select a repository and scan scope. vulnfounder parses functions, builds context, runs model analysis, and preserves reviewable output for every stage.',
     'workflow.title': 'Scan workflow',
@@ -640,6 +648,19 @@ function syncRepositoryChoice() {
   repoInput.placeholder = fromCatalog ? t('repo.savedPlaceholder') + selected.textContent.trim() : t('repo.customPlaceholder');
 }
 
+function prefillSourceLocatorHandoff() {
+  if (!repoChoice || !repoInput || !repoIDInput) return;
+  const params = new URLSearchParams(window.location.search);
+  const handoffRepo = params.get('source_locator_repo');
+  if (!handoffRepo || handoffRepo.length > 4096) return;
+  repoChoice.value = '';
+  repoIDInput.value = '';
+  repoInput.disabled = false;
+  repoInput.required = true;
+  repoInput.value = handoffRepo;
+  repoInput.focus();
+}
+
 if (languageSelect) {
   languageSelect.addEventListener('change', function() {
     try { localStorage.setItem('openant.ui.language', languageSelect.value); } catch (_) {}
@@ -701,6 +722,7 @@ try { preferredLanguage = localStorage.getItem('openant.ui.language') || 'zh-CN'
 applyLanguage(preferredLanguage);
 syncDynamicTestMode();
 syncLLMReachability();
+prefillSourceLocatorHandoff();
 </script>
 </body>
 </html>

@@ -206,3 +206,22 @@ def test_client_combine_adapter_and_invalid_action_inputs():
             score=0,
             predicates={"client_connect": "false"},  # type: ignore[dict-item]
         )
+
+
+def test_test_path_evidence_is_retained_but_cannot_complete_client():
+    store = _complete_store()
+    test_id = store.add_evidence(
+        kind="client_send",
+        source_path="/openharmony/base/module/tests/fake_client_test.cpp",
+        line_start=50,
+        excerpt="send(fd, payload);",
+        tool_name="test.fixture",
+        source_mode="fixture",
+        relation_from="/dev/unix/socket/paramservice",
+        relation_to="FakeTestClient::send",
+    ).evidence_id
+    result = ClientLocator(mapping=_mapping()).locate(store)
+
+    assert test_id in result.excluded_evidence_ids
+    assert test_id not in result.evidence_ids
+    assert result.status == "HIGH"
