@@ -180,6 +180,7 @@ def _target_evidence_valid(
     target_id: str,
     target: Mapping[str, Any],
     caller: Mapping[str, Any],
+    site: Mapping[str, Any] | None = None,
 ) -> bool:
     kind = _text(evidence.get("kind"))
     if kind not in {"target", "registration", "type"}:
@@ -187,13 +188,48 @@ def _target_evidence_valid(
     evidence_file = _text(evidence.get("file"))
     if not _evidence_file_matches(evidence_file, _file(target), _file(caller)):
         return False
-    if _line(evidence.get("start_line", 1)) < 1:
+    evidence_start = _line(evidence.get("start_line", 1))
+    evidence_end = _line(evidence.get("end_line", evidence_start), evidence_start)
+    if evidence_start < 1 or evidence_end < evidence_start:
         return False
     evidence_text = _normalize_ws(evidence.get("text"))
     if not evidence_text:
         return False
     if kind == "target" and _text(evidence.get("function_id")) == target_id:
         return True
+
+    # Parser-provided candidate records are source-backed mappings from a
+    # dispatch-table write to an indexed function ID.  A wrapped C++
+    # registration often spans two lines; a model may quote either the key
+    # line or the handler line, while the candidate record retains the full
+    # excerpt.  Accept that bounded, same-target evidence rather than
+    # discarding a semantically valid edge merely because the quote omitted
+    # the second line.  The file/span and target ID must still match, and the
+    # quoted text must be a substring of the parser excerpt (or vice versa).
+    if kind == "registration" and isinstance(site, Mapping):
+        registrations = site.get("candidate_registrations", [])
+        if isinstance(registrations, list):
+            for registration in registrations:
+                if not isinstance(registration, Mapping):
+                    continue
+                if _text(registration.get("target_id")) != target_id:
+                    continue
+                source = registration.get("registration_evidence")
+                if not isinstance(source, Mapping):
+                    continue
+                source_file = _text(source.get("file"))
+                source_start = _line(source.get("start_line", 1))
+                source_end = _line(source.get("end_line", source_start), source_start)
+                source_text = _normalize_ws(source.get("text"))
+                if not _evidence_file_matches(evidence_file, source_file):
+                    continue
+                if evidence_end < source_start or evidence_start > source_end:
+                    continue
+                if source_text and (
+                    evidence_text in source_text or source_text in evidence_text
+                ):
+                    return True
+
     target_name = _function_name(target_id, target)
     target_leaf = _leaf(target_name)
     if not target_leaf:
@@ -227,7 +263,7 @@ def _valid_evidence(
             )
         elif kind in {"target", "registration", "type"}:
             has_target = has_target or _target_evidence_valid(
-                item, target_id, target, caller
+                item, target_id, target, caller, site
             )
     if not has_call_site:
         return False, "call_site_evidence_not_source_backed"

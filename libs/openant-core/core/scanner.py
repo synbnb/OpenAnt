@@ -1163,6 +1163,17 @@ def scan_repository(
             f"模式={'迭代多轮' if llm_call_graph_iterative_recovery else '单轮'}；"
             "模型只提交带证据的候选边，不直接改写原生 call_graph.json。"
         )
+        if llm_call_graph_iterative_recovery:
+            _print_chinese_log(
+                "恢复范围决策：迭代模式会同时复核无候选残余和解析器已列出的候选边，"
+                "投影后的新目标还能进入下一轮入口驱动 BFS。"
+            )
+        else:
+            _print_chinese_log(
+                "恢复范围决策：单轮模式只处理无候选的残余间接点；已有候选目标的站点"
+                "需要另外开启 --llm-call-graph-candidate-review，或改用迭代恢复，"
+                "否则不会把候选表误当成已确认调用边。"
+            )
         _print_chinese_log(
             "调用图恢复输入：每种语言分别读取 call_graph.json、"
             "call_graph_residuals.json、函数索引和入口提示；缺少残余产物的语言会明确记录为未复核。"
@@ -1310,6 +1321,12 @@ def scan_repository(
                                 entry_point_ids=graph_entry_points | dataset_entry_points,
                                 call_graph=graph_payload.get("call_graph", {}),
                                 semantic_graph=semantic_payload,
+                                # Iterative mode is the explicit high-recall
+                                # path: review both parser-resolved candidate
+                                # sites and candidate-less residuals so a
+                                # recovered handler can expand the next BFS
+                                # frontier.
+                                include_candidate_sites=True,
                             )
                         else:
                             review = run_recovery_review(
@@ -1317,6 +1334,10 @@ def scan_repository(
                                 functions,
                                 binding=recovery_binding,
                                 entry_point_ids=graph_entry_points | dataset_entry_points,
+                                call_graph=graph_payload.get("call_graph", {}),
+                                reverse_call_graph=graph_payload.get(
+                                    "reverse_call_graph", {}
+                                ),
                             )
                         reports.append({
                             "language": label,
@@ -1363,6 +1384,7 @@ def scan_repository(
                     "languages": len(reports),
                     "missing_artifacts": len(missing_artifacts),
                     "worklist_sites": 0,
+                    "request_batches": 0,
                     "attempts": 0,
                     "llm_calls": 0,
                     "retry_count": 0,
@@ -1385,6 +1407,7 @@ def scan_repository(
                         continue
                     for key in (
                         "worklist_sites",
+                        "request_batches",
                         "attempts",
                         "llm_calls",
                         "retry_count",
@@ -1441,7 +1464,8 @@ def scan_repository(
                     _record_skip(result, recovery_step, "failed")
                 _print_chinese_log(
                     f"调用图恢复结果：状态={overall_status}，语言数={len(reports)}，"
-                    f"待复核站点={aggregate['worklist_sites']}，模型调用={aggregate['llm_calls']}，"
+                    f"待复核站点={aggregate['worklist_sites']}，请求批次={aggregate.get('request_batches', 0)}，"
+                    f"模型调用={aggregate['llm_calls']}，"
                     f"接受={aggregate['accepted']}，保留未决={aggregate['kept_unresolved']}，"
                     f"拒绝={aggregate['rejected']}；结果仅写入恢复报告。"
                 )
@@ -2917,6 +2941,7 @@ def _run_openharmony_candidate_review_stage(
     )
     _print_chinese_log(
         "阶段/OpenHarmony 候选边复核：对解析器已经找到候选目标的残余站点做第二次语义核对，"
+        "候选注册源码、调用点及有界调用图邻居会一并提供给模型；"
         "只生成独立审计报告，不修改原生调用图、dataset 或可达性结果。"
     )
 
@@ -3031,6 +3056,10 @@ def _run_openharmony_candidate_review_stage(
                         functions,
                         binding=review_binding,
                         entry_point_ids=graph_entry_points | dataset_entry_points,
+                        call_graph=graph_payload.get("call_graph", {}),
+                        reverse_call_graph=graph_payload.get(
+                            "reverse_call_graph", {}
+                        ),
                         include_candidate_sites=True,
                     )
                     reports.append({
@@ -3070,6 +3099,7 @@ def _run_openharmony_candidate_review_stage(
                 "languages": len(reports),
                 "missing_artifacts": len(missing_artifacts),
                 "worklist_sites": 0,
+                "request_batches": 0,
                 "attempts": 0,
                 "llm_calls": 0,
                 "retry_count": 0,
@@ -3085,6 +3115,7 @@ def _run_openharmony_candidate_review_stage(
                     continue
                 for key in (
                     "worklist_sites",
+                    "request_batches",
                     "attempts",
                     "llm_calls",
                     "retry_count",
@@ -3125,6 +3156,7 @@ def _run_openharmony_candidate_review_stage(
                 _record_skip(result, review_step, "failed")
             _print_chinese_log(
                 f"候选边复核结果：状态={overall_status}，待审站点={aggregate['worklist_sites']}，"
+                f"请求批次={aggregate.get('request_batches', 0)}，"
                 f"模型调用={aggregate['llm_calls']}，接受={aggregate['accepted']}，"
                 f"未决={aggregate['kept_unresolved']}，拒绝={aggregate['rejected']}；"
                 "结果写入 llm_call_graph_candidate_review.json。"

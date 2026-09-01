@@ -267,6 +267,7 @@ def run_iterative_recovery_review(
         registration_context_max_file_bytes=registration_context_max_file_bytes,
         registration_context_max_chars=registration_context_max_chars,
         repository=repository,
+        call_graph=call_graph,
     )
     adjacency = _edge_adjacency(call_graph, semantic_graph, known)
 
@@ -322,6 +323,7 @@ def run_iterative_recovery_review(
             "accepted_decisions": 0,
             "projected_edges": 0,
             "duplicate_edges": 0,
+            "request_batches": 0,
             "llm_calls": 0,
             "retry_count": 0,
             "failed_rounds": 0,
@@ -431,6 +433,7 @@ def run_iterative_recovery_review(
                     registration_context_max_file_bytes=registration_context_max_file_bytes,
                     registration_context_max_chars=registration_context_max_chars,
                     repository=repository,
+                    call_graph=call_graph,
                     max_retries=retry_budget,
                     retry_backoff_seconds=retry_backoff_seconds,
                     max_tokens=max_tokens,
@@ -451,6 +454,7 @@ def run_iterative_recovery_review(
                 if isinstance(review_summary, Mapping):
                     summary["sites_reviewed"] += int(review_summary.get("worklist_sites", 0) or 0)
                     summary["accepted_decisions"] += int(review_summary.get("accepted", 0) or 0)
+                    summary["request_batches"] += int(review_summary.get("request_batches", 0) or 0)
                     summary["llm_calls"] += int(review_summary.get("llm_calls", 0) or 0)
                     summary["retry_count"] += int(review_summary.get("retry_count", 0) or 0)
                 if _text(review.get("status")) == "failed":

@@ -18,7 +18,11 @@ from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     build_recovery_worklist,
     classify_recovery_site,
     parse_recovery_response,
+    run_recovery_review,
     validate_recovery_proposals,
+)
+from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
+    _partition_worklist,
 )
 
 
@@ -224,6 +228,59 @@ def test_worklist_can_attach_cross_function_registration_context(tmp_path: Path)
     assert "requestTable[1] = &NetStub::HandleRequest;" in prompt
 
 
+def test_worklist_preserves_parser_registration_evidence_for_candidate_review():
+    diagnostics = _diagnostics()
+    diagnostics["unresolved_call_sites"][1]["candidates"] = [
+        {
+            "target_id": HANDLER,
+            "target_name": "NetStub::HandleRequest",
+            "selector": "REQUEST_HANDLE",
+            "value_kind": "member_function_pointer",
+            "registration_owner_function_id": CALLER,
+            "owner_class": "NetStub",
+            "evidence": {
+                "file": SOURCE,
+                "start_line": 18,
+                "end_line": 18,
+                "text": "memberFuncMap_[REQUEST_HANDLE] = &NetStub::HandleRequest",
+            },
+        }
+    ]
+
+    worklist = build_recovery_worklist(
+        diagnostics,
+        _functions(),
+        max_sites=-1,
+        include_candidate_sites=True,
+    )
+
+    candidate_item = next(
+        item for item in worklist if item["candidate_target_ids"]
+    )
+    registrations = candidate_item["candidate_registrations"]
+    assert registrations == [
+        {
+            "target_id": HANDLER,
+            "target_name": "NetStub::HandleRequest",
+            "selector": "REQUEST_HANDLE",
+            "value_kind": "member_function_pointer",
+            "registration_form": "",
+            "owner_class": "NetStub",
+            "registration_owner_function_id": CALLER,
+            "permissions": [],
+            "registration_evidence": {
+                "file": SOURCE,
+                "start_line": 18,
+                "end_line": 18,
+                "text": "memberFuncMap_[REQUEST_HANDLE] = &NetStub::HandleRequest",
+            },
+        }
+    ]
+    prompt = build_recovery_prompt([candidate_item])
+    assert "candidate_registrations" in prompt
+    assert "REQUEST_HANDLE" in prompt
+
+
 def test_registration_context_is_opt_in_for_direct_worklist_call():
     worklist = build_recovery_worklist(
         _diagnostics(),
@@ -232,6 +289,35 @@ def test_registration_context_is_opt_in_for_direct_worklist_call():
     )
 
     assert "registration_context" not in worklist[0]
+
+
+def test_worklist_attaches_bounded_known_graph_neighbors():
+    diagnostics = _diagnostics()
+    call_graph = {
+        CALLER: [HANDLER, OTHER, BACKGROUND],
+        BACKGROUND: [CALLER],
+    }
+    worklist = build_recovery_worklist(
+        diagnostics,
+        _functions(),
+        max_sites=1,
+        call_graph=call_graph,
+        graph_context_neighbors=2,
+        graph_context_code_bytes=40,
+    )
+
+    graph_context = worklist[0]["graph_context"]
+    assert [item["function_id"] for item in graph_context["direct_callees"]] == [
+        BACKGROUND,
+        HANDLER,
+    ]
+    assert [item["function_id"] for item in graph_context["direct_callers"]] == [
+        BACKGROUND,
+    ]
+    assert all(len(item["code"]) <= 40 for item in graph_context["direct_callees"])
+    prompt = build_recovery_prompt(worklist)
+    assert "graph_context" in prompt
+    assert HANDLER in prompt
 
 
 def test_parser_and_validator_require_known_ids_and_source_evidence():
@@ -496,3 +582,211 @@ def test_site_classification_separates_local_template_and_external_calls():
     assert external_interface["kind"] == "external_interface"
     assert external_interface["analysis_route"] == "external_boundary"
     assert external_interface["llm_eligible"] is False
+
+
+def test_partition_splits_large_candidate_site_without_prompt_truncation():
+    candidates = [
+        {
+            "function_id": f"{SOURCE}:NetStub::Handler{index}",
+            "name": f"NetStub::Handler{index}",
+            "file_path": SOURCE,
+            "start_line": index + 100,
+            "end_line": index + 110,
+            "class_name": "NetStub",
+            "code": "int32_t Handler(MessageParcel &, MessageParcel &) { return 0; }",
+        }
+        for index in range(60)
+    ]
+    item = {
+        "site_id": "native:12:large",
+        "source": "native",
+        "caller_id": CALLER,
+        "caller_ids": [CALLER],
+        "caller": _functions()[CALLER],
+        "file": SOURCE,
+        "line": 12,
+        "expression": "return (this->*requestFunc)(data, reply);",
+        "reason": "parenthesized_member_function_pointer",
+        "symbols": {"target_variable": "requestFunc"},
+        "candidate_target_ids": [candidate["function_id"] for candidate in candidates],
+        "candidate_count": len(candidates),
+        "retrieval_candidates": candidates,
+    }
+
+    batches = _partition_worklist(
+        [item],
+        max_prompt_chars=80_000,
+        max_sites_per_request=6,
+        max_candidates_per_request=24,
+    )
+
+    assert len(batches) == 3
+    assert sum(len(batch[0]["candidate_target_ids"]) for batch in batches) == 60
+    assert all(
+        len(build_recovery_prompt(batch, max_prompt_chars=80_000)) <= 80_000
+        for batch in batches
+    )
+
+
+def test_item_level_invalid_decision_keeps_valid_subset_without_retry():
+    functions = _functions()
+    diagnostics = _diagnostics()
+    worklist = build_recovery_worklist(diagnostics, functions, max_sites=1)
+    site_id = worklist[0]["site_id"]
+    calls = []
+
+    def completion(_prompt: str) -> str:
+        calls.append(1)
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "decisions": [
+                    {
+                        "site_id": site_id,
+                        "decision": "keep_unresolved",
+                        "target_id": "",
+                        "confidence": "medium",
+                        "reason": "The callback target is not proven.",
+                        "evidence": [
+                            {
+                                "kind": "call_site",
+                                "file": SOURCE,
+                                "start_line": 12,
+                                "end_line": 12,
+                                "text": "(this->*requestFunc)(data, reply)",
+                            }
+                        ],
+                    },
+                    {
+                        "site_id": "unknown:1:site",
+                        "decision": "keep_unresolved",
+                        "target_id": "",
+                        "confidence": "low",
+                        "reason": "Unknown site should be ignored.",
+                        "evidence": [
+                            {
+                                "kind": "call_site",
+                                "file": SOURCE,
+                                "start_line": 12,
+                                "end_line": 12,
+                                "text": "unknown()",
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+    result = run_recovery_review(
+        diagnostics,
+        functions,
+        completion=completion,
+        max_sites=1,
+        max_retries=2,
+    )
+
+    assert calls == [1]
+    assert result["status"] == "partial"
+    assert result["summary"]["retry_count"] == 0
+    assert result["summary"]["kept_unresolved"] == 1
+
+
+def test_run_batches_keep_all_candidate_edges_and_never_send_truncated_json():
+    functions = _functions()
+    candidates = []
+    for index in range(30):
+        target_id = f"{SOURCE}:NetStub::GeneratedHandler{index}"
+        functions[target_id] = {
+            "name": f"NetStub::GeneratedHandler{index}",
+            "file_path": SOURCE,
+            "start_line": 100 + index,
+            "end_line": 105 + index,
+            "class_name": "NetStub",
+            "code": "int32_t GeneratedHandler(MessageParcel &, MessageParcel &) { return 0; }",
+        }
+        candidates.append(
+            {
+                "target_id": target_id,
+                "target_name": f"NetStub::GeneratedHandler{index}",
+                "selector": f"REQUEST_{index}",
+                "value_kind": "member_function_pointer",
+                "evidence": {
+                    "file": SOURCE,
+                    "start_line": 20 + index,
+                    "end_line": 20 + index,
+                    "text": f"requestTable[REQUEST_{index}] = &GeneratedHandler{index};",
+                },
+            }
+        )
+    diagnostics = {
+        "unresolved_call_sites": [
+            {
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line": 12,
+                "expression": "return (this->*requestFunc)(data, reply);",
+                "reason": "parenthesized_member_function_pointer",
+                "symbols": {"target_variable": "requestFunc"},
+                "candidate_target_ids": [item["target_id"] for item in candidates],
+                "candidates": candidates,
+            }
+        ]
+    }
+    calls = []
+
+    def completion(prompt: str) -> str:
+        calls.append(prompt)
+        opening = re.search(r"\n(`+)json\n", prompt)
+        assert opening is not None
+        fence = opening.group(1)
+        body_start = opening.end()
+        body_end = prompt.find(f"\n{fence}\n", body_start)
+        assert body_end > body_start
+        payload = json.loads(prompt[body_start:body_end])
+        decisions = []
+        for site in payload["sites"]:
+            for candidate in site.get("candidate_registrations", []):
+                evidence = candidate["registration_evidence"]
+                decisions.append(
+                    {
+                        "site_id": site["site_id"],
+                        "decision": "add_edge",
+                        "target_id": candidate["target_id"],
+                        "confidence": "high",
+                        "reason": "The parser supplied a source-backed registration.",
+                        "evidence": [
+                            {
+                                "kind": "call_site",
+                                "file": site["file"],
+                                "start_line": site["line"],
+                                "end_line": site["line"],
+                                "text": site["expression"],
+                            },
+                            {
+                                "kind": "registration",
+                                "file": evidence["file"],
+                                "start_line": evidence["start_line"],
+                                "end_line": evidence["end_line"],
+                                "text": evidence["text"].splitlines()[0],
+                            },
+                        ],
+                    }
+                )
+        return json.dumps({"schema_version": 1, "decisions": decisions})
+
+    result = run_recovery_review(
+        diagnostics,
+        functions,
+        completion=completion,
+        include_candidate_sites=True,
+        max_sites=-1,
+        max_candidates_per_request=10,
+        max_prompt_chars=20_000,
+        max_retries=0,
+    )
+
+    assert result["status"] == "complete"
+    assert len(calls) == 3
+    assert result["summary"]["request_batches"] == 3
+    assert result["summary"]["accepted"] == 30
+    assert result["summary"]["unreviewed_sites"] == 0

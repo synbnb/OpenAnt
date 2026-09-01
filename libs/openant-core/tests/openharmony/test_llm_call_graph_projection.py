@@ -153,6 +153,44 @@ def test_candidate_less_residual_can_project_bounded_retrieval_target():
     assert overlay["edges"][0]["target_id"] == f"function:{TARGET}"
 
 
+def test_projects_wrapped_parser_registration_when_model_quotes_first_line():
+    """A two-line table write remains valid source evidence at projection."""
+    report = _report(_proposal())
+    report["worklist"][0]["candidate_registrations"] = [
+        {
+            "target_id": TARGET,
+            "target_name": "NetStub::HandleRequest",
+            "registration_evidence": {
+                "file": SOURCE,
+                "start_line": 24,
+                "end_line": 25,
+                "text": "memberFuncMap_[REQUEST] = {\n    &NetStub::HandleRequest};",
+            },
+        }
+    ]
+    report["validation"]["accepted"][0]["evidence"] = [
+        {
+            "kind": "call_site",
+            "file": SOURCE,
+            "start_line": 12,
+            "end_line": 12,
+            "text": "(this->*requestFunc)(data, reply)",
+        },
+        {
+            "kind": "registration",
+            "file": SOURCE,
+            "start_line": 24,
+            "end_line": 24,
+            "text": "memberFuncMap_[REQUEST] = {",
+        },
+    ]
+
+    overlay = project_recovery_overlay(report, _functions())
+
+    assert overlay["summary"]["projected_edges"] == 1
+    assert overlay["summary"]["rejected"] == 0
+
+
 def test_rejects_low_confidence_unknown_candidate_and_unbacked_evidence():
     low = _proposal(confidence="medium")
     unknown = _proposal(target_id=OTHER)
