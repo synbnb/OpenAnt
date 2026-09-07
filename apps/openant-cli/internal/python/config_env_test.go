@@ -51,3 +51,18 @@ func TestWithConfigEnvDoesNotExposeSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestWithConfigEnvLeavesImplicitMissingPathUnset(t *testing.T) {
+	// Keep the implicit legacy lookup isolated from the developer's real
+	// configuration. A temporary Go test executable cannot be used to discover
+	// the checkout root, so ResolvedPath returns this missing user path.
+	t.Setenv("OPENANT_CONFIG_FILE", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	env := withConfigEnv([]string{"KEEP=1"})
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "OPENANT_CONFIG_FILE=") {
+			t.Fatalf("implicit missing config path should not be passed: %q", entry)
+		}
+	}
+}

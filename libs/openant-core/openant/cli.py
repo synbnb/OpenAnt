@@ -911,6 +911,7 @@ def _source_locator_runtime(args):
         return SourceLocatorRuntime(project_root=_source_locator_project_root(args))
     llm_planner = _source_locator_llm_planner(args)
     llm_role_attributor = _source_locator_llm_role_attributor(args)
+    llm_candidate_reviewer = _source_locator_llm_candidate_reviewer(args)
     return runtime_from_config(
         config_path,
         project_root=_source_locator_project_root(args),
@@ -918,6 +919,7 @@ def _source_locator_runtime(args):
         max_source_bytes=getattr(args, "max_source_bytes", None),
         llm_planner=llm_planner,
         llm_role_attributor=llm_role_attributor,
+        llm_candidate_reviewer=llm_candidate_reviewer,
     )
 
 
@@ -933,8 +935,43 @@ def _source_locator_llm_planner(args):
 
     if not bool(getattr(args, "llm_search", False)):
         return None
+    # Source-locator planning only needs a short structured action JSON.  The
+    # normal analysis phases intentionally allow larger reasoning budgets, but
+    # carrying those defaults into this bounded search loop can make one
+    # Responses request occupy the whole Web request window.  These defaults
+    # are process-local (the source-locator command runs in its own Python
+    # worker) and remain overridable through the environment for diagnostics.
+    os.environ.setdefault("OPENANT_OPENAI_REASONING_EFFORT", "low")
+    os.environ.setdefault("OPENANT_OPENAI_MIN_OUTPUT_TOKENS", "4096")
+    os.environ.setdefault("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "120")
+    os.environ.setdefault("OPENANT_OPENAI_MAX_RETRIES", "0")
     try:
-        from core.source_locator import LLMSearchPlanner, PlannerBudget
+        from core.source_locator import LLM_SEARCH_MAX_ACTIONS
+    except Exception as exc:  # optional locator module must not block fallback
+        print(f"source-locator 语义规划器不可用，继续确定性检索：{_compact_cli_error(exc)}", file=sys.stderr)
+        return None
+    configured_rounds = getattr(args, "llm_search_rounds", None)
+    # Validate the user-selected budget before entering the optional-provider
+    # fallback block.  A malformed explicit value is an API/CLI input error;
+    # it must not be mistaken for a temporarily unavailable model and silently
+    # downgrade the run to deterministic search.
+    if (
+        configured_rounds is not None
+        and (
+            isinstance(configured_rounds, bool)
+            or not isinstance(configured_rounds, int)
+            or not 1 <= configured_rounds <= LLM_SEARCH_MAX_ACTIONS
+        )
+    ):
+        raise ValueError(f"llm_search_rounds 必须是 1 到 {LLM_SEARCH_MAX_ACTIONS} 的整数")
+    try:
+        from core.source_locator import (
+            LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+            LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS,
+            LLM_SEARCH_MAX_ACTIONS,
+            LLMSearchPlanner,
+            PlannerBudget,
+        )
         from core.source_locator.prompts import SEARCH_PLANNER_SYSTEM
         from utilities.llm import (
             build_phase_registry,
@@ -965,14 +1002,21 @@ def _source_locator_llm_planner(args):
                 max_tokens=2048,
             )
 
-        # The worker applies the per-session ``max_llm_actions`` cap (twenty by
-        # default, twenty at most).  Give the planner enough internal model-call
-        # budget to complete that bounded loop while reserving one repair call;
-        # without this explicit budget the planner's historical default of two
-        # model calls would silently stop before the configured rounds finish.
+        if configured_rounds is None:
+            max_actions = LLM_SEARCH_DEFAULT_MAX_ACTIONS
+        else:
+            max_actions = configured_rounds
+
+        # The worker applies the per-session ``max_llm_actions`` cap.  The
+        # planner receives the selected round budget and a separate 48-call budget
+        # so duplicate proposals, transient failures and the one schema-repair
+        # request do not silently truncate the effective action loop.
         return LLMSearchPlanner(
             model_call=call,
-            budget=PlannerBudget(max_actions=20, max_model_calls=21),
+            budget=PlannerBudget(
+                max_actions=max_actions,
+                max_model_calls=LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS,
+            ),
         )
     except Exception as exc:  # optional enhancement must never block locator
         print(f"source-locator 语义规划器不可用，继续确定性检索：{_compact_cli_error(exc)}", file=sys.stderr)
@@ -989,6 +1033,10 @@ def _source_locator_llm_role_attributor(args):
 
     if not bool(getattr(args, "llm_search", False)):
         return None
+    os.environ.setdefault("OPENANT_OPENAI_REASONING_EFFORT", "low")
+    os.environ.setdefault("OPENANT_OPENAI_MIN_OUTPUT_TOKENS", "4096")
+    os.environ.setdefault("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "120")
+    os.environ.setdefault("OPENANT_OPENAI_MAX_RETRIES", "0")
     try:
         from core.source_locator import LLMRoleAttributor
         from core.source_locator.llm_role_attributor import ROLE_ATTRIBUTION_SYSTEM
@@ -1019,6 +1067,48 @@ def _source_locator_llm_role_attributor(args):
         return LLMRoleAttributor(model_call=call)
     except Exception as exc:  # optional enhancement must never block locator
         print(f"source-locator LLM 角色复核不可用，继续确定性归因：{_compact_cli_error(exc)}", file=sys.stderr)
+        return None
+
+
+def _source_locator_llm_candidate_reviewer(args):
+    """Build the optional final repository-candidate PK model."""
+
+    if not bool(getattr(args, "llm_search", False)):
+        return None
+    os.environ.setdefault("OPENANT_OPENAI_REASONING_EFFORT", "low")
+    os.environ.setdefault("OPENANT_OPENAI_MIN_OUTPUT_TOKENS", "4096")
+    os.environ.setdefault("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "120")
+    os.environ.setdefault("OPENANT_OPENAI_MAX_RETRIES", "0")
+    try:
+        from core.source_locator import LLMCandidateReviewer
+        from core.source_locator.candidate_reviewer import CANDIDATE_REVIEW_SYSTEM
+        from utilities.llm import (
+            build_phase_registry,
+            load_config_file,
+            resolve_llm_config,
+            simple_text,
+        )
+
+        config_path = _source_locator_config_path(args)
+        config_file = load_config_file(Path(config_path))
+        llm_config = resolve_llm_config(config_file, getattr(args, "llm_config", None))
+        registry = build_phase_registry(config_file, llm_config)
+        try:
+            binding = registry.get("app_context")
+        except KeyError:
+            binding = registry.get("llm_reach")
+
+        def call(prompt: str):
+            return simple_text(
+                binding,
+                prompt,
+                system=CANDIDATE_REVIEW_SYSTEM,
+                max_tokens=2048,
+            )
+
+        return LLMCandidateReviewer(model_call=call)
+    except Exception as exc:  # optional enhancement must never block locator
+        print(f"source-locator LLM 候选 PK 不可用，继续确定性归因：{_compact_cli_error(exc)}", file=sys.stderr)
         return None
 
 
@@ -1342,6 +1432,179 @@ def cmd_source_locator_advance(args):
         session = worker.run_until_pause(max_steps=args.max_steps)
         _output_json(success(_source_locator_payload(machine)))
         return 0 if session.state not in {"FAILED", "CLONE_FAILED", "POST_CLONE_VERIFY_FAILED"} else 2
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+# ---------------------------------------------------------------------------
+# exposure-surface — standalone OpenHarmony device inspection
+# ---------------------------------------------------------------------------
+
+def _exposure_surface_store(args):
+    from core.exposure_surface import ExposureSessionStore
+
+    return ExposureSessionStore(args.root)
+
+
+def _exposure_surface_payload(session: dict) -> dict:
+    """Return a stable, display-friendly payload without exposing raw files."""
+
+    session_view = dict(session)
+    artifacts = session.get("artifacts", {})
+    # The session file internally stores absolute paths for the collector, but
+    # they are implementation details and may disclose the host layout. The
+    # Web/CLI contract exposes only registered artifact names; the Go endpoint
+    # serves the files through its own root/allowlist check.
+    session_view["artifacts"] = {
+        str(name): str(name)
+        for name in artifacts
+    } if isinstance(artifacts, dict) else {}
+    return {
+        "session": session_view,
+        "session_id": session_view.get("session_id"),
+        "state": session_view.get("state"),
+        "summary": session_view.get("summary"),
+        "artifacts": session_view.get("artifacts", {}),
+    }
+
+
+def cmd_exposure_surface_create(args):
+    from core.schemas import error, success
+
+    try:
+        session = _exposure_surface_store(args).create(
+            args.target,
+            device_serial=args.device_serial,
+            llm_assist=args.llm_assist,
+            session_id=args.session_id,
+            mode=args.mode,
+            allow_model_commands=args.allow_model_commands,
+            rag_mode=args.rag_mode,
+            max_rounds=args.max_rounds,
+            max_commands=args.max_commands,
+            batch_id=getattr(args, "batch_id", None),
+            batch_index=getattr(args, "batch_index", None),
+            batch_total=getattr(args, "batch_total", None),
+        )
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_status(args):
+    from core.schemas import error, success
+
+    try:
+        session = _exposure_surface_store(args).load(args.session_id)
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_list(args):
+    from core.schemas import error, success
+
+    try:
+        store = _exposure_surface_store(args)
+        _output_json(success({"root": str(store.root), "sessions": [_exposure_surface_payload(session)["session"] for session in store.list_sessions()]}))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_events(args):
+    from core.schemas import error, success
+
+    try:
+        events = _exposure_surface_store(args).events(args.session_id, after=args.after)
+        _output_json(success({"session_id": args.session_id, "events": events}))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_start(args):
+    from core.schemas import error, success
+    from core.exposure_surface import run_exposure_session
+
+    try:
+        session = run_exposure_session(args.root, args.session_id, hdc_path=args.hdc_path)
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0 if session.get("state") not in {"FAILED", "OFFLINE", "PERMISSION_DENIED"} else 2
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_start_service(args):
+    """在用户明确确认后启动服务，并重新执行暴露面探测。"""
+
+    from core.schemas import error, success
+    from core.exposure_surface import start_exposure_service
+
+    try:
+        session = start_exposure_service(
+            args.root,
+            args.session_id,
+            option_id=args.option_id,
+            hdc_path=args.hdc_path,
+        )
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0 if session.get("state") not in {"FAILED", "OFFLINE", "PERMISSION_DENIED"} else 2
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_skip_start(args):
+    """记录用户拒绝启动服务的决定，不向开发板写入参数。"""
+
+    from core.schemas import error, success
+    from core.exposure_surface import decline_exposure_service
+
+    try:
+        session = decline_exposure_service(args.root, args.session_id, args.reason)
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_cancel(args):
+    from core.schemas import error, success
+
+    try:
+        store = _exposure_surface_store(args)
+        session = store.load(args.session_id)
+        if session.get("state") not in {"DONE", "PARTIAL", "OFFLINE", "NOT_FOUND", "PERMISSION_DENIED", "CANCELLED", "FAILED"}:
+            session = store.update(
+                args.session_id,
+                state="CANCELLED",
+                summary_zh=args.reason or "已取消暴露面识别",
+                cancel_reason=(args.reason or "用户取消"),
+            )
+        _output_json(success(_exposure_surface_payload(session)))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_exposure_surface_delete(args):
+    from core.schemas import error, success
+
+    try:
+        _exposure_surface_store(args).delete(args.session_id)
+        _output_json(success({"session_id": args.session_id, "deleted": True}))
+        return 0
     except Exception as exc:
         _output_json(error(str(exc)))
         return 2
@@ -2607,6 +2870,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="启用有界多轮 LLM 语义检索循环（默认关闭，避免意外产生模型费用）",
     )
     sl_advance.add_argument(
+        "--llm-search-rounds",
+        type=int,
+        default=None,
+        help="本次 LLM 语义检索最多接受的有效动作数（1-40；默认 40）",
+    )
+    sl_advance.add_argument(
         "--llm-config",
         default=None,
         help="语义检索使用的模型配置名；未指定时沿用配置文件默认模型",
@@ -2630,11 +2899,138 @@ def build_parser() -> argparse.ArgumentParser:
         help="启用有界多轮 LLM 语义检索循环（默认关闭，避免意外产生模型费用）",
     )
     sl_run.add_argument(
+        "--llm-search-rounds",
+        type=int,
+        default=None,
+        help="本次 LLM 语义检索最多接受的有效动作数（1-40；默认 40）",
+    )
+    sl_run.add_argument(
         "--llm-config",
         default=None,
         help="语义检索使用的模型配置名；未指定时沿用配置文件默认模型",
     )
     sl_run.set_defaults(func=cmd_source_locator_advance)
+
+    # ---------------------------------------------------------------
+    # exposure-surface — standalone OpenHarmony device exposure inspection
+    # ---------------------------------------------------------------
+    es_p = subparsers.add_parser(
+        "exposure-surface",
+        help="创建并执行 OpenHarmony 设备暴露面识别 session（启动需用户确认）",
+    )
+    es_sub = es_p.add_subparsers(dest="exposure_surface_command", required=True)
+
+    es_create = es_sub.add_parser("create", help="创建暴露面识别 session")
+    es_create.add_argument(
+        "target",
+        help="Unix socket 路径/名称，或网络端点描述（例如：SP_daemon UDP 127.0.0.1:8283）",
+    )
+    es_create.add_argument("--root", required=True, help="session 持久化根目录")
+    es_create.add_argument("--device-serial", default=None, help="可选的 HDC 设备 serial")
+    es_create.add_argument(
+        "--llm-assist",
+        action="store_true",
+        help="使用 app_context 模型从已采集设备证据提取字段（失败时回退确定性结果）",
+    )
+    es_create.add_argument(
+        "--mode",
+        choices=("fixed", "agentic"),
+        default="fixed",
+        help="执行模式：fixed 固定探测；agentic 由模型循环选择设备命令",
+    )
+    es_create.add_argument(
+        "--allow-model-commands",
+        action="store_true",
+        help="明确授权 Agentic Loop 执行模型提出的设备命令",
+    )
+    es_create.add_argument(
+        "--rag-mode",
+        choices=("off", "local"),
+        default="local",
+        help="Agent 本地命令指南检索模式",
+    )
+    es_create.add_argument(
+        "--max-rounds",
+        type=int,
+        default=20,
+        help="Agent 最大模型轮数（最多 20）",
+    )
+    es_create.add_argument(
+        "--max-commands",
+        type=int,
+        default=100,
+        help="Agent 最大设备命令数（最多 100）",
+    )
+    es_create.add_argument(
+        "--batch-id",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    es_create.add_argument(
+        "--batch-index",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    es_create.add_argument(
+        "--batch-total",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    es_create.add_argument("--session-id", default=None)
+    es_create.set_defaults(func=cmd_exposure_surface_create)
+
+    es_status = es_sub.add_parser("status", help="读取暴露面 session")
+    es_status.add_argument("session_id")
+    es_status.add_argument("--root", required=True)
+    es_status.set_defaults(func=cmd_exposure_surface_status)
+
+    es_list = es_sub.add_parser("list", help="列出历史暴露面 session")
+    es_list.add_argument("--root", required=True)
+    es_list.set_defaults(func=cmd_exposure_surface_list)
+
+    es_events = es_sub.add_parser("events", help="读取暴露面 session 事件")
+    es_events.add_argument("session_id")
+    es_events.add_argument("--root", required=True)
+    es_events.add_argument("--after", type=int, default=0)
+    es_events.set_defaults(func=cmd_exposure_surface_events)
+
+    es_start = es_sub.add_parser("start", help="执行一次只读设备探测；发现停止服务时等待确认")
+    es_start.add_argument("session_id")
+    es_start.add_argument("--root", required=True)
+    es_start.add_argument("--hdc-path", default=None, help=argparse.SUPPRESS)
+    es_start.set_defaults(func=cmd_exposure_surface_start)
+
+    es_start_service = es_sub.add_parser(
+        "start-service",
+        help="在用户确认后启动已配置但停止的服务并重新侦查",
+    )
+    es_start_service.add_argument("session_id")
+    es_start_service.add_argument("--root", required=True)
+    es_start_service.add_argument("--option-id", default=None, help="待启动服务选项 ID")
+    es_start_service.add_argument("--hdc-path", default=None, help=argparse.SUPPRESS)
+    es_start_service.set_defaults(func=cmd_exposure_surface_start_service)
+
+    es_skip_start = es_sub.add_parser(
+        "skip-start",
+        help="拒绝启动已停止服务并保留设备当前状态",
+    )
+    es_skip_start.add_argument("session_id")
+    es_skip_start.add_argument("--root", required=True)
+    es_skip_start.add_argument("--reason", default="用户选择保持停止")
+    es_skip_start.set_defaults(func=cmd_exposure_surface_skip_start)
+
+    es_cancel = es_sub.add_parser("cancel", help="取消暴露面识别 session")
+    es_cancel.add_argument("session_id")
+    es_cancel.add_argument("--root", required=True)
+    es_cancel.add_argument("--reason", default="用户取消暴露面识别")
+    es_cancel.set_defaults(func=cmd_exposure_surface_cancel)
+
+    es_delete = es_sub.add_parser("delete", help="删除暴露面 session 及其产物")
+    es_delete.add_argument("session_id")
+    es_delete.add_argument("--root", required=True)
+    es_delete.set_defaults(func=cmd_exposure_surface_delete)
 
     return parser
 

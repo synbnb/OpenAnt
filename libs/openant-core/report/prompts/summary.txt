@@ -74,6 +74,19 @@ OUTPUT FORMAT:
 |---|--------------|----------|-----|----------|
 | 1 | {short_name} | {file:function} | CWE-{n} | {static|verified|dynamic} |
 
+## Unverified Candidates
+
+[For each finding whose stage2_verdict is "unverified" or review_status is
+"needs_review", include one row. These are not confirmed vulnerabilities and
+must remain visible for manual review rather than being presented as safe or
+rejected. Use the assessment fields when present to explain whether the defect,
+route, impact, or evidence is still unknown.]
+[If none, write: "No unverified candidates remain."]
+
+| # | Candidate | Location | Stage 1 | Assessment | Missing evidence |
+|---|-----------|----------|---------|------------|------------------|
+| 1 | {name} | {file:function} | {stage1_verdict} | {defect/reachability/impact statuses} | {short list} |
+
 ## False Positives Eliminated
 
 [For each finding that Stage 2 rejected.]
@@ -98,6 +111,9 @@ INSTRUCTIONS:
 - If a count is zero, still show "0" in the table
 - Keep "Reason" column under 15 words
 - "Verified" column: "dynamic" if dynamic_testing exists for that finding, "verified" if stage2_verdict is "confirmed" or "agreed" (Stage 2 attacker simulation passed), else "static"
+- Unverified Candidates must not be counted as confirmed vulnerabilities, safe,
+  or false positives. Keep their exact location and assessment/missing-evidence
+  fields so a reviewer can decide what evidence to collect next.
 - Language comes from repository.language
 - Commit SHA comes from repository.commit_sha; if null or missing, write "Not available"
 - Scan Mode is derived from the top-level `diff` field on the input data:

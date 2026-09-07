@@ -184,6 +184,28 @@ def test_two_hop_recovery_only_expands_after_projected_edge():
     ])
 
 
+def test_iterative_summary_exposes_review_counters_for_stage_reports():
+    functions = _functions()
+    report = run_iterative_recovery_review(
+        _diagnostics(),
+        functions,
+        completion=_completion_for(functions, _diagnostics()),
+        max_rounds=4,
+        max_sites_per_round=10,
+        retry_backoff_seconds=0,
+    )
+
+    # The scheduler's canonical counters are useful for BFS, but the stage
+    # report and Web UI also need the review counters used by one-shot mode.
+    # These assertions reproduce the regression where all of them appeared as
+    # zero for an iterative run.
+    assert report["summary"]["attempts"] == 2
+    assert report["summary"]["parsed_decisions"] == 2
+    assert report["summary"]["accepted"] == 2
+    assert report["summary"]["kept_unresolved"] == 0
+    assert report["summary"]["rejected"] == 0
+
+
 def test_native_edge_reaches_residual_without_llm_edge_on_entry():
     functions = _functions()
     diagnostics = {

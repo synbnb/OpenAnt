@@ -25,6 +25,10 @@ class Finding:
     suggested_fix: Optional[str] = None
     steps_to_reproduce: Optional[list] = None
     rejection_reason: Optional[str] = None
+    # Additive Stage-2 evidence fields.  Older pipeline artifacts omit them;
+    # ``from_dict`` keeps those artifacts backwards compatible.
+    review_status: Optional[str] = None
+    verification_assessment: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Finding":
@@ -46,6 +50,8 @@ class Finding:
             suggested_fix=data.get("suggested_fix"),
             steps_to_reproduce=data.get("steps_to_reproduce"),
             rejection_reason=data.get("rejection_reason"),
+            review_status=data.get("review_status"),
+            verification_assessment=data.get("verification_assessment"),
         )
 
 

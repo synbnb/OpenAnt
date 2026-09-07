@@ -97,3 +97,6 @@ exclude = [
 # Claude Code dynamic-test tasks use these Markdown templates at runtime. Keep
 # them in installed wheels as data rather than relying on a source checkout.
 "utilities/dynamic_tester/templates/claude_code" = "utilities/dynamic_tester/templates/claude_code"
+# The exposure-surface Agentic Loop uses one local Markdown command guide for
+# deterministic, offline RAG retrieval. Ship it as data with the wheel.
+"knowledge/openharmony_exposure_surface_command_guide.zh-CN.md" = "knowledge/openharmony_exposure_surface_command_guide.zh-CN.md"

@@ -54,6 +54,141 @@ def _print_chinese_log(message: str) -> None:
     print_chinese_log(message)
 
 
+_CALL_GRAPH_REVIEW_COUNTERS = (
+    "attempts",
+    "parsed_decisions",
+    "accepted",
+    "kept_unresolved",
+    "rejected",
+)
+
+
+def _counter_value(summary, key: str) -> int:
+    """Read a report counter without allowing malformed JSON to break a scan."""
+    if not isinstance(summary, Mapping):
+        return 0
+    try:
+        return max(0, int(summary.get(key, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _iterative_review_counters(report):
+    """Collect one-shot review counters nested inside an iterative report.
+
+    Iterative recovery originally exposed only BFS counters at the report root
+    (for example ``sites_scheduled`` and ``accepted_decisions``).  Each round
+    still contains the complete one-shot review result, so use those nested
+    summaries as the source of truth when normalising the stage report.  The
+    validation-list fallback keeps older test and production artifacts useful
+    even if a round did not persist a nested summary.
+    """
+    totals = {key: 0 for key in _CALL_GRAPH_REVIEW_COUNTERS}
+    present = set()
+    if not isinstance(report, Mapping):
+        return totals, present
+
+    # A stage aggregate wraps one iterative report per language under
+    # ``reports[*].report``. A per-language report stores ``rounds`` at its
+    # own root. Normalize both shapes so historical and current artifacts use
+    # the same counter source.
+    report_sources = []
+    if isinstance(report.get("rounds"), list):
+        report_sources.append(report)
+    children = report.get("reports")
+    if isinstance(children, list):
+        report_sources.extend(
+            item.get("report")
+            for item in children
+            if isinstance(item, Mapping) and isinstance(item.get("report"), Mapping)
+        )
+
+    for report_source in report_sources:
+        rounds = report_source.get("rounds", [])
+        if not isinstance(rounds, list):
+            continue
+        for round_item in rounds:
+            if not isinstance(round_item, Mapping):
+                continue
+            review = round_item.get("review")
+            if not isinstance(review, Mapping):
+                review = {}
+            nested = review.get("summary")
+            if isinstance(nested, Mapping):
+                for key in _CALL_GRAPH_REVIEW_COUNTERS:
+                    if key in nested:
+                        totals[key] += _counter_value(nested, key)
+                        present.add(key)
+                continue
+
+            # Early iterative artifacts persisted the validation lists but not
+            # ``review.summary``. Recover the decision counters from those
+            # lists.
+            validation = review.get("validation")
+            if not isinstance(validation, Mapping):
+                continue
+            list_keys = {
+                "accepted": "accepted",
+                "kept_unresolved": "kept_unresolved",
+                "rejected": "rejected",
+            }
+            parsed = 0
+            for counter, list_name in list_keys.items():
+                values = validation.get(list_name)
+                if isinstance(values, list):
+                    count = len(values)
+                    totals[counter] += count
+                    present.add(counter)
+                    parsed += count
+            if parsed or any(name in validation for name in list_keys.values()):
+                totals["parsed_decisions"] += parsed
+                present.add("parsed_decisions")
+
+    return totals, present
+
+
+def _normalise_call_graph_review_summary(report, *, iterative: bool):
+    """Return a backwards-compatible, truthful summary for an optional stage."""
+    raw = report.get("summary", {}) if isinstance(report, Mapping) else {}
+    if not isinstance(raw, Mapping):
+        return {}
+    normalized = dict(raw)
+    if not iterative:
+        return normalized
+
+    nested, nested_present = _iterative_review_counters(report)
+    for key in _CALL_GRAPH_REVIEW_COUNTERS:
+        if key in nested_present:
+            normalized[key] = nested[key]
+
+    # Compatibility with iterative artifacts written before review counters
+    # were added.  Canonical BFS counters remain authoritative for aliases;
+    # a nested counter, when available, always wins over a stale zero.
+    if "attempts" not in nested_present and _counter_value(raw, "attempts") == 0:
+        normalized["attempts"] = _counter_value(raw, "llm_calls")
+    if "accepted" not in nested_present and _counter_value(raw, "accepted") == 0:
+        normalized["accepted"] = _counter_value(raw, "accepted_decisions")
+    if "parsed_decisions" not in nested_present and _counter_value(raw, "parsed_decisions") == 0:
+        parsed = (
+            _counter_value(normalized, "accepted")
+            + _counter_value(normalized, "kept_unresolved")
+            + _counter_value(normalized, "rejected")
+        )
+        if parsed == 0:
+            parsed = _counter_value(raw, "accepted_decisions")
+        normalized["parsed_decisions"] = parsed
+    if "kept_unresolved" not in nested_present and _counter_value(raw, "kept_unresolved") == 0:
+        worklist = _counter_value(raw, "worklist_sites")
+        accepted = _counter_value(normalized, "accepted")
+        rejected = _counter_value(normalized, "rejected")
+        unreviewed = _counter_value(raw, "unreviewed_sites")
+        normalized["kept_unresolved"] = max(
+            0,
+            worklist - accepted - rejected - unreviewed,
+        )
+    return normalized
+
+
 
 def resolve_call_graph_dirs(output_dir: str) -> dict[str | None, str]:
     """Directories holding a usable ``call_graph.json``, keyed by language.
@@ -91,19 +226,20 @@ def resolve_call_graph_dirs(output_dir: str) -> dict[str | None, str]:
 
 
 def scope_entry_points_to_units(entry_point_ids, units: list[dict]) -> set:
-    """Restrict promoted entry-point ids to those present in *units*.
+    """Restrict reachability seed ids to those present in *units*.
 
     ``apply_reachability_filter`` unions ``extra_entry_points`` into its seed
     set BEFORE evaluating the empty-seed safety net. Passing the whole run's
-    promoted ids to a single language's filter therefore hands it seeds that do
+    promoted entry-point or semantic seed ids to a single language's filter
+    therefore hands it seeds that do
     not exist in that language's call graph: the seed set is non-empty, so the
     "no entry points — pass everything through rather than black out" guard
     never fires, BFS reaches nothing, and every unit of that language is
     dropped from the scan while it still reports success.
 
-    Scoping per partition restores the guard: a language with no promoted units
-    of its own gets an EMPTY seed set, which is exactly the condition the
-    safety net is written to detect.
+    Scoping per partition restores the guard: a language with no promoted or
+    semantic-seed units of its own gets an EMPTY seed set, which is exactly the
+    condition the safety net is written to detect.
     """
     if not entry_point_ids:
         return set()
@@ -806,10 +942,12 @@ def scan_repository(
     # Runs after parse + app-context and before enhance/analyze. Because parse
     # was done with processing_level="all" (when filtering is requested), the
     # LLM sees every unit in the codebase and can identify entry points the
-    # structural heuristics would miss.  After signals are applied the
-    # structural reachability filter is re-run with LLM-promoted entry points
-    # added as extra BFS seeds, so the final dataset honours the user's
-    # requested processing_level.  Threading app_context into the prompt helps
+    # structural heuristics would miss. After signals are applied, the
+    # structural reachability filter is re-run with LLM entry points and
+    # high-confidence semantic seeds as extra BFS roots; medium-confidence
+    # targets are retained without becoming roots, so the final dataset
+    # honours the user's requested processing_level. Threading app_context into
+    # the prompt helps
     # the model reason about expected entry points (e.g. "this is a web_app,
     # look for HTTP handlers").
     if llm_reachability:
@@ -829,7 +967,9 @@ def scan_repository(
         )
         _print_chinese_log(
             "可达性安全边界：LLM 只产生入口/输入信号和审计证据；"
-            "原生调用图不被直接改写，若有调用图则只在语义信号合并后重新做可达性筛选。"
+            "external_input/cross_process 的 high 信号作为 BFS 语义种子，"
+            "medium 信号只保留对应单元、不扩散 BFS；"
+            "证据、边界和方向只用于审计，原生调用图不被直接改写。"
         )
 
         with step_context("llm-reachability", output_dir, inputs={
@@ -912,15 +1052,34 @@ def scan_repository(
                 )
                 summary = apply_signals(dataset, signals)
 
+                # Persist both the raw/normalized signals and the local seed
+                # decisions. Downstream stages must not infer semantic seeds
+                # solely from ``is_entry_point`` because external-input and
+                # cross-process signals intentionally keep that flag
+                # false.
                 signals_path = os.path.join(output_dir, "llm_reachability.json")
-                write_json(signals_path, {"signals": signals_to_json(signals)}, indent=2)
+                write_json(
+                    signals_path,
+                    {
+                        "signals": signals_to_json(signals),
+                        "summary": summary,
+                    },
+                    indent=2,
+                )
+
+                reachability_metadata = dict(dataset.get("metadata") or {})
+                reachability_metadata["llm_reachability"] = summary
+                dataset["metadata"] = reachability_metadata
 
                 pre_filter_count = len(dataset.get("units", []))
                 post_filter_count = pre_filter_count
                 refilter_supported = False
 
-                # Re-apply the structural reachability filter using
-                # LLM-promoted entry points as additional BFS seeds.
+                # Re-apply the structural reachability filter using LLM
+                # entry points and accepted high-confidence semantic seeds as
+                # additional BFS roots. Medium-confidence semantic units are
+                # passed separately and retained after BFS without expansion;
+                # the parser keeps all labels distinct.
                 # Only possible when the parser persisted call_graph.json.
                 # Which parsers do so is determined by PROBING THE FILESYSTEM
                 # below, not by a hardcoded language list — an earlier comment
@@ -937,6 +1096,20 @@ def scan_repository(
                         llm_promoted_ids = {
                             u["id"] for u in dataset.get("units", [])
                             if u.get("is_entry_point") and u.get("id")
+                        }
+                        semantic_seed_ids = {
+                            str(unit_id)
+                            for unit_id in summary.get("semantic_seed_ids", [])
+                            if unit_id
+                        }
+                        semantic_retain_only_ids = {
+                            str(unit.get("id"))
+                            for unit in dataset.get("units", [])
+                            if (
+                                unit.get("semantic_reachability_retain_only") is True
+                                or unit.get("reachability_retain_only") is True
+                            )
+                            and unit.get("id")
                         }
                         partitions = partition_units_by_language(
                             dataset.get("units", [])
@@ -982,6 +1155,12 @@ def scan_repository(
                                 extra_entry_points=scope_entry_points_to_units(
                                     llm_promoted_ids, lang_units
                                 ),
+                                extra_reachability_seeds=scope_entry_points_to_units(
+                                    semantic_seed_ids, lang_units
+                                ),
+                                extra_retain_only_units=scope_entry_points_to_units(
+                                    semantic_retain_only_ids, lang_units
+                                ),
                                 library_mode=library_mode,
                                 platform=effective_platform,
                             )
@@ -1011,6 +1190,13 @@ def scan_repository(
                                 _per_lang[_lang] = {
                                     "original_units": _cnt,
                                     "entry_points": 0,
+                                    "entry_point_labels": 0,
+                                    "semantic_seed_count": 0,
+                                    "semantic_seed_ids": [],
+                                    "semantic_retain_only_count": 0,
+                                    "semantic_retain_only_ids": [],
+                                    "reachable_only_count": 0,
+                                    "reachable_only_ids": [],
                                     "reachable_units": _cnt,
                                     "filtered_out": 0,
                                     "reduction_percentage": 0,
@@ -1027,6 +1213,51 @@ def scan_repository(
                                 "entry_points": sum(
                                     r.get("entry_points", 0) for r in _per_lang.values()
                                 ),
+                                "entry_point_labels": sum(
+                                    r.get("entry_point_labels", r.get("entry_points", 0))
+                                    for r in _per_lang.values()
+                                ),
+                                "semantic_seed_count": sum(
+                                    r.get("semantic_seed_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "semantic_seed_ids": sorted({
+                                    str(seed_id)
+                                    for r in _per_lang.values()
+                                    for seed_id in (r.get("semantic_seed_ids", []) or [])
+                                    if seed_id
+                                }),
+                                "semantic_retain_only_count": sum(
+                                    r.get("semantic_retain_only_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "semantic_retain_only_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (
+                                        r.get("semantic_retain_only_ids", []) or []
+                                    )
+                                    if unit_id
+                                }),
+                                "reachable_only_count": sum(
+                                    r.get(
+                                        "reachable_only_count",
+                                        r.get("semantic_retain_only_count", 0),
+                                    )
+                                    for r in _per_lang.values()
+                                ),
+                                "reachable_only_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (
+                                        r.get(
+                                            "reachable_only_ids",
+                                            r.get("semantic_retain_only_ids", []),
+                                        )
+                                        or []
+                                    )
+                                    if unit_id
+                                }),
                                 "reachable_units": _reach,
                                 "filtered_out": _orig - _reach,
                                 # Units that flowed through unfiltered (no call
@@ -1105,6 +1336,25 @@ def scan_repository(
                     "units_reviewed": pre_filter_count,
                     "signals_added": summary["signals_applied"],
                     "entry_points_promoted": summary["entry_points_promoted"],
+                    "semantic_seed_count": len(summary.get("semantic_seed_ids", [])),
+                    "semantic_seed_ids": summary.get("semantic_seed_ids", []),
+                    "semantic_retain_only_count": len(
+                        summary.get("semantic_retain_only_ids", [])
+                    ),
+                    "semantic_retain_only_ids": summary.get(
+                        "semantic_retain_only_ids", []
+                    ),
+                    "reachable_only_ids": summary.get("reachable_only_ids", []),
+                    "reachable_only_count": len(
+                        summary.get("reachable_only_ids", [])
+                    ),
+                    "seed_counts": summary.get("seed_counts", {}),
+                    "retained_only_counts": summary.get(
+                        "retained_only_counts", {}
+                    ),
+                    "seed_rejected_counts": summary.get("rejected_counts", {}),
+                    "seed_review_only": summary.get("review_only", 0),
+                    "retained_only": summary.get("retained_only", 0),
                     "units_touched": summary["units_touched"],
                     "post_filter_units": post_filter_count,
                     "refilter_supported": refilter_supported,
@@ -1113,12 +1363,16 @@ def scan_repository(
 
                 print(
                     f"  LLM reachability: {summary['signals_applied']} signals, "
-                    f"{summary['entry_points_promoted']} new entry points",
+                    f"{summary['entry_points_promoted']} new entry points, "
+                    f"{len(summary.get('semantic_seed_ids', []))} semantic seeds, "
+                    f"{len(summary.get('reachable_only_ids', summary.get('semantic_retain_only_ids', [])))} retained-only units",
                     file=sys.stderr,
                 )
                 _print_chinese_log(
                     f"可达性结果：模型应用 {summary['signals_applied']} 条信号，"
                     f"提升 {summary['entry_points_promoted']} 个入口，"
+                    f"接受 {len(summary.get('semantic_seed_ids', []))} 个 high 语义种子，"
+                    f"保留 {len(summary.get('reachable_only_ids', summary.get('semantic_retain_only_ids', [])))} 个 medium 单元（不扩散 BFS），"
                     f"触及 {summary['units_touched']} 个单元；结果写入 {signals_path}。"
                 )
                 if processing_level != "all" and refilter_supported:
@@ -1127,7 +1381,8 @@ def scan_repository(
                         file=sys.stderr,
                     )
                     _print_chinese_log(
-                        f"可达性筛选：已用模型提升的入口重新做 BFS，"
+                        f"可达性筛选：high 入口/语义种子已重新做 BFS，"
+                        f"medium 单元仅直接保留、不作为 BFS 根；"
                         f"下游阶段将处理 {post_filter_count} 个单元，而不是原始 {pre_filter_count} 个单元。"
                     )
                 elif processing_level != "all":
@@ -1251,7 +1506,10 @@ def scan_repository(
                             str(unit.get("id"))
                             for unit in dataset_units
                             if isinstance(unit, dict)
-                            and unit.get("is_entry_point") is True
+                            and (
+                                unit.get("is_entry_point") is True
+                                or unit.get("semantic_reachability_seed") is True
+                            )
                             and unit.get("id")
                         }
                 except Exception as exc:
@@ -1402,7 +1660,11 @@ def scan_repository(
                     "failed_rounds": 0,
                 }
                 for item in reports:
-                    summary = item.get("report", {}).get("summary", {})
+                    report_payload = item.get("report", {})
+                    summary = _normalise_call_graph_review_summary(
+                        report_payload,
+                        iterative=iterative_mode,
+                    )
                     if not isinstance(summary, dict):
                         continue
                     for key in (
@@ -1462,6 +1724,12 @@ def scan_repository(
                 elif overall_status == "failed":
                     ctx.status = "skipped"
                     _record_skip(result, recovery_step, "failed")
+                elif overall_status == "partial":
+                    # The stage ran, but at least one language/report was
+                    # incomplete. Preserve that distinction in the step
+                    # report instead of presenting a partial review as a
+                    # fully covered stage.
+                    ctx.status = "partial"
                 _print_chinese_log(
                     f"调用图恢复结果：状态={overall_status}，语言数={len(reports)}，"
                     f"待复核站点={aggregate['worklist_sites']}，请求批次={aggregate.get('request_batches', 0)}，"
@@ -2184,6 +2452,19 @@ def _apply_projection_reachability_filter(
         for unit_id, unit in current_by_id.items()
         if unit.get("is_entry_point") is True
     }
+    extra_reachability_seeds = {
+        unit_id
+        for unit_id, unit in current_by_id.items()
+        if unit.get("semantic_reachability_seed") is True
+    }
+    extra_retain_only_units = {
+        unit_id
+        for unit_id, unit in current_by_id.items()
+        if (
+            unit.get("semantic_reachability_retain_only") is True
+            or unit.get("reachability_retain_only") is True
+        )
+    }
     graph_dirs = resolve_call_graph_dirs(output_dir)
     if not graph_dirs:
         return {
@@ -2256,6 +2537,12 @@ def _apply_projection_reachability_filter(
                 extra_entry_points=scope_entry_points_to_units(
                     extra_entry_points, language_units
                 ),
+                extra_reachability_seeds=scope_entry_points_to_units(
+                    extra_reachability_seeds, language_units
+                ),
+                extra_retain_only_units=scope_entry_points_to_units(
+                    extra_retain_only_units, language_units
+                ),
                 library_mode=library_mode,
                 platform=effective_platform,
                 semantic_graph_overlay=language_overlay,
@@ -2275,6 +2562,13 @@ def _apply_projection_reachability_filter(
                     "is_entry_point",
                     "entry_point_reason",
                     "llm_reachability_signals",
+                    "semantic_reachability_seed",
+                    "semantic_reachability_retain_only",
+                    "reachability_retain_only",
+                    "reachability_seed_source",
+                    "semantic_seed_reasons",
+                    "reachability_retain_only_source",
+                    "semantic_retain_only_reasons",
                 ):
                     if key in current:
                         unit[key] = current[key]
@@ -2897,6 +3191,8 @@ def _run_openharmony_recovery_projection_stage(
             elif overall_status == "failed":
                 ctx.status = "skipped"
                 _record_skip(result, projection_step, "failed")
+            elif overall_status == "partial":
+                ctx.status = "partial"
 
             print(
                 f"  LLM overlay: {aggregate['projected_edges']} edge(s), "
@@ -3002,7 +3298,10 @@ def _run_openharmony_candidate_review_stage(
                         str(unit.get("id"))
                         for unit in dataset_units
                         if isinstance(unit, dict)
-                        and unit.get("is_entry_point") is True
+                        and (
+                            unit.get("is_entry_point") is True
+                            or unit.get("semantic_reachability_seed") is True
+                        )
                         and unit.get("id")
                     }
             except Exception as exc:
@@ -3090,7 +3389,7 @@ def _run_openharmony_candidate_review_stage(
                 overall_status = "no_artifacts"
             elif report_statuses <= {"complete", "no_sites"}:
                 overall_status = "complete"
-            elif report_statuses & {"complete", "no_sites"}:
+            elif report_statuses & {"complete", "no_sites", "partial"}:
                 overall_status = "partial"
             else:
                 overall_status = "failed"
@@ -3154,6 +3453,8 @@ def _run_openharmony_candidate_review_stage(
             elif overall_status == "failed":
                 ctx.status = "skipped"
                 _record_skip(result, review_step, "failed")
+            elif overall_status == "partial":
+                ctx.status = "partial"
             _print_chinese_log(
                 f"候选边复核结果：状态={overall_status}，待审站点={aggregate['worklist_sites']}，"
                 f"请求批次={aggregate.get('request_batches', 0)}，"
@@ -3335,6 +3636,8 @@ def _run_openharmony_dispatch_code_evidence_stage(
             elif overall_status == "failed":
                 ctx.status = "skipped"
                 _record_skip(result, evidence_step, "failed")
+            elif overall_status == "partial":
+                ctx.status = "partial"
             _print_chinese_log(
                 f"分派码证据结果：状态={overall_status}，站点={aggregate['sites']}，"
                 f"候选分派码={aggregate['candidate_cases']}，已解析={aggregate['resolved_cases']}，"

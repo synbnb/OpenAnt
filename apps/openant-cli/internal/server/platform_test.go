@@ -84,6 +84,94 @@ func TestNormalizeLLMReachabilityMaxCodeBytes(t *testing.T) {
 	}
 }
 
+func TestNormalizeScanExecutionOptions(t *testing.T) {
+	if got, ok := normalizeScanLevel(""); !ok || got != defaultScanLevel {
+		t.Fatalf("default scan level = (%q, %v), want (%q, true)", got, ok, defaultScanLevel)
+	}
+	if _, ok := normalizeScanLevel("bogus"); ok {
+		t.Fatal("unknown scan level was accepted")
+	}
+	if got, ok := normalizeEnhanceMode("single-shot"); !ok || got != "single-shot" {
+		t.Fatalf("single-shot enhancement mode = (%q, %v)", got, ok)
+	}
+	if _, ok := normalizeEnhanceMode("multi-agent"); ok {
+		t.Fatal("unknown enhancement mode was accepted")
+	}
+	for _, tt := range []struct {
+		raw      string
+		fallback int
+		min      int
+		max      int
+		want     int
+		valid    bool
+	}{
+		{"", 8, 1, 64, 8, true},
+		{"16", 8, 1, 64, 16, true},
+		{"0", 8, 0, 100, 0, true},
+		{"65", 8, 1, 64, 0, false},
+		{"oops", 8, 1, 64, 0, false},
+	} {
+		got, ok := normalizeBoundedInt(tt.raw, tt.fallback, tt.min, tt.max)
+		if got != tt.want || ok != tt.valid {
+			t.Errorf("normalizeBoundedInt(%q) = (%d, %v), want (%d, %v)", tt.raw, got, ok, tt.want, tt.valid)
+		}
+	}
+	for _, tt := range []struct {
+		raw   string
+		want  float64
+		valid bool
+	}{
+		{"", defaultMinLanguageShare, true}, {"0", 0, true}, {"0.5", 0.5, true}, {"1.01", 0, false}, {"x", 0, false},
+	} {
+		got, ok := normalizeMinLanguageShare(tt.raw)
+		if got != tt.want || ok != tt.valid {
+			t.Errorf("normalizeMinLanguageShare(%q) = (%v, %v), want (%v, %v)", tt.raw, got, ok, tt.want, tt.valid)
+		}
+	}
+}
+
+func TestBuildScanArgsForAllWebOptions(t *testing.T) {
+	job := &Job{
+		Repo:      "/tmp/repo",
+		languages: []string{"c", "python"}, platform: "openharmony", level: "all",
+		noContext: true, noEnhance: false, enhanceMode: "single-shot", noReport: true,
+		noSkipTests: true, allLanguages: true, multiLanguage: false, minLanguageFiles: 9,
+		minLanguageShare: 0, strictLanguages: true, limit: 42, llmConfig: "analysis",
+		workers: 12, backoff: 0, verify: true, llmReachability: true,
+		llmReachabilityMaxCodeBytes: 4096, llmCallGraphRecovery: true,
+		llmCallGraphIterative: true, llmCallGraphCandidateReview: true,
+		llmCallGraphProjection: true, dispatchCodeEvidence: true,
+		dynamicTest: true, dynamicTestMode: "docker", libraryMode: true,
+	}
+	got := buildScanArgs(job, "/tmp/out", "/tmp/repo", false)
+	for _, want := range []string{
+		"--languages", "c,python", "--platform", "openharmony", "--level", "all",
+		"--no-context", "--enhance-mode", "single-shot", "--no-report", "--no-skip-tests",
+		"--all-languages", "--min-language-files", "9", "--min-language-share", "0",
+		"--strict-languages", "--limit", "42", "--llm-config", "analysis", "--workers", "12",
+		"--backoff", "0", "--verify", "--llm-reachability", "--llm-reachability-max-code-bytes", "4096",
+		"--llm-call-graph-recovery", "--llm-call-graph-iterative-recovery",
+		"--llm-call-graph-candidate-review", "--llm-call-graph-projection",
+		"--openharmony-dispatch-code-evidence", "--dynamic-test", "--library-mode", "--", "/tmp/repo",
+	} {
+		found := false
+		for _, arg := range got {
+			if arg == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("buildScanArgs missing %q in %v", want, got)
+		}
+	}
+	for _, arg := range got {
+		if arg == "--dynamic-test-mode" {
+			t.Error("default Docker mode should not add a redundant dynamic-test-mode flag")
+		}
+	}
+}
+
 func TestHandleStartScanRejectsUnsupportedPlatform(t *testing.T) {
 	dir := t.TempDir()
 	s := &Server{

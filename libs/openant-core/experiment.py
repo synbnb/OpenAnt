@@ -580,7 +580,13 @@ def run_experiment(
                         finding=stage1_finding,
                         attack_vector=result.get("attack_vector"),
                         reasoning=result.get("reasoning", ""),
-                        files_included=result.get("files_included", [])
+                        files_included=result.get("files_included", []),
+                        platform_context=(
+                            result.get("platformContext")
+                            if result.get("platformContext") is not None
+                            else result.get("platform_context")
+                        ),
+                        route=route_key,
                     )
 
                     # Update result with verification

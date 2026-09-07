@@ -21,6 +21,8 @@ Available Tools:
     - search_definitions: Find where a function is defined
     - read_function: Get full function code by ID
     - list_functions: List all functions in a file
+    - read_file_section: Read bounded registration/dispatch context by line range
+    - get_static_dependencies: Return parser-resolved callers/callees for the current target route
     - finish: Complete verification with verdict and exploit path
 
 Classes:
@@ -81,6 +83,14 @@ MAX_TOKENS_PER_RESPONSE = 4096
 _VERIFY_JSON_SCHEMA = """{
     "agree": true,
     "correct_finding": "safe | protected | bypassable | vulnerable | inconclusive",
+    "assessment": {
+        "defect_status": "confirmed | suspected | none | unknown",
+        "reachability_status": "confirmed | conditional | unknown | none",
+        "impact_status": "confirmed | plausible | unknown | none",
+        "evidence_completeness": "complete | partial | missing",
+        "boundary_type": "binder | system_ability | idl | unix_socket | tcp | udp | napi | hdf_hdi | ioctl | file | callback | queue | other",
+        "missing_evidence": []
+    },
     "exploit_path": {"entry_point": null, "data_flow": [], "sink_reached": false, "attacker_control_at_sink": "none", "path_broken_at": null},
     "explanation": "Detailed explanation of your analysis",
     "security_weakness": null
@@ -146,6 +156,28 @@ VERIFICATION_TOOLS = [
         }
     },
     {
+        "name": "read_file_section",
+        "description": "Read a bounded source section by file and line numbers when a registration, socket receiver, guard, or sink is outside a function body.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string"},
+                "start_line": {"type": "integer", "minimum": 1},
+                "end_line": {"type": "integer", "minimum": 1}
+            },
+            "required": ["file_path", "start_line", "end_line"]
+        }
+    },
+    {
+        "name": "get_static_dependencies",
+        "description": "Return parser-resolved callers and callees for the target route. Use this as a starting map, then read the relevant function bodies; graph edges are evidence, not proof of attacker control.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "finish",
         "description": "Complete the verification with your verdict and exploit path analysis.",
         "input_schema": {
@@ -159,6 +191,33 @@ VERIFICATION_TOOLS = [
                     "type": "string",
                     "enum": ["safe", "protected", "bypassable", "vulnerable", "inconclusive"],
                     "description": "The correct finding based on exploit path analysis"
+                },
+                "assessment": {
+                    "type": "object",
+                    "description": "Independent assessment of defect, route, impact, and evidence completeness.",
+                    "properties": {
+                        "defect_status": {
+                            "type": "string",
+                            "enum": ["confirmed", "suspected", "none", "unknown"]
+                        },
+                        "reachability_status": {
+                            "type": "string",
+                            "enum": ["confirmed", "conditional", "unknown", "none"]
+                        },
+                        "impact_status": {
+                            "type": "string",
+                            "enum": ["confirmed", "plausible", "unknown", "none"]
+                        },
+                        "evidence_completeness": {
+                            "type": "string",
+                            "enum": ["complete", "partial", "missing"]
+                        },
+                        "boundary_type": {"type": "string"},
+                        "missing_evidence": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    }
                 },
                 "exploit_path": {
                     "type": "object",
@@ -263,6 +322,11 @@ class VerificationResult:
     total_tokens: int
     exploit_path: Optional[ExploitPath] = None
     security_weakness: Optional[str] = None
+    # Orthogonal evidence assessment.  ``correct_finding`` remains the
+    # backwards-compatible Stage-2 verdict; this additive object prevents a
+    # missing route from erasing a well-supported target defect and gives the
+    # report/UI a way to explain conditional reachability.
+    assessment: dict = field(default_factory=dict)
     # First-class "incomplete verification" state (PR #69 F4/F5). True on the
     # four degenerate fail-safe paths (unparseable text, no tool calls, max
     # iterations, finish-without-agree) where Stage 2 could NOT COMPLETE a
@@ -286,6 +350,8 @@ class VerificationResult:
             result["exploit_path"] = self.exploit_path.to_dict()
         if self.security_weakness:
             result["security_weakness"] = self.security_weakness
+        if self.assessment:
+            result["assessment"] = self.assessment
         # Always serialize the incomplete flag so downstream consumers
         # (core/reporter.py, core/verifier.py) can branch on it explicitly.
         result["incomplete"] = self.incomplete
@@ -333,6 +399,12 @@ class FindingVerifier:
         self.verbose = verbose
         self.app_context = app_context
         self.tool_executor = ToolExecutor(index)
+        # ``verify_batch`` runs findings in parallel.  ToolExecutor keeps the
+        # current unit's static callers/callees, so sharing one mutable
+        # instance would mix graph context between workers.  Keep a per-thread
+        # executor while retaining ``tool_executor`` as a backwards-compatible
+        # fallback for direct/single-unit callers and tests.
+        self._tool_local = threading.local()
         self.logger = logger or _null_logger
         self._use_logger = logger is not None
 
@@ -375,6 +447,22 @@ class FindingVerifier:
             context = function.get("platform_context")
         return context
 
+    def _set_tool_context_for_route(self, route_key: str) -> None:
+        """Expose parser-resolved graph neighbors to the Stage-2 tools."""
+        graph_key = route_key
+        normalize = getattr(self.index, "_normalize_graph_id", None)
+        if callable(normalize):
+            graph_key = normalize(route_key) or route_key
+        deps = getattr(self.index, "call_graph", {}).get(graph_key, [])
+        callers = getattr(self.index, "reverse_call_graph", {}).get(graph_key, [])
+        executor = ToolExecutor(self.index)
+        executor.set_unit_context(
+            deps if isinstance(deps, list) else [],
+            callers if isinstance(callers, list) else [],
+            route_key=route_key,
+        )
+        self._tool_local.executor = executor
+
     def verify_result(
         self,
         code: str,
@@ -383,6 +471,7 @@ class FindingVerifier:
         reasoning: str,
         files_included: list = None,
         platform_context: dict | None = None,
+        route: str | None = None,
     ) -> VerificationResult:
         """
         Validate a Stage 1 assessment with exploit path tracing.
@@ -394,6 +483,7 @@ class FindingVerifier:
             reasoning: Stage 1's reasoning
             files_included: Optional list of files in context
             platform_context: Optional bounded OpenHarmony unit metadata
+            route: Optional source/function route key for route-aware review
 
         Returns:
             VerificationResult with verdict, exploit path, and explanation
@@ -406,7 +496,17 @@ class FindingVerifier:
             files_included=files_included,
             app_context=self.app_context,
             platform_context=platform_context,
+            route=route,
         )
+
+        # Direct callers (including legacy experiment.py integrations) do not
+        # pass through ``_verify_one``. Install route-specific graph context
+        # here too. Reinstalling for every explicit route is intentional: a
+        # thread may verify several units sequentially and a stale executor
+        # would expose the previous unit's callers/callees.
+        if route:
+            self._set_tool_context_for_route(route)
+        tool_executor = getattr(self._tool_local, "executor", self.tool_executor)
 
         # Get system prompt with app context if available
         system_prompt = get_verification_system_prompt(self.app_context)
@@ -497,7 +597,7 @@ class FindingVerifier:
                         )
                         break
                     else:
-                        outcome = self.tool_executor.execute(tool_name, tool_input)
+                        outcome = tool_executor.execute(tool_name, tool_input)
                         tool_results.append(
                             ToolResultBlock(
                                 tool_use_id=tool_use_id,
@@ -628,7 +728,7 @@ class FindingVerifier:
             if not cp_data:
                 return True
             v = cp_data.get("verification", {})
-            if not v:
+            if not isinstance(v, dict) or not v:
                 return True
             return v.get("correct_finding") == "error"
 
@@ -748,6 +848,7 @@ class FindingVerifier:
         unit_start = time.monotonic()
         detail = ""
         try:
+            self._set_tool_context_for_route(route_key)
             code = code_by_route.get(route_key, "")
             # Prefer static analyzer metadata over result fields, because the
             # result itself contains model-controlled values.  Both values are
@@ -764,6 +865,7 @@ class FindingVerifier:
                 reasoning=result.get("reasoning", ""),
                 files_included=result.get("files_included", []),
                 platform_context=platform_context,
+                route=route_key,
             )
 
             result["verification"] = verification.to_dict()
@@ -1098,6 +1200,32 @@ class FindingVerifier:
         total_tokens: int
     ) -> VerificationResult:
         """Parse the finish tool result into VerificationResult."""
+        if not isinstance(finish_result, dict):
+            # Non-Anthropic adapters can hand back a scalar/list as tool
+            # arguments. Treat it as an incomplete finish instead of raising
+            # while parsing and losing the audit record entirely.
+            finish_result = {}
+        # Parse the orthogonal assessment if present.  Older models do not
+        # emit it, so missing/invalid values are simply omitted and the legacy
+        # ``correct_finding`` path remains authoritative.  Values are bounded
+        # and allow-listed because finish arguments are model supplied.
+        raw_assessment = finish_result.get("assessment")
+        # A few providers flatten optional tool fields despite the nested
+        # schema. Accept those fields as a compatibility fallback while
+        # keeping the same allow-list/bounds in ``_parse_assessment``.
+        if not isinstance(raw_assessment, dict):
+            flattened = {
+                key: finish_result.get(key)
+                for key in (
+                    "defect_status", "reachability_status", "impact_status",
+                    "evidence_completeness", "boundary_type",
+                    "missing_evidence", "confidence",
+                )
+                if key in finish_result
+            }
+            raw_assessment = flattened
+        assessment = self._parse_assessment(raw_assessment)
+
         # Parse exploit path if present
         exploit_path = None
         # FAM-ROBUST: finish_result is raw model tool-args; only treat
@@ -1106,12 +1234,36 @@ class FindingVerifier:
         # it (normalized to None) instead of crashing on ep.get(...).
         ep = finish_result.get("exploit_path")
         if isinstance(ep, dict) and ep:
+            entry_point = ep.get("entry_point")
+            if not isinstance(entry_point, str):
+                entry_point = None
+            raw_flow = ep.get("data_flow", [])
+            if isinstance(raw_flow, str):
+                raw_flow = [raw_flow]
+            data_flow = (
+                [item.strip()[:2_000] for item in raw_flow
+                 if isinstance(item, str) and item.strip()][:24]
+                if isinstance(raw_flow, (list, tuple)) else []
+            )
+            sink_reached = ep.get("sink_reached", False)
+            if isinstance(sink_reached, str):
+                sink_reached = sink_reached.strip().lower() == "true"
+            else:
+                sink_reached = bool(sink_reached) if isinstance(sink_reached, bool) else False
+            control = ep.get("attacker_control_at_sink", "none")
+            if control not in ("full", "partial", "none"):
+                control = "none"
+            broken = ep.get("path_broken_at")
+            if not isinstance(broken, str) or not broken.strip():
+                broken = None
+            else:
+                broken = broken.strip()[:2_000]
             exploit_path = ExploitPath(
-                entry_point=ep.get("entry_point"),
-                data_flow=ep.get("data_flow", []),
-                sink_reached=ep.get("sink_reached", False),
-                attacker_control_at_sink=ep.get("attacker_control_at_sink", "none"),
-                path_broken_at=ep.get("path_broken_at")
+                entry_point=entry_point,
+                data_flow=data_flow,
+                sink_reached=sink_reached,
+                attacker_control_at_sink=control,
+                path_broken_at=broken,
             )
 
         # Fail-safe (R4-7): a `finish` call that omits `agree` must NOT
@@ -1127,8 +1279,30 @@ class FindingVerifier:
         # carry `agree` (True or False) is a real, completed verdict and stays
         # incomplete=False.
         agree_missing = "agree" not in finish_result
-        agree = finish_result.get("agree", False)
-        correct_finding = finish_result.get("correct_finding", original_finding)
+        raw_agree = finish_result.get("agree", False)
+        if isinstance(raw_agree, bool):
+            agree = raw_agree
+        elif isinstance(raw_agree, str) and raw_agree.strip().lower() in ("true", "false"):
+            agree = raw_agree.strip().lower() == "true"
+        else:
+            # A malformed agreement must never be interpreted as truthy. Mark
+            # it incomplete so it remains visible for review rather than
+            # silently becoming an active rejection/agreement.
+            agree = False
+            agree_missing = True
+        valid_findings = {"safe", "protected", "bypassable", "vulnerable", "inconclusive"}
+        raw_correct_finding = finish_result.get("correct_finding", original_finding)
+        correct_finding = (
+            raw_correct_finding.strip().lower()
+            if isinstance(raw_correct_finding, str)
+            else str(original_finding or "inconclusive").strip().lower()
+        )
+        if correct_finding not in valid_findings:
+            correct_finding = str(original_finding or "inconclusive").strip().lower()
+            if correct_finding not in valid_findings:
+                correct_finding = "inconclusive"
+            agree = False
+            agree_missing = True
         incomplete = agree_missing
 
         # FAM-REPORT-2: a self-contradictory finish — `agree=True` (claims to
@@ -1150,16 +1324,58 @@ class FindingVerifier:
             agree = False
             incomplete = True
 
+        explanation = finish_result.get("explanation", "")
+        if not isinstance(explanation, str):
+            explanation = str(explanation)[:8_000]
+        weakness = finish_result.get("security_weakness")
+        if not isinstance(weakness, str):
+            weakness = None
+        elif weakness:
+            weakness = weakness[:8_000]
+
         return VerificationResult(
             agree=agree,
             correct_finding=correct_finding,
-            explanation=finish_result.get("explanation", ""),
+            explanation=explanation,
             iterations=iterations,
             total_tokens=total_tokens,
             exploit_path=exploit_path,
-            security_weakness=finish_result.get("security_weakness"),
+            security_weakness=weakness,
+            assessment=assessment,
             incomplete=incomplete,
         )
+
+    @staticmethod
+    def _parse_assessment(value) -> dict:
+        """Normalize optional defect/reachability/impact evidence fields."""
+        if not isinstance(value, dict):
+            return {}
+        allowed = {
+            "defect_status": {"confirmed", "suspected", "none", "unknown"},
+            "reachability_status": {"confirmed", "conditional", "unknown", "none"},
+            "impact_status": {"confirmed", "plausible", "unknown", "none"},
+            "evidence_completeness": {"complete", "partial", "missing"},
+        }
+        result = {}
+        for key, values in allowed.items():
+            item = value.get(key)
+            if isinstance(item, str) and item.strip().lower() in values:
+                result[key] = item.strip().lower()
+        boundary = value.get("boundary_type")
+        if isinstance(boundary, str) and boundary.strip():
+            result["boundary_type"] = boundary.strip()[:128]
+        missing = value.get("missing_evidence")
+        if isinstance(missing, (list, tuple)):
+            result["missing_evidence"] = [
+                item.strip()[:500]
+                for item in missing[:12]
+                if isinstance(item, str) and item.strip()
+            ]
+        confidence = value.get("confidence")
+        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+            if 0.0 <= float(confidence) <= 1.0:
+                result["confidence"] = float(confidence)
+        return result
 
     def _try_parse_text_response(
         self,

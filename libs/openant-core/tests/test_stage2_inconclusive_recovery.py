@@ -217,6 +217,7 @@ def test_run_verification_sends_inconclusive_to_finding_verifier(tmp_path):
     promoted = next(r for r in written["results"] if r["route_key"] == route)
     assert promoted["finding"] == "vulnerable"
     assert promoted["verification"]["stage1_finding"] == "inconclusive"
+    assert written["review_findings"] == []
 
 
 def test_report_keeps_inconclusive_promotion_disclosure_eligible(tmp_path):
@@ -269,3 +270,258 @@ def test_report_keeps_inconclusive_promotion_disclosure_eligible(tmp_path):
 
     assert len(data["findings"]) == 1
     assert data["findings"][0]["stage2_verdict"] == "confirmed"
+
+
+def test_stage2_prompt_exposes_route_and_non_binder_recovery_tools():
+    prompt = get_verification_prompt(
+        code="int handle(const char *msg) { return dispatch(msg); }",
+        finding="inconclusive",
+        attack_vector="socket message",
+        reasoning="The receiver was not included in Stage 1.",
+        files_included="services/socket.cpp",
+        route="services/socket.cpp:Service::handle",
+    )
+
+    assert "Target route: services/socket.cpp:Service::handle" in prompt
+    assert "Files included in Stage-1 context: services/socket.cpp" in prompt
+    assert "Unix/TCP/UDP Socket" in prompt
+    assert "get_static_dependencies" in prompt
+    assert "assessment.missing_evidence" in prompt
+
+
+def test_stage2_parser_accepts_flattened_assessment_and_bounds_finish_data():
+    from utilities.agentic_enhancer.repository_index import RepositoryIndex
+    from utilities.finding_verifier import FindingVerifier
+
+    verifier = FindingVerifier.__new__(FindingVerifier)
+    parsed = verifier._parse_finish_result({
+        "agree": "false",
+        "correct_finding": "INCONCLUSIVE",
+        "defect_status": "confirmed",
+        "reachability_status": "conditional",
+        "impact_status": "plausible",
+        "evidence_completeness": "partial",
+        "boundary_type": "unix_socket",
+        "missing_evidence": ["receiver"] * 30,
+        "confidence": 0.8,
+        "exploit_path": {
+            "entry_point": "accept",
+            "data_flow": ["x"] * 30,
+            "sink_reached": "true",
+            "attacker_control_at_sink": "partial",
+        },
+        "explanation": {"not": "a string"},
+    }, "vulnerable", 1, 2)
+
+    assert parsed.agree is False
+    assert parsed.correct_finding == "inconclusive"
+    assert parsed.incomplete is False
+    assert parsed.assessment["boundary_type"] == "unix_socket"
+    assert len(parsed.assessment["missing_evidence"]) == 12
+    assert len(parsed.exploit_path.data_flow) == 24
+    assert parsed.exploit_path.sink_reached is True
+    assert parsed.explanation.startswith("{")
+
+    malformed = verifier._parse_finish_result({
+        "agree": True,
+        "correct_finding": "not-a-verdict",
+        "explanation": "malformed verdict",
+    }, "vulnerable", 1, 2)
+    assert malformed.agree is False
+    assert malformed.incomplete is True
+    assert malformed.correct_finding == "vulnerable"
+
+
+def test_repository_index_exposes_native_graph_to_static_dependency_tool():
+    from utilities.agentic_enhancer.repository_index import RepositoryIndex
+    from utilities.agentic_enhancer.tools import ToolExecutor
+
+    target = "src/service.cpp:Service::handle"
+    callee = "src/service.cpp:Service::delegate"
+    caller = "src/stub.cpp:Stub::OnRequest"
+    index = RepositoryIndex({
+        "functions": {
+            target: {"name": "Service::handle", "code": "return delegate();"},
+            callee: {"name": "Service::delegate", "code": "return 0;"},
+            caller: {"name": "Stub::OnRequest", "code": "return handle();"},
+        },
+        "call_graph": {f"function:{target}": [f"function:{callee}"]},
+        "reverse_call_graph": {target: [caller]},
+    })
+    executor = ToolExecutor(index)
+    executor.set_unit_context(index.call_graph[target], index.reverse_call_graph[target], target)
+    result = executor.execute("get_static_dependencies", {})
+    assert result["target_route"] == target
+    assert result["dependencies"]["resolved"][0]["id"] == callee
+    assert result["callers"]["resolved"][0]["id"] == caller
+
+
+def test_repository_index_accepts_python_camelcase_graph_keys():
+    from utilities.agentic_enhancer.repository_index import RepositoryIndex
+
+    target = "src/service.py:handle"
+    callee = "src/service.py:delegate"
+    caller = "src/stub.py:on_request"
+    index = RepositoryIndex({
+        "functions": {
+            target: {"name": "handle", "code": "return delegate()"},
+            callee: {"name": "delegate", "code": "return 0"},
+            caller: {"name": "on_request", "code": "return handle()"},
+        },
+        "callGraph": {target: [callee]},
+        "reverseCallGraph": {target: [caller]},
+    })
+
+    assert index.get_call_graph_context(target) == {
+        "function_id": target,
+        "callees": [callee],
+        "callers": [caller],
+    }
+
+
+def test_unverified_stage2_agreement_is_not_reported_as_completed_agreement(tmp_path):
+    """agree=True + correct_finding=inconclusive must stay explicitly unverified."""
+    from core.reporter import build_pipeline_output
+
+    route = "src/socket.cpp:Service::handle"
+    write = {
+        "results": [{
+            "route_key": route,
+            "unit_id": route,
+            "finding": "inconclusive",
+            "verdict": "INCONCLUSIVE",
+            "reasoning": "The receiver is outside the first context.",
+            "verification": {
+                "stage1_finding": "inconclusive",
+                "agree": True,
+                "correct_finding": "inconclusive",
+                "assessment": {
+                    "defect_status": "confirmed",
+                    "reachability_status": "unknown",
+                    "impact_status": "plausible",
+                    "evidence_completeness": "partial",
+                    "boundary_type": "unix_socket",
+                    "missing_evidence": ["receiver implementation"],
+                },
+            },
+        }],
+        "confirmed_findings": [],
+        "review_findings": [{
+            "route_key": route,
+            "unit_id": route,
+            "finding": "inconclusive",
+            "verification": {
+                "stage1_finding": "inconclusive",
+                "agree": True,
+                "correct_finding": "inconclusive",
+                "assessment": {
+                    "defect_status": "confirmed",
+                    "reachability_status": "unknown",
+                    "impact_status": "plausible",
+                    "evidence_completeness": "partial",
+                    "boundary_type": "unix_socket",
+                    "missing_evidence": ["receiver implementation"],
+                },
+            },
+        }],
+        "code_by_route": {route: "int handle(const char *msg) { return dispatch(msg); }"},
+        "metrics": {"total": 1, "inconclusive": 1},
+    }
+    results_path = tmp_path / "results_verified.json"
+    results_path.write_text(json.dumps(write), encoding="utf-8")
+    output_path = tmp_path / "pipeline_output.json"
+    build_pipeline_output(str(results_path), str(output_path), language="cpp")
+    data = json.loads(output_path.read_text(encoding="utf-8"))
+    finding = data["findings"][0]
+    assert finding["stage2_verdict"] == "unverified"
+    assert finding["review_status"] == "needs_review"
+    assert finding["verification_assessment"]["boundary_type"] == "unix_socket"
+    assert finding["report_context"]["assessment"]["missing_evidence"] == ["receiver implementation"]
+
+
+def test_review_candidates_are_not_removed_by_confirmed_caller_callee_dedup(tmp_path):
+    from core.reporter import build_pipeline_output
+
+    caller = "src/stub.cpp:Stub::OnRequest"
+    callee = "src/service.cpp:Service::handle"
+    common = {"cwe_id": 400, "cwe_name": "Resource Consumption"}
+    payload = {
+        "results": [
+            {"route_key": caller, "unit_id": caller, "finding": "vulnerable", "vulnerabilities": [common]},
+            {"route_key": callee, "unit_id": callee, "finding": "inconclusive", "vulnerabilities": [common],
+             "verification": {"agree": True, "correct_finding": "inconclusive"}},
+        ],
+        "confirmed_findings": [
+            {"route_key": caller, "unit_id": caller, "finding": "vulnerable", "cwe_id": 400}
+        ],
+        "review_findings": [
+            {"route_key": callee, "unit_id": callee, "finding": "inconclusive", "cwe_id": 400,
+             "verification": {"agree": True, "correct_finding": "inconclusive"}}
+        ],
+        "code_by_route": {caller: "void OnRequest() {}", callee: "void handle() {}"},
+        "metrics": {"total": 2, "vulnerable": 1, "inconclusive": 1},
+    }
+    results_path = tmp_path / "results_verified.json"
+    results_path.write_text(json.dumps(payload), encoding="utf-8")
+    (tmp_path / "call_graph.json").write_text(json.dumps({
+        "reverse_call_graph": {callee: [caller]},
+    }), encoding="utf-8")
+    output_path = tmp_path / "pipeline_output.json"
+    build_pipeline_output(str(results_path), str(output_path), language="cpp")
+    findings = json.loads(output_path.read_text(encoding="utf-8"))["findings"]
+    assert {item["route_key"] for item in findings} == {caller, callee}
+
+
+def test_reporter_preserves_flattened_assessment_from_legacy_artifact(tmp_path):
+    """Legacy resumed results may store Stage-2 assessment beside verification."""
+    from core.reporter import build_pipeline_output
+
+    route = "src/socket.cpp:Service::handle"
+    payload = {
+        "results": [{
+            "route_key": route,
+            "unit_id": route,
+            "finding": "inconclusive",
+            "verdict": "INCONCLUSIVE",
+            "verification": {
+                "agree": False,
+                "incomplete": True,
+            },
+            "verification_assessment": {
+                "defect_status": "confirmed",
+                "reachability_status": "conditional",
+                "impact_status": "plausible",
+                "evidence_completeness": "partial",
+                "boundary_type": "unix_socket",
+                "missing_evidence": ["receiver registration"],
+            },
+        }],
+        "confirmed_findings": [],
+        "review_findings": [{
+            "route_key": route,
+            "unit_id": route,
+            "finding": "inconclusive",
+            "verdict": "INCONCLUSIVE",
+            "verification": {
+                "agree": False,
+                "incomplete": True,
+            },
+            "verification_assessment": {
+                "defect_status": "confirmed",
+                "reachability_status": "conditional",
+                "impact_status": "plausible",
+                "evidence_completeness": "partial",
+                "boundary_type": "unix_socket",
+                "missing_evidence": ["receiver registration"],
+            },
+        }],
+        "code_by_route": {route: "int handle(const char *msg) { return dispatch(msg); }"},
+        "metrics": {"total": 1, "inconclusive": 1},
+    }
+    results_path = tmp_path / "results_verified.json"
+    results_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_path = tmp_path / "pipeline_output.json"
+    build_pipeline_output(str(results_path), str(output_path), language="cpp")
+    finding = json.loads(output_path.read_text(encoding="utf-8"))["findings"][0]
+    assert finding["review_status"] == "needs_review"
+    assert finding["verification_assessment"]["boundary_type"] == "unix_socket"

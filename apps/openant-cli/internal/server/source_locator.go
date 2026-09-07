@@ -29,7 +29,12 @@ const (
 	// confirmed Git fetch.  The browser receives progress through SSE, so keep
 	// the request alive long enough for those operations instead of imposing the
 	// 30-second scan timeout used by small metadata calls.
-	sourceLocatorInvokeTimeout = 10 * time.Minute
+	// The Web UI permits up to 40 semantic search rounds.  Ten minutes was
+	// shorter than a slow first Responses request plus the remaining bounded
+	// rounds, so the Go wrapper killed a healthy worker and surfaced a JSON EOF.
+	// Provider requests are independently bounded in the source-locator Python
+	// worker; this larger outer deadline is only the stage-level safety net.
+	sourceLocatorInvokeTimeout = 30 * time.Minute
 )
 
 var sourceLocatorSessionIDRe = regexp.MustCompile(`^loc_[A-Za-z0-9_-]{8,64}$`)
@@ -600,6 +605,11 @@ func (s *Server) handleSourceLocatorAdvance(w http.ResponseWriter, r *http.Reque
 		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{boolErr.Error()}})
 		return
 	}
+	llmSearchRounds, roundsErr := sourceLocatorInt(fields, "llm_search_rounds", 1, 40)
+	if roundsErr != nil {
+		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{roundsErr.Error()}})
+		return
+	}
 	llmConfig, configErr := sourceLocatorLLMConfig(fields)
 	if configErr != nil {
 		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{configErr.Error()}})
@@ -608,6 +618,9 @@ func (s *Server) handleSourceLocatorAdvance(w http.ResponseWriter, r *http.Reque
 	args := []string{"advance", id, "--max-steps", strconv.Itoa(maxSteps)}
 	if llmSearch {
 		args = append(args, "--llm-search")
+		if llmSearchRounds != 0 {
+			args = append(args, "--llm-search-rounds", strconv.Itoa(llmSearchRounds))
+		}
 		if llmConfig != "" {
 			args = append(args, "--llm-config", llmConfig)
 		}

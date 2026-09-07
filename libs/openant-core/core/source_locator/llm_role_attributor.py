@@ -30,7 +30,9 @@ ROLE_ATTRIBUTION_SCHEMA_VERSION = "openant.source-locator.llm-role-attribution.v
 ROLE_ATTRIBUTION_PROMPT_VERSION = "openant.source-locator.llm-role-prompt.v1"
 ROLE_ATTRIBUTION_SYSTEM = (
     "你是 OpenHarmony 源码审计中的服务端/客户端角色复核器。"
-    "只能依据用户提供的结构化源码证据作出判断；必须严格返回 JSON，不能输出思维链。"
+    "只能依据用户提供的结构化源码证据作出判断；Unix socket 和 TCP/UDP 端点都适用。"
+    "网络目标中端口、地址和进程名只是线索，必须结合源码中的 bind/listen/accept/recvfrom 方向判断服务端；"
+    "connect/send 只能支持客户端角色。必须严格返回 JSON，不能输出思维链。"
 )
 _STATUSES = frozenset({"confirmed", "possible", "unresolved"})
 _CONFIDENCES = frozenset({"high", "medium", "low"})
@@ -69,6 +71,10 @@ def _target_payload(target: TargetSpec | Mapping[str, Any] | None) -> dict[str, 
             "basename": target.basename,
             "service_hint": target.service_hint,
             "macro_hint": target.macro_hint,
+            "transport": target.transport,
+            "address": target.address,
+            "port": target.port,
+            "process_hint": target.process_hint,
             "target_revision": target.target_revision,
         }
     if target is None:
@@ -82,6 +88,10 @@ def _target_payload(target: TargetSpec | Mapping[str, Any] | None) -> dict[str, 
         "basename",
         "service_hint",
         "macro_hint",
+        "transport",
+        "address",
+        "port",
+        "process_hint",
         "target_revision",
     }
     return {str(key): value for key, value in target.items() if str(key) in allowed}
@@ -258,7 +268,7 @@ def build_role_attribution_prompt(
         )
     payload = {
         "prompt_version": ROLE_ATTRIBUTION_PROMPT_VERSION,
-        "task": "判断 OpenHarmony Unix socket/service 相关源码证据中的服务端和客户端角色",
+        "task": "判断 OpenHarmony Unix socket 或 TCP/UDP endpoint 相关源码证据中的服务端和客户端角色",
         "target": _target_payload(target),
         "evidence": rows,
         "excluded_test_or_fuzz_evidence_count": len(excluded),
@@ -267,7 +277,7 @@ def build_role_attribution_prompt(
             "cite_only_given_evidence_ids": True,
             "test_or_fuzz_paths_are_non_authoritative": True,
             "create_socket_alone_is_neutral": True,
-            "server_signals": ["bind", "listen", "accept", "recv/read", "service registration", "protocol dispatch"],
+            "server_signals": ["bind", "listen", "accept", "recv/recvfrom/read", "socket registration", "protocol dispatch"],
             "client_signals": ["connect", "request/protocol construction", "send/write"],
             "kernel_third_party_generated_build_paths_are_not_automatically_excluded": True,
         },

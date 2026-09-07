@@ -131,6 +131,45 @@ func TestPipelineViewMarksLLMReachabilityAsRequested(t *testing.T) {
 	t.Fatal("llm-reachability step missing")
 }
 
+func TestPipelineViewMarksCallGraphStagesAsRequested(t *testing.T) {
+	outDir := t.TempDir()
+	jobID := "1122334455667788"
+	if err := os.MkdirAll(filepath.Join(outDir, jobID), 0750); err != nil {
+		t.Fatal(err)
+	}
+	job := &Job{
+		ID: jobID, Repo: "/tmp/openharmony", StartedAt: time.Now().UTC(), Status: StatusRunning,
+		llmCallGraphRecovery: true, llmCallGraphCandidateReview: true,
+		llmCallGraphProjection: true, dispatchCodeEvidence: true,
+		LogBuf: []string{"[OpenHarmony] Running LLM call-graph recovery review"},
+	}
+	view := (&Server{outDir: outDir}).pipelineView(job)
+	for _, step := range view.Steps {
+		switch step.ID {
+		case "llm-call-graph-recovery", "llm-call-graph-candidate-review", "llm-call-graph-projection", "openharmony-dispatch-code-evidence":
+			if step.Status == "not_requested" {
+				t.Fatalf("optional stage %s marked not_requested despite being enabled", step.ID)
+			}
+		}
+	}
+	if view.CurrentStep != "llm-call-graph-recovery" {
+		t.Fatalf("current step = %q, want llm-call-graph-recovery", view.CurrentStep)
+	}
+}
+
+func TestPipelineStepFromLogRecognizesSemanticStages(t *testing.T) {
+	tests := map[string]string{
+		"Running LLM candidate-edge review":             "llm-call-graph-candidate-review",
+		"OpenHarmony 调用边投影阶段":                           "llm-call-graph-projection",
+		"Extracting OpenHarmony dispatch-code evidence": "openharmony-dispatch-code-evidence",
+	}
+	for line, want := range tests {
+		if got := pipelineStepFromLog(line); got != want {
+			t.Errorf("pipelineStepFromLog(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
+
 func TestPipelineViewInfersRunningFromLogs(t *testing.T) {
 	outDir := t.TempDir()
 	jobID := "1234567890abcdef"

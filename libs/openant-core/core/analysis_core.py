@@ -83,6 +83,66 @@ def _unit_language(unit: dict) -> str:
     return aliases.get(normalized, normalized)
 
 
+def _reachability_context_for_unit(unit: dict) -> dict | None:
+    """Build a bounded, data-only summary of LLM reachability evidence.
+
+    Reachability signals are advisory model output. Passing a small structured
+    projection to Stage 1 makes the semantic-BFS decision auditable without
+    copying the full batch response (or allowing arbitrary metadata to become
+    prompt instructions). The vulnerability model must still validate source,
+    propagation, sink, and guards independently.
+    """
+    raw_signals = unit.get("llm_reachability_signals")
+    signals = raw_signals if isinstance(raw_signals, list) else []
+    compact = []
+    for raw in signals[:8]:
+        if not isinstance(raw, dict):
+            continue
+        item = {}
+        for key in (
+            "kind", "confidence", "boundary", "direction", "evidence_status",
+            "seed_status", "seed_reason", "evidence", "evidence_excerpt",
+            "evidence_line_start", "evidence_line_end",
+        ):
+            value = raw.get(key)
+            if value in (None, "", []):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                item[key] = str(value)[:500] if isinstance(value, str) else value
+        if item:
+            compact.append(item)
+
+    semantic_seed = unit.get("semantic_reachability_seed") is True
+    semantic_retain_only = (
+        unit.get("semantic_reachability_retain_only") is True
+        or unit.get("reachability_retain_only") is True
+    )
+    sources = unit.get("reachability_seed_source")
+    if isinstance(sources, list):
+        sources = [str(value)[:120] for value in sources[:8]]
+    elif sources:
+        sources = [str(sources)[:120]]
+    else:
+        sources = []
+    retain_sources = unit.get("reachability_retain_only_source")
+    if isinstance(retain_sources, list):
+        retain_sources = [str(value)[:120] for value in retain_sources[:8]]
+    elif retain_sources:
+        retain_sources = [str(retain_sources)[:120]]
+    else:
+        retain_sources = []
+    if not compact and not semantic_seed and not semantic_retain_only and not sources:
+        return None
+    return {
+        "semantic_reachability_seed": semantic_seed,
+        "semantic_reachability_retain_only": semantic_retain_only,
+        "reachability_retain_only": semantic_retain_only,
+        "reachability_seed_source": sources,
+        "reachability_retain_only_source": retain_sources,
+        "signals": compact,
+    }
+
+
 def parse_response(response: str) -> dict:
     """Parse JSON response from Claude."""
     # Try to extract JSON from response
@@ -259,6 +319,7 @@ def analyze_unit(
     # code-fence fallback instead of being reinterpreted during migration.
     language = _unit_language(unit)
     platform_context = unit.get("platform_context")
+    reachability_context = _reachability_context_for_unit(unit)
 
     # Proactively enhance context if reviewer is enabled
     context_enhanced = False
@@ -288,6 +349,7 @@ def analyze_unit(
         classification_reasoning=classification_reasoning,
         app_context=app_context,
         platform_context=platform_context,
+        reachability_context=reachability_context,
     )
 
     # Call the configured analyze-phase model with the threat-model system prompt.

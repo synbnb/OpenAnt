@@ -179,12 +179,17 @@ class SearchPlanner:
                 continue
             seen.add(key)
             try:
+                # ``all`` is an audit-friendly query-plan spelling for an
+                # OpenGrok search without a language restriction.  Passing
+                # None omits the REST ``type`` parameter, allowing init
+                # ``.cfg``/JSON and BUILD metadata to participate alongside
+                # C/C++ source.
                 response = self.client.search(
                     full=query.value if query.kind == "full" else None,
                     definition=query.value if query.kind == "definition" else None,
                     symbol=query.value if query.kind == "symbol" else None,
                     path=query.value if query.kind == "path" else None,
-                    file_type=query.file_type,
+                    file_type=None if query.file_type == "all" else query.file_type,
                     max_results=self.max_results,
                     max_hits_per_file=self.max_hits_per_file,
                 )

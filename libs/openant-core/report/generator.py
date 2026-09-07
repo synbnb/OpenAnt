@@ -286,6 +286,8 @@ def _compact_for_summary(pipeline_data: dict) -> dict:
             "cwe_name": f.get("cwe_name"),
             "stage1_verdict": f.get("stage1_verdict"),
             "stage2_verdict": f.get("stage2_verdict"),
+            "review_status": f.get("review_status"),
+            "verification_assessment": f.get("verification_assessment"),
             "dynamic_testing": f.get("dynamic_testing"),
             "impact": f.get("impact"),
         })
@@ -531,6 +533,7 @@ def _localize_disclosure_markdown(text: str, language: str = "en") -> str:
         "Source-to-Sink Evidence": "源到汇证据",
         "Call Chain Source": "调用链源码",
         "Call Graph Evidence": "调用图证据",
+        "Stage 2 Assessment": "第二阶段评估",
         "Summary": "摘要",
         "Steps to Reproduce": "复现步骤",
         "Impact": "影响",
@@ -564,6 +567,13 @@ def _localize_disclosure_markdown(text: str, language: str = "en") -> str:
         "Graph statistics": "调用图统计",
         "Recovery summary": "恢复摘要",
         "Coverage note": "覆盖范围说明",
+        "Defect status": "缺陷状态",
+        "Reachability status": "可达性状态",
+        "Impact status": "影响状态",
+        "Evidence completeness": "证据完整性",
+        "Boundary type": "边界类型",
+        "Missing evidence": "缺失证据",
+        "Assessment confidence": "评估置信度",
     }
     for source, target in field_map.items():
         # Match only bold Markdown labels (including a trailing colon) so a
@@ -987,6 +997,33 @@ def _render_disclosure_context(
         lines.append(f"- **Attacker control at sink:** `{display(source_sink.get('attacker_control_at_sink'))}`")
     if source_sink.get("path_broken_at"):
         lines.append(f"- **Path broken at:** {display(source_sink.get('path_broken_at'))}")
+
+    # Stage 2 records defect, route, impact, and evidence completeness as
+    # orthogonal fields.  Render them deterministically so an unresolved
+    # route is visibly different from a clean verdict, even when the report
+    # model's prose omits or paraphrases that distinction.
+    assessment = context.get("assessment")
+    if isinstance(assessment, Mapping) and assessment:
+        lines.extend(["", "### Stage 2 Assessment", ""])
+        assessment_labels = (
+            ("Defect status", "defect_status"),
+            ("Reachability status", "reachability_status"),
+            ("Impact status", "impact_status"),
+            ("Evidence completeness", "evidence_completeness"),
+            ("Boundary type", "boundary_type"),
+        )
+        for label, key in assessment_labels:
+            value = assessment.get(key)
+            if value not in (None, "", []):
+                lines.append(f"- **{label}:** `{display(value, 500)}`")
+        missing = assessment.get("missing_evidence")
+        if isinstance(missing, list) and missing:
+            lines.append("- **Missing evidence:**")
+            for item in missing[:12]:
+                if item not in (None, ""):
+                    lines.append(f"  - {display(item, 1_000)}")
+        if assessment.get("confidence") is not None:
+            lines.append(f"- **Assessment confidence:** `{display(assessment.get('confidence'), 100)}`")
 
     lines.extend(["", "### Call Chain Source", ""])
     nodes = chain.get("nodes")

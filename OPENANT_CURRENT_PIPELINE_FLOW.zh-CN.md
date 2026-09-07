@@ -507,13 +507,7 @@ dataset_unfiltered.json，然后使用“只增不减”的 overlay BFS：
 - 不会因为语义图删掉原生图已确认的单元；
 - 会做单调性检查，防止投影导致召回范围缩小。
 
-### 7.5 分派码证据
 
-开关：--openharmony-dispatch-code-evidence。
-
-该阶段从源码常量、switch、映射表和注册信息中提取动态验证所需的 selector
-或 transaction code，写入 openharmony_dispatch_code_evidence.json。它是动态
-测试的输入证据，不等同于已经执行了设备交互。
 
 ## 8. Agentic 上下文增强
 

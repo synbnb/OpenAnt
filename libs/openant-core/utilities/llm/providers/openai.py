@@ -267,6 +267,47 @@ def _use_responses_api(model: str, override: Optional[bool]) -> bool:
 # Floor the responses-path output budget so the visible answer always has room.
 _RESPONSES_MIN_OUTPUT_TOKENS = 16000
 
+
+def _env_nonnegative_int(name: str, default: int, *, maximum: int) -> int:
+    """Read a bounded non-negative integer override from the environment."""
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return min(max(value, 0), maximum)
+
+
+def _env_positive_float(name: str) -> float | None:
+    """Read an optional positive request timeout without accepting infinity."""
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if value <= 0 or not (value < float("inf")):
+        return None
+    return value
+
+
+def _responses_output_floor() -> int:
+    """Return the response output floor, with a bounded test/phase override."""
+
+    return max(
+        256,
+        _env_nonnegative_int(
+            "OPENANT_OPENAI_MIN_OUTPUT_TOKENS",
+            _RESPONSES_MIN_OUTPUT_TOKENS,
+            maximum=65536,
+        ),
+    )
+
 # Reasoning effort for the Responses path. Default from env; "medium" balances
 # quality vs reasoning-token cost across thousands of units. Not threaded through
 # per-phase config: PhaseRef carries only (provider, model), and adding a field
@@ -355,7 +396,13 @@ class OpenAIAdapter:
             self._client = _client
             return
 
-        kwargs: dict[str, Any] = {"max_retries": max_retries}
+        effective_retries = _env_nonnegative_int(
+            "OPENANT_OPENAI_MAX_RETRIES", max_retries, maximum=10
+        )
+        kwargs: dict[str, Any] = {"max_retries": effective_retries}
+        request_timeout = _env_positive_float("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS")
+        if request_timeout is not None:
+            kwargs["timeout"] = request_timeout
         if api_key is not None:
             kwargs["api_key"] = api_key
         if base_url is not None:
@@ -427,7 +474,7 @@ class OpenAIAdapter:
         request: dict[str, Any] = {
             "model": model,
             "input": _messages_to_responses(messages),
-            "max_output_tokens": max(max_tokens, _RESPONSES_MIN_OUTPUT_TOKENS),
+            "max_output_tokens": max(max_tokens, _responses_output_floor()),
             "reasoning": {"effort": self._reasoning_effort},
             "store": False,
         }

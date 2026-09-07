@@ -15,6 +15,8 @@ import (
 	"github.com/knostic/open-ant-cli/internal/types"
 )
 
+const maxInvokeStderrTail = 8 * 1024
+
 // lineWriter forwards complete stderr lines to onLog as they arrive. Used as
 // cmd.Stderr (a managed io.Writer) instead of a StderrPipe scanner so os/exec
 // owns the copy goroutine and WaitDelay can force-close a pipe a detached child
@@ -22,6 +24,7 @@ import (
 type lineWriter struct {
 	onLog func(string)
 	buf   []byte
+	tail  []byte
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -45,6 +48,15 @@ func (w *lineWriter) emit(line []byte) {
 	if w.onLog != nil {
 		w.onLog(string(line))
 	}
+	// Keep a small diagnostic tail even when the caller does not subscribe to
+	// live logs.  Source-locator requests historically passed onLog=nil, so a
+	// killed Python worker left only the misleading JSON EOF error visible to
+	// the Web UI.
+	w.tail = append(w.tail, line...)
+	w.tail = append(w.tail, '\n')
+	if len(w.tail) > maxInvokeStderrTail {
+		w.tail = w.tail[len(w.tail)-maxInvokeStderrTail:]
+	}
 }
 
 // flush emits any buffered trailing line with no newline. Call after cmd.Wait,
@@ -54,6 +66,17 @@ func (w *lineWriter) flush() {
 		w.emit(w.buf)
 		w.buf = w.buf[:0]
 	}
+}
+
+func emptyCaptureError(ctx context.Context, exitCode int, stderrTail string) error {
+	detail := fmt.Sprintf("Python worker produced no JSON envelope (exit code %d)", exitCode)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		detail += "; context: " + ctxErr.Error()
+	}
+	if stderrTail = strings.TrimSpace(stderrTail); stderrTail != "" {
+		detail += "; stderr tail: " + stderrTail
+	}
+	return errors.New(detail)
 }
 
 // InvokeCtx runs `python -m openant <args>` with context-cancellation support.
@@ -118,6 +141,25 @@ func InvokeSourceLocator(ctx context.Context, pythonPath string, args []string, 
 	}, nil
 }
 
+// InvokeExposureSurface invokes exactly one standalone exposure-surface
+// operation.  Keeping the command namespace explicit prevents the Web layer
+// from turning this bridge into a generic Python or shell execution endpoint.
+func InvokeExposureSurface(ctx context.Context, pythonPath string, args []string, workDir string, onLog func(string)) (*InvokeResult, error) {
+	commandArgs := append([]string{"exposure-surface"}, args...)
+	stdout, exitCode, err := InvokeCtxCapture(ctx, pythonPath, commandArgs, workDir, "", onLog)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := DecodeEnvelope(stdout)
+	if err != nil {
+		return nil, err
+	}
+	return &InvokeResult{
+		Envelope: envelope,
+		ExitCode: normalizeExit(exitCode, envelope.Status == "error"),
+	}, nil
+}
+
 func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string), captureStdout bool) (string, int, error) {
 	// -P keeps the process working directory off sys.path so a hostile openant/
 	// package inside the scanned, untrusted repo can't shadow the real module on
@@ -162,20 +204,23 @@ func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workD
 	exitErr := cmd.Wait()
 	lw.flush() // emit any trailing partial line; Wait has drained the copy goroutine
 
+	exitCode := 0
 	if exitErr != nil {
 		if ee, ok := exitErr.(*exec.ExitError); ok {
-			return stdoutBuf.String(), ee.ExitCode(), nil
+			exitCode = ee.ExitCode()
+		} else if errors.Is(exitErr, exec.ErrWaitDelay) && cmd.ProcessState != nil {
+			// The process itself exited but a lingering pipe holder tripped
+			// WaitDelay; retain the real process exit code.
+			exitCode = cmd.ProcessState.ExitCode()
+		} else {
+			if ctx.Err() != nil {
+				return "", -1, fmt.Errorf("wait after Python worker cancellation: %w", ctx.Err())
+			}
+			return "", 0, fmt.Errorf("wait: %w", exitErr)
 		}
-		if ctx.Err() != nil {
-			return "", -1, nil
-		}
-		// The process itself exited but a lingering pipe holder tripped WaitDelay;
-		// the scan completed, so keep its captured stdout + real exit code rather
-		// than discarding a successful run as a failure.
-		if errors.Is(exitErr, exec.ErrWaitDelay) && cmd.ProcessState != nil {
-			return stdoutBuf.String(), cmd.ProcessState.ExitCode(), nil
-		}
-		return "", 0, fmt.Errorf("wait: %w", exitErr)
 	}
-	return stdoutBuf.String(), 0, nil
+	if captureStdout && strings.TrimSpace(stdoutBuf.String()) == "" {
+		return stdoutBuf.String(), exitCode, emptyCaptureError(ctx, exitCode, string(lw.tail))
+	}
+	return stdoutBuf.String(), exitCode, nil
 }

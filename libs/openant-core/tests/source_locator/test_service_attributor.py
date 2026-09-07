@@ -12,9 +12,11 @@ CORE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CORE_ROOT))
 
 from core.source_locator import (  # noqa: E402
+    AttributionCandidate,
     EvidenceStore,
     RepositoryMapping,
     ServerAttributionResult,
+    SourceLocation,
     ServiceAttributionError,
     ServiceAttributor,
 )
@@ -74,6 +76,119 @@ def test_creator_only_is_partial_and_never_confirmed_server():
     assert any("creator" in reason for reason in result.reasons)
     assert [candidate.role for candidate in result.candidates].count("socket_creator") == 2
     assert [candidate.role for candidate in result.candidates].count("service_owner") == 1
+
+
+def test_cfg_socket_name_selects_repository_before_consumer_is_recovered():
+    """init ``socket.name`` is enough to rank an ownership candidate.
+
+    The complete receive chain remains PARTIAL, but a resolved Manifest path
+    plus the configuration identity must still produce a usable repository
+    answer instead of an empty/unknown result.
+    """
+
+    store = EvidenceStore()
+    _add(
+        store,
+        "service_config",
+        7,
+        relation_to="init socket.name=paramservice",
+        path="/openharmony/base/startup/init/services/param/paramservice.cfg",
+    )
+
+    result = ServiceAttributor(mapping=_mapping()).attribute(store)
+
+    assert result.status == "PARTIAL"
+    assert result.confirmed is False
+    assert result.server_repo == "startup_init"
+    assert result.best_candidate is not None
+    assert result.repository_confidence == "HIGH"
+    assert result.selection_confidence_score >= result.score
+    assert "socket.name" in " ".join(result.selection_reasons)
+
+
+def test_confirmed_semantic_owner_candidate_wins_over_noisy_mapping_candidate():
+    """The confirmation view must preserve the validated semantic owner."""
+
+    store = EvidenceStore()
+    owner_id = _add(
+        store,
+        "socket_server_registration",
+        313,
+        symbol="hisysevent",
+        path="/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp",
+    )
+    noisy_id = _add(
+        store,
+        "service_config",
+        30,
+        symbol="hisysevent",
+        path="/openharmony/foundation/distributedhardware/distributed_audio/common/dfx_utils/src/daudio_hisysevent.cpp",
+    )
+    result = ServerAttributionResult(
+        status="HIGH",
+        confirmed=True,
+        score=90,
+        predicates={},
+        candidates=(
+            AttributionCandidate(
+                role="socket_creator",
+                subject="hisysevent",
+                source_locations=(SourceLocation(
+                    "/openharmony/foundation/distributedhardware/distributed_audio/common/dfx_utils/src/daudio_hisysevent.cpp",
+                    30,
+                    30,
+                    "hisysevent",
+                ),),
+                evidence_ids=(noisy_id,),
+                score=300,
+            ),
+            AttributionCandidate(
+                role="service_owner",
+                subject='SocketDevice("hisysevent")',
+                source_locations=(SourceLocation(
+                    "/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp",
+                    313,
+                    313,
+                    "hisysevent",
+                ),),
+                evidence_ids=(owner_id,),
+                score=90,
+            ),
+        ),
+        semantic_decision={"status": "confirmed", "evidence_ids": [owner_id]},
+    )
+
+    assert result.best_candidate is not None
+    assert result.best_candidate.role == "service_owner"
+    assert result.best_candidate.subject == 'SocketDevice("hisysevent")'
+
+
+def test_overfull_candidate_group_is_bounded_instead_of_failing():
+    """Noisy repeated socket identities must not abort attribution."""
+
+    store = EvidenceStore()
+    for line in range(1, 301):
+        _add(
+            store,
+            "service_config",
+            line,
+            relation_to="paramservice",
+            path="/openharmony/base/startup/init/services/param/paramservice.cfg",
+        )
+    registration_id = _add(
+        store,
+        "socket_server_registration",
+        400,
+        relation_to="paramservice",
+        path="/openharmony/base/startup/init/services/param/param_service.c",
+    )
+
+    result = ServiceAttributor().attribute(store)
+    creator = next(candidate for candidate in result.candidates if candidate.role == "socket_creator")
+
+    assert len(creator.evidence_ids) <= 256
+    assert registration_id in creator.evidence_ids
+    assert any("证据过多" in reason for reason in creator.reasons)
 
 
 def test_fd_acquire_receive_and_dispatch_confirm_server():

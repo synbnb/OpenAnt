@@ -220,6 +220,15 @@ def test_context_renderer_keeps_source_and_edges_out_of_model_rewrite():
                 "ordered_steps": ["caller input -> EnableInner", "EnableInner -> sink"],
                 "sink_reached": True,
             },
+            "assessment": {
+                "defect_status": "confirmed",
+                "reachability_status": "conditional",
+                "impact_status": "plausible",
+                "evidence_completeness": "partial",
+                "boundary_type": "unix_socket",
+                "missing_evidence": ["receiver registration"],
+                "confidence": 0.72,
+            },
             "call_chain": {"nodes": [{
                 "order": 1,
                 "role": "entry",
@@ -245,6 +254,14 @@ def test_context_renderer_keeps_source_and_edges_out_of_model_rewrite():
     assert "int OnRemoteRequest(...)" in rendered
     assert "native_dispatch_to_handler" in rendered
     assert "Sink reached" in rendered
+    assert "Stage 2 Assessment" in rendered
+    assert "Defect status" in rendered
+    assert "receiver registration" in rendered
+
+    localized = generator._localize_disclosure_markdown(rendered, "zh-CN")
+    assert "第二阶段评估" in localized
+    assert "缺陷状态" in localized
+    assert "可达性状态" in localized
 
 
 def test_repair_response_requires_code_and_rejects_disclosure_document():

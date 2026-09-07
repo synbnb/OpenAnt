@@ -10,6 +10,8 @@ Available Tools:
     - search_definitions: Find where a function is defined
     - read_function: Get full source code of a function by ID
     - list_functions: List all functions in a specific file
+    - read_file_section: Read bounded source context by line range
+    - get_static_dependencies: Return the current unit's callers/callees
     - finish: Complete the analysis (for context enhancement)
 
 Classes:
@@ -176,11 +178,22 @@ class ToolExecutor:
         self.index = index
         self._unit_static_deps: list[str] = []
         self._unit_static_callers: list[str] = []
+        self._unit_route_key = ""
 
-    def set_unit_context(self, static_deps: list[str], static_callers: list[str]):
+    def set_unit_context(
+        self,
+        static_deps: list[str],
+        static_callers: list[str],
+        route_key: str = "",
+    ):
         """Set static dependency data for the current unit being analyzed."""
-        self._unit_static_deps = static_deps or []
-        self._unit_static_callers = static_callers or []
+        self._unit_static_deps = (
+            list(static_deps) if isinstance(static_deps, (list, tuple)) else []
+        )
+        self._unit_static_callers = (
+            list(static_callers) if isinstance(static_callers, (list, tuple)) else []
+        )
+        self._unit_route_key = route_key if isinstance(route_key, str) else ""
 
     def execute(self, tool_name: str, tool_input: dict) -> dict:
         """
@@ -216,8 +229,9 @@ class ToolExecutor:
     def _search_usages(self, input: dict) -> dict:
         """Search for usages of a function."""
         function_name = input.get("function_name", "")
-        if not function_name:
+        if not isinstance(function_name, str) or not function_name.strip():
             return {"error": "function_name is required"}
+        function_name = function_name.strip()[:256]
 
         results = self.index.search_usages(function_name)
 
@@ -237,8 +251,9 @@ class ToolExecutor:
     def _search_definitions(self, input: dict) -> dict:
         """Search for function definitions."""
         function_name = input.get("function_name", "")
-        if not function_name:
+        if not isinstance(function_name, str) or not function_name.strip():
             return {"error": "function_name is required"}
+        function_name = function_name.strip()[:256]
 
         results = self.index.search_definitions(function_name)
 
@@ -266,8 +281,9 @@ class ToolExecutor:
     def _read_function(self, input: dict) -> dict:
         """Read full function code by ID."""
         function_id = input.get("function_id", "")
-        if not function_id:
+        if not isinstance(function_id, str) or not function_id.strip():
             return {"error": "function_id is required"}
+        function_id = function_id.strip()[:1024]
 
         func = self.index.get_function(function_id)
         if not func:
@@ -290,8 +306,9 @@ class ToolExecutor:
     def _list_functions(self, input: dict) -> dict:
         """List functions in a file."""
         file_path = input.get("file_path", "")
-        if not file_path:
+        if not isinstance(file_path, str) or not file_path.strip():
             return {"error": "file_path is required"}
+        file_path = file_path.strip()[:1024]
 
         results = self.index.list_functions_in_file(file_path)
 
@@ -314,8 +331,14 @@ class ToolExecutor:
         start_line = input.get("start_line", 1)
         end_line = input.get("end_line", 50)
 
-        if not file_path:
+        if not isinstance(file_path, str) or not file_path.strip():
             return {"error": "file_path is required"}
+        if (not isinstance(start_line, int) or isinstance(start_line, bool)
+                or not isinstance(end_line, int) or isinstance(end_line, bool)):
+            return {"error": "start_line and end_line must be integers"}
+        if start_line < 1 or end_line < start_line:
+            return {"error": "invalid line range"}
+        file_path = file_path.strip()[:1024]
 
         content = self.index.read_file_section(file_path, start_line, end_line)
 
@@ -339,6 +362,7 @@ class ToolExecutor:
         resolved_callers = self.index.resolve_dependencies(self._unit_static_callers)
 
         return {
+            "target_route": self._unit_route_key,
             "dependencies": {
                 "raw": self._unit_static_deps[:20],
                 "resolved": resolved_deps[:20],

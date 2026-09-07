@@ -78,11 +78,33 @@ def stub_llm_reachability(monkeypatch):
     monkeypatch.setattr(lr, "analyze_reachability", lambda *a, **k: [])
 
     def fake_apply(dataset, signals):
-        # Promote exactly one PYTHON unit — the cross-language seed hazard.
+        # Promote one entry and mark a second unit as a semantic seed. Keeping
+        # these distinct lets the scanner test verify the two parser inputs do
+        # not collapse back into ``is_entry_point``.
         for u in dataset.get("units", []):
             if u.get("id") == "app.py:handler":
                 u["is_entry_point"] = True
-        return {"signals_applied": 1, "entry_points_promoted": 1, "units_touched": 1}
+            if u.get("id") == "app.py:helper":
+                u["semantic_reachability_seed"] = True
+            if u.get("id") == "web/app.js:util":
+                u["semantic_reachability_retain_only"] = True
+        return {
+            "signals_applied": 2,
+            "entry_points_promoted": 1,
+            "units_touched": 2,
+            "semantic_seed_ids": ["app.py:helper"],
+            "semantic_retain_only_ids": ["web/app.js:util"],
+            "seed_counts": {
+                "entry_point": 1,
+                "external_input": 1,
+                "cross_process": 0,
+                "cross_process_receive": 0,
+            },
+            "rejected_counts": {},
+            "review_only": 0,
+            "retained_only": 1,
+            "retained_only_counts": {"external_input": 1, "cross_process": 0},
+        }
 
     monkeypatch.setattr(lr, "apply_signals", fake_apply)
     monkeypatch.setattr(lr, "signals_to_json", lambda s: [])
@@ -99,6 +121,30 @@ def probe_loop(monkeypatch):
         return real(units)
 
     monkeypatch.setattr(scanner_mod, "partition_units_by_language", traced)
+
+
+@pytest.fixture
+def probe_semantic_seed(monkeypatch):
+    """Capture the distinct parser arguments used for semantic BFS seeds."""
+    import core.parser_adapter as pa
+
+    calls = []
+    real = pa.apply_reachability_filter
+
+    def traced(*args, **kwargs):
+        calls.append({
+            "extra_entry_points": set(kwargs.get("extra_entry_points") or set()),
+            "extra_reachability_seeds": set(
+                kwargs.get("extra_reachability_seeds") or set()
+            ),
+            "extra_retain_only_units": set(
+                kwargs.get("extra_retain_only_units") or set()
+            ),
+        })
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pa, "apply_reachability_filter", traced)
+    return calls
 
 
 def run(repo, out):
@@ -143,3 +189,33 @@ class TestLoopBodyExecutes:
         result = run(repo, out)
         dataset = json.loads(Path(result.dataset_path).read_text())
         assert len(dataset["units"]) >= 2, "partition/recombine lost units"
+
+    def test_semantic_seed_is_passed_separately_from_entry_point(
+        self, repo, tmp_path, fake_parsers, stub_llm_reachability,
+        probe_semantic_seed,
+    ):
+        run(repo, tmp_path / "out")
+        python_calls = [
+            call for call in probe_semantic_seed
+            if "app.py:helper" in call["extra_reachability_seeds"]
+        ]
+        assert python_calls, "semantic seed was not passed to the BFS filter"
+        assert all(
+            "app.py:helper" not in call["extra_entry_points"]
+            for call in python_calls
+        ), "semantic seed was incorrectly promoted to an entry-point argument"
+
+    def test_medium_signal_is_passed_as_retain_only_not_bfs_seed(
+        self, repo, tmp_path, fake_parsers, stub_llm_reachability,
+        probe_semantic_seed,
+    ):
+        run(repo, tmp_path / "out")
+        javascript_calls = [
+            call for call in probe_semantic_seed
+            if "web/app.js:util" in call["extra_retain_only_units"]
+        ]
+        assert javascript_calls, "medium semantic unit was not passed for retention"
+        assert all(
+            "web/app.js:util" not in call["extra_reachability_seeds"]
+            for call in javascript_calls
+        ), "medium semantic unit was incorrectly passed as a BFS seed"

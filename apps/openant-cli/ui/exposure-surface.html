@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf" content="{{.CSRF}}">
+<title>OpenHarmony 暴露面识别</title>
+<style>
+  :root {
+    color-scheme: light;
+    --canvas: #f2f6f7;
+    --surface: #ffffff;
+    --surface-soft: #f7fafb;
+    --ink: #17242d;
+    --ink-soft: #536875;
+    --ink-faint: #7a8b95;
+    --line: #d8e1e5;
+    --accent: #0a6478;
+    --accent-dark: #074b5b;
+    --accent-soft: #e0f1f4;
+    --success: #187249;
+    --success-soft: #e4f5eb;
+    --warning: #93600a;
+    --warning-soft: #fff3d2;
+    --danger: #b62b37;
+    --danger-soft: #fdebed;
+    --shadow: 0 18px 46px rgba(22, 47, 59, .08);
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { min-width: 320px; background: var(--canvas); }
+  body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: var(--sans); }
+  button, input, select { font: inherit; }
+  :focus-visible { outline: 3px solid rgba(10, 100, 120, .28); outline-offset: 2px; }
+  .topbar { min-height: 68px; padding: 12px clamp(16px, 4vw, 48px); display: flex; align-items: center; gap: 16px; background: #15252d; color: #f6fbfc; border-bottom: 1px solid #2b4049; }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .brand-mark { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; background: #d5eef1; color: #0b5363; font-weight: 850; }
+  .brand h1 { margin: 0; font-size: 1rem; letter-spacing: -.02em; }
+  .brand p { margin: 3px 0 0; color: #aac0c8; font-size: .75rem; }
+  .top-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+  .top-actions a, .top-actions select { min-height: 32px; border: 1px solid #4a626c; border-radius: 8px; background: #1d323b; color: #edf5f7; padding: 6px 9px; font-size: .76rem; text-decoration: none; }
+  .top-actions select { padding-right: 24px; }
+  .page { width: min(1440px, 100%); margin: 0 auto; padding: 30px clamp(14px, 4vw, 48px) 54px; }
+  .hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 24px; }
+  .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: .73rem; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+  .hero h2 { margin: 0; max-width: 19ch; font-size: clamp(1.65rem, 3.5vw, 2.7rem); line-height: 1.08; letter-spacing: -.05em; }
+  .hero p { max-width: 62ch; margin: 12px 0 0; color: var(--ink-soft); font-size: .9rem; line-height: 1.65; }
+  .read-only { flex: 0 0 auto; padding: 8px 11px; border: 1px solid #a8d1d9; border-radius: 9px; background: var(--accent-soft); color: #195b69; font-size: .75rem; font-weight: 800; }
+  .layout { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); gap: 22px; align-items: start; }
+  .panel { min-width: 0; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); }
+  .panel + .panel { margin-top: 18px; }
+  .panel-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+  .panel-head h3 { margin: 0; font-size: .98rem; letter-spacing: -.02em; }
+  .panel-head p { margin: 5px 0 0; color: var(--ink-soft); font-size: .76rem; line-height: 1.5; }
+  .panel-body { padding: 18px 20px 22px; }
+  .history { min-height: 86px; }
+  .history-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+  .history-select-all { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--ink-soft); font-size: .7rem; font-weight: 800; cursor: pointer; }
+  .history-select-all input, .history-select { flex: 0 0 auto; accent-color: var(--accent); }
+  .history-delete-selected { margin-left: auto; min-height: 31px; padding: 5px 9px; font-size: .68rem; }
+  .history-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .history-row:last-child { border-bottom: 0; }
+  .history-row:hover { background: var(--surface-soft); }
+  .history-row .session-row { min-width: 0; flex: 1; border-bottom: 0; }
+  .history-row .session-row:hover, .history-row .session-row.active { background: var(--accent-soft); }
+  .history-row .history-select { align-self: flex-start; margin: 14px 0 0 14px; }
+  .history-group { border-bottom: 1px solid var(--line); background: var(--surface); }
+  .history-group:last-child { border-bottom: 0; }
+  .history-group-summary { display: flex; align-items: center; gap: 8px; min-height: 45px; padding: 9px 14px; cursor: pointer; list-style: none; background: var(--surface-soft); }
+  .history-group-summary::-webkit-details-marker { display: none; }
+  .history-group-summary::before { content: "▸"; width: 11px; color: var(--accent); font-size: .78rem; font-weight: 850; }
+  .history-group[open] .history-group-summary::before { content: "▾"; }
+  .history-group-summary:hover { background: var(--accent-soft); }
+  .history-group-select { flex: 0 0 auto; accent-color: var(--accent); }
+  .history-group-title { min-width: 0; overflow: hidden; color: var(--ink); font-size: .76rem; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+  .history-group-meta { margin-left: auto; flex: 0 0 auto; color: var(--ink-faint); font-size: .67rem; white-space: nowrap; }
+  .history-group .history-row { padding-left: 12px; }
+  .history-group .history-row:last-child { border-bottom: 0; }
+  .session-row { width: 100%; display: block; padding: 12px 14px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+  .session-row:hover, .session-row.active { background: var(--accent-soft); }
+  .session-row:last-child { border-bottom: 0; }
+  .session-target { display: block; overflow: hidden; color: var(--ink); font: .78rem/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  .session-meta { display: flex; align-items: center; gap: 7px; margin-top: 5px; color: var(--ink-faint); font-size: .7rem; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
+  .status-dot.running { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+  .status-dot.done { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+  .status-dot.error { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+  .empty { padding: 24px 14px; color: var(--ink-faint); font-size: .78rem; text-align: center; line-height: 1.55; }
+  .notice { padding: 12px 14px; border-radius: 9px; background: var(--accent-soft); color: #315d68; font-size: .76rem; line-height: 1.55; }
+  .notice.warning { background: var(--warning-soft); color: #6f4d12; }
+  .form-grid { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; }
+  .network-target-fields { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 150px; gap: 12px; padding: 12px; border: 1px solid #b9c9cf; border-radius: 9px; background: var(--surface-soft); }
+  .network-target-fields[hidden] { display: none; }
+  .field { min-width: 0; }
+  .field label { display: block; margin: 0 0 7px; color: #334852; font-size: .78rem; font-weight: 800; }
+  input[type="text"], input[type="number"], select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid #b9c9cf; border-radius: 9px; background: var(--surface); color: var(--ink); }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 100, 120, .12); outline: 0; }
+  .hint { margin-top: 6px; color: var(--ink-faint); font-size: .72rem; line-height: 1.5; }
+  .toggle-field { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid #b9c9cf; border-radius: 9px; background: var(--surface-soft); }
+  .toggle-field input { margin: 3px 0 0; accent-color: var(--accent); }
+  .toggle-field label { margin: 0; color: var(--ink); font-size: .78rem; font-weight: 800; cursor: pointer; }
+  .toggle-field .hint { margin-top: 3px; font-weight: 400; }
+  .form-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+  .form-actions p { margin: 0; color: var(--ink-faint); font-size: .72rem; line-height: 1.45; }
+  .btn { min-height: 40px; padding: 8px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--accent); font-weight: 800; cursor: pointer; }
+  .btn:hover { background: var(--accent-soft); border-color: #9ec5cd; }
+  .btn-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-dark); }
+  .btn-danger { color: var(--danger); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .status-banner { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 15px 17px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+  .status-banner h3 { margin: 0; font-size: 1rem; }
+  .status-banner p { margin: 5px 0 0; color: var(--ink-soft); font-size: .78rem; line-height: 1.5; }
+  .state { flex: 0 0 auto; padding: 5px 9px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-size: .72rem; font-weight: 850; }
+  .state.running { background: var(--warning-soft); color: var(--warning); }
+  .state.done { background: var(--success-soft); color: var(--success); }
+  .state.failed, .state.cancelled { background: var(--danger-soft); color: var(--danger); }
+  .state.await { background: var(--warning-soft); color: var(--warning); }
+  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 14px; }
+  .agent-summary { margin-top: 14px; padding: 13px 14px; border: 1px solid #c9e2e6; border-radius: 10px; background: #f1fafb; }
+  .agent-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .agent-summary-head h4 { margin: 0; font-size: .82rem; }
+  .agent-metrics { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 9px; color: var(--ink-soft); font-size: .75rem; }
+  .agent-metrics b { color: var(--accent-dark); font-size: 1rem; }
+  .agent-metrics em { font-style: normal; }
+  .agent-task-tree { display: grid; gap: 5px; margin: 10px 0 0; padding-left: 21px; color: var(--ink-soft); font-size: .74rem; }
+  .agent-task-tree li::marker { color: var(--accent); }
+  .metric { padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+  .metric strong { display: block; color: var(--accent); font-size: 1.2rem; letter-spacing: -.04em; }
+  .metric span { display: block; margin-top: 3px; color: var(--ink-faint); font-size: .7rem; }
+  .start-confirmation { margin-top: 16px; padding: 16px; border: 1px solid #e3c77d; border-radius: 11px; background: linear-gradient(135deg, #fffaf0, #fffdf8); }
+  .start-confirmation[hidden] { display: none; }
+  .start-confirmation-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .start-confirmation-head h4 { margin: 0; font-size: .9rem; }
+  .start-confirmation-head p { margin: 5px 0 0; color: #72551f; font-size: .75rem; line-height: 1.55; }
+  .start-confirmation-badge { flex: 0 0 auto; padding: 5px 8px; border-radius: 7px; background: #f8e5ad; color: #795713; font-size: .68rem; font-weight: 850; }
+  .start-option-picker { margin-top: 14px; }
+  .start-option-picker label { display: block; margin-bottom: 6px; color: #6c501a; font-size: .73rem; font-weight: 800; }
+  .start-option-details { margin-top: 12px; padding: 11px 12px; border-radius: 8px; background: rgba(255, 255, 255, .72); }
+  .start-confirmation .form-actions { justify-content: flex-start; margin-top: 14px; }
+  .start-confirmation .form-actions .hint { margin: 0 auto 0 0; }
+  .surfaces { display: grid; gap: 14px; margin-top: 16px; }
+  .surface-card { padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+  .surface-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .surface-title h4 { margin: 0; color: var(--ink); font: 800 .88rem/1.45 var(--mono); word-break: break-all; }
+  .risk { flex: 0 0 auto; padding: 4px 8px; border-radius: 6px; background: var(--warning-soft); color: var(--warning); font-size: .69rem; font-weight: 850; }
+  .risk.low { background: var(--success-soft); color: var(--success); }
+  .risk.unknown { background: var(--surface-soft); color: var(--ink-faint); }
+  .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; margin-top: 14px; }
+  .fact dt { color: var(--ink-faint); font-size: .69rem; }
+  .fact dd { margin: 3px 0 0; color: var(--ink); font-size: .78rem; line-height: 1.5; word-break: break-word; }
+  .risk-list { margin: 12px 0 0; padding: 10px 12px 10px 28px; border-radius: 8px; background: var(--warning-soft); color: #654910; font-size: .75rem; line-height: 1.55; }
+  .risk-list:empty { display: none; }
+  .subsection { margin-top: 18px; }
+  .subsection h4 { margin: 0 0 9px; font-size: .8rem; }
+  .events { max-height: 330px; overflow: auto; display: grid; gap: 8px; padding-right: 3px; }
+  .event { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+  .event::before { content: ""; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--accent); }
+  .event strong { display: block; font-size: .75rem; }
+  .event time { display: block; margin-top: 3px; color: var(--ink-faint); font-size: .65rem; }
+  .event-detail { margin-top: 5px; color: var(--ink-soft); font: .68rem/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .artifacts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .artifact-btn { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--accent); font: .7rem var(--mono); cursor: pointer; }
+  .artifact-btn:hover { background: var(--accent-soft); border-color: #9ec5cd; }
+  dialog { width: min(860px, calc(100% - 28px)); max-height: 86vh; padding: 0; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 28px 90px rgba(11, 35, 45, .24); color: var(--ink); }
+  dialog::backdrop { background: rgba(14, 34, 42, .46); }
+  .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .dialog-head h3 { margin: 0; font-size: .96rem; }
+  .dialog-body { max-height: calc(86vh - 62px); overflow: auto; padding: 16px 18px; }
+  .dialog-body pre { margin: 0; padding: 13px; overflow: auto; border-radius: 8px; background: #15252d; color: #e8f1f3; font: .72rem/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .sidebar { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } .sidebar .panel + .panel { margin-top: 0; } }
+  @media (max-width: 640px) { .topbar { align-items: flex-start; flex-wrap: wrap; } .top-actions { width: 100%; margin-left: 0; justify-content: flex-end; } .brand p { display: none; } .hero { display: block; } .read-only { display: inline-block; margin-top: 14px; } .sidebar { display: block; } .sidebar .panel + .panel { margin-top: 14px; } .form-grid, .facts, .network-target-fields { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .form-actions { align-items: stretch; flex-direction: column; } .form-actions .btn { width: 100%; } .surface-title { display: block; } .surface-title .risk { display: inline-block; margin-top: 8px; } .panel-head, .panel-body { padding-left: 16px; padding-right: 16px; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+</style>
+<style>
+  .batch-panel { margin-top: 14px; border: 1px solid #b9d6dc; background: #f7fbfc; }
+  .batch-panel .panel-body { padding-top: 12px; }
+  .batch-targets { width: 100%; min-height: 112px; resize: vertical; padding: 9px 10px; border: 1px solid #b9cbd1; border-radius: 8px; background: #fff; color: #1d2b31; font: .74rem/1.5 var(--mono, monospace); }
+  .batch-targets:focus { outline: 3px solid #075e7322; border-color: #075e73; }
+  .batch-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .batch-toolbar .toggle-field { margin-right: auto; }
+  .batch-progress { margin-top: 11px; padding: 10px; border: 1px solid #d3e3e6; border-radius: 8px; background: #fff; }
+  .batch-progress[hidden] { display: none; }
+  .batch-summary { color: #245766; font-size: .72rem; font-weight: 750; }
+  .batch-items { display: grid; gap: 5px; margin-top: 8px; max-height: 230px; overflow: auto; }
+  .batch-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 7px 8px; border: 1px solid #e0eaec; border-radius: 6px; background: #fbfdfd; font-size: .68rem; }
+  .batch-item-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .batch-item-state { color: #60717d; font: 700 .64rem var(--mono, monospace); white-space: nowrap; }
+  .batch-item-error { grid-column: 1 / -1; color: #b4232f; line-height: 1.35; word-break: break-word; }
+  @media (max-width: 640px) { .batch-toolbar .toggle-field { width: 100%; margin-right: 0; } .batch-item { grid-template-columns: 1fr; } .batch-item-state { white-space: normal; } }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div><h1>vulnfounder</h1><p data-i18n="brand.subtitle">OpenHarmony 设备安全工作台</p></div></div>
+  <div class="top-actions"><a href="/" data-i18n="nav.home">返回首页</a><a href="/source-locator" data-i18n="nav.locator">源码定位</a><label class="sr-only" for="language-select">语言</label><select id="language-select" aria-label="界面语言"><option value="zh-CN">中文</option><option value="en">English</option></select></div>
+</header>
+<main class="page">
+  <section class="hero">
+    <div><p class="eyebrow" data-i18n="hero.eyebrow">OpenHarmony / Device observation</p><h2 data-i18n="hero.title">暴露面识别</h2><p data-i18n="hero.body">连接开发板后，读取目标 Unix socket 的权限、SELinux 标签、监听状态和关联进程。首次探测始终只读；如果发现服务已配置但未启动，必须经过你的明确确认才会启动并重新侦查。</p></div>
+    <span class="read-only" data-i18n="hero.readonly">首次探测只读 · 启动需确认</span>
+  </section>
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="panel"><div class="panel-head"><h3 data-i18n="history.title">历史识别</h3><p data-i18n="history.body">重启 Web 后仍可恢复事件与产物。</p></div><div class="history-toolbar"><label class="history-select-all" for="history-select-all"><input id="history-select-all" type="checkbox" aria-label="全选历史识别 session"><span data-i18n="history.selectAll">全选</span></label><button id="history-delete-selected" class="btn btn-danger history-delete-selected" type="button" disabled data-i18n="history.deleteSelected">批量删除（0）</button></div><div id="history" class="history" aria-live="polite"><div class="empty" data-i18n="history.empty">还没有识别 session。</div></div></section>
+      <section class="panel"><div class="panel-head"><h3 data-i18n="safety.title">安全边界</h3></div><div class="panel-body"><div class="notice" data-i18n="safety.body">设备命令由固定探测计划生成，浏览器输入只用于目标标准化，不会拼接 shell 字符串。启动服务是单独的、可审计的确认动作。</div></div></section>
+    </aside>
+    <div class="main-column">
+  <section class="panel batch-panel" aria-labelledby="batch-title"><div class="panel-head"><h3 id="batch-title" data-batch-i18n="title">批量识别</h3><p data-batch-i18n="description">每行输入一个 Unix socket 路径或 TCP/UDP 端点。设备 serial、执行模式、大模型和 RAG 选项沿用下方设置；系统按顺序执行，不会自动启动停止的服务。</p></div><div class="panel-body"><label class="field" for="batch-targets"><span data-batch-i18n="targetsLabel">批量目标（每行一个）</span><textarea id="batch-targets" class="batch-targets" maxlength="65536" rows="5" placeholder="/dev/unix/socket/hiprofiler_unix_socket&#10;SP_daemon UDP 127.0.0.1:8283" data-batch-placeholder-zh="/dev/unix/socket/hiprofiler_unix_socket&#10;SP_daemon UDP 127.0.0.1:8283" data-batch-placeholder-en="/dev/unix/socket/hiprofiler_unix_socket&#10;SP_daemon UDP 127.0.0.1:8283"></textarea></label><div class="hint" data-batch-i18n="targetHint">支持命名 Unix socket、TCP 或 UDP；网络目标可写成“进程 协议 IP:端口”。</div><div class="batch-toolbar"><label class="toggle-field" for="batch-auto-start"><input id="batch-auto-start" type="checkbox" checked><span data-batch-i18n="autoStart">创建后自动开始只读探测</span></label><button id="batch-create" class="btn btn-primary" type="button" data-batch-i18n="start">开始批量识别</button><button id="batch-stop" class="btn" type="button" hidden data-batch-i18n="stop">停止后续任务</button></div><div id="batch-progress" class="batch-progress" hidden aria-live="polite"></div></div></section>
+      <section class="panel"><div class="panel-head"><h3 data-i18n="form.title">新建识别</h3><p data-i18n="form.body">输入 Unix 路径，或选择 TCP/UDP 并填写进程、IP 地址和端口。</p></div><div class="panel-body"><form id="create-form"><div class="form-grid"><div class="field"><label for="target-mode" data-i18n="form.mode">端点类型</label><select id="target-mode" name="target_mode"><option value="unix" data-i18n="form.modeUnix">Unix Domain Socket</option><option value="tcp" data-i18n="form.modeTcp">TCP Socket</option><option value="udp" data-i18n="form.modeUdp">UDP Socket</option></select><div class="hint" data-i18n="form.modeHint">网络 socket 会使用设备网络状态命令核对端口和进程。</div></div><div class="field"><label for="device-serial" data-i18n="form.serial">开发板 serial（可选）</label><input id="device-serial" name="device_serial" type="text" maxlength="128" placeholder="自动选择唯一设备"><div class="hint" data-i18n="form.serialHint">留空时由 HDC 默认设备处理。</div></div><div id="unix-target-field" class="field"><label for="target" data-i18n="form.target">Unix socket 路径或自然语言目标</label><input id="target" name="target" type="text" maxlength="512" required placeholder="/dev/unix/socket/hiprofiler_unix_socket"><div class="hint" data-i18n="form.targetHint">Unix 模式输入路径；网络模式可留空，使用下面的地址和端口字段。</div></div><div id="network-target-fields" class="network-target-fields" hidden><div class="field"><label for="network-process" data-i18n="form.process">进程名（可选）</label><input id="network-process" type="text" maxlength="128" placeholder="SP_daemon"><div class="hint" data-i18n="form.processHint">用于校验端口对应的服务进程。</div></div><div class="field"><label for="network-address" data-i18n="form.address">IP 地址</label><input id="network-address" type="text" maxlength="128" placeholder="127.0.0.1"><div class="hint" data-i18n="form.addressHint">支持 IPv4；IPv6 可填写 ::1。</div></div><div class="field"><label for="network-port" data-i18n="form.port">端口</label><input id="network-port" type="number" min="1" max="65535" step="1" placeholder="8283"><div class="hint" data-i18n="form.portHint">1–65535。</div></div></div><div class="field"><label for="execution-mode" data-i18n="form.executionMode">执行模式</label><select id="execution-mode"><option value="fixed" data-i18n="form.executionFixed">固定只读探测</option><option value="agentic" data-i18n="form.executionAgentic">Agentic Loop（模型选择命令）</option></select><div class="hint" data-i18n="form.executionHint">Agentic 模式会先维护任务树，再按轮次提出设备命令。</div></div><div id="agent-options" class="agent-options" hidden><div class="toggle-field"><input id="allow-model-commands" type="checkbox"><div><label for="allow-model-commands" data-i18n="form.allowCommands">允许模型执行设备命令</label><div class="hint" data-i18n="form.allowCommandsHint">仅授权后执行；命令和返回会写入 Agent 追踪产物。</div></div></div><div class="field"><label for="rag-mode" data-i18n="form.ragMode">本地命令指南</label><select id="rag-mode"><option value="local" data-i18n="form.ragLocal">启用本地 RAG</option><option value="off" data-i18n="form.ragOff">关闭 RAG</option></select></div></div><div class="toggle-field"><input id="llm-assist" name="llm_assist" type="checkbox" checked><div><label for="llm-assist" data-i18n="form.llm">使用大模型提取结果</label><div class="hint" data-i18n="form.llmHint">模型只归纳已采集的设备证据并必须引用 evidence_id；调用失败时保留确定性结果。</div></div></div></div><div class="form-actions"><p data-i18n="form.note">识别结果会写入独立 session，可下载字段级证据和命令记录。</p><button class="btn btn-primary" id="create-btn" type="submit" data-i18n="form.submit">创建并识别</button></div></form><p id="form-error" class="notice warning" hidden role="alert"></p></div></section>
+      <section class="panel" id="result-panel" hidden><div class="panel-head"><h3 data-i18n="result.title">识别结果</h3><p id="result-subtitle" data-i18n="result.empty">选择一个 session 查看结构化结果。</p></div><div class="panel-body"><div id="status-banner" class="status-banner"><div><h3 id="status-title">—</h3><p id="status-detail">—</p></div><span id="state-badge" class="state">—</span></div><div class="metrics"><div class="metric"><strong id="metric-surfaces">0</strong><span data-i18n="metric.surfaces">候选暴露面</span></div><div class="metric"><strong id="metric-confirmed">0</strong><span data-i18n="metric.confirmed">已确认字段</span></div><div class="metric"><strong id="metric-unknown">0</strong><span data-i18n="metric.unknown">待观测字段</span></div><div class="metric"><strong id="metric-evidence">0</strong><span data-i18n="metric.evidence">证据条目</span></div></div><section id="agent-summary" class="agent-summary" hidden><div class="agent-summary-head"><h4 data-i18n="result.agentTitle">Agentic Loop 进度</h4><span id="agent-status" class="state">—</span></div><div class="agent-metrics"><span><b id="agent-rounds">0</b> <em data-i18n="result.agentRounds">模型轮次</em></span><span><b id="agent-commands">0</b> <em data-i18n="result.agentCommands">设备命令</em></span><span><b id="agent-evidence">0</b> <em data-i18n="result.agentEvidence">Agent 证据</em></span></div><p id="agent-detail" class="hint"></p><ol id="agent-task-tree" class="agent-task-tree"></ol></section><section id="start-confirmation" class="start-confirmation" hidden aria-live="assertive"><div class="start-confirmation-head"><div><h4 data-i18n="start.title">发现已配置但未启动的服务</h4><p data-i18n="start.body">设备上的服务配置存在，但当前启动参数为关闭。选择服务后，只有点击确认并通过二次确认，才会执行启动和重新侦查。</p></div><span class="start-confirmation-badge" data-i18n="start.badge">需要确认</span></div><div class="start-option-picker"><label for="start-option-select" data-i18n="start.option">待启动服务</label><select id="start-option-select" aria-describedby="start-option-help"></select><div id="start-option-help" class="hint" data-i18n="start.help">拒绝启动不会修改开发板状态。</div></div><dl id="start-option-details" class="facts start-option-details"></dl><div class="form-actions"><p class="hint" data-i18n="start.audit">启动前会重新读取配置和参数，结果写入启动审计产物。</p><button class="btn btn-primary" id="start-service-btn" type="button" data-i18n="start.accept">同意启动并重新侦查</button><button class="btn" id="skip-service-btn" type="button" data-i18n="start.decline">保持停止状态</button></div></section><div class="form-actions"><p id="session-id-label">—</p><div><button class="btn" id="start-btn" type="button" data-i18n="result.start">开始只读探测</button><button class="btn btn-danger" id="cancel-btn" type="button" data-i18n="result.cancel">取消</button><button class="btn btn-danger" id="delete-btn" type="button" data-i18n="result.delete">删除 session</button></div></div><div class="subsection"><h4 data-i18n="result.surfaces">暴露面卡片</h4><div id="surfaces" class="surfaces"><div class="empty" data-i18n="result.noSurface">暂无结构化结果。</div></div></div><div class="subsection"><h4 data-i18n="result.events">过程事件</h4><div id="events" class="events" aria-live="polite"><div class="empty" data-i18n="result.noEvents">暂无事件。</div></div></div><div class="subsection"><h4 data-i18n="result.artifacts">可查看产物</h4><div id="artifacts" class="artifacts"><span class="hint" data-i18n="result.noArtifacts">完成探测后显示。</span></div></div></div></section>
+    </div>
+  </div>
+</main>
+<dialog id="detail-dialog"><div class="dialog-head"><h3 id="dialog-title">详情</h3><button class="btn" id="dialog-close" type="button" data-i18n="dialog.close">关闭</button></div><div class="dialog-body"><pre id="dialog-content"></pre></div></dialog>
+<script>
+(() => {
+  "use strict";
+  const csrf = document.querySelector('meta[name="csrf"]')?.content || "";
+  const labels = {
+    "zh-CN": { "brand.subtitle":"OpenHarmony 设备安全工作台", "nav.home":"返回首页", "nav.locator":"源码定位", "history.title":"历史识别", "history.body":"重启 Web 后仍可恢复事件与产物。", "history.empty":"还没有识别 session。", "safety.title":"安全边界", "safety.body":"设备命令由固定探测计划生成，浏览器输入只用于目标标准化，不会拼接 shell 字符串。启动服务是单独的、可审计的确认动作。", "hero.eyebrow":"OpenHarmony / Device observation", "hero.title":"暴露面识别", "hero.body":"连接开发板后，读取目标 Unix socket 的权限、SELinux 标签、监听状态和关联进程。首次探测始终只读；如果发现服务已配置但未启动，必须经过你的明确确认才会启动并重新侦查。", "hero.readonly":"首次探测只读 · 启动需确认", "form.title":"新建识别", "form.body":"输入完整路径或 socket 名称，例如 /dev/unix/socket/hiprofiler_unix_socket。", "form.target":"目标服务或 socket 路径", "form.targetHint":"支持自然语言描述；当前阶段仅识别 Unix socket。", "form.serial":"开发板 serial（可选）", "form.serialHint":"留空时由 HDC 默认设备处理。", "form.note":"识别结果会写入独立 session，可下载字段级证据和命令记录。", "form.submit":"创建并识别", "result.title":"识别结果", "result.empty":"选择一个 session 查看结构化结果。", "metric.surfaces":"候选暴露面", "metric.confirmed":"已确认字段", "metric.unknown":"待观测字段", "metric.evidence":"证据条目", "result.start":"开始只读探测", "result.cancel":"取消", "result.delete":"删除 session", "result.surfaces":"暴露面卡片", "result.noSurface":"暂无结构化结果。", "result.events":"过程事件", "result.noEvents":"暂无事件。", "result.artifacts":"可查看产物", "result.noArtifacts":"完成探测后显示。", "start.title":"发现已配置但未启动的服务", "start.body":"设备上的服务配置存在，但当前启动参数为关闭。选择服务后，只有点击确认并通过二次确认，才会执行启动和重新侦查。", "start.badge":"需要确认", "start.option":"待启动服务", "start.help":"拒绝启动不会修改开发板状态。", "start.audit":"启动前会重新读取配置和参数，结果写入启动审计产物。", "start.accept":"同意启动并重新侦查", "start.decline":"保持停止状态", "start.confirm":"确认启动服务", "start.reasonPrompt":"可填写拒绝原因（可选）", "dialog.close":"关闭" },
+    "en": { "brand.subtitle":"OpenHarmony device security workbench", "nav.home":"Home", "nav.locator":"Source locator", "history.title":"History", "history.body":"Sessions and artifacts survive a Web restart.", "history.empty":"No exposure sessions yet.", "safety.title":"Safety boundary", "safety.body":"Commands run only on the selected board. The target is normalized as a Unix/TCP/UDP endpoint; service start is a separate, auditable confirmation action.", "hero.eyebrow":"OpenHarmony / Device observation", "hero.title":"Exposure surface", "hero.body":"After a board is connected, inspect the target Unix/TCP/UDP socket's permissions, protocol, listen state and associated process. The first probe is always read-only; a configured but stopped service starts only after your explicit confirmation.", "hero.readonly":"Initial probe is read-only · start requires confirmation", "form.title":"New inspection", "form.body":"Enter a Unix path, or select TCP/UDP and provide a process, address and port.", "form.target":"Unix socket path or natural-language target", "form.targetHint":"For Unix mode enter a path; network mode uses the address and port fields below.", "form.serial":"Board serial (optional)", "form.serialHint":"Leave blank to use the default HDC device.", "form.note":"Results are stored in an isolated session with field evidence and command records.", "form.submit":"Create and inspect", "result.title":"Inspection result", "result.empty":"Choose a session to view structured results.", "metric.surfaces":"Surfaces", "metric.confirmed":"Confirmed fields", "metric.unknown":"Unknown fields", "metric.evidence":"Evidence items", "result.start":"Start read-only probe", "result.cancel":"Cancel", "result.delete":"Delete session", "result.surfaces":"Surface cards", "result.noSurface":"No structured result yet.", "result.events":"Process events", "result.noEvents":"No events yet.", "result.artifacts":"Viewable artifacts", "result.noArtifacts":"Available after probing.", "start.title":"Configured service is stopped", "start.body":"A service configuration was found, but its startup parameter is disabled. Starting and re-probing happen only after an explicit confirmation.", "start.badge":"Confirmation required", "start.option":"Service to start", "start.help":"Declining does not change the board.", "start.audit":"Configuration and parameter state are re-read before the command; the decision is saved as an audit artifact.", "start.accept":"Confirm start and re-probe", "start.decline":"Keep stopped", "start.confirm":"Confirm service start", "start.reasonPrompt":"Optional reason for keeping it stopped", "dialog.close":"Close" }
+  };
+  // Keep the extraction switch localized without duplicating the long legacy
+  // dictionaries above; older cached pages still fall back to these keys.
+  labels["zh-CN"]["form.llm"] = "使用大模型提取结果";
+  labels["zh-CN"]["form.llmHint"] = "模型只归纳已采集的设备证据并必须引用 evidence_id；调用失败时保留确定性结果。";
+  labels["zh-CN"]["result.agentTitle"] = "Agentic Loop 进度";
+  labels["zh-CN"]["result.agentRounds"] = "模型轮次";
+  labels["zh-CN"]["result.agentCommands"] = "设备命令";
+  labels["zh-CN"]["result.agentEvidence"] = "Agent 证据";
+  labels.en["form.llm"] = "Use the LLM to extract results";
+  labels.en["form.llmHint"] = "The model summarizes observed device evidence and must cite evidence_id; deterministic results are kept if it fails.";
+  labels.en["result.agentTitle"] = "Agentic Loop progress";
+  labels.en["result.agentRounds"] = "model rounds";
+  labels.en["result.agentCommands"] = "device commands";
+  labels.en["result.agentEvidence"] = "Agent evidence";
+  Object.assign(labels["zh-CN"], {
+    "history.selectAll": "全选",
+    "history.deleteSelected": "批量删除（{count}）",
+    "history.deleteConfirm": "确定删除选中的 {count} 个暴露面识别 session 及其产物吗？此操作不可恢复。",
+    "history.deleteRunningWarning": "其中有 {count} 个 session 仍在运行，删除会同时终止其记录。是否继续？",
+    "history.deleting": "正在删除选中的 session…",
+    "history.deleted": "批量删除完成：成功 {success} 个，失败 {failed} 个。",
+    "history.deleteBusy": "批量识别或删除正在进行，请稍后再试。",
+    "history.batchGroup": "批量识别组",
+    "history.batchGroupMeta": "{count}/{total} 个会话",
+    "safety.body": "探测命令只在指定开发板上执行，目标输入会先标准化为 Unix/TCP/UDP 端点，不会拼接 shell 字符串。启动服务是单独的、可审计的确认动作。",
+    "hero.body": "连接开发板后，读取目标 Unix/TCP/UDP socket 的权限、协议、监听状态和关联进程。首次探测始终只读；如果发现服务已配置但未启动，必须经过你的明确确认才会启动并重新侦查。",
+    "form.body": "输入 Unix 路径，或选择 TCP/UDP 并填写进程、IP 地址和端口。",
+    "form.target": "Unix socket 路径或自然语言目标",
+    "form.targetHint": "Unix 模式输入路径；网络模式可留空，使用下面的地址和端口字段。",
+    "form.mode": "端点类型",
+    "form.modeUnix": "Unix Domain Socket",
+    "form.modeTcp": "TCP Socket",
+    "form.modeUdp": "UDP Socket",
+    "form.modeHint": "网络 socket 会使用设备网络状态命令核对端口和进程。",
+    "form.process": "进程名（可选）",
+    "form.processHint": "用于校验端口对应的服务进程。",
+    "form.address": "IP 地址",
+    "form.addressHint": "支持 IPv4；IPv6 可填写 ::1。",
+    "form.port": "端口",
+    "form.portHint": "1–65535。",
+    "form.executionMode": "执行模式",
+    "form.executionFixed": "固定只读探测",
+    "form.executionAgentic": "Agentic Loop（模型选择命令）",
+    "form.executionHint": "Agentic 模式会先维护任务树，再按轮次提出设备命令。",
+    "form.allowCommands": "允许模型执行设备命令",
+    "form.allowCommandsHint": "仅授权后执行；命令和返回会写入 Agent 追踪产物。",
+    "form.ragMode": "本地命令指南",
+    "form.ragLocal": "启用本地 RAG",
+    "form.ragOff": "关闭 RAG",
+  });
+  Object.assign(labels.en, {
+    "history.selectAll": "Select all",
+    "history.deleteSelected": "Delete selected ({count})",
+    "history.deleteConfirm": "Delete the selected {count} exposure sessions and their artifacts? This cannot be undone.",
+    "history.deleteRunningWarning": "{count} selected session(s) are still running. Deleting them will also remove their records. Continue?",
+    "history.deleting": "Deleting selected sessions…",
+    "history.deleted": "Batch deletion finished: {success} succeeded, {failed} failed.",
+    "history.deleteBusy": "A batch inspection or deletion is already in progress. Try again later.",
+    "history.batchGroup": "Batch inspection group",
+    "history.batchGroupMeta": "{count}/{total} sessions",
+    "safety.body": "Probe commands run only on the selected board. The target is normalized as a Unix/TCP/UDP endpoint and never concatenated into a shell command. Starting a service is a separate, auditable confirmation action.",
+    "hero.body": "After a board is connected, inspect the target Unix/TCP/UDP socket's permissions, protocol, listen state and associated process. The first probe is always read-only; a configured but stopped service starts only after your explicit confirmation.",
+    "form.body": "Enter a Unix path, or choose TCP/UDP and provide a process, IP address and port.",
+    "form.target": "Unix socket path or natural-language target",
+    "form.targetHint": "Enter a path in Unix mode; in network mode use the address and port fields below.",
+    "form.mode": "Endpoint type",
+    "form.modeUnix": "Unix Domain Socket",
+    "form.modeTcp": "TCP Socket",
+    "form.modeUdp": "UDP Socket",
+    "form.modeHint": "Network status commands verify the endpoint, port and process on the board.",
+    "form.process": "Process name (optional)",
+    "form.processHint": "Used to match the process that owns the endpoint.",
+    "form.address": "IP address",
+    "form.addressHint": "IPv4 is supported; enter ::1 for IPv6.",
+    "form.port": "Port",
+    "form.portHint": "1–65535.",
+    "form.executionMode": "Execution mode",
+    "form.executionFixed": "Fixed read-only probes",
+    "form.executionAgentic": "Agentic Loop (model-selected commands)",
+    "form.executionHint": "Agentic mode maintains a task tree and proposes device commands round by round.",
+    "form.allowCommands": "Allow model device commands",
+    "form.allowCommandsHint": "Commands run only after explicit authorization and are saved in Agent traces.",
+    "form.ragMode": "Local command guide",
+    "form.ragLocal": "Enable local RAG",
+    "form.ragOff": "Disable RAG",
+  });
+  const DEFAULT_LANGUAGE = "zh-CN";
+  const SUPPORTED_LANGUAGES = new Set(Object.keys(labels));
+  const savedLanguage = localStorage.getItem("openant.ui.language");
+  const state = { session: null, events: [], eventSource: null, startOptions: [], historySessions: [], historySelected: new Set(), historyDeleteInFlight: false, language: SUPPORTED_LANGUAGES.has(savedLanguage) ? savedLanguage : DEFAULT_LANGUAGE };
+  const $ = (id) => document.getElementById(id);
+  const batchTexts = {
+    "zh-CN": {
+      title: "批量识别",
+      description: "每行输入一个 Unix socket 路径或 TCP/UDP 端点。设备 serial、执行模式、大模型和 RAG 选项沿用下方设置；系统按顺序执行，不会自动启动停止的服务。",
+      targetsLabel: "批量目标（每行一个）",
+      targetHint: "支持命名 Unix socket、TCP 或 UDP；网络目标可写成“进程 协议 IP:端口”。",
+      autoStart: "创建后自动开始只读探测",
+      start: "开始批量识别",
+      stop: "停止后续任务",
+      empty: "请输入至少一个批量目标。",
+      tooMany: "一次最多处理 32 个目标。",
+      started: "批量识别已开始，将按顺序执行。",
+      finished: "批量识别完成：成功 {success} 个，失败 {failed} 个。",
+      stopped: "批量识别已停止，不会再创建后续会话。",
+      summary: "进度：{done}/{total} · 已创建 {created} · 运行中 {running} · 失败 {failed} · 待处理 {pending}",
+      pending: "待处理",
+      creating: "创建 session",
+      created: "已创建（未探测）",
+      running: "正在探测",
+      done: "已完成探测",
+      error: "失败",
+      stoppedItem: "已停止",
+    },
+    en: {
+      title: "Batch exposure inspection",
+      description: "Enter one Unix socket path or TCP/UDP endpoint per line. The serial, execution mode, LLM and RAG settings below are reused; sessions run sequentially and stopped services are never started automatically.",
+      targetsLabel: "Batch targets (one per line)",
+      targetHint: "Supports named Unix sockets, TCP and UDP; network targets can use “process protocol IP:port”.",
+      autoStart: "Start the read-only probe after creation",
+      start: "Start batch inspection",
+      stop: "Stop remaining tasks",
+      empty: "Enter at least one batch target.",
+      tooMany: "At most 32 targets can be processed at once.",
+      started: "Batch inspection started; targets will run sequentially.",
+      finished: "Batch inspection finished: {success} succeeded, {failed} failed.",
+      stopped: "Batch inspection stopped; no more sessions will be created.",
+      summary: "Progress: {done}/{total} · created {created} · running {running} · failed {failed} · pending {pending}",
+      pending: "Pending",
+      creating: "Creating session",
+      created: "Created (not probed)",
+      running: "Probing",
+      done: "Probe completed",
+      error: "Failed",
+      stoppedItem: "Stopped",
+    },
+  };
+  const batchState = { inFlight: false, stopRequested: false, records: [], batchID: "" };
+  function batchText(key) { return (batchTexts[state.language] && batchTexts[state.language][key]) || batchTexts[DEFAULT_LANGUAGE][key] || key; }
+  function applyBatchLanguage() {
+    document.querySelectorAll("[data-batch-i18n]").forEach((node) => {
+      const key = node.dataset.batchI18n;
+      if (key) node.textContent = batchText(key);
+    });
+    document.querySelectorAll("[data-batch-placeholder-zh]").forEach((node) => {
+      node.placeholder = state.language === "en" ? node.dataset.batchPlaceholderEn : node.dataset.batchPlaceholderZh;
+    });
+    if (batchState.records.length) renderBatchProgress();
+  }
+  function updateTargetMode() {
+    const mode = $("target-mode")?.value || "unix";
+    const network = mode !== "unix";
+    const fields = $("network-target-fields");
+    if (fields) fields.hidden = !network;
+    const unixField = $("unix-target-field");
+    if (unixField) unixField.hidden = network;
+    const target = $("target");
+    if (target) {
+      target.required = !network;
+      target.placeholder = network ? "网络模式下可留空" : "/dev/unix/socket/hiprofiler_unix_socket";
+    }
+    ["network-address", "network-port"].forEach((id) => {
+      const input = $(id);
+      if (input) input.required = network;
+    });
+  }
+  function buildExposureTarget() {
+    const mode = $("target-mode")?.value || "unix";
+    if (mode === "unix") return $("target").value.trim();
+    const address = $("network-address").value.trim();
+    const port = $("network-port").value.trim();
+    const process = $("network-process").value.trim();
+    if (!address || !port) throw new Error("网络 socket 必须填写 IP 地址和端口");
+    const endpointAddress = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+    return [process, mode.toUpperCase(), `${endpointAddress}:${port}`].filter(Boolean).join(" ");
+  }
+  function parseBatchTargets() {
+    const seen = new Set();
+    const targets = [];
+    String($("batch-targets")?.value || "").split(/\r?\n/).map((value) => value.trim()).filter((value) => value && !value.startsWith("#")).forEach((value) => {
+      if (value.length > 512) throw new Error((state.language === "en" ? "Target is longer than 512 characters: " : "目标长度超过 512 个字符：") + value.slice(0, 80));
+      if (!seen.has(value)) { seen.add(value); targets.push(value); }
+    });
+    if (!targets.length) throw new Error(batchText("empty"));
+    if (targets.length > 32) throw new Error(batchText("tooMany"));
+    return targets;
+  }
+  function batchCreateBody(target, batchID = "", batchIndex = 0, batchTotal = 0) {
+    const executionMode = $("execution-mode")?.value || "fixed";
+    const body = {
+      target,
+      device_serial: $("device-serial").value.trim(),
+      llm_assist: Boolean($("llm-assist")?.checked),
+      mode: executionMode,
+      allow_model_commands: executionMode === "agentic" && Boolean($("allow-model-commands")?.checked),
+      rag_mode: $("rag-mode")?.value || "local",
+      max_rounds: 20,
+      max_commands: 100,
+    };
+    if (batchID) {
+      body.batch_id = batchID;
+      body.batch_index = batchIndex;
+      body.batch_total = batchTotal;
+    }
+    return body;
+  }
+  function batchRecordLabel(record) {
+    if (record.status === "error") return batchText("error") + "：" + record.error;
+    if (record.status === "stopped") return batchText("stoppedItem");
+    return batchText(record.status) + (record.state ? " · " + record.state : "") + (record.session_id ? " · " + record.session_id : "");
+  }
+  function renderBatchProgress() {
+    const box = $("batch-progress");
+    if (!box) return;
+    box.hidden = !batchState.records.length;
+    box.replaceChildren();
+    if (!batchState.records.length) return;
+    const records = batchState.records;
+    const total = records.length;
+    const created = records.filter((record) => record.session_id).length;
+    const failed = records.filter((record) => record.status === "error").length;
+    const running = records.filter((record) => record.status === "creating" || record.status === "running").length;
+    const pending = records.filter((record) => record.status === "pending").length;
+    const done = records.filter((record) => !["pending", "creating", "running"].includes(record.status)).length;
+    const summary = document.createElement("div");
+    summary.className = "batch-summary";
+    summary.textContent = batchText("summary").replace("{done}", String(done)).replace("{total}", String(total)).replace("{created}", String(created)).replace("{running}", String(running)).replace("{failed}", String(failed)).replace("{pending}", String(pending));
+    box.append(summary);
+    const list = document.createElement("div");
+    list.className = "batch-items";
+    records.forEach((record, index) => {
+      const item = document.createElement("div");
+      item.className = "batch-item";
+      const target = document.createElement("span");
+      target.className = "batch-item-target";
+      target.textContent = (index + 1) + ". " + record.target;
+      const status = document.createElement("span");
+      status.className = "batch-item-state";
+      status.textContent = batchRecordLabel(record);
+      item.append(target, status);
+      if (record.error) {
+        const error = document.createElement("div");
+        error.className = "batch-item-error";
+        error.textContent = record.error;
+        item.append(error);
+      }
+      list.append(item);
+    });
+    box.append(list);
+  }
+  function setBatchBusy(busy) {
+    batchState.inFlight = busy;
+    const ids = ["target-mode", "device-serial", "target", "network-process", "network-address", "network-port", "execution-mode", "allow-model-commands", "rag-mode", "llm-assist", "create-btn", "start-btn", "cancel-btn", "delete-btn", "start-service-btn", "skip-service-btn", "history-select-all", "history-delete-selected"];
+    ids.forEach((id) => { const node = $(id); if (node) node.disabled = busy; });
+    document.querySelectorAll(".history-select, .history-group-select").forEach((node) => { node.disabled = busy || state.historyDeleteInFlight; });
+    const start = $("batch-create");
+    const stop = $("batch-stop");
+    if (start) start.disabled = busy;
+    if (stop) { stop.hidden = !busy; stop.disabled = !busy; }
+    if (!busy) {
+      ids.forEach((id) => { const node = $(id); if (node) node.disabled = false; });
+      updateTargetMode();
+      updateExecutionMode();
+      if ($("start-service-btn")) $("start-service-btn").disabled = false;
+      if ($("skip-service-btn")) $("skip-service-btn").disabled = false;
+      if (state.session) renderStatus(state.session);
+    }
+    updateHistorySelectionControls();
+  }
+  async function runBatch() {
+    if (batchState.inFlight) return;
+    if (state.historyDeleteInFlight) { showError(i18n("history.deleteBusy")); return; }
+    showError("");
+    let targets;
+    try { targets = parseBatchTargets(); } catch (error) { showError(error.message); return; }
+    batchState.records = targets.map((target) => ({ target, status: "pending", session_id: "", state: "", error: "" }));
+    batchState.batchID = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    batchState.stopRequested = false;
+    const autoStart = Boolean($("batch-auto-start")?.checked);
+    setBatchBusy(true);
+    renderBatchProgress();
+    showError(batchText("started"));
+    let lastSessionID = "";
+    for (const [index, record] of batchState.records.entries()) {
+      if (batchState.stopRequested) {
+        record.status = "stopped";
+        renderBatchProgress();
+        continue;
+      }
+      record.status = "creating";
+      renderBatchProgress();
+      try {
+        const createdData = await request("/exposure-surface/sessions", { method: "POST", body: JSON.stringify(batchCreateBody(record.target, batchState.batchID, index + 1, batchState.records.length)) });
+        const created = createdData.session || createdData;
+        if (!created.session_id) throw new Error(state.language === "en" ? "The server did not return a session id" : "服务器没有返回 session ID");
+        record.session_id = created.session_id;
+        record.state = created.state || "";
+        lastSessionID = record.session_id;
+        if (autoStart) {
+          record.status = "running";
+          renderBatchProgress();
+          const startedData = await request("/exposure-surface/sessions/" + encodeURIComponent(record.session_id) + "/start", { method: "POST", body: "{}" });
+          const started = startedData.session || startedData;
+          record.state = started.state || record.state;
+          const statusData = await request("/exposure-surface/sessions/" + encodeURIComponent(record.session_id));
+          const latest = statusData.session || statusData;
+          record.state = latest.state || record.state;
+          record.status = "done";
+        } else {
+          record.status = "created";
+        }
+      } catch (error) {
+        record.status = "error";
+        record.error = error && error.message ? error.message : String(error);
+      }
+      renderBatchProgress();
+    }
+    const stopped = batchState.stopRequested;
+    const failed = batchState.records.filter((record) => record.status === "error").length;
+    const succeeded = batchState.records.filter((record) => record.status === "done" || record.status === "created").length;
+    setBatchBusy(false);
+    renderBatchProgress();
+    if (lastSessionID) await selectSession(lastSessionID);
+    else await refreshSessions();
+    if (stopped) showError(batchText("stopped"));
+    else showError(batchText("finished").replace("{success}", String(succeeded)).replace("{failed}", String(failed)));
+  }
+  function updateExecutionMode() {
+    const mode = $("execution-mode")?.value || "fixed";
+    const options = $("agent-options");
+    if (options) options.hidden = mode !== "agentic";
+    const allow = $("allow-model-commands");
+    if (allow) {
+      allow.required = mode === "agentic";
+      if (mode !== "agentic") allow.checked = false;
+    }
+  }
+  $("target-mode")?.addEventListener("change", updateTargetMode);
+  $("execution-mode")?.addEventListener("change", updateExecutionMode);
+  updateTargetMode();
+  updateExecutionMode();
+  const statusLabels = { INTAKE:"等待开始", RUNNING:"正在探测", AWAIT_START_CONFIRMATION:"等待启动确认", DONE:"已完成", PARTIAL:"部分完成", OFFLINE:"设备离线", NOT_FOUND:"未找到目标", PERMISSION_DENIED:"权限不足", CANCELLED:"已取消", FAILED:"执行失败" };
+  const statusClasses = { RUNNING:"running", AWAIT_START_CONFIRMATION:"await", DONE:"done", FAILED:"failed", CANCELLED:"cancelled", PERMISSION_DENIED:"failed" };
+  function dictionary() { return labels[state.language] || labels[DEFAULT_LANGUAGE]; }
+  function i18n(key, fallback = key) { return dictionary()[key] || labels[DEFAULT_LANGUAGE][key] || fallback; }
+  function applyLanguage() { if (!SUPPORTED_LANGUAGES.has(state.language)) state.language = DEFAULT_LANGUAGE; document.documentElement.lang = state.language; $("language-select").value = state.language; document.querySelectorAll("[data-i18n]").forEach((node) => { const value = i18n(node.dataset.i18n); if (value) node.textContent = value; }); }
+  function headers(json = false) { const h = { "X-CSRF-Token": csrf }; if (json) h["Content-Type"] = "application/json"; return h; }
+  async function request(url, options = {}) { const response = await fetch(url, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } }); const payload = await response.json().catch(() => ({})); if (!response.ok || payload.status === "error") throw new Error((payload.errors || ["请求失败"]).join("；")); return payload.data || {}; }
+  function showError(message) { const node = $("form-error"); node.textContent = message; node.hidden = !message; }
+  function closeStream() { if (state.eventSource) { state.eventSource.close(); state.eventSource = null; } }
+  function targetOf(session) { return session?.raw_target || session?.normalized_target?.candidate_paths?.[0] || session?.session_id || "—"; }
+  function historyDeleteButtonLabel() { return i18n("history.deleteSelected").replace("{count}", String(state.historySelected.size)); }
+  function updateHistorySelectionControls() {
+    const selectAll = $("history-select-all");
+    const deleteButton = $("history-delete-selected");
+    const total = state.historySessions.length;
+    const selected = state.historySelected.size;
+    if (selectAll) {
+      selectAll.checked = total > 0 && selected === total;
+      selectAll.indeterminate = selected > 0 && selected < total;
+      selectAll.disabled = total === 0 || state.historyDeleteInFlight || batchState.inFlight;
+    }
+    if (deleteButton) {
+      deleteButton.textContent = historyDeleteButtonLabel();
+      deleteButton.disabled = selected === 0 || state.historyDeleteInFlight || batchState.inFlight;
+    }
+    updateHistoryGroupSelections();
+  }
+  function historyBatchID(session) {
+    const value = session?.batch_id ?? session?.batch?.id;
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function historyBatchItems(list) {
+    const items = [];
+    const groups = new Map();
+    list.forEach((session) => {
+      const batchID = historyBatchID(session);
+      if (!batchID) {
+        items.push({ kind: "session", session });
+        return;
+      }
+      let group = groups.get(batchID);
+      if (!group) {
+        group = { kind: "group", batchID, sessions: [] };
+        groups.set(batchID, group);
+        items.push(group);
+      }
+      group.sessions.push(session);
+    });
+    items.forEach((item) => {
+      if (item.kind !== "group") return;
+      item.sessions.sort((left, right) => {
+        const leftIndex = Number(left.batch_index);
+        const rightIndex = Number(right.batch_index);
+        if (Number.isInteger(leftIndex) && Number.isInteger(rightIndex) && leftIndex !== rightIndex) return leftIndex - rightIndex;
+        return String(left.updated_at || "").localeCompare(String(right.updated_at || ""));
+      });
+    });
+    return items;
+  }
+  function updateHistoryGroupSelections() {
+    document.querySelectorAll(".history-group").forEach((groupNode) => {
+      const batchID = groupNode.dataset.batchId || "";
+      const checkbox = groupNode.querySelector(".history-group-select");
+      if (!checkbox || !batchID) return;
+      const sessions = state.historySessions.filter((session) => historyBatchID(session) === batchID);
+      const selected = sessions.filter((session) => state.historySelected.has(session.session_id)).length;
+      checkbox.checked = sessions.length > 0 && selected === sessions.length;
+      checkbox.indeterminate = selected > 0 && selected < sessions.length;
+      checkbox.disabled = state.historyDeleteInFlight || batchState.inFlight;
+    });
+  }
+  function renderHistorySessionRow(session, parent) {
+    const row = document.createElement("div");
+    row.className = "history-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "history-select";
+    checkbox.checked = state.historySelected.has(session.session_id);
+    checkbox.disabled = state.historyDeleteInFlight || batchState.inFlight;
+    checkbox.setAttribute("aria-label", `${i18n("history.selectAll")} ${targetOf(session)}`);
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.historySelected.add(session.session_id);
+      else state.historySelected.delete(session.session_id);
+      updateHistorySelectionControls();
+      updateHistoryGroupSelections();
+    });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "session-row" + (state.session?.session_id === session.session_id ? " active" : "");
+    button.addEventListener("click", () => selectSession(session.session_id));
+    const target = document.createElement("span");
+    target.className = "session-target";
+    target.textContent = targetOf(session);
+    const meta = document.createElement("span");
+    meta.className = "session-meta";
+    const dot = document.createElement("i");
+    dot.className = "status-dot " + (statusClasses[session.state] || "");
+    meta.append(dot, document.createTextNode(statusLabels[session.state] || session.state || "未知"));
+    button.append(target, meta);
+    row.append(checkbox, button);
+    parent.append(row);
+  }
+  function renderHistory(sessions) {
+    const root = $("history");
+    const list = Array.isArray(sessions) ? sessions.filter((session) => session && session.session_id) : [];
+    state.historySessions = list;
+    const available = new Set(list.map((session) => session.session_id));
+    state.historySelected.forEach((id) => { if (!available.has(id)) state.historySelected.delete(id); });
+    root.replaceChildren();
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = i18n("history.empty");
+      root.append(empty);
+      updateHistorySelectionControls();
+      return;
+    }
+    historyBatchItems(list).forEach((item) => {
+      if (item.kind === "session") {
+        renderHistorySessionRow(item.session, root);
+        return;
+      }
+      const group = document.createElement("details");
+      group.className = "history-group";
+      group.dataset.batchId = item.batchID;
+      group.open = true;
+      const summary = document.createElement("summary");
+      summary.className = "history-group-summary";
+      const groupCheckbox = document.createElement("input");
+      groupCheckbox.type = "checkbox";
+      groupCheckbox.className = "history-group-select";
+      groupCheckbox.setAttribute("aria-label", `${i18n("history.batchGroup")} ${item.batchID}`);
+      groupCheckbox.addEventListener("click", (event) => event.stopPropagation());
+      groupCheckbox.addEventListener("change", () => {
+        item.sessions.forEach((session) => {
+          if (groupCheckbox.checked) state.historySelected.add(session.session_id);
+          else state.historySelected.delete(session.session_id);
+        });
+        updateHistorySelectionControls();
+        updateHistoryGroupSelections();
+      });
+      const title = document.createElement("span");
+      title.className = "history-group-title";
+      title.textContent = `${i18n("history.batchGroup")} · ${item.batchID}`;
+      title.title = item.batchID;
+      const expected = Math.max(item.sessions.length, ...item.sessions.map((session) => Number(session.batch_total) || 0));
+      const meta = document.createElement("span");
+      meta.className = "history-group-meta";
+      meta.textContent = i18n("history.batchGroupMeta").replace("{count}", String(item.sessions.length)).replace("{total}", String(expected));
+      summary.append(groupCheckbox, title, meta);
+      group.append(summary);
+      const children = document.createElement("div");
+      item.sessions.forEach((session) => renderHistorySessionRow(session, children));
+      group.append(children);
+      root.append(group);
+    });
+    updateHistorySelectionControls();
+    updateHistoryGroupSelections();
+  }
+  function renderSelectedStartOption() { const details = $("start-option-details"); details.replaceChildren(); const option = state.startOptions.find((item) => String(item.option_id || "") === $("start-option-select").value) || state.startOptions[0]; if (!option) return; addFact(details, "服务名称", option.service_name); addFact(details, "配置文件", option.config_path); addFact(details, "目标 socket", option.socket_name); addFact(details, "启动参数", `${option.parameter || "未知"}：${option.current_value || "未知"} → ${option.requested_value || "1"}`); addFact(details, "说明", option.reason); }
+  function renderStartConfirmation(session, summary) { const panel = $("start-confirmation"); const select = $("start-option-select"); const options = Array.isArray(summary.start_options) ? summary.start_options.filter((item) => item && typeof item === "object") : []; const visible = session.state === "AWAIT_START_CONFIRMATION" && options.length > 0; panel.hidden = !visible; state.startOptions = visible ? options : []; select.replaceChildren(); if (!visible) { $("start-option-details").replaceChildren(); return; } options.forEach((option, index) => { const item = document.createElement("option"); item.value = String(option.option_id || ""); item.textContent = `${option.service_name || "未知服务"} · ${option.parameter || "未知参数"}=${option.current_value || "未知"}`; if (index === 0) item.selected = true; select.append(item); }); renderSelectedStartOption(); }
+  function renderStatus(session) { const summary = session.summary || {}; const surfaces = Array.isArray(summary.surfaces) ? summary.surfaces : []; const evidence = summary.evidence_summary || {}; $("status-title").textContent = targetOf(session); $("status-detail").textContent = summary.errors?.length ? summary.errors.join("；") : (session.device_serial ? `设备：${session.device_serial}` : "未指定 serial"); const badge = $("state-badge"); badge.textContent = statusLabels[session.state] || session.state || "未知"; badge.className = "state " + (statusClasses[session.state] || ""); $("metric-surfaces").textContent = String(surfaces.length); $("metric-confirmed").textContent = String(evidence.confirmed_fields || 0); $("metric-unknown").textContent = String(evidence.unknown_fields || 0); $("metric-evidence").textContent = String(evidence.total || 0); $("session-id-label").textContent = session.session_id ? `Session：${session.session_id}` : "—"; $("start-btn").disabled = ["RUNNING", "AWAIT_START_CONFIRMATION", "DONE", "CANCELLED"].includes(session.state); $("cancel-btn").disabled = ["DONE", "CANCELLED", "FAILED", "PARTIAL", "NOT_FOUND", "OFFLINE", "PERMISSION_DENIED"].includes(session.state); renderStartConfirmation(session, summary); }
+  const __exposureRenderStatus = renderStatus;
+  renderStatus = function(session) {
+    __exposureRenderStatus(session);
+    const extraction = session.summary?.llm_extraction || {};
+    const status = extraction.status || "disabled";
+    const labelsByStatus = {
+      applied: state.language === "en" ? "结果已由 LLM 提取并通过证据引用校验" : "结果已由大模型提取，并通过证据引用校验",
+      fallback: state.language === "en" ? "LLM extraction failed; deterministic result kept" : "大模型提取失败，已保留确定性探测结果",
+      disabled: state.language === "en" ? "Deterministic extraction" : "当前使用确定性探测结果",
+    };
+    $("result-subtitle").textContent = labelsByStatus[status] || status;
+    const agent = session.summary?.agent || {};
+    const agentPanel = $("agent-summary");
+    if (agentPanel) {
+      const visible = Object.keys(agent).length > 0;
+      agentPanel.hidden = !visible;
+      if (visible) {
+        const agentStatus = agent.status || "unknown";
+        $("agent-status").textContent = agentStatus;
+        $("agent-status").className = "state " + (agentStatus === "complete" ? "done" : agentStatus === "error" ? "failed" : "await");
+        $("agent-rounds").textContent = String(agent.rounds || 0);
+        $("agent-commands").textContent = String(agent.command_count || 0);
+        $("agent-evidence").textContent = String(agent.evidence_count || 0);
+        const rag = agent.rag || {};
+        $("agent-detail").textContent = `${agent.provider || "模型"} / ${agent.model || "未知模型"} · RAG：${rag.mode || "off"} · ${agent.error || "任务树和命令轨迹已写入 Agent 产物"}`;
+        const treeRoot = $("agent-task-tree");
+        if (treeRoot) {
+          treeRoot.replaceChildren();
+          const nodes = Array.isArray(agent.task_tree?.nodes) ? agent.task_tree.nodes : [];
+          nodes.forEach((node) => {
+            if (!node || typeof node !== "object") return;
+            const item = document.createElement("li");
+            item.textContent = `${node.title || node.task_id || "任务"} · ${node.status || "pending"} · 证据 ${Array.isArray(node.evidence_ids) ? node.evidence_ids.length : 0}`;
+            treeRoot.append(item);
+          });
+        }
+      }
+    }
+  };
+  function addFact(card, name, value) { const wrap = document.createElement("div"); wrap.className = "fact"; const dt = document.createElement("dt"); dt.textContent = name; const dd = document.createElement("dd"); dd.textContent = value == null || value === "" ? "未知" : String(value); wrap.append(dt, dd); card.append(wrap); }
+  function renderSurfaces(surfaces) { const root = $("surfaces"); root.replaceChildren(); if (!surfaces.length) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = i18n("result.noSurface"); root.append(empty); return; } surfaces.forEach((surface) => { const card = document.createElement("article"); card.className = "surface-card"; const title = document.createElement("div"); title.className = "surface-title"; const heading = document.createElement("h4"); heading.textContent = surface["套接字路径"] || "未知路径"; const risk = document.createElement("span"); const riskText = surface["风险等级"] || "待评估"; risk.textContent = `风险：${riskText}`; risk.className = "risk " + (riskText === "低" ? "low" : riskText === "待评估" ? "unknown" : ""); title.append(heading, risk); const facts = document.createElement("dl"); facts.className = "facts"; addFact(facts, "暴露面类型", surface["暴露面类型"]); addFact(facts, "套接字类型", surface["套接字类型"]); addFact(facts, "运行状态", surface["运行状态"]); addFact(facts, "通信协议", surface["通信协议"]); addFact(facts, "关联进程", surface["关联进程"]); const perms = surface["权限配置"] || {}; addFact(facts, "DAC 权限", perms["DAC权限"]); addFact(facts, "SELinux 标签", perms["SELinux标签"]); const list = document.createElement("ul"); list.className = "risk-list"; (Array.isArray(surface["关键风险点"]) ? surface["关键风险点"] : []).forEach((item) => { const li = document.createElement("li"); li.textContent = item; list.append(li); }); card.append(title, facts, list); root.append(card); }); }
+  renderSurfaces = function(surfaces) {
+    const root = $("surfaces");
+    root.replaceChildren();
+    if (!surfaces.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = i18n("result.noSurface");
+      root.append(empty);
+      return;
+    }
+    surfaces.forEach((surface) => {
+      const card = document.createElement("article");
+      card.className = "surface-card";
+      const title = document.createElement("div");
+      title.className = "surface-title";
+      const heading = document.createElement("h4");
+      const path = surface["套接字路径"];
+      const address = surface["监听地址"];
+      const port = surface["监听端口"];
+      const transport = surface["传输协议"];
+      const endpointAddress = typeof address === "string" && address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+      heading.textContent = path || (address && port ? `${transport || "网络"} ${endpointAddress}:${port}` : "未知端点");
+      const risk = document.createElement("span");
+      const riskText = surface["风险等级"] || "待评估";
+      risk.textContent = `风险：${riskText}`;
+      risk.className = "risk " + (riskText === "低" ? "low" : riskText === "待评估" ? "unknown" : "");
+      title.append(heading, risk);
+      const facts = document.createElement("dl");
+      facts.className = "facts";
+      addFact(facts, "暴露面类型", surface["暴露面类型"]);
+      addFact(facts, "套接字类型", surface["套接字类型"]);
+      if (address != null || port != null) {
+        addFact(facts, "监听地址", address);
+        addFact(facts, "监听端口", port);
+        addFact(facts, "地址族", surface["地址族"]);
+        addFact(facts, "传输协议", transport);
+      }
+      addFact(facts, "运行状态", surface["运行状态"]);
+      addFact(facts, "通信协议", surface["通信协议"]);
+      addFact(facts, "关联进程", surface["关联进程"]);
+      const perms = surface["权限配置"] || {};
+      addFact(facts, "DAC 权限", perms["DAC权限"]);
+      addFact(facts, "SELinux 标签", perms["SELinux标签"]);
+      addFact(facts, "进程 SELinux 域", perms["进程SELinux域"] || surface["进程SELinux域"]);
+      const list = document.createElement("ul");
+      list.className = "risk-list";
+      (Array.isArray(surface["关键风险点"]) ? surface["关键风险点"] : []).forEach((item) => {
+        const li = document.createElement("li");
+        li.textContent = item;
+        list.append(li);
+      });
+      card.append(title, facts, list);
+      root.append(card);
+    });
+  };
+  function renderEvents(events) { const root = $("events"); root.replaceChildren(); if (!events.length) { const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = i18n("result.noEvents"); root.append(empty); return; } events.forEach((event) => { const item = document.createElement("article"); item.className = "event"; const body = document.createElement("div"); const title = document.createElement("strong"); title.textContent = event.summary_zh || event.type; const time = document.createElement("time"); time.textContent = `${event.state || ""} · ${event.created_at || ""}`; body.append(title, time); if (event.details && Object.keys(event.details).length) { const detail = document.createElement("div"); detail.className = "event-detail"; detail.textContent = Object.entries(event.details).map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join("\n"); body.append(detail); } item.append(body); root.append(item); }); root.scrollTop = root.scrollHeight; }
+  function renderArtifacts(session) { const root = $("artifacts"); root.replaceChildren(); const artifacts = session.artifacts || {}; const names = Object.keys(artifacts); if (!names.length) { const empty = document.createElement("span"); empty.className = "hint"; empty.textContent = i18n("result.noArtifacts"); root.append(empty); return; } names.forEach((name) => { const button = document.createElement("button"); button.type = "button"; button.className = "artifact-btn"; button.textContent = name; button.addEventListener("click", () => showArtifact(name)); root.append(button); }); }
+  async function showArtifact(name) { if (!state.session) return; try { const response = await fetch(`/exposure-surface/sessions/${encodeURIComponent(state.session.session_id)}/artifact/${encodeURIComponent(name)}`); if (!response.ok) throw new Error("产物读取失败"); const text = await response.text(); $("dialog-title").textContent = name; try { $("dialog-content").textContent = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { $("dialog-content").textContent = text; } $("detail-dialog").showModal(); } catch (error) { showError(error.message); } }
+  function renderSession(session) { state.session = session; $("result-panel").hidden = false; renderStatus(session); renderSurfaces(session.summary?.surfaces || []); renderArtifacts(session); }
+  async function loadEvents(id) { const data = await request(`/exposure-surface/sessions/${encodeURIComponent(id)}/events/snapshot`); state.events = data.events || []; renderEvents(state.events); return data.last_seq || 0; }
+  function connectEvents(id, lastSeq) { closeStream(); const source = new EventSource(`/exposure-surface/sessions/${encodeURIComponent(id)}/events`, { withCredentials: false }); state.eventSource = source; source.addEventListener("exposure", (message) => { try { const event = JSON.parse(message.data); if (!state.events.some((item) => item.seq === event.seq)) state.events.push(event); renderEvents(state.events); } catch (_) {} }); source.addEventListener("done", () => { refreshSession(id).catch(() => {}); }); source.onerror = () => { if (state.session && !["DONE", "PARTIAL", "FAILED", "CANCELLED", "OFFLINE", "NOT_FOUND", "PERMISSION_DENIED"].includes(state.session.state)) return; closeStream(); }; }
+  async function refreshSessions() { try { const data = await request("/exposure-surface/sessions"); renderHistory(data.sessions || []); } catch (error) { showError(error.message); } }
+  async function deleteSelectedHistory() {
+    if (state.historyDeleteInFlight) return;
+    if (batchState.inFlight) { showError(i18n("history.deleteBusy")); return; }
+    const selected = state.historySessions.filter((session) => state.historySelected.has(session.session_id));
+    if (!selected.length) return;
+    if (!window.confirm(i18n("history.deleteConfirm").replace("{count}", String(selected.length)))) return;
+    const running = selected.filter((session) => ["RUNNING", "AWAIT_START_CONFIRMATION"].includes(session.state)).length;
+    if (running > 0 && !window.confirm(i18n("history.deleteRunningWarning").replace("{count}", String(running)))) return;
+    const currentID = state.session?.session_id || "";
+    const deletingCurrent = selected.some((session) => session.session_id === currentID);
+    if (deletingCurrent) closeStream();
+    state.historyDeleteInFlight = true;
+    updateHistorySelectionControls();
+    showError(i18n("history.deleting"));
+    let success = 0;
+    const deletedIDs = new Set();
+    const failures = [];
+    try {
+      for (const session of selected) {
+        try {
+          await request(`/exposure-surface/sessions/${encodeURIComponent(session.session_id)}`, { method: "DELETE", body: "{}" });
+          state.historySelected.delete(session.session_id);
+          deletedIDs.add(session.session_id);
+          success++;
+        } catch (error) {
+          failures.push(`${targetOf(session)}：${error.message || error}`);
+        }
+      }
+      if (deletingCurrent && deletedIDs.has(currentID)) {
+        state.session = null;
+        state.events = [];
+        state.startOptions = [];
+        $("result-panel").hidden = true;
+      }
+      await refreshSessions();
+      if (state.session && currentID && state.session.session_id === currentID && deletingCurrent) {
+        await selectSession(currentID);
+      }
+      const message = i18n("history.deleted").replace("{success}", String(success)).replace("{failed}", String(failures.length));
+      showError(failures.length ? `${message} ${failures.join("；")}` : message);
+    } finally {
+      state.historyDeleteInFlight = false;
+      renderHistory(state.historySessions);
+    }
+  }
+  async function refreshSession(id) { const data = await request(`/exposure-surface/sessions/${encodeURIComponent(id)}`); renderSession(data.session || data); renderHistory((await request("/exposure-surface/sessions")).sessions || []); }
+  async function selectSession(id) { try { showError(""); closeStream(); const data = await request(`/exposure-surface/sessions/${encodeURIComponent(id)}`); renderSession(data.session || data); const last = await loadEvents(id); connectEvents(id, last); renderHistory((await request("/exposure-surface/sessions")).sessions || []); } catch (error) { showError(error.message); } }
+  $("start-option-select").addEventListener("change", renderSelectedStartOption);
+  $("batch-create").addEventListener("click", runBatch);
+  $("history-select-all").addEventListener("change", (event) => {
+    if (state.historyDeleteInFlight || batchState.inFlight) return;
+    if (event.target.checked) state.historySessions.forEach((session) => state.historySelected.add(session.session_id));
+    else state.historySelected.clear();
+    renderHistory(state.historySessions);
+  });
+  $("history-delete-selected").addEventListener("click", deleteSelectedHistory);
+  $("batch-stop").addEventListener("click", () => {
+    if (!batchState.inFlight) return;
+    batchState.stopRequested = true;
+    $("batch-stop").disabled = true;
+    showError(batchText("stopped"));
+    renderBatchProgress();
+  });
+  $("start-service-btn").addEventListener("click", async () => { if (!state.session || state.session.state !== "AWAIT_START_CONFIRMATION") return; const option = state.startOptions.find((item) => String(item.option_id || "") === $("start-option-select").value) || state.startOptions[0]; if (!option) return; const service = option.service_name || "目标服务"; const parameter = option.parameter || "启动参数"; if (!confirm(`${i18n("start.confirm")}：${service}\n${parameter}：${option.current_value || "0"} → ${option.requested_value || "1"}`)) return; const button = $("start-service-btn"); button.disabled = true; try { await request(`/exposure-surface/sessions/${encodeURIComponent(state.session.session_id)}/start-service`, { method: "POST", body: JSON.stringify({ option_id: option.option_id }) }); await refreshSession(state.session.session_id); } catch (error) { showError(error.message); refreshSession(state.session.session_id).catch(() => {}); } finally { button.disabled = false; } });
+  $("skip-service-btn").addEventListener("click", async () => { if (!state.session || state.session.state !== "AWAIT_START_CONFIRMATION") return; const reason = prompt(i18n("start.reasonPrompt"), i18n("start.decline")); if (reason === null) return; try { await request(`/exposure-surface/sessions/${encodeURIComponent(state.session.session_id)}/skip-start`, { method: "POST", body: JSON.stringify({ reason }) }); await refreshSession(state.session.session_id); } catch (error) { showError(error.message); } });
+  $("create-form").addEventListener("submit", async (event) => { event.preventDefault(); showError(""); const button = $("create-btn"); button.disabled = true; try { const target = buildExposureTarget(); const serial = $("device-serial").value.trim(); const executionMode = $("execution-mode")?.value || "fixed"; const data = await request("/exposure-surface/sessions", { method: "POST", body: JSON.stringify({ target, device_serial: serial, llm_assist: Boolean($("llm-assist")?.checked), mode: executionMode, allow_model_commands: executionMode === "agentic" && Boolean($("allow-model-commands")?.checked), rag_mode: $("rag-mode")?.value || "local", max_rounds: 20, max_commands: 100 }) }); const session = data.session || data; await refreshSessions(); await selectSession(session.session_id); await startSelected(); } catch (error) { showError(error.message); } finally { button.disabled = false; } });
+  async function startSelected() { if (!state.session) return; const button = $("start-btn"); button.disabled = true; try { await request(`/exposure-surface/sessions/${encodeURIComponent(state.session.session_id)}/start`, { method: "POST", body: "{}" }); await refreshSession(state.session.session_id); } catch (error) { showError(error.message); refreshSession(state.session.session_id).catch(() => {}); } }
+  $("start-btn").addEventListener("click", startSelected);
+  $("cancel-btn").addEventListener("click", async () => { if (!state.session) return; try { await request(`/exposure-surface/sessions/${encodeURIComponent(state.session.session_id)}/cancel`, { method: "POST", body: JSON.stringify({ reason: "用户取消暴露面识别" }) }); await refreshSession(state.session.session_id); } catch (error) { showError(error.message); } });
+  $("delete-btn").addEventListener("click", async () => { if (state.historyDeleteInFlight || batchState.inFlight) { showError(i18n("history.deleteBusy")); return; } if (!state.session || !confirm("确定删除当前暴露面识别 session 及其产物吗？")) return; try { const id = state.session.session_id; await request(`/exposure-surface/sessions/${encodeURIComponent(id)}`, { method: "DELETE", body: "{}" }); state.historySelected.delete(id); closeStream(); state.session = null; $("result-panel").hidden = true; await refreshSessions(); } catch (error) { showError(error.message); } });
+  $("dialog-close").addEventListener("click", () => $("detail-dialog").close());
+  $("language-select").addEventListener("change", (event) => { const selected = event.target.value; state.language = SUPPORTED_LANGUAGES.has(selected) ? selected : DEFAULT_LANGUAGE; localStorage.setItem("openant.ui.language", state.language); applyLanguage(); applyBatchLanguage(); if (state.session) { renderSession(state.session); renderEvents(state.events); } refreshSessions(); });
+  applyLanguage(); applyBatchLanguage(); refreshSessions();
+})();
+</script>
+</body>
+</html>

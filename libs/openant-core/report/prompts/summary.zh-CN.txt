@@ -73,6 +73,17 @@ OpenHarmony 平台上下文（如果存在）：
 |------|------|------|-----|----------|
 | 1 | {short_name} | {file:function} | CWE-{n} | {static|verified|dynamic} |
 
+## 尚未完成验证的问题
+
+[针对 stage2_verdict 为“unverified”或 review_status 为“needs_review”的问题各生成一行。
+这些条目不是已确认漏洞，也不能被表述为安全或误报；应结合 assessment 中的缺陷、
+可达性、影响和证据完整性说明仍缺什么。]
+[如果没有，写“没有尚未完成验证的问题”。]
+
+| 编号 | 候选问题 | 位置 | 第一阶段 | 评估状态 | 缺失证据 |
+|------|----------|------|----------|----------|----------|
+| 1 | {name} | {file:function} | {stage1_verdict} | {缺陷/可达性/影响状态} | {简短列表} |
+
 ## 已排除的误报
 
 [列出第二阶段拒绝的问题。]
@@ -97,6 +108,8 @@ OpenHarmony 平台上下文（如果存在）：
 - 即使数量为零，也要在表格中显示“0”。
 - “原因”列不超过 15 个词。
 - “验证方式”列：存在 dynamic_testing 时写“动态”；stage2_verdict 为 confirmed 或 agreed 时写“已验证”；其他情况写“静态”。
+- 尚未完成验证的问题不能计入已确认、安全或误报；必须保留精确位置以及
+  assessment/缺失证据，便于人工补证。
 - 语言取自 repository.language，提交取自 repository.commit_sha；缺失时写“不可用”。
 - 扫描模式根据顶层 diff 判断：缺失或 mode 不是 incremental 时写“完整扫描”；如果是 incremental，写出 base_sha、head_sha 前 8 位、scope 和 units_in_diff/units_total_parsed。
 - 当扫描模式为 incremental 时，在元数据后紧接着补充一段中文说明，明确只有覆盖变更的单元被分析，未变化单元沿用之前的判定。

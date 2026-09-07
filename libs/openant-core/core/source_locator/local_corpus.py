@@ -36,14 +36,14 @@ class LocalCorpusError(ValueError):
 
 
 _SKIP_DIRS = frozenset({
-    ".git", ".hg", ".svn", ".repo", "out", "build", "node_modules",
-    "__pycache__", ".cache", "target", ".gradle",
+    ".git", ".hg", ".svn", ".repo", "node_modules", "__pycache__",
+    ".cache", "target", ".gradle",
 })
 _TEXT_SUFFIXES = frozenset({
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc",
     ".gni", ".gn", ".rc", ".cfg", ".conf", ".ini", ".json", ".xml",
     ".yaml", ".yml", ".toml", ".txt", ".md", ".cmake", ".mk", ".bp",
-    ".java", ".js", ".ts", ".rs", ".go", ".sh", ".py",
+    ".java", ".js", ".ts", ".rs", ".go", ".sh", ".py", ".te",
 })
 _C_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inc", ".gni", ".gn"})
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -99,6 +99,8 @@ def _strip_source_prefix(path: str) -> str:
 
 def _file_type_allowed(path: Path, file_type: str | None) -> bool:
     if file_type is None:
+        return True
+    if file_type.lower() in {"all", "any", "text"}:
         return True
     suffix = path.suffix.lower()
     if file_type.lower() in {"c", "cxx", "cpp", "c/c++"}:

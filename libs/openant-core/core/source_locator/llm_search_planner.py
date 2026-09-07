@@ -48,6 +48,17 @@ _LOCAL_PATH_ROOTS = frozenset(
 _DANGEROUS_QUERY_CHARS = frozenset({"\x00", "\r", "\n", "`", "$", ";", "|", "&"})
 _ALLOWED_PURPOSES = frozenset({"normal", "repair", "recovery"})
 
+# LLM 源码检索的生产预算。有效动作和模型请求是两个不同的概念：模型
+# 可能因为格式修复、重复提案或网络失败消耗请求，但这些请求不应被计为
+# 已执行的检索动作，因此给请求预算保留少量余量。
+LLM_SEARCH_DEFAULT_MAX_ACTIONS = 40
+LLM_SEARCH_MAX_ACTIONS = 40
+LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS = 48
+LLM_SEARCH_MAX_MODEL_CALLS = 64
+# 直接使用库对象时仍保留轻量默认值；Web/CLI 入口会显式注入生产预算，
+# 避免测试或嵌入式调用在未选择策略时突然产生大量模型请求。
+LLM_SEARCH_DIRECT_DEFAULT_MODEL_CALLS = 2
+
 ALLOWED_ACTION_KINDS = frozenset(
     {
         "search_full",
@@ -115,10 +126,26 @@ def _is_local_path(path: str) -> bool:
     return first in _LOCAL_PATH_ROOTS or path.startswith("~")
 
 
+def _normalize_query_text(query: str) -> str:
+    """Normalize harmless spelling variants before deduplication/execution.
+
+    Models occasionally emit ``bind(`` or ``bind()`` when they mean the
+    OpenGrok token ``bind``.  The former is not a valid OpenGrok query on some
+    deployments and the two spellings are semantically the same bounded API
+    probe.  Only a bare identifier with trailing call punctuation is changed;
+    paths, qualified names, literals and expressions remain untouched.
+    """
+
+    normalized = " ".join(query.split())
+    match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(\)?", normalized)
+    return match.group(1) if match else normalized
+
+
 def _validate_search_query(value: Any, *, max_length: int, path_query: bool = False) -> str:
     query = _clean_text(value, name="query", limit=max_length)
     if any(char in query for char in _DANGEROUS_QUERY_CHARS):
         raise LLMSearchPlannerError("query 包含命令或控制字符")
+    query = _normalize_query_text(query)
     try:
         parsed = urlsplit(query)
     except ValueError as exc:
@@ -167,7 +194,7 @@ def _validate_context_evidence(
 
 
 def _canonical_action_key(kind: str, query: str) -> str:
-    return f"{kind}:{query}"
+    return f"{kind}:{_normalize_query_text(query)}"
 
 
 def _normalize_executed_action(value: Any) -> str:
@@ -187,21 +214,21 @@ def _normalize_executed_action(value: Any) -> str:
 class PlannerBudget:
     """一次定位 session 的硬预算；所有限制都在模型调用前检查。"""
 
-    max_actions: int = 8
+    max_actions: int = LLM_SEARCH_DEFAULT_MAX_ACTIONS
     max_query_length: int = 512
     max_evidence_ids: int = 16
     max_prompt_chars: int = 12_000
     max_repair_attempts: int = 1
-    max_model_calls: int = 2
+    max_model_calls: int = LLM_SEARCH_DIRECT_DEFAULT_MODEL_CALLS
 
     def __post_init__(self) -> None:
         integer_fields = (
-            ("max_actions", self.max_actions, 0, 128),
+            ("max_actions", self.max_actions, 0, LLM_SEARCH_MAX_ACTIONS),
             ("max_query_length", self.max_query_length, 1, 4096),
             ("max_evidence_ids", self.max_evidence_ids, 1, 64),
             ("max_prompt_chars", self.max_prompt_chars, 512, 128_000),
             ("max_repair_attempts", self.max_repair_attempts, 0, 1),
-            ("max_model_calls", self.max_model_calls, 0, 32),
+            ("max_model_calls", self.max_model_calls, 0, LLM_SEARCH_MAX_MODEL_CALLS),
         )
         for name, value, lower, upper in integer_fields:
             if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
@@ -834,6 +861,11 @@ class LLMSearchPlanner:
 __all__ = [
     "ALLOWED_ACTION_KINDS",
     "FORBIDDEN_ACTION_KINDS",
+    "LLM_SEARCH_DEFAULT_MAX_ACTIONS",
+    "LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS",
+    "LLM_SEARCH_DIRECT_DEFAULT_MODEL_CALLS",
+    "LLM_SEARCH_MAX_ACTIONS",
+    "LLM_SEARCH_MAX_MODEL_CALLS",
     "LLMSearchAction",
     "LLMSearchPlanResult",
     "LLMSearchPlanner",

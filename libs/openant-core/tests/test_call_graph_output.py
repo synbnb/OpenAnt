@@ -180,6 +180,59 @@ class TestApplyReachabilityFilterPublicAPI:
         unit_ids = {u["id"] for u in result["units"]}
         assert "app.py:orphan" in unit_ids
 
+    def test_semantic_seed_expands_without_entry_point_label(self, tmp_path):
+        self._make_call_graph_json(tmp_path)
+        dataset = self._make_dataset(
+            ["app.py:route_handler", "app.py:helper", "app.py:orphan"]
+        )
+        result = apply_reachability_filter(
+            dataset,
+            str(tmp_path),
+            "reachable",
+            extra_reachability_seeds={"app.py:orphan"},
+        )
+        by_id = {u["id"]: u for u in result["units"]}
+        assert "app.py:orphan" in by_id
+        assert by_id["app.py:orphan"].get("is_entry_point") is not True
+        metadata = result.get("metadata", {}).get("reachability_filter", {})
+        assert metadata.get("semantic_seed_ids") == ["app.py:orphan"]
+
+    def test_medium_semantic_signal_is_retained_without_bfs_expansion(self, tmp_path):
+        self._make_call_graph_json(tmp_path)
+        graph_path = tmp_path / "call_graph.json"
+        graph = json.loads(graph_path.read_text())
+        graph["functions"]["app.py:orphan_child"] = {
+            "name": "orphan_child",
+            "filePath": "app.py",
+            "unitType": "function",
+            "isExported": False,
+            "decorators": [],
+        }
+        graph["call_graph"]["app.py:orphan"] = ["app.py:orphan_child"]
+        graph["reverse_call_graph"]["app.py:orphan_child"] = ["app.py:orphan"]
+        graph_path.write_text(json.dumps(graph))
+
+        dataset = self._make_dataset(
+            [
+                "app.py:route_handler",
+                "app.py:helper",
+                "app.py:orphan",
+                "app.py:orphan_child",
+            ]
+        )
+        result = apply_reachability_filter(
+            dataset,
+            str(tmp_path),
+            "reachable",
+            extra_retain_only_units={"app.py:orphan"},
+        )
+        unit_ids = {u["id"] for u in result["units"]}
+        assert "app.py:orphan" in unit_ids
+        assert "app.py:orphan_child" not in unit_ids
+        metadata = result.get("metadata", {}).get("reachability_filter", {})
+        assert metadata.get("semantic_retain_only_ids") == ["app.py:orphan"]
+        assert metadata.get("semantic_retain_only_count") == 1
+
     def test_is_entry_point_set_on_structural_entry_points(self, tmp_path):
         self._make_call_graph_json(tmp_path)
         dataset = self._make_dataset(["app.py:route_handler", "app.py:helper"])

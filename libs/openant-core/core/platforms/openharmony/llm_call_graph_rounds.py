@@ -320,6 +320,16 @@ def run_iterative_recovery_review(
             "sites_scheduled": 0,
             "sites_reviewed": 0,
             "unreviewed_sites": len(all_worklist),
+            # Keep the one-shot review counters in the iterative envelope as
+            # well.  The scheduler counters below describe BFS progress,
+            # while these counters describe what the model actually returned.
+            # Without both views, the stage report cannot distinguish
+            # "reviewed and unresolved" from "never attempted".
+            "attempts": 0,
+            "parsed_decisions": 0,
+            "accepted": 0,
+            "kept_unresolved": 0,
+            "rejected": 0,
             "accepted_decisions": 0,
             "projected_edges": 0,
             "duplicate_edges": 0,
@@ -452,6 +462,17 @@ def run_iterative_recovery_review(
                 overlays.append(overlay)
                 review_summary = review.get("summary", {})
                 if isinstance(review_summary, Mapping):
+                    for key in (
+                        "attempts",
+                        "parsed_decisions",
+                        "accepted",
+                        "kept_unresolved",
+                        "rejected",
+                    ):
+                        try:
+                            summary[key] += int(review_summary.get(key, 0) or 0)
+                        except (TypeError, ValueError):
+                            continue
                     summary["sites_reviewed"] += int(review_summary.get("worklist_sites", 0) or 0)
                     summary["accepted_decisions"] += int(review_summary.get("accepted", 0) or 0)
                     summary["request_batches"] += int(review_summary.get("request_batches", 0) or 0)

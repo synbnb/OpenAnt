@@ -434,7 +434,16 @@ def _count_verification_outcomes(verified_results: list) -> dict:
         "inconclusive_remaining": 0,
     }
     for r in verified_results:
+        if not isinstance(r, dict):
+            counts["error_count"] += 1
+            continue
         verification = r.get("verification", {})
+        verification_malformed = not isinstance(verification, dict)
+        if verification_malformed:
+            # The verifier output is model-supplied JSON. A malformed provider
+            # response must be counted as an unverified/error path, never
+            # allowed to crash metrics or fall through as a clean finding.
+            verification = {}
         original_finding = str(
             verification.get("stage1_finding")
             or r.get("stage1_finding")
@@ -448,7 +457,17 @@ def _count_verification_outcomes(verified_results: list) -> dict:
             if original_finding == "inconclusive":
                 counts["inconclusive_remaining"] += 1
             continue
-        if verification.get("incomplete"):
+        if verification_malformed:
+            counts["needs_review"] += 1
+            if original_finding == "inconclusive":
+                counts["inconclusive_remaining"] += 1
+            continue
+        raw_incomplete = verification.get("incomplete", False)
+        incomplete = (
+            raw_incomplete if isinstance(raw_incomplete, bool)
+            else isinstance(raw_incomplete, str) and raw_incomplete.strip().lower() == "true"
+        )
+        if incomplete:
             # Could not complete — needs manual review, NOT a disagreement.
             counts["needs_review"] += 1
             if original_finding == "inconclusive":
@@ -465,7 +484,12 @@ def _count_verification_outcomes(verified_results: list) -> dict:
             else:
                 counts["inconclusive_remaining"] += 1
                 counts["needs_review"] += 1
-        if verification.get("agree", False):
+        raw_agree = verification.get("agree", False)
+        agree = (
+            raw_agree if isinstance(raw_agree, bool)
+            else isinstance(raw_agree, str) and raw_agree.strip().lower() == "true"
+        )
+        if agree:
             counts["agreed"] += 1
             # Canonical read (matches :99 input filter): fall back to `verdict`
             # so a verdict-only VULNERABLE result is not silently dropped.
@@ -497,6 +521,35 @@ def _write_verified_results(
     verified_only: list,
 ) -> None:
     """Write the verified results file."""
+    # Keep unresolved high-risk candidates in a separate, additive collection.
+    # ``confirmed_findings`` remains strict and is consumed by dynamic testing;
+    # ``review_findings`` prevents a Stage-1 vulnerability that Stage 2 could
+    # not disprove or confirm from disappearing merely because the final
+    # verdict is INCONCLUSIVE.
+    review_findings = []
+    for item in verified_only:
+        if not isinstance(item, dict):
+            continue
+        verification = item.get("verification")
+        verification = verification if isinstance(verification, dict) else {}
+        stage1 = str(
+            verification.get("stage1_finding")
+            or item.get("stage1_finding")
+            or item.get("finding")
+            or item.get("verdict", "")
+        ).strip().lower()
+        final = _result_finding(item)
+        if stage1 not in ("vulnerable", "bypassable", "inconclusive"):
+            continue
+        raw_incomplete = verification.get("incomplete", False)
+        incomplete = (
+            raw_incomplete if isinstance(raw_incomplete, bool)
+            else isinstance(raw_incomplete, str)
+            and raw_incomplete.strip().lower() == "true"
+        )
+        if item.get("error") or incomplete or final == "inconclusive":
+            review_findings.append(item)
+
     output = {
         "dataset": experiment.get("dataset", ""),
         "model": experiment.get("model", ""),
@@ -523,6 +576,7 @@ def _write_verified_results(
             if str(r.get("finding") or r.get("verdict", "")).lower()
             in ("vulnerable", "bypassable")
         ],
+        "review_findings": review_findings,
     }
 
     # Recount metrics after verification from the merged final verdicts.  This

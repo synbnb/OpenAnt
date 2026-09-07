@@ -82,10 +82,17 @@ def test_execute_initial_uses_normalized_plan_in_order_without_llm():
 
     assert result.target == target
     assert len(client.calls) == len(result.executions) <= 12
-    assert client.calls[0]["definition"] == "paramservice"
+    assert client.calls[0]["full"] == "/dev/unix/socket/paramservice"
     assert client.calls[0]["file_type"] == "c"
-    assert all(call["file_type"] in {"c", "cxx"} for call in client.calls)
+    assert all(call["file_type"] in {None, "c", "cxx"} for call in client.calls)
     assert all("cpp" not in json.dumps(call) for call in client.calls)
+
+
+def test_execute_omits_file_type_for_all_text_queries():
+    client = _FakeClient()
+    query = LocatorQuery("Q-0001", "full", '"name": "dnsproxyd"', "all", "配置检索")
+    SearchPlanner(client).execute([query])
+    assert client.calls[0]["file_type"] is None
 
 
 def test_duplicate_query_is_recorded_and_not_sent_twice():

@@ -10,7 +10,7 @@ methods at the bottom of :class:`EvidenceStore`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
@@ -348,6 +348,31 @@ class EvidenceStore:
         existing_id = self._evidence_index.get(identity)
         if existing_id is not None:
             self._duplicate_counts[existing_id] = self._duplicate_counts.get(existing_id, 0) + 1
+            # Search and trace passes can observe the same semantic line at
+            # different times.  The first observation remains canonical for
+            # audit stability, but a later source-backed trace may add the
+            # target relation/edge metadata that was unavailable during the
+            # initial search.  Preserve existing values and enrich only empty
+            # fields; this prevents client/server predicates from depending on
+            # which pass happened to create the evidence first.
+            existing = self._evidence[existing_id]
+            normalized_relation_from = (
+                _optional_token(relation_from, name="relation_from")
+                if relation_from is not None
+                else None
+            )
+            normalized_relation_to = (
+                _optional_token(relation_to, name="relation_to")
+                if relation_to is not None
+                else None
+            )
+            updates: dict[str, Any] = {}
+            if existing.relation_from is None and normalized_relation_from is not None:
+                updates["relation_from"] = normalized_relation_from
+            if existing.relation_to is None and normalized_relation_to is not None:
+                updates["relation_to"] = normalized_relation_to
+            if updates:
+                self._evidence[existing_id] = replace(existing, **updates)
             return self._evidence[existing_id]
 
         evidence_id = _stable_id(

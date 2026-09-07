@@ -64,6 +64,34 @@ def test_same_kind_path_line_and_symbol_is_deduplicated_without_losing_first_aud
     assert store.get_evidence(first.evidence_id).query_id == "Q-0001"
 
 
+def test_duplicate_trace_can_enrich_missing_target_relation_metadata():
+    store = EvidenceStore()
+    first = store.add_evidence(
+        kind="client_connect",
+        source_path="base/service/param.c",
+        line_start=10,
+        excerpt="connect(fd, addr, len);",
+        tool_name="opengrok.search_full",
+        query_id="Q-search",
+    )
+    second = store.add_evidence(
+        kind="client_connect",
+        source_path="base/service/param.c",
+        line_start=10,
+        excerpt="connect(fd, addr, len);",
+        tool_name="opengrok.read_source",
+        query_id="Q-trace",
+        relation_from="/dev/unix/socket/paramservice",
+        relation_to="/base/service/param.c:10",
+    )
+
+    assert first.evidence_id == second.evidence_id
+    enriched = store.get_evidence(first.evidence_id)
+    assert enriched.relation_from == "/dev/unix/socket/paramservice"
+    assert enriched.relation_to == "/base/service/param.c:10"
+    assert enriched.query_id == "Q-search"
+
+
 def test_excerpt_is_bounded_and_control_characters_are_replaced():
     store = EvidenceStore()
     raw = "raw\x00\n" + ("y" * 5000)

@@ -56,6 +56,7 @@ _PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9]+")
 _TEST_FILE_RE = re.compile(
     r"(?i)^(?:test[-_].*|.*[-_](?:test|tests|unittest|selftest))$"
 )
+_TEST_COMPONENT_RE = re.compile(r"(?i)(?:^|[-_])tests?(?:$|[-_])")
 
 
 def _normalize_path(path: str) -> str:
@@ -83,7 +84,11 @@ def _compact(value: str) -> str:
 def _target_terms(target: TargetSpec | None) -> tuple[str, ...]:
     if target is None:
         return ()
-    values = [target.basename, target.service_hint, target.macro_hint]
+    # File names normally contain the process/service hint rather than a
+    # literal ``address:port``.  Keep numeric endpoint pieces out of path
+    # scoring so a common port such as 8283 cannot promote unrelated files;
+    # the port remains available to source-line evidence and query planning.
+    values = [target.basename, target.service_hint, target.macro_hint, target.process_hint]
     terms: list[str] = []
     for value in values:
         if not value:
@@ -91,6 +96,15 @@ def _target_terms(target: TargetSpec | None) -> tuple[str, ...]:
         compact = _compact(value)
         if compact and compact not in terms:
             terms.append(compact)
+        # A network process hint such as ``SP_daemon`` is an identity token,
+        # not a generic directory vocabulary.  Splitting it into ``daemon``
+        # would promote unrelated files such as
+        # ``router_advertisement_daemon.cpp`` above the actual socket server.
+        # Keep the full compact token for network targets; Unix socket names
+        # retain the historical component scoring (``paramservice`` /
+        # ``service``) because init/config paths commonly use those pieces.
+        if target.target_type == "network_socket":
+            continue
         for piece in _PATH_COMPONENT_RE.findall(value):
             compact_piece = _compact(piece)
             if len(compact_piece) >= 3 and compact_piece not in terms:
@@ -160,6 +174,7 @@ def classify_path(path: str, *, target: TargetSpec | None = None) -> PathClassif
     is_third_party = any(part in _THIRD_PARTY_SEGMENTS for part in components[:-1])
     is_test = (
         any(part in _TEST_SEGMENTS for part in components[:-1])
+        or any(_TEST_COMPONENT_RE.search(part) is not None for part in components[:-1])
         or stem in {"test", "tests", "unittest", "selftest"}
         or _TEST_FILE_RE.fullmatch(stem) is not None
         or basename.startswith(("test_", "test-"))

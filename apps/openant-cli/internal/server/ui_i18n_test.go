@@ -18,7 +18,7 @@ func readUITemplate(t *testing.T, name string) string {
 }
 
 func TestWebTemplatesParseAfterRedesign(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html"} {
+	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html"} {
 		if _, err := template.ParseFS(uifiles.FS, name); err != nil {
 			t.Errorf("parse %s: %v", name, err)
 		}
@@ -42,7 +42,15 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 		"id=\"events\"",
 		"id=\"llm-search\"",
 		"id=\"llm-config\"",
-		"id=\"llm-rounds\"",
+		"id=\"llm-round-limit\"",
+		"id=\"batch-targets\"",
+		"id=\"batch-create\"",
+		"id=\"batch-progress\"",
+		"runBatch",
+		"At most 32 targets",
+		"id=\"evidence-modal\"",
+		"showLLMEvidence",
+		"llm.evidenceDetail",
 		"id=\"search-insights\"",
 		"id=\"search-metrics\"",
 		"id=\"search-graph\"",
@@ -53,14 +61,22 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 		"searchGraphZoom",
 		"searchEvidenceFilter",
 		"searchView.graphTitle",
+		"deriveServiceTopology",
+		"renderServiceTopology",
+		"topology-viewport",
+		"confirm-role-source",
+		"source_evidence",
+		"hydrateConfirmationEvidence",
+		"Internal verification files are not rendered as topology nodes.",
 		"fetchSearchArtifact",
 		"action.help",
 		"minmax(260px,280px)",
 		"aria-busy",
 		"notice.running",
 		"llm.search.round",
-		"最多 20 轮",
-		"up to 20 rounds",
+		"本次定位会话最多轮数",
+		"Maximum rounds for this locator session",
+		"1–40",
 		"隐藏思维链",
 		"textContent",
 	} {
@@ -71,7 +87,7 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 }
 
 func TestWebTemplatesProvidePersistentChineseEnglishSwitch(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html"} {
+	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html"} {
 		body := readUITemplate(t, name)
 		for _, want := range []string{
 			"id=\"language-select\"",
@@ -88,6 +104,42 @@ func TestWebTemplatesProvidePersistentChineseEnglishSwitch(t *testing.T) {
 	}
 }
 
+func TestExposureSurfaceTemplateProvidesStandaloneWorkbench(t *testing.T) {
+	body := readUITemplate(t, "exposure-surface.html")
+	for _, want := range []string{
+		"/exposure-surface/sessions",
+		"/events/snapshot",
+		"/artifact/",
+		"EventSource",
+		"X-CSRF-Token",
+		"id=\"create-form\"",
+		"id=\"batch-targets\"",
+		"id=\"batch-create\"",
+		"id=\"batch-progress\"",
+		"runBatch",
+		"history-group",
+		"history-group-select",
+		"history.batchGroup",
+		"batch_id",
+		"At most 32 targets",
+		"id=\"surfaces\"",
+		"id=\"events\"",
+		"id=\"artifacts\"",
+		"id=\"start-confirmation\"",
+		"id=\"start-service-btn\"",
+		"id=\"skip-service-btn\"",
+		"/start-service",
+		"/skip-start",
+		"textContent",
+		"只读探测",
+		"@media (max-width: 640px)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposure-surface.html missing interactive marker %q", want)
+		}
+	}
+}
+
 func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 	index := readUITemplate(t, "index.html")
 	for _, want := range []string{
@@ -96,14 +148,35 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 		"name=\"repo_id\"",
 		"name=\"repo\"",
 		"name=\"platform\"",
+		"name=\"level\"",
+		"name=\"llm_config\"",
 		"name=\"verify\"",
+		"name=\"no_context\"",
+		"name=\"no_enhance\"",
+		"name=\"enhance_mode\"",
+		"name=\"no_report\"",
+		"name=\"no_skip_tests\"",
+		"name=\"all_languages\"",
+		"name=\"multi_language\"",
+		"name=\"strict_languages\"",
+		"name=\"min_language_files\"",
+		"name=\"min_language_share\"",
+		"name=\"limit\"",
+		"name=\"workers\"",
+		"name=\"backoff\"",
 		"name=\"dynamic_test\"",
 		"name=\"library_mode\"",
 		"name=\"llm_reachability\"",
 		"name=\"llm_reachability_max_code_bytes\"",
+		"name=\"llm_call_graph_recovery\"",
+		"name=\"llm_call_graph_iterative_recovery\"",
+		"name=\"llm_call_graph_candidate_review\"",
+		"name=\"llm_call_graph_projection\"",
+		"name=\"openharmony_dispatch_code_evidence\"",
 		"reachability-value",
 		"scan.llmReachabilityBytesUnit",
 		"syncLLMReachability",
+		"syncEnhanceMode",
 		"@media (max-width: 767px)",
 		"@media (prefers-reduced-motion: reduce)",
 	} {
@@ -211,6 +284,45 @@ func TestScanPageProvidesStructuredArtifactExplorer(t *testing.T) {
 	}
 }
 
+func TestScanPageUsesCanonicalCallGraphStageCounters(t *testing.T) {
+	scan := readUITemplate(t, "scan.html")
+	for _, want := range []string{
+		"summary.sites_scheduled",
+		"summary.sites_reviewed",
+		"summary.accepted_decisions",
+		"summary.kept_unresolved",
+		"summary.parsed_decisions",
+		"summary.worklist_sites",
+		"stageResultMetricDisplay(groups, [",
+		"stageResultRecoveryUnresolvedDisplay(groups)",
+		"normalizeCallGraphStageArtifact(name, data)",
+		"groups.splice(summaryIndex, 1)",
+		"stage-result-evidence",
+		"stageResultEvidenceRecords",
+	} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("scan.html missing canonical call-graph counter %q", want)
+		}
+	}
+}
+
+func TestScanPageProvidesCallGraphEvidenceCards(t *testing.T) {
+	scan := readUITemplate(t, "scan.html")
+	for _, want := range []string{
+		"stage-result-evidence",
+		"stageResultEvidence",
+		"stageResultEvidenceRecords",
+		"调用点",
+		"证据片段",
+		"未解决原因",
+		"dispatch_code_values",
+	} {
+		if !strings.Contains(scan, want) {
+			t.Errorf("scan.html missing call-graph evidence card marker %q", want)
+		}
+	}
+}
+
 func TestScanPageProvidesDisclosureFindingCards(t *testing.T) {
 	scan := readUITemplate(t, "scan.html")
 	for _, want := range []string{
@@ -240,6 +352,11 @@ func TestScanPageProvidesDisclosureFindingCards(t *testing.T) {
 		"disclosures.callChain",
 		"disclosures.summary",
 		"document.createTextNode(disclosure.summary",
+		"disclosure-search",
+		"disclosure-search-clear",
+		"disclosureSearchText(disclosure)",
+		"disclosures.searchPlaceholder",
+		"disclosures.noMatches",
 	} {
 		if !strings.Contains(scan, want) {
 			t.Errorf("scan.html missing disclosure card marker %q", want)

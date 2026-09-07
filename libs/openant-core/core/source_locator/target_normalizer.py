@@ -9,6 +9,7 @@ queries, but they must start from (and remain within) these validated values.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import ipaddress
 import re
 import unicodedata
 from typing import Any, Mapping
@@ -18,7 +19,7 @@ class TargetNormalizationError(ValueError):
     """Raised when an input cannot be safely converted into a target."""
 
 
-_SCHEMA_VERSION = "openant.source-locator.target.v1"
+_SCHEMA_VERSION = "openant.source-locator.target.v2"
 _MAX_INPUT_LENGTH = 4096
 _MAX_PATH_LENGTH = 512
 _MAX_QUERY_LENGTH = 512
@@ -26,6 +27,13 @@ _MAX_QUERIES = 32
 _REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,127}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _SERVICE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+_NETWORK_PROTOCOL_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])(TCP|UDP)(?![A-Za-z0-9_])")
+_NETWORK_ENDPOINT_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?:\[(?P<bracketed>[0-9A-Fa-f:.%]+)\]|(?P<ipv4>(?:\d{1,3}\.){3}\d{1,3}))"
+    r":(?P<port>\d{1,5})(?!\d)"
+)
+_NETWORK_IDENTIFIER_SCAN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}")
 _PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_])/(?:[A-Za-z0-9._+@=-]+/)+[A-Za-z0-9._+@=-]+"
 )
@@ -57,6 +65,13 @@ _STOPWORDS = frozenset(
         "service",
         "socket",
         "source",
+        "address",
+        "endpoint",
+        "ipv4",
+        "ipv6",
+        "port",
+        "tcp",
+        "udp",
         "the",
         "want",
         "with",
@@ -67,6 +82,18 @@ _STOPWORDS = frozenset(
         "服务",
         "源码",
         "套接字",
+    }
+)
+_NETWORK_STOPWORDS = _STOPWORDS | frozenset(
+    {
+        "af_inet",
+        "af_inet6",
+        "dgram",
+        "domain",
+        "inet",
+        "stream",
+        "sock_dgram",
+        "sock_stream",
     }
 )
 
@@ -171,6 +198,93 @@ def _extract_identifier(text: str, *, macro_hint: str | None) -> str | None:
     return candidates[-1]
 
 
+def _parse_network_target(
+    text: str,
+    *,
+    raw_input: str,
+    target_revision: str | None,
+    notes: list[str],
+) -> "TargetSpec | None":
+    """Parse a TCP/UDP endpoint without falling back to a false service name.
+
+    Before network targets were modelled explicitly, an input such as
+    ``SP_daemon UDP 127.0.0.1:8283`` was reduced to a service named ``UDP``.
+    Network parsing therefore runs before the ordinary identifier fallback and
+    fails closed when a protocol or endpoint is present but incomplete.
+    """
+
+    protocols = [match.group(1).upper() for match in _NETWORK_PROTOCOL_RE.finditer(text)]
+    endpoints = list(_NETWORK_ENDPOINT_RE.finditer(text))
+    network_markers = bool(protocols or endpoints or re.search(r"(?i)\b(?:TCP|UDP)\s*/\s*(?:TCP|UDP)\b", text))
+    if not network_markers:
+        return None
+    if len(protocols) != 1:
+        raise TargetNormalizationError("网络 Socket 必须明确且只包含一个 TCP 或 UDP 协议")
+    if len(endpoints) != 1:
+        raise TargetNormalizationError("网络 Socket 必须包含一个 IP:端口端点，例如 UDP 127.0.0.1:8283")
+
+    endpoint_match = endpoints[0]
+    address_text = endpoint_match.group("bracketed") or endpoint_match.group("ipv4")
+    try:
+        # IPv6 zone identifiers are device-local metadata.  They are accepted
+        # in input but removed from the canonical source-search address.
+        address = ipaddress.ip_address(address_text.split("%", 1)[0])
+    except ValueError as exc:
+        raise TargetNormalizationError("网络 Socket 的地址不是合法 IPv4/IPv6 地址") from exc
+    normalized_address = str(address)
+    if normalized_address != address_text:
+        notes.append("已将网络地址标准化为规范 IPv4/IPv6 文本")
+    try:
+        port = int(endpoint_match.group("port"))
+    except (TypeError, ValueError) as exc:
+        raise TargetNormalizationError("网络 Socket 端口必须是十进制整数") from exc
+    if not 1 <= port <= 65535:
+        raise TargetNormalizationError("网络 Socket 端口必须在 1 到 65535 之间")
+
+    endpoint_text = endpoint_match.group(0)
+    process_text = text.replace(endpoint_text, " ")
+    process_text = _NETWORK_PROTOCOL_RE.sub(" ", process_text)
+    process_candidates = [
+        token
+        for token in _NETWORK_IDENTIFIER_SCAN_RE.findall(process_text)
+        if token.casefold() not in _NETWORK_STOPWORDS
+        and token.casefold() not in {"tcp", "udp", "socket", "service"}
+    ]
+    process_hint: str | None = None
+    if process_candidates:
+        # Prefer tokens that look like a real process/service identifier.  A
+        # single safe identifier from a natural-language sentence remains a
+        # useful hint, but it is never treated as proof of repository owner.
+        process_candidates.sort(
+            key=lambda token: (
+                not any(marker in token for marker in ("_", ".", "-")),
+                not any(char.isupper() for char in token),
+                token,
+            )
+        )
+        process_hint = _validate_service_identifier(process_candidates[0], name="process_hint")
+
+    revision = "unknown" if target_revision is None else _validate_revision(target_revision)
+    endpoint_display = (
+        f"[{normalized_address}]:{port}" if address.version == 6 else f"{normalized_address}:{port}"
+    )
+    notes.append(f"识别到 {protocols[0]} 网络 Socket 端点：{endpoint_display}")
+    if process_hint:
+        notes.append(f"识别到关联进程提示：{process_hint}")
+    return TargetSpec(
+        raw_input=raw_input,
+        target_type="network_socket",
+        basename=process_hint,
+        service_hint=process_hint,
+        process_hint=process_hint,
+        transport=protocols[0],
+        address=normalized_address,
+        port=port,
+        target_revision=revision,
+        normalization_notes=tuple(notes),
+    )
+
+
 @dataclass(frozen=True)
 class TargetSpec:
     """Validated target description shared by locator stages."""
@@ -185,21 +299,48 @@ class TargetSpec:
     path_components: tuple[str, ...] = ()
     normalization_notes: tuple[str, ...] = ()
     schema_version: str = _SCHEMA_VERSION
+    # Network fields are appended after the original positional fields so
+    # older integrations constructing TargetSpec positionally keep working.
+    transport: str | None = None
+    address: str | None = None
+    port: int | None = None
+    process_hint: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.raw_input, str) or not self.raw_input:
             raise TargetNormalizationError("raw_input 不能为空")
-        if self.target_type not in {"unix_socket", "service_name", "macro"}:
+        if self.target_type not in {"unix_socket", "network_socket", "service_name", "macro"}:
             raise TargetNormalizationError("target_type 不是支持的目标类型")
         if self.target_revision != "unknown":
             _validate_revision(self.target_revision)
         if self.socket_path is not None:
             _clean_path(self.socket_path, notes=[])
-        for value, name in ((self.basename, "basename"), (self.service_hint, "service_hint")):
+        for value, name in (
+            (self.basename, "basename"),
+            (self.service_hint, "service_hint"),
+            (self.process_hint, "process_hint"),
+        ):
             if value is not None:
                 _validate_service_identifier(value, name=name)
         if self.macro_hint is not None:
             _validate_identifier(self.macro_hint, name="macro_hint")
+        if self.target_type == "network_socket":
+            if self.socket_path is not None or self.macro_hint is not None:
+                raise TargetNormalizationError("网络 Socket 不能同时包含 Unix 路径或宏提示")
+            if self.transport not in {"TCP", "UDP"}:
+                raise TargetNormalizationError("网络 Socket transport 必须是 TCP 或 UDP")
+            if not isinstance(self.address, str) or not self.address.strip():
+                raise TargetNormalizationError("网络 Socket address 必须是非空 IP 地址")
+            try:
+                ipaddress.ip_address(self.address)
+            except ValueError as exc:
+                raise TargetNormalizationError("网络 Socket address 不是合法 IP 地址") from exc
+            if isinstance(self.port, bool) or not isinstance(self.port, int) or not 1 <= self.port <= 65535:
+                raise TargetNormalizationError("网络 Socket port 必须是 1 到 65535 的整数")
+            if self.process_hint is not None and self.service_hint not in {None, self.process_hint}:
+                raise TargetNormalizationError("process_hint 与 service_hint 不一致")
+        elif any(value is not None for value in (self.transport, self.address, self.port, self.process_hint)):
+            raise TargetNormalizationError("只有 network_socket 目标可以包含网络字段")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -221,8 +362,8 @@ class LocatorQuery:
     def __post_init__(self) -> None:
         if self.kind not in {"definition", "symbol", "path", "full"}:
             raise TargetNormalizationError("查询 kind 无效")
-        if self.file_type not in {"c", "cxx"}:
-            raise TargetNormalizationError("查询 file_type 只能是 c 或 cxx")
+        if self.file_type not in {"c", "cxx", "all"}:
+            raise TargetNormalizationError("查询 file_type 只能是 c、cxx 或 all")
         if not self.value or len(self.value) > _MAX_QUERY_LENGTH:
             raise TargetNormalizationError("查询值为空或超出长度上限")
 
@@ -257,7 +398,7 @@ def normalize_target(raw_input: str, *, target_revision: str | None = None) -> T
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw_input):
         raise TargetNormalizationError("目标描述包含控制字符")
     if re.search(r"(?:https?|file)://", raw_input, flags=re.IGNORECASE):
-        raise TargetNormalizationError("目标描述不能包含 URL；请提供服务名或 Unix socket 路径")
+        raise TargetNormalizationError("目标描述不能包含 URL；请提供服务名、Unix socket 路径或 TCP/UDP 端点")
 
     text = unicodedata.normalize("NFKC", raw_input).strip()
     notes: list[str] = []
@@ -289,10 +430,20 @@ def normalize_target(raw_input: str, *, target_revision: str | None = None) -> T
             normalization_notes=tuple(notes),
         )
 
+    network_target = _parse_network_target(
+        text,
+        raw_input=raw_input,
+        target_revision=target_revision,
+        notes=notes,
+    )
+    if network_target is not None:
+        return network_target
+
     identifier = _extract_identifier(text, macro_hint=macro_hint)
     if identifier is None:
         raise TargetNormalizationError(
-            "未识别出 Unix socket 路径、服务名或宏名；示例：/dev/unix/socket/paramservice"
+            "未识别出 Unix socket 路径、服务名、宏名或 TCP/UDP 端点；"
+            "示例：/dev/unix/socket/paramservice 或 UDP 127.0.0.1:8283"
         )
     identifier = _validate_identifier(identifier, name="service_hint")
     target_type = "macro" if identifier.isupper() and "_" in identifier else "service_name"
@@ -322,31 +473,174 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
 
     candidates: list[tuple[str, str, str, str]] = []
 
-    def add(kind: str, value: str | None, reason: str) -> None:
+    def add(
+        kind: str,
+        value: str | None,
+        reason: str,
+        *,
+        file_types: tuple[str, ...] = ("c", "cxx"),
+    ) -> None:
         if not value:
             return
         value = value.strip()
         if not value or len(value) > _MAX_QUERY_LENGTH:
             return
-        for file_type in ("c", "cxx"):
+        for file_type in file_types:
             item = (kind, value, file_type, reason)
             if item not in candidates:
                 candidates.append(item)
 
-    symbol = target.macro_hint or target.service_hint or target.basename
-    if symbol:
-        add("definition", symbol, "先查找服务名或宏名的定义")
-        add("symbol", symbol, "再查找服务名或宏名的符号引用")
-    if target.socket_path:
-        add("path", target.basename, "按 socket basename 限定源码路径")
-        add("full", target.socket_path, "检索完整 socket 路径及其配置/宏引用")
-        add("full", target.socket_path.lstrip("/"), "去掉首斜杠后再次检索 OpenGrok 分词结果")
+    if target.target_type == "network_socket":
+        # Network source almost never contains the observed endpoint as one
+        # literal.  Keep the port and byte-order form first, then use the
+        # process hint and protocol primitives to find the implementation.
+        # The generic API queries are deliberately bounded and are only used
+        # to obtain candidate files; trace_evidence later requires a nearby
+        # target-bearing line before it promotes an API call to evidence.
+        endpoint = network_endpoint(target)
+        # Network implementations in OpenHarmony are split between C, C++,
+        # headers and (for service registration) ``.cfg``/JSON/GN metadata.
+        # Use the explicit ``all`` spelling for each semantic probe rather
+        # than issuing separate C and C++ requests: it preserves the bounded
+        # query budget while allowing one target to recover both a C++
+        # ``SpServerSocket`` listener and its configuration/build anchors.
+        # Worker-side evidence gating rejects unrelated text/API hits, so the
+        # wider file set improves recall without turning every numeric match
+        # into ownership evidence.
+        network_file_types = ("all",)
+        add(
+            "full",
+            str(target.port) if target.port is not None else None,
+            "优先检索十进制端口常量、结构体初始化和端口比较",
+            file_types=network_file_types,
+        )
+        if target.port is not None:
+            add("full", f"htons({target.port})", "检索网络字节序端口写法", file_types=network_file_types)
+        add("full", endpoint, "补充检索完整 TCP/UDP 端点文本", file_types=network_file_types)
+        add("full", "sin_port", "检索 sockaddr 端口字段赋值", file_types=network_file_types)
+        add(
+            "full",
+            "SOCK_DGRAM" if target.transport == "UDP" else "SOCK_STREAM",
+            "按 TCP/UDP 传输类型检索 socket 初始化",
+            file_types=network_file_types,
+        )
+        add(
+            "full",
+            "AF_INET6" if target.address and ":" in target.address else "AF_INET",
+            "检索目标地址族初始化",
+            file_types=network_file_types,
+        )
+        add("full", "socket", "检索网络服务端 socket 创建 API", file_types=network_file_types)
+        add("full", "bind", "检索网络服务端绑定 API", file_types=network_file_types)
+        add(
+            "full",
+            "recvfrom" if target.transport == "UDP" else "accept",
+            "检索网络服务端入站接收 API，供端口命中邻域追踪",
+            file_types=network_file_types,
+        )
+        if target.process_hint:
+            add("full", target.process_hint, "全文检索关联进程、服务类和线程实现", file_types=network_file_types)
+        add("full", "BUILD.gn", "检索 BUILD.gn 中的可执行目标归属", file_types=("all",))
+        add("full", "bundle.json", "检索 bundle 元数据中的组件归属", file_types=("all",))
+        # SmartPerf and similar OpenHarmony daemons commonly hide the POSIX
+        # calls behind ``SpServerSocket``/``SpThreadSocket`` wrappers.  These
+        # are bounded semantic probes (not ownership facts by themselves),
+        # and are especially useful when the port is kept in a header while
+        # the listener/dispatcher lives in a sibling implementation file.
+        add("full", "ServerSocket", "检索服务端 socket 包装类", file_types=network_file_types)
+        add("full", "ThreadSocket", "检索 socket 收包线程包装类", file_types=network_file_types)
+        add("full", "HandleMsg", "检索消息接收后的协议分派函数", file_types=network_file_types)
+        # The endpoint may be represented by a loopback macro or an address
+        # conversion call rather than the literal IPv4/IPv6 text.  Keep these
+        # after the first high-value probes so the default bounded plan still
+        # starts with port -> socket -> bind -> receive; normal sessions with
+        # a larger budget also recover the address half of sockaddr setup.
+        add("full", target.address, "检索源码中的监听地址或地址常量", file_types=network_file_types)
+        if target.address in {"127.0.0.1", "::1"}:
+            add("full", "INADDR_LOOPBACK", "检索回环地址宏", file_types=network_file_types)
+        add("full", "inet_addr", "检索 IPv4 地址转换调用", file_types=network_file_types)
+        add("full", "inet_pton", "检索 IPv4/IPv6 地址转换调用", file_types=network_file_types)
+        add("full", "htonl", "检索网络字节序地址转换", file_types=network_file_types)
+
+        queries: list[LocatorQuery] = []
+        for index, (kind, value, file_type, reason) in enumerate(candidates[:max_queries], start=1):
+            queries.append(
+                LocatorQuery(
+                    query_id=f"Q-{index:04d}",
+                    kind=kind,
+                    value=value,
+                    file_type=file_type,
+                    reason=reason,
+                )
+            )
+        return tuple(queries)
+
+    # A literal Unix path is the most selective source identity.  Search it
+    # before the basename/service symbol so a global name such as ``native``
+    # cannot dominate the first bounded request window.  An explicitly
+    # supplied macro assignment remains a special case: its definition is a
+    # stronger clue than the path text and keeps the historical macro-first
+    # ordering used by callers that entered ``PIPE_NAME=/dev/...``.
+    if target.socket_path and target.macro_hint is None:
+        # Keep the two source-language forms first for compatibility and fast
+        # recall.  The third request deliberately drops the language filter:
+        # OpenHarmony normally declares named sockets in init ``.cfg``/JSON
+        # files, which are invisible to a C/C++-only OpenGrok query.
+        add("full", target.socket_path, "优先检索完整 Unix socket 路径及其配置/宏引用")
+        add("full", target.socket_path, "以不限制文件类型的方式补充检索完整路径配置", file_types=("all",))
+        add("path", target.basename, "按 socket basename 检索配置、源码和构建元数据", file_types=("all",))
+        add("full", target.basename, "检索 init 配置 socket.name 和短名称监听/连接实现", file_types=("all",))
+        # Init configuration is the strongest ownership anchor for a named
+        # socket.  Place the exact ``socket.name`` form before broad API
+        # probes so the default bounded plan can establish the module context
+        # even when the full path never appears in the config file.
+        add(
+            "full",
+            f'"name" : "{target.basename}"',
+            "精确检索 init 配置中的 socket.name 声明（兼容 OpenHarmony 常见空格格式）",
+            file_types=("all",),
+        )
+        add(
+            "full",
+            "socket.name",
+            "检索 init 配置字段 socket.name，连接短名称到所属 service",
+            file_types=("all",),
+        )
+        # The following bounded probes recover the common OpenHarmony chain:
+        # config name -> GetControlSocket/socket/bind/listen/recv -> BUILD.gn.
+        # They are recall probes; worker-side context gating prevents generic
+        # API hits from becoming ownership evidence for unrelated modules.
+        add("full", "GetControlSocket", "追踪 init 创建 descriptor 的服务端获取接口", file_types=("all",))
+        add("full", "bind", "追踪服务端绑定接口", file_types=("all",))
+        add("full", "listen", "追踪 TCP/Unix 服务端监听接口", file_types=("all",))
+        add("full", "recv", "追踪服务端接收和消息处理接口", file_types=("all",))
+        add("full", "ohos_executable", "追踪 BUILD.gn 中的可执行目标归属", file_types=("all",))
+        add("full", "bundle.json", "追踪组件 bundle 元数据归属", file_types=("all",))
+        # Keep broad ``socket`` recall after the high-value config,
+        # descriptor, consumer and build anchors so the default 12-query
+        # window still contains an ownership mapping after ``socket.name``.
+        add("full", "socket", "追踪服务端 socket 创建接口", file_types=("all",))
+        add("full", "GetServerSocket", "追踪服务端 descriptor 获取封装", file_types=("all",))
+        add("full", "SocketDevice", "追踪设备式 Unix socket 注册/打开封装", file_types=("all",))
+    else:
+        symbol = target.macro_hint or target.service_hint or target.basename
+        if symbol:
+            add("definition", symbol, "先查找服务名或宏名的定义")
+            add("symbol", symbol, "再查找服务名或宏名的符号引用")
+    if target.socket_path and target.macro_hint is not None:
+        add("path", target.basename, "按 socket basename 限定源码路径", file_types=("all",))
+        add("full", target.socket_path, "检索完整 socket 路径及其配置/宏引用", file_types=("all",))
+        add("full", target.socket_path.lstrip("/"), "去掉首斜杠后再次检索 OpenGrok 分词结果", file_types=("all",))
         # A listener often uses the short init name (for example
         # ``GetControlSocket(\"fwmarkd\")``) rather than the full Unix path.
         # Keep a bounded basename full-text query in both C and C++ so that
         # server implementations are reachable even when the path is only in
         # a client header.
-        add("full", target.basename, "按 socket basename 全文检索短名称监听/连接实现")
+        add("full", target.basename, "按 socket basename 全文检索短名称监听/连接实现", file_types=("all",))
+        add("full", "GetControlSocket", "追踪 init 创建 descriptor 的服务端获取接口", file_types=("all",))
+        add("full", "socket", "追踪服务端 socket 创建接口", file_types=("all",))
+        add("full", "bind", "追踪服务端绑定接口", file_types=("all",))
+        add("full", "listen", "追踪 TCP/Unix 服务端监听接口", file_types=("all",))
     elif target.service_hint:
         add("path", target.service_hint, "按服务名检索可能的实现文件")
         add("full", target.service_hint, "全文检索服务名作为兜底召回")
@@ -363,6 +657,60 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
             )
         )
     return tuple(queries)
+
+
+def network_endpoint(target: TargetSpec) -> str | None:
+    """Return a canonical address/port string for a network target."""
+
+    if not isinstance(target, TargetSpec) or target.target_type != "network_socket":
+        return None
+    if target.address is None or target.port is None:
+        return None
+    try:
+        address = ipaddress.ip_address(target.address)
+    except ValueError:
+        return None
+    return f"[{address}]:{target.port}" if address.version == 6 else f"{address}:{target.port}"
+
+
+def target_identity_terms(target: TargetSpec | None) -> tuple[str, ...]:
+    """Return bounded, deduplicated source identity terms for all targets."""
+
+    if target is None:
+        return ()
+    values: list[str | int | None] = [
+        target.socket_path,
+        target.basename,
+        target.service_hint,
+        target.macro_hint,
+        target.process_hint,
+    ]
+    if target.target_type == "network_socket":
+        # The transport label is a search constraint, not a source identity.
+        # Treating ``UDP``/``TCP`` as an identity term would make almost every
+        # protocol-related file look like evidence for one particular port.
+        # Keep the endpoint, address, port and optional process/service name;
+        # callers that need the transport already receive it on TargetSpec.
+        values.extend((network_endpoint(target), target.address, target.port))
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            terms.append(text)
+    return tuple(terms)
+
+
+def target_relation(target: TargetSpec | None) -> str | None:
+    """Return the stable relation label used by evidence edges and UI."""
+
+    if target is None:
+        return None
+    return target.socket_path or network_endpoint(target) or target.service_hint or target.basename or target.macro_hint
 
 
 def normalize_and_plan(

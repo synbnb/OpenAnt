@@ -233,11 +233,29 @@ class OpenRouterAdapter:
                 "https://openrouter.ai/settings/keys."
             )
 
+        raw_retries = os.environ.get("OPENANT_OPENAI_MAX_RETRIES", "").strip()
+        effective_retries = max_retries
+        if raw_retries:
+            try:
+                effective_retries = min(max(int(raw_retries), 0), 10)
+            except ValueError:
+                effective_retries = max_retries
+        client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url if base_url is not None else _DEFAULT_BASE_URL,
+            "max_retries": effective_retries,
+            "default_headers": _ATTRIBUTION_HEADERS,
+        }
+        raw_timeout = os.environ.get("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "").strip()
+        if raw_timeout:
+            try:
+                timeout = float(raw_timeout)
+                if timeout > 0 and timeout < float("inf"):
+                    client_kwargs["timeout"] = timeout
+            except ValueError:
+                pass
         self._client = openai.OpenAI(
-            api_key=api_key,
-            base_url=base_url if base_url is not None else _DEFAULT_BASE_URL,
-            max_retries=max_retries,
-            default_headers=_ATTRIBUTION_HEADERS,
+            **client_kwargs,
         )
 
     # ------------------------------------------------------------------

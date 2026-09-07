@@ -128,6 +128,27 @@ class TestParseResponse:
         assert len(sigs) == 1
         assert sigs[0].kind == "external_input"
 
+    def test_malformed_structured_fields_are_skipped_without_raising(self):
+        text = json.dumps({
+            "signals": [
+                {
+                    "unit_id": "x:f",
+                    "kind": [],
+                    "confidence": "high",
+                    "reason": "bad kind",
+                },
+                {
+                    "unit_id": "x:f",
+                    "kind": "cross_process",
+                    "confidence": "high",
+                    "direction": {},
+                    "boundary": "binder",
+                    "reason": "bad direction",
+                },
+            ]
+        })
+        assert parse_response(text, valid_unit_ids={"x:f"}) == []
+
     def test_falls_back_to_first_object(self):
         text = "Sure! Here you go:\n" + json.dumps(
             {"signals": [
@@ -177,6 +198,44 @@ class TestParseResponse:
         errors: List[str] = []
         sigs = parse_response(text, on_error=errors.append)
         assert sigs == []
+
+    def test_external_input_does_not_require_direction(self):
+        text = json.dumps({
+            "signals": [{
+                "unit_id": "a:f",
+                "kind": "external_input",
+                "confidence": "high",
+                "boundary": "socket",
+                "evidence": "reads the received request",
+                "evidence_excerpt": "recv(fd, buf, len, 0)",
+                "evidence_line_start": 12,
+                "evidence_line_end": 12,
+                "reason": "socket input",
+            }]
+        })
+        sigs = parse_response(text, valid_unit_ids={"a:f"})
+        assert len(sigs) == 1
+        assert sigs[0].direction == ""
+        assert sigs[0].boundary == "socket"
+        assert sigs[0].evidence_excerpt == "recv(fd, buf, len, 0)"
+
+    def test_cross_process_requires_valid_direction(self):
+        text = json.dumps({
+            "signals": [{
+                "unit_id": "a:f",
+                "kind": "cross_process",
+                "confidence": "high",
+                "boundary": "binder",
+                "direction": "sideways",
+                "reason": "bad direction",
+            }]
+        })
+        errors: List[str] = []
+        sigs = parse_response(
+            text, valid_unit_ids={"a:f"}, on_error=errors.append
+        )
+        assert sigs == []
+        assert any("invalid direction" in item for item in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -375,13 +434,46 @@ class TestApplySignals:
         sigs = [
             ReachabilitySignal("a:f", "external_input", "medium", "reads stdin")
         ]
-        apply_signals(dataset, sigs)
+        summary = apply_signals(dataset, sigs)
         unit = dataset["units"][0]
         assert "llm_reachability_signals" in unit
         assert len(unit["llm_reachability_signals"]) == 1
         attached = unit["llm_reachability_signals"][0]
         assert attached["kind"] == "external_input"
         assert attached["reason"] == "reads stdin"
+        assert attached["seed_status"] == "reachable_only"
+        assert unit["semantic_reachability_retain_only"] is True
+        assert "semantic_reachability_seed" not in unit
+        assert summary["semantic_retain_only_ids"] == ["a:f"]
+        assert summary["retained_only"] == 1
+
+    def test_medium_cross_process_is_retained_without_bfs_seed(self):
+        dataset = {"units": [_make_unit("a:f")]}
+        signal = ReachabilitySignal(
+            "a:f", "cross_process", "medium", "maybe receives a queue message",
+            boundary="queue", direction="receive",
+        )
+        summary = apply_signals(dataset, [signal])
+        unit = dataset["units"][0]
+        assert unit["semantic_reachability_retain_only"] is True
+        assert unit.get("semantic_reachability_seed") is not True
+        assert summary["semantic_seed_ids"] == []
+        assert summary["semantic_retain_only_ids"] == ["a:f"]
+        assert summary["retained_only_counts"]["cross_process"] == 1
+        assert unit["llm_reachability_signals"][0]["seed_status"] == "reachable_only"
+
+    def test_medium_entry_point_is_retained_without_bfs_seed(self):
+        dataset = {"units": [_make_unit("a:f", is_entry_point=False)]}
+        summary = apply_signals(dataset, [
+            ReachabilitySignal("a:f", "entry_point", "medium", "possible hook")
+        ])
+        unit = dataset["units"][0]
+        assert unit["reachability_retain_only"] is True
+        assert unit.get("semantic_reachability_seed") is not True
+        assert unit["is_entry_point"] is False
+        assert summary["reachable_only_ids"] == ["a:f"]
+        assert summary["semantic_retain_only_ids"] == []
+        assert unit["llm_reachability_signals"][0]["seed_status"] == "reachable_only"
 
     def test_multiple_signals_accumulate_on_same_unit(self):
         dataset = {"units": [_make_unit("a:f")]}
@@ -400,6 +492,137 @@ class TestApplySignals:
         assert summary["signals_applied"] == 0
         assert summary["entry_points_promoted"] == 0
 
+    def test_high_external_input_becomes_semantic_seed(self):
+        dataset = {
+            "units": [_make_unit(
+                "a:f",
+                code="void f() { recv(fd, buf, len, 0); }",
+                is_entry_point=False,
+            )]
+        }
+        sigs = [ReachabilitySignal(
+            "a:f",
+            "external_input",
+            "high",
+            "socket input",
+            boundary="unknown",
+            evidence="reads from socket",
+            evidence_excerpt="recv(fd, buf, len, 0)",
+        )]
+        summary = apply_signals(dataset, sigs)
+        unit = dataset["units"][0]
+        assert unit["is_entry_point"] is False
+        assert unit["semantic_reachability_seed"] is True
+        assert summary["semantic_seed_ids"] == ["a:f"]
+        assert summary["seed_counts"]["external_input"] == 1
+        assert unit["llm_reachability_signals"][0]["evidence_status"] == "provided"
+        assert unit["llm_reachability_signals"][0]["seed_status"] == "accepted_seed"
+
+    def test_high_external_input_without_source_evidence_becomes_semantic_seed(self):
+        dataset = {"units": [_make_unit("a:f", code="void f(int input) {}") ]}
+        sigs = [ReachabilitySignal(
+            "a:f", "external_input", "high", "parameter named input",
+            boundary="socket",
+        )]
+        summary = apply_signals(dataset, sigs)
+        unit = dataset["units"][0]
+        assert unit["semantic_reachability_seed"] is True
+        assert summary["semantic_seed_ids"] == ["a:f"]
+        record = unit["llm_reachability_signals"][0]
+        assert record["seed_status"] == "accepted_seed"
+        assert record["evidence_status"] == "missing"
+
+    def test_high_external_input_with_model_only_excerpt_becomes_semantic_seed(self):
+        dataset = {"units": [_make_unit("a:f", code="void f() { recv(fd, buf, len, 0); }") ]}
+        sigs = [ReachabilitySignal(
+            "a:f",
+            "external_input",
+            "high",
+            "socket input",
+            evidence_excerpt="recv(fd, buf, len, 0); ...",
+        )]
+        summary = apply_signals(dataset, sigs)
+        assert summary["semantic_seed_ids"] == ["a:f"]
+        record = dataset["units"][0]["llm_reachability_signals"][0]
+        assert record["seed_status"] == "accepted_seed"
+        assert record["evidence_status"] == "provided"
+
+    def test_high_cross_process_with_any_direction_becomes_seed(self):
+        code = "void f() { MessageParcel data; data.ReadInt32(); }"
+        receive = ReachabilitySignal(
+            "a:receive", "cross_process", "high", "binder receive",
+            boundary="unknown", direction="receive",
+            evidence_excerpt="data.ReadInt32()",
+        )
+        send = ReachabilitySignal(
+            "a:send", "cross_process", "high", "binder send",
+            boundary="unknown", direction="send",
+            evidence_excerpt="data.ReadInt32()",
+        )
+        dataset = {
+            "units": [
+                _make_unit("a:receive", code=code),
+                _make_unit("a:send", code=code),
+            ]
+        }
+        summary = apply_signals(dataset, [receive, send])
+        assert summary["semantic_seed_ids"] == ["a:receive", "a:send"]
+        assert summary["seed_counts"]["cross_process"] == 2
+        assert summary["seed_counts"]["cross_process_receive"] == 1
+        assert dataset["units"][0]["semantic_reachability_seed"] is True
+        assert dataset["units"][1]["semantic_reachability_seed"] is True
+
+    def test_high_cross_process_unknown_direction_with_verified_evidence_becomes_seed(self):
+        code = "void f() { auto *pipe = popen(cmd.c_str(), \"r\"); fgets(buf, n, pipe); }"
+        signal = ReachabilitySignal(
+            "a:f", "cross_process", "high", "child-process pipe",
+            boundary="unknown", direction="unknown",
+            evidence_excerpt="popen(cmd.c_str(), \"r\")",
+        )
+        dataset = {"units": [_make_unit("a:f", code=code)]}
+        summary = apply_signals(dataset, [signal])
+        assert summary["semantic_seed_ids"] == ["a:f"]
+        record = dataset["units"][0]["llm_reachability_signals"][0]
+        assert record["seed_status"] == "accepted_seed"
+        assert record["seed_reason"] == "high-confidence semantic signal"
+
+    def test_duplicate_signals_keep_stronger_confidence(self):
+        dataset = {"units": [_make_unit(
+            "a:f", code="void f() { read(fd, buf, len); }"
+        )]}
+        sigs = [
+            ReachabilitySignal(
+                "a:f", "external_input", "medium", "maybe",
+                boundary="socket", evidence_excerpt="read(fd, buf, len)",
+            ),
+            ReachabilitySignal(
+                "a:f", "external_input", "high", "confirmed",
+                boundary="socket", evidence_excerpt="read(fd, buf, len)",
+            ),
+        ]
+        summary = apply_signals(dataset, sigs)
+        assert summary["duplicates_removed"] == 1
+        assert summary["signals_applied"] == 1
+        assert summary["semantic_seed_ids"] == ["a:f"]
+
+    def test_duplicate_equal_confidence_prefers_evidence_bearing_signal(self):
+        dataset = {"units": [_make_unit(
+            "a:f", code="void f() { recv(fd, buf, len, 0); }"
+        )]}
+        sigs = [
+            ReachabilitySignal(
+                "a:f", "external_input", "high", "model guess",
+                boundary="socket",
+            ),
+            ReachabilitySignal(
+                "a:f", "external_input", "high", "source confirmed",
+                boundary="socket", evidence_excerpt="recv(fd, buf, len, 0)",
+            ),
+        ]
+        summary = apply_signals(dataset, sigs)
+        assert summary["duplicates_removed"] == 1
+        assert summary["semantic_seed_ids"] == ["a:f"]
+
 
 class TestSerialization:
     def test_signals_to_json_roundtrip(self):
@@ -410,6 +633,8 @@ class TestSerialization:
         out = signals_to_json(sigs)
         assert isinstance(out, list)
         assert all(isinstance(item, dict) for item in out)
+        assert "direction" not in out[0]
+        assert "direction" not in out[1]
         # Round-trips through JSON cleanly.
         json.loads(json.dumps(out))
 

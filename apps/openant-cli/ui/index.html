@@ -57,6 +57,8 @@
     color: #d7e5e9; text-decoration: none; font-size: 0.75rem; white-space: nowrap;
   }
   .locator-link:hover { background: #213640; }
+  .exposure-link { border-color: #5d8e98; background: #1d3a42; }
+  .exposure-link:hover { background: #27505a; }
   .local-note {
     padding: 5px 9px; border: 1px solid #3b505c; border-radius: 8px;
     color: #c6d4dc; font-size: 0.74rem; white-space: nowrap;
@@ -136,7 +138,42 @@
   .llm-phase { margin: 5px 0 0 12px; color: var(--ink-soft); font-size: 0.75rem; }
   .llm-credential-ok { color: var(--success); }
   .llm-credential-missing { color: var(--warning); }
+  .llm-config-label { display: block; margin-top: 8px; color: var(--ink-soft); font-size: 0.72rem; font-weight: 800; }
+  .llm-status select { width: 100%; min-height: 35px; margin-top: 5px; padding: 6px 8px; color: var(--ink); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 0.78rem; }
   .option-list { display: grid; gap: 9px; }
+  .option-section {
+    padding: 13px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--surface-strong);
+  }
+  .option-section + .option-section { margin-top: 11px; }
+  .option-section-title {
+    margin: 0 0 4px; color: var(--ink); font-size: 0.82rem; font-weight: 800;
+  }
+  .option-section-hint { margin: 0 0 9px; color: var(--ink-faint); font-size: 0.74rem; line-height: 1.5; }
+  .option-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px;
+  }
+  .option-field {
+    min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface);
+  }
+  .option-field label { display: block; margin: 0 0 5px; color: #33444f; font-size: 0.76rem; font-weight: 700; }
+  .option-field input[type="number"], .option-field select { min-height: 35px; padding: 6px 8px; font-size: 0.78rem; }
+  .option-field .hint { margin-top: 5px; font-size: 0.71rem; }
+  .option-toggle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .option-toggle {
+    display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start;
+    min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  }
+  .option-toggle input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
+  .option-toggle label { margin: 0; color: #33444f; font-size: 0.76rem; line-height: 1.45; cursor: pointer; }
+  .option-toggle small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: 0.7rem; line-height: 1.45; }
+  .option-toggle-wide { grid-column: 1 / -1; }
+  .option-inline-control { margin-top: 7px; display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 7px; align-items: center; }
+  .option-inline-control label { color: var(--ink-faint); font-size: 0.7rem; font-weight: 700; }
+  .option-inline-control select { min-height: 33px; padding: 5px 8px; font-size: 0.75rem; }
+  .option-inline-control select:disabled { opacity: 0.65; cursor: not-allowed; }
+  .option-field input:disabled { opacity: 0.7; }
   .option-row {
     display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start;
     padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
@@ -216,6 +253,7 @@
     .workflow-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .privacy-note { display: none; }
     .language-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .option-grid, .option-toggle-grid { grid-template-columns: 1fr; }
     .panel-header, .panel-body { padding-left: 18px; padding-right: 18px; }
     .scan-row { grid-template-columns: 1fr auto; padding: 14px 18px; }
     .scan-actions { grid-column: 1 / -1; justify-content: flex-start; }
@@ -243,6 +281,7 @@
   </div>
   <div class="topbar-actions">
     <a class="locator-link" href="/source-locator" data-i18n="header.locator">OpenHarmony 源码定位</a>
+    <a class="locator-link exposure-link" href="/exposure-surface" data-i18n="header.exposure">设备暴露面识别</a>
     <span class="local-note" data-i18n="header.local" title="服务只监听本机回环地址，不会暴露到局域网。">仅本机访问</span>
     <div class="language-field">
       <label for="language-select" data-i18n="language.label">语言</label>
@@ -327,6 +366,11 @@
                 <div class="llm-status" role="status">
                   {{if .LLM.Available}}
                     <div><strong>{{.LLM.ConfigName}}</strong></div>
+                    <label for="llm_config" class="llm-config-label" data-i18n="scan.llmConfig">本次扫描使用的模型配置</label>
+                    <select id="llm_config" name="llm_config" aria-describedby="llm-config-hint">
+                      {{range .LLM.Configs}}<option value="{{.Name}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>{{end}}
+                    </select>
+                    <div class="hint" id="llm-config-hint" data-i18n="scan.llmConfigHint">默认使用配置文件中的 default_llm；可在每次扫描时切换已登记配置。</div>
                     {{range .LLM.Providers}}
                       <div class="llm-provider">
                         <span data-i18n="llm.provider">服务商</span>: <code>{{.Name}}</code> ({{.Type}})<br>
@@ -343,6 +387,7 @@
                     <div class="hint">{{.LLM.CredentialHint}}</div>
                   {{else}}
                     <div data-i18n="llm.unavailable">未检测到可用的大模型配置。</div>
+                    <input type="hidden" name="llm_config" value="openant-default">
                   {{end}}
                 </div>
               </div>
@@ -356,42 +401,170 @@
               <div class="field field-wide">
                 <span class="field-label" id="options-label" data-i18n="scan.options">执行选项</span>
                 <div class="option-list" role="group" aria-labelledby="options-label">
-                  <div class="option-row">
-                    <input type="checkbox" id="verify" name="verify" checked>
-                    <label for="verify" data-i18n="scan.verify">攻击者模拟：验证候选问题是否可被实际利用（--verify）</label>
-                  </div>
-                  <div class="option-row">
-                    <input type="checkbox" id="llm_reachability" name="llm_reachability">
-                    <div>
-                      <label for="llm_reachability" data-i18n="scan.llmReachability">LLM 可达性复核：让大模型补充可能遗漏的入口和外部输入点（--llm-reachability）</label>
-                      <div class="reachability-control">
-                        <label for="llm_reachability_max_code_bytes" data-i18n="scan.llmReachabilityMaxCodeBytes">每个分析单元最多发送源码字节数</label>
-                        <div class="reachability-value disabled">
-                          <input type="number" id="llm_reachability_max_code_bytes" name="llm_reachability_max_code_bytes" value="1500" min="256" max="32768" step="256" disabled aria-describedby="llm-reachability-hint">
-                          <span class="reachability-unit" data-i18n="scan.llmReachabilityBytesUnit">字节</span>
-                        </div>
-                        <div class="hint" id="llm-reachability-hint" data-i18n="scan.llmReachabilityHint">默认关闭；开启后会复核整个代码库，模型费用会随仓库规模增加。建议先使用 1500，长函数可提高到 4096 或 8192。</div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="option-row">
-                    <input type="checkbox" id="dynamic_test" name="dynamic_test">
-                    <div>
-                      <label for="dynamic_test" data-i18n="scan.dynamic">动态测试：验证候选问题的运行时行为（--dynamic-test）</label>
-                      <div class="dynamic-mode-control">
-                        <label for="dynamic_test_mode" data-i18n="scan.dynamicMode">动态测试运行模式</label>
-                        <select id="dynamic_test_mode" name="dynamic_test_mode" disabled>
-                          <option value="docker" data-i18n="scan.dynamicDocker">Docker 隔离执行</option>
-                          <option value="claude-code" data-i18n="scan.dynamicClaude">Claude Code 交互工作台</option>
+                  <section class="option-section" aria-labelledby="pipeline-options-title">
+                    <h3 class="option-section-title" id="pipeline-options-title" data-i18n="scan.pipelineGroup">流程范围与资源</h3>
+                    <p class="option-section-hint" data-i18n="scan.pipelineGroupHint">选择分析级别、语言覆盖范围和并发资源。数字上限由服务端再次校验。</p>
+                    <div class="option-grid">
+                      <div class="option-field">
+                        <label for="level" data-i18n="scan.level">分析级别</label>
+                        <select id="level" name="level">
+                          <option value="reachable" selected data-i18n="scan.levelReachable">可达函数（默认）</option>
+                          <option value="all" data-i18n="scan.levelAll">全部函数</option>
+                          <option value="codeql" data-i18n="scan.levelCodeQL">CodeQL 范围</option>
+                          <option value="exploitable" data-i18n="scan.levelExploitable">可利用性范围</option>
                         </select>
-                        <div class="hint" data-i18n="scan.dynamicModeHint">Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。</div>
+                        <div class="hint" data-i18n="scan.levelHint">决定哪些函数进入上下文和漏洞分析；可达级别通常更快。</div>
+                      </div>
+                      <div class="option-field">
+                        <label for="limit" data-i18n="scan.limit">最多分析单元数</label>
+                        <input type="number" id="limit" name="limit" min="0" max="1000000" step="1" placeholder="0">
+                        <div class="hint" data-i18n="scan.limitHint">留空或 0 表示不额外限制；适合先做小规模试跑。</div>
+                      </div>
+                      <div class="option-field">
+                        <label for="workers" data-i18n="scan.workers">模型并发数</label>
+                        <input type="number" id="workers" name="workers" value="8" min="1" max="64" step="1">
+                        <div class="hint" data-i18n="scan.workersHint">并发越高越快，但会增加瞬时请求和限流概率。</div>
+                      </div>
+                      <div class="option-field">
+                        <label for="backoff" data-i18n="scan.backoff">限流重试等待（秒）</label>
+                        <input type="number" id="backoff" name="backoff" value="30" min="0" max="3600" step="1">
+                        <div class="hint" data-i18n="scan.backoffHint">遇到服务商限流时，每次重试前等待的秒数。</div>
                       </div>
                     </div>
-                  </div>
-                  <div class="option-row">
-                    <input type="checkbox" id="library_mode" name="library_mode">
-                    <label for="library_mode" data-i18n="scan.library">库模式：将导出的公共 API 作为入口。大型库会明显增加时间和模型费用（--library-mode）</label>
-                  </div>
+                  </section>
+
+                  <section class="option-section" aria-labelledby="stage-options-title">
+                    <h3 class="option-section-title" id="stage-options-title" data-i18n="scan.stageGroup">阶段开关</h3>
+                    <p class="option-section-hint" data-i18n="scan.stageGroupHint">关闭某个阶段后，后续阶段可能缺少相应输入；页面会标记为未启用。</p>
+                    <div class="option-toggle-grid">
+                      <div class="option-toggle">
+                        <input type="checkbox" id="verify" name="verify" checked>
+                        <div><label for="verify" data-i18n="scan.verify">攻击者模拟：验证候选问题是否可被实际利用（--verify）</label><small data-i18n="scan.verifyHint">Stage 2 会使用搜索和源码读取工具复核攻击路径。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="no_context" name="no_context">
+                        <div><label for="no_context" data-i18n="scan.noContext">跳过应用上下文（--no-context）</label><small data-i18n="scan.noContextHint">不生成攻击者、边界和平台安全上下文，适合调试解析器。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="no_enhance" name="no_enhance">
+                        <div>
+                          <label for="no_enhance" data-i18n="scan.noEnhance">跳过上下文增强（--no-enhance）</label>
+                          <small data-i18n="scan.noEnhanceHint">不向函数补充调用者、被调用者和 Agentic 上下文。</small>
+                          <div class="option-inline-control">
+                            <label for="enhance_mode" data-i18n="scan.enhanceMode">增强模式</label>
+                            <select id="enhance_mode" name="enhance_mode">
+                              <option value="agentic" selected data-i18n="scan.enhanceAgentic">Agentic 多轮</option>
+                              <option value="single-shot" data-i18n="scan.enhanceSingleShot">单轮</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="no_report" name="no_report">
+                        <div><label for="no_report" data-i18n="scan.noReport">跳过报告生成（--no-report）</label><small data-i18n="scan.noReportHint">保留扫描产物和结果，但不生成 HTML、摘要及披露文件。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="no_skip_tests" name="no_skip_tests">
+                        <div><label for="no_skip_tests" data-i18n="scan.noSkipTests">包含测试和 fuzz 文件（--no-skip-tests）</label><small data-i18n="scan.noSkipTestsHint">默认过滤测试目录；开启后可扩大覆盖，但会增加单元数。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="library_mode" name="library_mode">
+                        <div><label for="library_mode" data-i18n="scan.library">库模式：将导出的公共 API 作为入口（--library-mode）</label><small data-i18n="scan.libraryHint">适用于没有明显进程入口的库型仓库。</small></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="option-section" aria-labelledby="language-options-title">
+                    <h3 class="option-section-title" id="language-options-title" data-i18n="scan.languageGroup">语言覆盖策略</h3>
+                    <p class="option-section-hint" data-i18n="scan.languageGroupHint">不选具体语言时由扫描器自动检测。多语言选项不能与上面的语言复选框同时使用。</p>
+                    <div class="option-toggle-grid">
+                      <div class="option-toggle">
+                        <input type="checkbox" id="all_languages" name="all_languages">
+                        <div><label for="all_languages" data-i18n="scan.allLanguages">扫描所有检测到的语言（--all-languages）</label><small data-i18n="scan.allLanguagesHint">忽略文件数和占比阈值，尽量扩大语言覆盖。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="multi_language" name="multi_language">
+                        <div><label for="multi_language" data-i18n="scan.multiLanguage">启用多语言扫描（--multi-language）</label><small data-i18n="scan.multiLanguageHint">扫描达到阈值的每种语言，并记录未覆盖语言。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="strict_languages" name="strict_languages">
+                        <div><label for="strict_languages" data-i18n="scan.strictLanguages">语言解析失败即终止（--strict-languages）</label><small data-i18n="scan.strictLanguagesHint">关闭时允许降级完成并在产物中记录覆盖缺口。</small></div>
+                      </div>
+                      <div class="option-field">
+                        <label for="min_language_files" data-i18n="scan.minLanguageFiles">语言最少文件数</label>
+                        <input type="number" id="min_language_files" name="min_language_files" value="5" min="1" max="1000000" step="1">
+                        <div class="hint" data-i18n="scan.minLanguageFilesHint">自动语言选择的文件数阈值。</div>
+                      </div>
+                      <div class="option-field">
+                        <label for="min_language_share" data-i18n="scan.minLanguageShare">语言最少占比</label>
+                        <input type="number" id="min_language_share" name="min_language_share" value="0.02" min="0" max="1" step="0.01">
+                        <div class="hint" data-i18n="scan.minLanguageShareHint">取值 0 到 1，例如 0.02 表示至少占源码文件的 2%。</div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="option-section" aria-labelledby="openharmony-options-title">
+                    <h3 class="option-section-title" id="openharmony-options-title" data-i18n="scan.openHarmonyGroup">OpenHarmony 语义复核</h3>
+                    <p class="option-section-hint" data-i18n="scan.openHarmonyGroupHint">这些开关只在目标平台识别为 OpenHarmony 时生效。它们生成独立证据，不会静默改写原生调用图。</p>
+                    <div class="option-toggle-grid">
+                      <div class="option-toggle option-toggle-wide">
+                        <input type="checkbox" id="llm_reachability" name="llm_reachability">
+                        <div>
+                          <label for="llm_reachability" data-i18n="scan.llmReachability">LLM 可达性复核：补充可能遗漏的入口和外部输入点（--llm-reachability）</label>
+                          <small data-i18n="scan.llmReachabilityHintShort">复核整个代码库；费用随仓库规模增加。</small>
+                          <div class="reachability-control">
+                            <label for="llm_reachability_max_code_bytes" data-i18n="scan.llmReachabilityMaxCodeBytes">每个分析单元最多发送源码字节数</label>
+                            <div class="reachability-value disabled">
+                              <input type="number" id="llm_reachability_max_code_bytes" name="llm_reachability_max_code_bytes" value="1500" min="256" max="32768" step="256" disabled aria-describedby="llm-reachability-hint">
+                              <span class="reachability-unit" data-i18n="scan.llmReachabilityBytesUnit">字节</span>
+                            </div>
+                            <div class="hint" id="llm-reachability-hint" data-i18n="scan.llmReachabilityHint">默认关闭；建议先使用 1500，长函数可提高到 4096 或 8192。</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="llm_call_graph_recovery" name="llm_call_graph_recovery">
+                        <div><label for="llm_call_graph_recovery" data-i18n="scan.llmCallGraphRecovery">LLM 调用图恢复（--llm-call-graph-recovery）</label><small data-i18n="scan.llmCallGraphRecoveryHint">复核没有确定候选目标的间接调用残余点。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="llm_call_graph_iterative_recovery" name="llm_call_graph_iterative_recovery">
+                        <div><label for="llm_call_graph_iterative_recovery" data-i18n="scan.llmCallGraphIterative">入口驱动的多轮调用图恢复（--llm-call-graph-iterative-recovery）</label><small data-i18n="scan.llmCallGraphIterativeHint">从入口出发有界递归复核调用边，成本高于单轮恢复。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="llm_call_graph_candidate_review" name="llm_call_graph_candidate_review">
+                        <div><label for="llm_call_graph_candidate_review" data-i18n="scan.llmCallGraphCandidateReview">候选调用边复核（--llm-call-graph-candidate-review）</label><small data-i18n="scan.llmCallGraphCandidateReviewHint">让模型审核规则已提出的候选 handler 边。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="llm_call_graph_projection" name="llm_call_graph_projection">
+                        <div><label for="llm_call_graph_projection" data-i18n="scan.llmCallGraphProjection">语义调用边投影（--llm-call-graph-projection）</label><small data-i18n="scan.llmCallGraphProjectionHint">将高置信边写入独立 overlay，必要时扩大可达范围。</small></div>
+                      </div>
+                      <div class="option-toggle">
+                        <input type="checkbox" id="openharmony_dispatch_code_evidence" name="openharmony_dispatch_code_evidence">
+                        <div><label for="openharmony_dispatch_code_evidence" data-i18n="scan.dispatchCodeEvidence">OpenHarmony 分派码证据（--openharmony-dispatch-code-evidence）</label><small data-i18n="scan.dispatchCodeEvidenceHint">提取 IPC/SA 分派整数值，辅助动态验证和调用链审计。</small></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="option-section" aria-labelledby="runtime-options-title">
+                    <h3 class="option-section-title" id="runtime-options-title" data-i18n="scan.runtimeGroup">动态验证</h3>
+                    <p class="option-section-hint" data-i18n="scan.runtimeGroupHint">静态流水线完成后再运行；Claude Code 模式会在网页中等待交互。</p>
+                    <div class="option-toggle-grid">
+                      <div class="option-toggle option-toggle-wide">
+                        <input type="checkbox" id="dynamic_test" name="dynamic_test">
+                        <div>
+                          <label for="dynamic_test" data-i18n="scan.dynamic">动态测试：验证候选问题的运行时行为（--dynamic-test）</label>
+                          <div class="dynamic-mode-control">
+                            <label for="dynamic_test_mode" data-i18n="scan.dynamicMode">动态测试运行模式</label>
+                            <select id="dynamic_test_mode" name="dynamic_test_mode" disabled>
+                              <option value="docker" data-i18n="scan.dynamicDocker">Docker 隔离执行</option>
+                              <option value="claude-code" data-i18n="scan.dynamicClaude">Claude Code 交互工作台</option>
+                            </select>
+                            <div class="hint" data-i18n="scan.dynamicModeHint">Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
                 </div>
               </div>
             </div>
@@ -443,6 +616,7 @@ const translations = {
     'header.local': '仅本机访问',
     'header.localTitle': '服务只监听本机回环地址，不会暴露到局域网。',
     'header.locator': 'OpenHarmony 源码定位',
+    'header.exposure': '设备暴露面识别',
     'language.label': '语言',
     'intro.body': '选择仓库和扫描范围。vulnfounder 会解析函数、构建上下文、调用模型分析，并保存每个阶段的可审阅产物。',
     'workflow.title': '扫描流程',
@@ -469,10 +643,57 @@ const translations = {
     'scan.platformGeneric': '通用源码',
     'scan.platformHint': 'OpenHarmony 模式会启用平台感知的 C/C++ 解析，以及 IPC 和 System Ability 入口检测。',
     'scan.llm': '大模型配置',
+    'scan.llmConfig': '本次扫描使用的模型配置',
+    'scan.llmConfigHint': '默认使用配置文件中的 default_llm；可在每次扫描时切换已登记配置。',
     'scan.legacyKeyHint': 'OpenAI 兼容接口请使用 openant setup llm 配置。此输入框只覆盖本次扫描的旧版 Anthropic 配置。',
     'scan.options': '执行选项',
+    'scan.pipelineGroup': '流程范围与资源',
+    'scan.pipelineGroupHint': '选择分析级别、语言覆盖范围和并发资源。数字上限由服务端再次校验。',
+    'scan.level': '分析级别',
+    'scan.levelReachable': '可达函数（默认）',
+    'scan.levelAll': '全部函数',
+    'scan.levelCodeQL': 'CodeQL 范围',
+    'scan.levelExploitable': '可利用性范围',
+    'scan.levelHint': '决定哪些函数进入上下文和漏洞分析；可达级别通常更快。',
+    'scan.limit': '最多分析单元数',
+    'scan.limitHint': '留空或 0 表示不额外限制；适合先做小规模试跑。',
+    'scan.workers': '模型并发数',
+    'scan.workersHint': '并发越高越快，但会增加瞬时请求和限流概率。',
+    'scan.backoff': '限流重试等待（秒）',
+    'scan.backoffHint': '遇到服务商限流时，每次重试前等待的秒数。',
+    'scan.stageGroup': '阶段开关',
+    'scan.stageGroupHint': '关闭某个阶段后，后续阶段可能缺少相应输入；页面会标记为未启用。',
     'scan.verify': '攻击者模拟：验证候选问题是否可被实际利用（--verify）',
+    'scan.verifyHint': 'Stage 2 会使用搜索和源码读取工具复核攻击路径。',
+    'scan.noContext': '跳过应用上下文（--no-context）',
+    'scan.noContextHint': '不生成攻击者、边界和平台安全上下文，适合调试解析器。',
+    'scan.noEnhance': '跳过上下文增强（--no-enhance）',
+    'scan.noEnhanceHint': '不向函数补充调用者、被调用者和 Agentic 上下文。',
+    'scan.enhanceMode': '增强模式',
+    'scan.enhanceAgentic': 'Agentic 多轮',
+    'scan.enhanceSingleShot': '单轮',
+    'scan.noReport': '跳过报告生成（--no-report）',
+    'scan.noReportHint': '保留扫描产物和结果，但不生成 HTML、摘要及披露文件。',
+    'scan.noSkipTests': '包含测试和 fuzz 文件（--no-skip-tests）',
+    'scan.noSkipTestsHint': '默认过滤测试目录；开启后可扩大覆盖，但会增加单元数。',
+    'scan.library': '库模式：将导出的公共 API 作为入口（--library-mode）',
+    'scan.libraryHint': '适用于没有明显进程入口的库型仓库。',
+    'scan.languageGroup': '语言覆盖策略',
+    'scan.languageGroupHint': '不选具体语言时由扫描器自动检测。多语言选项不能与上面的语言复选框同时使用。',
+    'scan.allLanguages': '扫描所有检测到的语言（--all-languages）',
+    'scan.allLanguagesHint': '忽略文件数和占比阈值，尽量扩大语言覆盖。',
+    'scan.multiLanguage': '启用多语言扫描（--multi-language）',
+    'scan.multiLanguageHint': '扫描达到阈值的每种语言，并记录未覆盖语言。',
+    'scan.strictLanguages': '语言解析失败即终止（--strict-languages）',
+    'scan.strictLanguagesHint': '关闭时允许降级完成并在产物中记录覆盖缺口。',
+    'scan.minLanguageFiles': '语言最少文件数',
+    'scan.minLanguageFilesHint': '自动语言选择的文件数阈值。',
+    'scan.minLanguageShare': '语言最少占比',
+    'scan.minLanguageShareHint': '取值 0 到 1，例如 0.02 表示至少占源码文件的 2%。',
+    'scan.openHarmonyGroup': 'OpenHarmony 语义复核',
+    'scan.openHarmonyGroupHint': '这些开关只在目标平台识别为 OpenHarmony 时生效。它们生成独立证据，不会静默改写原生调用图。',
     'scan.llmReachability': 'LLM 可达性复核：让大模型补充可能遗漏的入口和外部输入点（--llm-reachability）',
+    'scan.llmReachabilityHintShort': '复核整个代码库；费用随仓库规模增加。',
     'scan.llmReachabilityMaxCodeBytes': '每个分析单元最多发送源码字节数',
     'scan.llmReachabilityBytesUnit': '字节',
     'scan.llmReachabilityHint': '默认关闭；开启后会复核整个代码库，模型费用会随仓库规模增加。建议先使用 1500，长函数可提高到 4096 或 8192。',
@@ -481,7 +702,18 @@ const translations = {
     'scan.dynamicDocker': 'Docker 隔离执行',
     'scan.dynamicClaude': 'Claude Code 交互工作台',
     'scan.dynamicModeHint': 'Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。',
-    'scan.library': '库模式：将导出的公共 API 作为入口。大型库会明显增加时间和模型费用（--library-mode）',
+    'scan.llmCallGraphRecovery': 'LLM 调用图恢复（--llm-call-graph-recovery）',
+    'scan.llmCallGraphRecoveryHint': '复核没有确定候选目标的间接调用残余点。',
+    'scan.llmCallGraphIterative': '入口驱动的多轮调用图恢复（--llm-call-graph-iterative-recovery）',
+    'scan.llmCallGraphIterativeHint': '从入口出发有界递归复核调用边，成本高于单轮恢复。',
+    'scan.llmCallGraphCandidateReview': '候选调用边复核（--llm-call-graph-candidate-review）',
+    'scan.llmCallGraphCandidateReviewHint': '让模型审核规则已提出的候选 handler 边。',
+    'scan.llmCallGraphProjection': '语义调用边投影（--llm-call-graph-projection）',
+    'scan.llmCallGraphProjectionHint': '将高置信边写入独立 overlay，必要时扩大可达范围。',
+    'scan.dispatchCodeEvidence': 'OpenHarmony 分派码证据（--openharmony-dispatch-code-evidence）',
+    'scan.dispatchCodeEvidenceHint': '提取 IPC/SA 分派整数值，辅助动态验证和调用链审计。',
+    'scan.runtimeGroup': '动态验证',
+    'scan.runtimeGroupHint': '静态流水线完成后再运行；Claude Code 模式会在网页中等待交互。',
     'scan.start': '开始扫描',
     'llm.provider': '服务商',
     'llm.endpoint': '接口地址',
@@ -516,6 +748,7 @@ const translations = {
     'header.local': 'Local access only',
     'header.localTitle': 'The server listens on loopback only and is not exposed to your local network.',
     'header.locator': 'OpenHarmony source locator',
+    'header.exposure': 'Device exposure surface',
     'language.label': 'Language',
     'intro.body': 'Select a repository and scan scope. vulnfounder parses functions, builds context, runs model analysis, and preserves reviewable output for every stage.',
     'workflow.title': 'Scan workflow',
@@ -542,10 +775,57 @@ const translations = {
     'scan.platformGeneric': 'Generic source',
     'scan.platformHint': 'OpenHarmony mode enables platform-aware C/C++ parsing and IPC/System Ability entry detection.',
     'scan.llm': 'LLM configuration',
+    'scan.llmConfig': 'LLM configuration for this scan',
+    'scan.llmConfigHint': 'Uses default_llm from the configuration file by default; select any registered configuration for this run.',
     'scan.legacyKeyHint': 'Use openant setup llm for OpenAI-compatible endpoints. This field overrides legacy Anthropic configuration for this scan only.',
     'scan.options': 'Execution options',
+    'scan.pipelineGroup': 'Scope and resources',
+    'scan.pipelineGroupHint': 'Choose the processing level, language coverage, and concurrency. The server validates numeric limits again.',
+    'scan.level': 'Processing level',
+    'scan.levelReachable': 'Reachable functions (default)',
+    'scan.levelAll': 'All functions',
+    'scan.levelCodeQL': 'CodeQL scope',
+    'scan.levelExploitable': 'Exploitable scope',
+    'scan.levelHint': 'Controls which functions enter context and vulnerability analysis; reachable is usually faster.',
+    'scan.limit': 'Maximum analysis units',
+    'scan.limitHint': 'Empty or 0 means no additional limit; useful for a small trial run.',
+    'scan.workers': 'Model concurrency',
+    'scan.workersHint': 'Higher concurrency is faster but increases burst traffic and rate-limit risk.',
+    'scan.backoff': 'Rate-limit retry wait (seconds)',
+    'scan.backoffHint': 'Seconds to wait before each retry after provider throttling.',
+    'scan.stageGroup': 'Stage switches',
+    'scan.stageGroupHint': 'Disabling a stage can remove inputs needed by later stages; the page marks it as not enabled.',
     'scan.verify': 'Attacker simulation: verify whether candidate findings are exploitable (--verify)',
+    'scan.verifyHint': 'Stage 2 uses search and source-reading tools to recheck the attack path.',
+    'scan.noContext': 'Skip application context (--no-context)',
+    'scan.noContextHint': 'Do not build attacker, boundary, or platform security context; useful for parser debugging.',
+    'scan.noEnhance': 'Skip context enhancement (--no-enhance)',
+    'scan.noEnhanceHint': 'Do not attach callers, callees, or Agentic context to functions.',
+    'scan.enhanceMode': 'Enhancement mode',
+    'scan.enhanceAgentic': 'Agentic multi-round',
+    'scan.enhanceSingleShot': 'Single-shot',
+    'scan.noReport': 'Skip report generation (--no-report)',
+    'scan.noReportHint': 'Keep scan artifacts and findings but do not generate HTML, summary, or disclosure files.',
+    'scan.noSkipTests': 'Include test and fuzz files (--no-skip-tests)',
+    'scan.noSkipTestsHint': 'Tests are skipped by default; including them broadens coverage and increases unit count.',
+    'scan.library': 'Library mode: seed exported public APIs as entry points (--library-mode)',
+    'scan.libraryHint': 'Useful for library repositories without an obvious process entry point.',
+    'scan.languageGroup': 'Language coverage',
+    'scan.languageGroupHint': 'When no language is checked, the scanner auto-detects languages. Multi-language switches cannot be combined with explicit language boxes.',
+    'scan.allLanguages': 'Scan every detected language (--all-languages)',
+    'scan.allLanguagesHint': 'Ignore file-count and share thresholds to maximize language coverage.',
+    'scan.multiLanguage': 'Enable multi-language scan (--multi-language)',
+    'scan.multiLanguageHint': 'Scan each language that clears thresholds and record uncovered languages.',
+    'scan.strictLanguages': 'Abort on language parse failure (--strict-languages)',
+    'scan.strictLanguagesHint': 'When off, allow degraded completion and record coverage gaps in artifacts.',
+    'scan.minLanguageFiles': 'Minimum files per language',
+    'scan.minLanguageFilesHint': 'File-count threshold used by automatic language selection.',
+    'scan.minLanguageShare': 'Minimum language share',
+    'scan.minLanguageShareHint': 'A value from 0 to 1; for example 0.02 means at least 2% of source files.',
+    'scan.openHarmonyGroup': 'OpenHarmony semantic review',
+    'scan.openHarmonyGroupHint': 'These switches apply when the target is OpenHarmony. They write independent evidence and do not silently rewrite the native graph.',
     'scan.llmReachability': 'LLM reachability review: find entry points and external-input sites structural rules may miss (--llm-reachability)',
+    'scan.llmReachabilityHintShort': 'Reviews the whole repository; cost grows with repository size.',
     'scan.llmReachabilityMaxCodeBytes': 'Maximum source bytes sent per analysis unit',
     'scan.llmReachabilityBytesUnit': 'bytes',
     'scan.llmReachabilityHint': 'Off by default. When enabled, the whole repository is reviewed and model cost grows with repository size. Start at 1500; use 4096 or 8192 for long handlers.',
@@ -554,7 +834,18 @@ const translations = {
     'scan.dynamicDocker': 'Docker isolation',
     'scan.dynamicClaude': 'Claude Code interactive workbench',
     'scan.dynamicModeHint': 'Claude Code pauses report generation at the dynamic-test stage and opens a chat plus task workspace in this page.',
-    'scan.library': 'Library mode: seed exported public APIs as entry points. Large libraries can significantly increase time and model cost (--library-mode)',
+    'scan.llmCallGraphRecovery': 'LLM call-graph recovery (--llm-call-graph-recovery)',
+    'scan.llmCallGraphRecoveryHint': 'Review indirect-call residual sites without a deterministic candidate target.',
+    'scan.llmCallGraphIterative': 'Entry-driven iterative call-graph recovery (--llm-call-graph-iterative-recovery)',
+    'scan.llmCallGraphIterativeHint': 'Recursively review edges from entries within a bounded budget; costs more than one-shot recovery.',
+    'scan.llmCallGraphCandidateReview': 'Candidate call-edge review (--llm-call-graph-candidate-review)',
+    'scan.llmCallGraphCandidateReviewHint': 'Ask the model to audit handler edges proposed by structural rules.',
+    'scan.llmCallGraphProjection': 'Semantic call-edge projection (--llm-call-graph-projection)',
+    'scan.llmCallGraphProjectionHint': 'Write high-confidence edges to an independent overlay and optionally expand reachability.',
+    'scan.dispatchCodeEvidence': 'OpenHarmony dispatch-code evidence (--openharmony-dispatch-code-evidence)',
+    'scan.dispatchCodeEvidenceHint': 'Extract IPC/SA dispatch integers for dynamic verification and call-chain auditing.',
+    'scan.runtimeGroup': 'Dynamic verification',
+    'scan.runtimeGroupHint': 'Runs after the static pipeline; Claude Code mode waits for interaction in the page.',
     'scan.start': 'Start scan',
     'llm.provider': 'Provider',
     'llm.endpoint': 'Endpoint',
@@ -593,6 +884,10 @@ const dynamicTestCheckbox = document.getElementById('dynamic_test');
 const dynamicTestMode = document.getElementById('dynamic_test_mode');
 const llmReachabilityCheckbox = document.getElementById('llm_reachability');
 const llmReachabilityMaxCodeBytes = document.getElementById('llm_reachability_max_code_bytes');
+const noEnhanceCheckbox = document.getElementById('no_enhance');
+const enhanceMode = document.getElementById('enhance_mode');
+const allLanguagesCheckbox = document.getElementById('all_languages');
+const multiLanguageCheckbox = document.getElementById('multi_language');
 let currentLanguage = 'zh-CN';
 
 function t(key) {
@@ -686,6 +981,25 @@ function syncLLMReachability() {
 }
 if (llmReachabilityCheckbox) llmReachabilityCheckbox.addEventListener('change', syncLLMReachability);
 
+function syncEnhanceMode() {
+  if (!noEnhanceCheckbox || !enhanceMode) return;
+  const disabled = noEnhanceCheckbox.checked;
+  enhanceMode.disabled = disabled;
+  enhanceMode.setAttribute('aria-disabled', String(disabled));
+}
+if (noEnhanceCheckbox) noEnhanceCheckbox.addEventListener('change', syncEnhanceMode);
+
+function syncLanguageSelection() {
+  if (!allLanguagesCheckbox || !multiLanguageCheckbox) return;
+  const broadSelection = allLanguagesCheckbox.checked || multiLanguageCheckbox.checked;
+  document.querySelectorAll('input[name="languages"]').forEach(function(input) {
+    input.disabled = broadSelection;
+    input.setAttribute('aria-disabled', String(broadSelection));
+  });
+}
+if (allLanguagesCheckbox) allLanguagesCheckbox.addEventListener('change', syncLanguageSelection);
+if (multiLanguageCheckbox) multiLanguageCheckbox.addEventListener('change', syncLanguageSelection);
+
 function copyRepo(btn) {
   navigator.clipboard.writeText(btn.dataset.repo).then(function() {
     btn.classList.add('copied');
@@ -722,6 +1036,8 @@ try { preferredLanguage = localStorage.getItem('openant.ui.language') || 'zh-CN'
 applyLanguage(preferredLanguage);
 syncDynamicTestMode();
 syncLLMReachability();
+syncEnhanceMode();
+syncLanguageSelection();
 prefillSourceLocatorHandoff();
 </script>
 </body>

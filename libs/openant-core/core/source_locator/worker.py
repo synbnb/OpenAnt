@@ -2,8 +2,9 @@
 
 这个模块把已经经过单元测试的 OpenGrok、证据、Manifest、归因和 Git
 组件串成一个“每次只推进一个阶段”的 worker。它不接受 shell 字符串，
-不让模型生成仓库 URL；模型若要参与，只能通过受限的检索规划器和证据
-约束型角色复核器提供下一步查询或服务端/客户端判定。没有
+不让模型生成仓库 URL；模型若要参与，只能通过受限的检索规划器、证据
+约束型角色复核器和候选仓库 PK 复核器提供下一步查询、服务端/客户端判定
+或候选选择。没有
 OpenGrok/Manifest 配置时会明确暂停，而不是猜测远程地址。
 """
 
@@ -20,7 +21,7 @@ from typing import Any, Iterable, Mapping
 
 from .client_locator import ClientAttributionResult, ClientLocator
 from .config import GitCodeConfig, SourceLocatorConfig, load_source_locator_config
-from .evidence_store import EvidenceStore
+from .evidence_store import Evidence, EvidenceStore
 from .manifest_resolver import (
     ManifestDocument,
     ManifestResolver,
@@ -28,6 +29,8 @@ from .manifest_resolver import (
     load_manifest,
 )
 from .llm_search_planner import (
+    LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+    LLM_SEARCH_MAX_ACTIONS,
     LLMSearchPlanner,
     LLMSearchPlannerContext,
     LLMSearchPlannerError,
@@ -38,6 +41,10 @@ from .llm_role_attributor import (
     LLMRoleAttributor,
     LLMRoleDecision,
 )
+from .candidate_reviewer import (
+    CandidateReviewError,
+    LLMCandidateReviewer,
+)
 from .opengrok_client import (
     OpenGrokClient,
     OpenGrokError,
@@ -47,7 +54,7 @@ from .opengrok_client import (
     SourceDocument,
     normalize_source_path,
 )
-from .path_classifier import classify_path, rank_paths
+from .path_classifier import classify_path, is_attribution_eligible, rank_paths
 from .post_clone_verifier import (
     PostCloneVerificationRequest,
     PostCloneVerifier,
@@ -69,7 +76,15 @@ from .state_machine import (
     LocatorStateError,
     SourceLocatorStateMachine,
 )
-from .target_normalizer import LocatorQuery, TargetSpec, build_initial_queries, normalize_target
+from .target_normalizer import (
+    LocatorQuery,
+    TargetSpec,
+    build_initial_queries,
+    network_endpoint,
+    normalize_target,
+    target_identity_terms,
+    target_relation,
+)
 
 
 class SourceLocatorWorkerError(ValueError):
@@ -80,6 +95,12 @@ _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 _MAX_PATHS = 32
 _MAX_HITS_PER_PATH = 8
 _TRACE_CONTEXT_LINES = 64
+_MAX_LLM_DUPLICATE_STREAK = 6
+# A malformed/unsupported OpenGrok query should not terminate the semantic
+# search after one attempt.  Let the model choose another query (with the
+# failure fed back into its next context), but stop a persistent outage after
+# a small consecutive-failure budget so a session remains bounded.
+_MAX_LLM_EXECUTION_FAILURE_STREAK = 3
 _MAX_STAGE_BYTES = 8 * 1024 * 1024
 _MAX_EVENT_EVIDENCE_IDS = 256
 _MAX_TRACE_EVIDENCE_PER_PATH = 128
@@ -87,8 +108,18 @@ _MAX_SEARCH_EVIDENCE = 1024
 _MAX_SEARCH_ARTIFACT_PATHS_PER_EXECUTION = 32
 _MAX_SEARCH_ARTIFACT_HITS_PER_PATH = 4
 _MAX_SEARCH_LINE_CHARS = 2048
-_MAX_ATTRIBUTION_CANDIDATES = 64
+# Keep the checkpoint/session copy below the state-machine's 64 KiB mapping
+# limit even when a generic socket basename produces many candidate roles.
+# The complete evidence remains available in evidence.json and the standalone
+# server_attribution.json artifact is still bounded independently.
+_MAX_ATTRIBUTION_CANDIDATES = 32
 _MAX_ATTRIBUTION_EVIDENCE_IDS = 256
+# Repository resolution attaches project-wide evidence to each Manifest row so
+# it can be ranked correctly.  That full list belongs in
+# repository_resolutions.json, not in the 64 KiB session checkpoint.
+_MAX_SESSION_REPOSITORY_MAPPINGS = 32
+_MAX_SESSION_MAPPING_EVIDENCE_IDS = 64
+_MAX_SESSION_EVIDENCE_IDS = 512
 _MAX_CONFIRMATION_ROLES = 8
 _MAX_CONFIRMATION_EVIDENCE = 12
 _MAX_CONFIRMATION_LOCATIONS = 3
@@ -138,6 +169,1261 @@ _LLM_EVIDENCE_KINDS = frozenset(
         "client_send",
     }
 )
+_NETWORK_GENERIC_QUERY_TERMS = frozenset(
+    {
+        "bind",
+        "socket",
+        "serversocket",
+        "threadsocket",
+        "handlemsg",
+        "accept",
+        "recv",
+        "recvfrom",
+        "read",
+        "connect",
+        "send",
+        "sendto",
+        "write",
+        "sin_port",
+        "sockaddr_in",
+        "sock_dgram",
+        "sock_stream",
+        "af_inet",
+        "af_inet6",
+        "inet_addr",
+        "inet_pton",
+        "inaddr_loopback",
+        "htons",
+        "htonl",
+    }
+)
+# Named sockets use the same bounded API probes as network sockets, but also
+# need the OpenHarmony descriptor helper and build/config metadata.  Keeping a
+# single generic-query vocabulary lets the evidence gate distinguish recall
+# probes from target-bearing lines for both target types.
+_SOCKET_GENERIC_QUERY_TERMS = _NETWORK_GENERIC_QUERY_TERMS | frozenset(
+    {
+        "getcontrolsocket",
+        "getserversocket",
+        "getsocket",
+        "socketpair",
+        "socketdevice",
+        "listen",
+        "build.gn",
+        "bundle.json",
+        "ohos_executable",
+        "part_name",
+        "subsystem_name",
+    }
+)
+_COMMUNICATION_EVIDENCE_KINDS = frozenset(
+    {
+        "socket_server_registration",
+        "socket_acquire",
+        "socket_bind_listen",
+        "socket_accept_read",
+        "protocol_dispatch",
+        "client_endpoint",
+        "client_connect",
+        "client_send",
+        "protocol_construction",
+    }
+)
+# Only these source facts are allowed to establish a cross-file module
+# context.  A basename/literal hit is still retained in the evidence graph,
+# but it must not make every neighbouring ``socket``/``bind`` call look like
+# the target service.  This is particularly important for common names such
+# as ``native`` and for SELinux/generated files that repeat socket labels.
+_STRONG_CONTEXT_KINDS = _COMMUNICATION_EVIDENCE_KINDS | frozenset(
+    {
+        "service_config",
+        "executable_build",
+        "macro_definition",
+        "constant_definition",
+    }
+)
+_PATH_ROLE_PENALTIES = {
+    # These paths remain candidates and remain visible in artifacts.  The
+    # adjustment only prevents policy/generated/log records from outranking a
+    # production listener when the same token appears in both places.
+    "selinux": -110,
+    "log": -90,
+    "generated": -65,
+    "build": -48,
+    "unknown": -28,
+    "kernel": -24,
+    "third_party": -16,
+}
+# Directory names that describe repository layout rather than a component.
+# They are intentionally used only when comparing two already collected
+# context paths; they do not remove candidates or evidence.  Without this
+# distinction, an anchor under ``services/etc/init`` makes every sibling
+# ``recv``/``GetControlSocket`` hit under ``services`` look related.
+_CONTEXT_STRUCTURAL_TOKENS = frozenset(
+    {
+        "base",
+        "build",
+        "client",
+        "clients",
+        "common",
+        "component",
+        "components",
+        "daemon",
+        "daemons",
+        "device",
+        "devices",
+        "etc",
+        "framework",
+        "frameworks",
+        "generated",
+        "gen",
+        "host",
+        "hosts",
+        "include",
+        "init",
+        "innerkit",
+        "innerkits",
+        "interface",
+        "interfaces",
+        "kernel",
+        "linux",
+        "manager",
+        "managers",
+        "module",
+        "modules",
+        "out",
+        "server",
+        "servers",
+        "service",
+        "services",
+        "socket",
+        "sockets",
+        "src",
+        "standard",
+        "startup",
+        "test",
+        "tests",
+        "testing",
+        "tool",
+        "tools",
+    }
+)
+_NETWORK_SOURCE_CONTEXT_RE = re.compile(
+    r"(?i)\b(?:socket|bind|listen|accept|recv(?:from)?|send(?:to)?|connect|"
+    r"sin_port|sockaddr(?:_in)?|sock_dgram|sock_stream|af_inet6?|"
+    r"inet_addr|inet_pton|inaddr_loopback|htons|htonl|\w*port\w*|udp|tcp)\b"
+)
+_NETWORK_SOCKET_CONTEXT_RE = re.compile(
+    r"(?i)\b(?:socket|bind|listen|accept|recv(?:from)?|send(?:to)?|connect|"
+    r"sin_port|sockaddr(?:_in)?|sock_dgram|sock_stream|af_inet6?|"
+    r"inet_addr|inet_pton|inaddr_loopback|htons|htonl)\b"
+)
+
+
+def _strip_source_comments(line: str) -> str:
+    """Remove comments from one bounded source hit before semantic checks.
+
+    OpenGrok returns individual lines rather than a complete translation unit.
+    A line-local pass is therefore sufficient to prevent comments such as
+    ``// hisysevent.h`` from becoming identity or macro evidence.  Keep
+    ``://`` intact so a string literal containing a URL is not truncated while
+    still removing the usual trailing C/C++ comment.
+    """
+
+    value = str(line)
+    value = re.sub(r"/\*.*?\*/", "", value)
+    return re.sub(r"(?<!:)//.*$", "", value)
+
+
+def _macro_name_is_socket_related(name: str, target: TargetSpec) -> bool:
+    """Return whether a macro/constant name is related to this socket.
+
+    A target token in a macro name is not enough by itself: ``HISYSEVENT_MAX``
+    is an event constant, while ``HISYSEVENT_SOCKET_NAME`` is an endpoint
+    alias.  Require either an exact target name or a target-prefixed name with
+    a socket/service/path suffix.  This keeps useful aliases while rejecting
+    generic constants and comments.
+    """
+
+    if not isinstance(name, str) or not name.strip() or not isinstance(target, TargetSpec):
+        return False
+    compact_name = re.sub(r"[^a-z0-9]", "", name.casefold())
+    if not compact_name:
+        return False
+    target_values = (
+        target.basename,
+        target.service_hint,
+        target.macro_hint,
+        target.process_hint,
+    )
+    for raw_value in target_values:
+        if not raw_value:
+            continue
+        compact_value = re.sub(r"[^a-z0-9]", "", str(raw_value).casefold())
+        if not compact_value:
+            continue
+        if compact_name == compact_value:
+            return True
+        if not compact_name.startswith(compact_value):
+            continue
+        suffix = compact_name[len(compact_value):]
+        if suffix and re.search(r"(?:socket|sock|pipe|endpoint|service|server|path|name|fd)", suffix):
+            return True
+    return False
+
+
+def _network_operation_matches_target(line: str, target: TargetSpec) -> bool:
+    """Reject a concrete operation that belongs to the other transport."""
+
+    if target.target_type != "network_socket":
+        return True
+    lower = str(line).lower()
+    if target.transport == "UDP":
+        return not (
+            re.search(r"\bsock_stream\b", lower)
+            or re.search(r"\blisten\s*\(", lower)
+            or re.search(r"\baccept\s*\(", lower)
+        )
+    return not (
+        re.search(r"\bsock_dgram\b", lower)
+        or re.search(r"\brecvfrom\s*\(", lower)
+        or re.search(r"\bsendto\s*\(", lower)
+    )
+
+
+def _named_socket_operation_matches_target(line: str, target: TargetSpec) -> bool:
+    """Reject explicit non-Unix or differently named socket operations.
+
+    A named OpenHarmony socket is commonly acquired through
+    ``GetControlSocket`` and therefore has no literal ``AF_UNIX`` on the
+    service line.  The same module can nevertheless contain TCP/UDP proxy,
+    netlink and VPN sockets.  Those operations must not become evidence for a
+    named socket merely because they share a directory context.
+    """
+
+    if target.target_type == "network_socket":
+        return True
+    code_line = _strip_source_comments(line).casefold()
+    if re.search(
+        r"\b(?:af|pf)_inet6?\b|\bsockaddr_in6?\b|\bipproto_(?:tcp|udp)\b|"
+        r"\binaddr_(?:any|loopback)\b",
+        code_line,
+    ):
+        return False
+    named_socket_call = re.search(
+        r"\b(?:getcontrolsocket|getserversocket|getsocket)\s*\(\s*['\"]([^'\"]+)['\"]",
+        code_line,
+    )
+    if named_socket_call is not None:
+        requested_name = named_socket_call.group(1).strip().casefold()
+        target_names = {
+            str(value).strip().casefold()
+            for value in (target.basename, target.service_hint, target.process_hint)
+            if value
+        }
+        if requested_name and requested_name not in target_names:
+            return False
+    return True
+
+
+def _named_socket_path_has_conflict(
+    path: str,
+    executions: Iterable[Mapping[str, Any]],
+    target: TargetSpec,
+) -> bool:
+    """Return whether a named-socket file visibly belongs to another socket.
+
+    This is a ranking/evidence-quality signal, not a hard path exclusion.  A
+    service file can legitimately handle more than one endpoint; callers that
+    contain an explicit target identity remain eligible.  The signal only
+    stops target-agnostic ``socket``/``recv`` lines in an IPv4, netlink or
+    differently named-socket implementation from inheriting the target's
+    directory context.
+    """
+
+    if target.target_type == "network_socket":
+        return False
+    target_names = {
+        str(value).strip().casefold()
+        for value in (target.basename, target.service_hint, target.process_hint)
+        if value
+    }
+    for execution in executions:
+        if not isinstance(execution, Mapping) or execution.get("status") != "ok":
+            continue
+        response = execution.get("response")
+        results = response.get("results") if isinstance(response, Mapping) else None
+        hits = results.get(path) if isinstance(results, Mapping) else None
+        if not isinstance(hits, list):
+            continue
+        for hit in hits:
+            if not isinstance(hit, Mapping) or not isinstance(hit.get("line"), str):
+                continue
+            code_line = _strip_source_comments(hit["line"]).casefold()
+            if re.search(
+                r"\b(?:af|pf)_inet6?\b|\bpf_netlink\b|\bsockaddr_in6?\b|"
+                r"\bipproto_(?:tcp|udp)\b|\binaddr_(?:any|loopback)\b|\bnetlink_",
+                code_line,
+            ):
+                return True
+            named_call = re.search(
+                r"\b(?:getcontrolsocket|getserversocket|getsocket|socketdevice)\s*\(\s*['\"]([^'\"]+)['\"]",
+                code_line,
+            )
+            if named_call is not None and named_call.group(1).strip().casefold() not in target_names:
+                return True
+    return False
+
+
+def _named_socket_conflicting_paths(
+    executions: Iterable[Mapping[str, Any]],
+    target: TargetSpec,
+) -> frozenset[str]:
+    """Collect named-socket paths with explicit competing transport/name facts."""
+
+    if target.target_type == "network_socket":
+        return frozenset()
+    paths: set[str] = set()
+    for execution in executions:
+        if not isinstance(execution, Mapping) or execution.get("status") != "ok":
+            continue
+        response = execution.get("response")
+        results = response.get("results") if isinstance(response, Mapping) else None
+        if not isinstance(results, Mapping):
+            continue
+        paths.update(path for path in results if isinstance(path, str))
+    return frozenset(
+        path
+        for path in paths
+        if _named_socket_path_has_conflict(path, executions, target)
+    )
+
+
+def _search_hit_is_target_evidence(
+    execution: Mapping[str, Any],
+    hit: Any,
+    target: TargetSpec,
+) -> bool:
+    """Decide whether one search hit is source evidence, not just a candidate.
+
+    The deterministic network plan intentionally includes broad API queries
+    (``bind``, ``recvfrom``, ``socket`` and friends) to recover implementations
+    whose port is hidden behind a macro.  Those queries must not turn every
+    unrelated API occurrence into a socket identity/ownership fact.  Candidate
+    paths remain in ``search_plan.json``; only a source line carrying the
+    endpoint/process or an unmistakable network context enters ``evidence``.
+    """
+
+    if not isinstance(execution, Mapping) or not isinstance(hit, Mapping):
+        return False
+    line = hit.get("line")
+    if not isinstance(line, str) or not line.strip() or line.strip() in {"...", "…"}:
+        # Path searches often return an ellipsis placeholder.  It identifies a
+        # candidate path but contains no source fact that can support a role.
+        return False
+    query = execution.get("query")
+    query_kind = query.get("kind") if isinstance(query, Mapping) else None
+    query_value = query.get("value") if isinstance(query, Mapping) else None
+    path = execution.get("path")
+    path_context_dirs = execution.get("target_context_dirs")
+    if not isinstance(path, str):
+        path = ""
+    if path and not _is_locator_evidence_path(path):
+        # Dependency/object/ccache records can repeat a process name, port or
+        # basename, but they are not source/config facts and cannot anchor a
+        # communication context.  Keep those paths in search_plan and path
+        # classification for auditability; discard them only at evidence.
+        return False
+    if path and not is_attribution_eligible(path, target=target):
+        # Explicit test/fuzz paths can contain the same port, basename and
+        # POSIX calls as the real daemon.  They remain candidates for audit,
+        # but must not establish a target context or positive role evidence.
+        return False
+    if target.target_type == "network_socket" and not _network_operation_matches_target(line, target):
+        return False
+    if target.target_type != "network_socket" and not _named_socket_operation_matches_target(line, target):
+        return False
+    if query_kind == "path":
+        # ``search_path`` responses are intentionally path-oriented and some
+        # OpenGrok backends return only an ellipsis/first line for each file.
+        # A path match is a candidate anchor, not source evidence, unless the
+        # returned line itself carries the endpoint identity.  Treating every
+        # line-1 placeholder as evidence would make a broad path query promote
+        # unrelated files into the server/client graph.
+        return _line_has_target_identity(line, target)
+    context_match = _path_shares_target_context(path, path_context_dirs)
+    path_identity = _path_contains_target_identity(path, target)
+    path_conflict = bool(execution.get("target_path_conflict"))
+    line_kind = _line_kind(
+        line,
+        target,
+        query_kind=query_kind,
+        query_value=query_value,
+    )
+    has_identity = _line_has_target_identity(line, target)
+    query_specific = _query_value_targets_target(query_value, target)
+    if target.target_type != "network_socket":
+        query_text = str(query_value or "").strip().casefold()
+        alias_query = _is_socket_alias_query(query_value, target)
+        if alias_query:
+            # ``DNS_SOCKET_NAME``/``APP_SPAWN_SOCKET`` is often the only token
+            # present in the server implementation.  Such aliases are
+            # accepted only in the same bounded module context established by
+            # a concrete path/config identity (or when their definition line
+            # itself contains the target value).  A follow-up query for an
+            # alias that was *already inferred from this target's definition*
+            # is also allowed to establish a source-backed bridge when the
+            # line contains the alias and a socket/config fact.  This is the
+            # common split-file pattern where init.c uses
+            # ``INIT_HOLDER_SOCKET_PATH`` while the literal lives in a header;
+            # it remains bounded because arbitrary model symbols are never
+            # accepted by ``_is_socket_alias_query``.
+            return (
+                has_identity
+                or (
+                    (context_match or path_identity)
+                    and line_kind
+                    in (
+                        _COMMUNICATION_EVIDENCE_KINDS
+                        | {"service_config", "executable_build"}
+                    )
+                )
+                or (
+                    isinstance(query_value, str)
+                    and _line_contains_identity(line, [query_value])
+                    and line_kind
+                    in (
+                        _COMMUNICATION_EVIDENCE_KINDS
+                        | {"service_config", "executable_build"}
+                    )
+                    and _is_locator_evidence_path(path)
+                )
+            )
+        if query_text in _SOCKET_GENERIC_QUERY_TERMS:
+            # Generic API/config/build probes are useful only after a concrete
+            # path/basename/config hit established a bounded module directory.
+            # An identity-bearing line is enough on its own; otherwise the
+            # sibling-directory relationship must be present and the line
+            # must describe a socket/server/build fact.
+            if path_conflict and not has_identity:
+                return False
+            return (
+                has_identity
+                or (
+                    (context_match or path_identity)
+                    and line_kind
+                    in (
+                        _COMMUNICATION_EVIDENCE_KINDS
+                        | {"service_config", "executable_build"}
+                    )
+                )
+            )
+        # Unix path/basename/macro hits are already target-specific.  Keep
+        # normal source lines, but do not promote an unrelated communication
+        # API just because a broad semantic query happened to find it.
+        # A target-specific full-text query should normally return the line
+        # containing that target.  Do not trust the query value alone: an
+        # index may return a nearby/first line, and accepting it would turn a
+        # common basename (``AppSpawn``/``native``) into evidence for every
+        # matching client or generated file.  The target-bearing line itself
+        # remains accepted through ``has_identity`` and can anchor its bounded
+        # source window in ``_advance_trace``.
+        return has_identity
+
+    # Numeric ports occur in lookup tables, generated data and unrelated test
+    # fixtures.  A port-bearing line is useful only when it is accompanied by
+    # a network API/field or by the explicitly supplied process hint.
+    query_text = str(query_value or "").strip().casefold()
+    has_network_context = bool(_NETWORK_SOURCE_CONTEXT_RE.search(line))
+    endpoint_query = bool(
+        target.target_type == "network_socket"
+        and network_endpoint(target)
+        and query_text == str(network_endpoint(target)).casefold()
+    )
+    address_query = bool(
+        target.target_type == "network_socket"
+        and target.address
+        and query_text == target.address.casefold()
+    )
+    port_query = bool(
+        target.target_type == "network_socket"
+        and target.port is not None
+        and query_text == str(target.port).casefold()
+    )
+    process_query = bool(
+        target.process_hint
+        and isinstance(query_value, str)
+        and query_value.strip().casefold() == target.process_hint.casefold()
+    )
+    if process_query:
+        # A process name is useful for candidate-path recall, but it is not a
+        # socket fact by itself: log macros, command help and unrelated
+        # process-management code routinely mention ``SP_daemon``.  Promote a
+        # process-query hit only when the same source line also carries a
+        # network primitive/field; the bounded trace can then expand to the
+        # surrounding server implementation.
+        return bool(_NETWORK_SOCKET_CONTEXT_RE.search(line)) and _is_network_source_path(path)
+    if address_query:
+        # A loopback address is common in proxy defaults, firewall rules and
+        # documentation.  It becomes socket evidence only when the same line
+        # contains a concrete socket/network primitive or field and comes
+        # from a source/header file.  This prevents an unrelated
+        # ``LOOP_BACK_ADDR`` macro from establishing a repository context for
+        # a different endpoint that happens to use 127.0.0.1.
+        return bool(_NETWORK_SOCKET_CONTEXT_RE.search(line)) and _is_network_source_path(path)
+    if endpoint_query:
+        # A complete endpoint in a service configuration is a useful identity
+        # anchor even when the config line has no POSIX API.  It still cannot
+        # establish a service implementation context by itself unless
+        # ``_line_kind`` classifies it as service/build metadata.
+        return bool(has_identity and _is_locator_evidence_path(path))
+    if query_value and str(query_value).strip().casefold() in _NETWORK_GENERIC_QUERY_TERMS:
+        # Generic API/field queries are recall probes.  A target-specific line
+        # is sufficient, but a source hit in the same directory as a strong
+        # port/process/header hit is also a useful bounded cross-file anchor.
+        # This matters when the implementation uses ``htons(sockPort)`` in a
+        # .cpp while the concrete 8283/8284/8285 constants live in a sibling
+        # header.  Keep the relaxation limited to real C/C++ source files so
+        # .d/.o/ccache and other generated records cannot become evidence.
+        # Wrapper declarations/constructors such as ``SpServerSocket`` and
+        # dispatch methods such as ``HandleMsg`` may not contain a POSIX API
+        # word on the hit line.  Once the target's bounded module context is
+        # established, their classified server/dispatch kind is still useful
+        # evidence; unrelated ``socket``/``bind`` lines continue to require
+        # an actual network primitive.
+        if (
+            line_kind in {"socket_server_registration", "protocol_dispatch"}
+            and (has_identity or context_match)
+            and _is_network_source_path(path)
+        ):
+            return True
+        return (has_identity or context_match) and has_network_context and _is_network_source_path(path)
+    if query_value and str(query_value).strip().casefold() in {"build.gn", "bundle.json", "ohos_executable", "part_name", "subsystem_name"}:
+        # Build metadata is not a network source file, but it can confirm the
+        # executable/component owning a port once a concrete port hit has
+        # established the same bounded module context.
+        return (
+            (has_identity or context_match)
+            and line_kind in {"executable_build", "service_config"}
+            and _is_locator_evidence_path(path)
+        )
+    if not has_identity and not query_specific:
+        return False
+    if port_query and str(target.port) in line and not has_network_context:
+        return bool(target.process_hint and target.process_hint.casefold() in line.casefold())
+    if line_kind in _COMMUNICATION_EVIDENCE_KINDS:
+        return has_identity or (query_specific and has_network_context)
+    return has_identity or query_specific
+
+
+def _is_network_source_path(path: str) -> bool:
+    """Return whether a path can carry network implementation evidence.
+
+    Search responses may include dependency files, object metadata and other
+    generated records.  They remain visible as candidates, but only source
+    files should establish a socket operation or anchor a nearby source
+    window.
+    """
+
+    if not isinstance(path, str) or not path.strip():
+        return False
+    lowered = path.rsplit("/", 1)[-1].casefold()
+    return lowered.endswith((".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"))
+
+
+def _path_role_adjustment(path: str, target: TargetSpec) -> int:
+    """Return a ranking adjustment for non-production path signals.
+
+    ``path_classifier`` deliberately keeps generated, kernel, third-party,
+    build and SELinux paths in the candidate set.  They are useful evidence
+    in some repositories, so this is not a hard filter.  The adjustment is
+    applied only by the socket-specific ranking functions and makes a source
+    implementation win over a generated dependency or a policy label when
+    both contain the same socket name.
+    """
+
+    try:
+        classification = classify_path(path, target=target)
+    except (TypeError, ValueError):
+        return -200
+    signals = set(classification.path_signals)
+    adjustment = 0
+    for signal, penalty in _PATH_ROLE_PENALTIES.items():
+        if signal in signals:
+            adjustment += penalty
+    return adjustment
+
+
+def _path_is_client_like(path: str) -> bool:
+    """Recognize a client-oriented source path without excluding it.
+
+    OpenHarmony keeps several client libraries next to the service itself and
+    they often repeat the same socket constants.  This helper is used only by
+    the ranking score: a client path remains a visible candidate and can win
+    when it also contains a real listener operation.
+    """
+
+    if not isinstance(path, str) or not path.strip():
+        return False
+    lowered = path.casefold()
+    components = [part for part in lowered.split("/") if part]
+    client_component = re.compile(r"(?:^|[_-])client(?:$|[_-])")
+    return any(part in {"client", "clients"} or client_component.search(part) for part in components)
+
+
+def _context_path_tokens(path: str) -> frozenset[str]:
+    """Return component-oriented tokens for one source directory.
+
+    The first component after ``openharmony``/``ohos`` is the repository
+    root, not a useful relationship by itself, so it is omitted.  Remaining
+    components are split on common delimiters and layout words are removed.
+    A compact joined token (``fault_logger`` -> ``faultlogger``) preserves
+    useful relationships between a config directory named ``faultloggerd``
+    and a source file directory named ``fault_logger_server``.
+    """
+
+    if not isinstance(path, str) or not path.strip():
+        return frozenset()
+    parts = [part.casefold() for part in path.split("/") if part]
+    if not parts:
+        return frozenset()
+    if parts[0] in {"openharmony", "ohos"}:
+        parts = parts[2:]
+    elif len(parts) > 1:
+        # OpenGrok normally includes the project prefix, but tests and some
+        # backends return source-tree-relative paths.
+        parts = parts[1:]
+    tokens: set[str] = set()
+    for component in parts:
+        stem = component.rsplit(".", 1)[0]
+        pieces = [
+            piece
+            for piece in re.split(r"[^a-z0-9]+", stem)
+            if piece and piece not in _CONTEXT_STRUCTURAL_TOKENS and len(piece) >= 3
+        ]
+        if not pieces:
+            continue
+        tokens.update(pieces)
+        compact = "".join(pieces)
+        if len(compact) >= 4:
+            tokens.add(compact)
+    return frozenset(tokens)
+
+
+def _context_tokens_overlap(left: frozenset[str], right: frozenset[str]) -> set[str]:
+    """Return bounded semantic token overlaps between two path contexts."""
+
+    overlap = set(left & right)
+    if overlap:
+        return set(overlap)
+    # Config/source naming differs mainly by a suffix (``netsys`` vs
+    # ``netsysnative``) or a trailing role word (``faultlogger`` vs
+    # ``faultloggerd``).  Permit only long, exact-prefix matches to avoid
+    # treating short generic fragments such as ``net`` or ``audio`` as a
+    # module relationship.
+    for left_token in left:
+        for right_token in right:
+            shorter, longer = sorted((left_token, right_token), key=len)
+            if len(shorter) >= 6 and longer.startswith(shorter):
+                overlap.add(shorter)
+    return overlap
+
+
+def _path_shares_target_context(path: str, context_dirs: Any) -> bool:
+    """Check a bounded same-directory relationship supplied by this worker.
+
+    The relationship is deliberately weaker than an ownership claim: it only
+    lets a generic ``sin_port``/``socket`` hit anchor source tracing after a
+    target-bearing hit established the directory.  The final server/client
+    attribution still uses operation kinds, path ranking and Manifest data.
+    """
+
+    if not isinstance(path, str) or not path.strip() or not isinstance(context_dirs, (list, tuple, set, frozenset)):
+        return False
+    parent = path.rsplit("/", 1)[0] or "/"
+    normalized = {
+        value.rstrip("/") or "/"
+        for value in context_dirs
+        if isinstance(value, str)
+        and value
+        # Never treat /openharmony or another two-component root as a socket
+        # context; doing so would make every generic recv/bind hit eligible.
+        and len([part for part in value.split("/") if part]) >= 3
+    }
+    candidate_tokens = _context_path_tokens(parent)
+    if parent in normalized:
+        # An exact, deeply nested source directory can itself be the only
+        # available component anchor (for example
+        # ``services/init/standard`` around an init-created fd-holder
+        # service).  Keep that direct relationship, but do not grant the same
+        # exception to broad roots such as ``services`` or ``src``.
+        parent_parts = [part for part in parent.split("/") if part]
+        if len(parent_parts) >= 6:
+            return True
+    if not candidate_tokens:
+        return False
+    # Header/source pairs commonly live in sibling ``include``/``src``
+    # directories.  Init ``.cfg`` files can be one or two levels below a
+    # component's ``services`` directory, so compare a small ancestor window
+    # instead of accepting a broad structural directory verbatim.
+    candidate_dirs = [parent]
+    current = parent
+    for _depth in range(3):
+        current = current.rsplit("/", 1)[0] or "/"
+        candidate_dirs.append(current)
+    # ``_target_context_directories`` keeps a bounded ancestor window so
+    # split config/source layouts can be bridged.  An ancestor with fewer
+    # semantic tokens is not itself a component anchor when a more specific
+    # descendant was collected (for example ``netmanagernative`` below
+    # ``netmanagernative/.../netsys``).  Ignoring that broad ancestor prevents
+    # DNS/VPN siblings from being connected through a repository module root.
+    specific_contexts: list[tuple[str, frozenset[str]]] = []
+    for context_dir in normalized:
+        context_tokens = _context_path_tokens(context_dir)
+        if not context_tokens:
+            continue
+        context_prefix = context_dir.rstrip("/") + "/"
+        has_specific_descendant = any(
+            other != context_dir
+            and other.startswith(context_prefix)
+            and len(_context_path_tokens(other)) > len(context_tokens)
+            for other in normalized
+        )
+        if not has_specific_descendant:
+            specific_contexts.append((context_dir, context_tokens))
+    for candidate_dir in candidate_dirs:
+        candidate_dir_tokens = _context_path_tokens(candidate_dir)
+        if not candidate_dir_tokens:
+            continue
+        for context_dir, context_tokens in specific_contexts:
+            overlap = _context_tokens_overlap(candidate_dir_tokens, context_tokens)
+            # A single semantic token is enough for a narrowly named
+            # component (``param`` or ``netsys``).  When the context contains
+            # multiple tokens, require two so repository-wide prefixes such
+            # as ``communication_netmanager_base`` cannot connect unrelated
+            # VPN/DNS manager siblings merely because they share a root.
+            required = 1 if len(context_tokens) == 1 else 2
+            if len(overlap) >= required:
+                return True
+    return False
+
+
+def _network_path_priority(
+    path: str,
+    executions: Iterable[Mapping[str, Any]],
+    target: TargetSpec,
+    context_dirs: Any,
+) -> int:
+    """Score network candidate paths using observed target anchors.
+
+    Generic ``socket``/``bind`` searches produce many valid source files.  A
+    path-ranking score based only on directory vocabulary can therefore push
+    the real server implementation below unrelated networking code.  This
+    bounded score prefers paths that share a module directory with a concrete
+    port/header hit and that contain server-socket source operations, while
+    retaining every candidate for the audit artifact.
+    """
+
+    if target.target_type != "network_socket":
+        return 0
+    if not _is_network_source_path(path) or not is_attribution_eligible(path, target=target):
+        return -10_000
+    score = 0
+    score += _path_role_adjustment(path, target)
+    if _path_shares_target_context(path, context_dirs):
+        score += 120
+    filename = path.rsplit("/", 1)[-1].casefold()
+    if "socket" in filename:
+        score += 24
+    if "server" in filename or "daemon" in filename:
+        score += 18
+
+    target_values = {
+        str(value).casefold()
+        for value in (
+            target.port,
+            target.address,
+            network_endpoint(target),
+            target.process_hint,
+        )
+        if value is not None
+    }
+    server_hits = 0
+    client_hits = 0
+    target_anchor_hits = 0
+    path_client_like = _path_is_client_like(path)
+    lowered_path = path.casefold()
+    for execution in executions:
+        if not isinstance(execution, Mapping) or execution.get("status") != "ok":
+            continue
+        response = execution.get("response")
+        results = response.get("results") if isinstance(response, Mapping) else None
+        raw_hits = results.get(path) if isinstance(results, Mapping) else None
+        if not isinstance(raw_hits, list):
+            continue
+        query = execution.get("query")
+        query_value = query.get("value") if isinstance(query, Mapping) else None
+        query_text = str(query_value or "").strip().casefold()
+        is_generic = query_text in _NETWORK_GENERIC_QUERY_TERMS
+        is_target_query = query_text in target_values
+        for raw_hit in raw_hits[:_MAX_SEARCH_ARTIFACT_HITS_PER_PATH]:
+            if not isinstance(raw_hit, Mapping):
+                continue
+            line = raw_hit.get("line")
+            if not isinstance(line, str):
+                continue
+            # Keep ranking on the same evidence boundary as the trace.  A
+            # broad ``socket``/``bind`` query can return perfectly valid
+            # networking code from an unrelated component; counting those
+            # raw hits here would let a path outrank the actual listener even
+            # though the hit is rejected by ``_search_hit_is_target_evidence``.
+            # Candidate paths remain available in the search artifact, while
+            # only accepted, target-related lines contribute ownership score.
+            evidence_execution = {
+                "path": path,
+                "query": query,
+                "target_context_dirs": context_dirs,
+            }
+            if not _search_hit_is_target_evidence(evidence_execution, raw_hit, target):
+                continue
+            kind = _line_kind(
+                line,
+                target,
+                query_kind=query.get("kind") if isinstance(query, Mapping) else None,
+                query_value=query_value,
+            )
+            if kind in {
+                "socket_server_registration",
+                "socket_acquire",
+                "socket_bind_listen",
+                "socket_accept_read",
+                "protocol_dispatch",
+            }:
+                # ``socket()`` is direction-neutral.  A client library often
+                # creates its own descriptor and then connects, so counting
+                # every socket-acquire line as a server signal lets clients
+                # outrank the listener.  GetControlSocket/socketpair and
+                # service-side paths remain server evidence; an explicit
+                # client path is counted on the client side.
+                if kind == "socket_acquire" and (
+                    path_client_like
+                    or (
+                        "/interfaces/innerkits/" in lowered_path
+                        and not re.search(r"/(?:service|server|daemon|init)(?:/|$)", lowered_path)
+                    )
+                ) and not re.search(r"\b(?:getcontrolsocket|socketpair)\s*\(", line.casefold()):
+                    client_hits += 1
+                else:
+                    server_hits += 1
+            elif kind in {
+                "client_endpoint",
+                "client_connect",
+                "client_send",
+                "protocol_construction",
+            }:
+                client_hits += 1
+            if is_target_query:
+                if target.port is not None and str(target.port) in line:
+                    score += 80
+                    target_anchor_hits += 1
+                    # A concrete port in a bind/receive path is substantially
+                    # stronger than the same port in a client constant or
+                    # documentation string.  Keep the latter as a candidate
+                    # but prefer the server branch for attribution.
+                    if kind in {
+                        "socket_server_registration",
+                        "socket_acquire",
+                        "socket_bind_listen",
+                        "socket_accept_read",
+                        "protocol_dispatch",
+                    }:
+                        score += 48
+                    elif kind in {
+                        "client_endpoint",
+                        "client_connect",
+                        "client_send",
+                        "protocol_construction",
+                    }:
+                        score += 4
+                if target.process_hint and target.process_hint.casefold() in line.casefold():
+                    score += 35 if _NETWORK_SOURCE_CONTEXT_RE.search(line) else 8
+            elif is_generic:
+                if kind in {
+                    "socket_server_registration",
+                    "socket_acquire",
+                    "socket_bind_listen",
+                    "socket_accept_read",
+                    "protocol_dispatch",
+                }:
+                    score += 18
+                elif kind in {
+                    "client_endpoint",
+                    "client_connect",
+                    "client_send",
+                    "protocol_construction",
+                }:
+                    score += 3
+    score += min(server_hits, 4) * 44
+    score += min(target_anchor_hits, 4) * 8
+    # A path containing only connect/send/client protocol work is an
+    # associated dependency, not the owner of the listening endpoint.
+    if path_client_like and server_hits == 0:
+        score -= 150
+    elif path_client_like and client_hits > server_hits:
+        score -= 70
+    if server_hits == 0:
+        score -= min(client_hits, 4) * 24
+    else:
+        score -= min(client_hits, 3) * 4
+    return score
+
+
+def _unix_path_priority(
+    path: str,
+    executions: Iterable[Mapping[str, Any]],
+    target: TargetSpec,
+    context_dirs: Any,
+) -> int:
+    """Rank named-socket candidates by config -> server-chain evidence.
+
+    A basename such as ``native`` or ``AppSpawn`` is common across client,
+    test and generated files.  The score therefore rewards an exact config
+    or source identity, the same module directory, and server-side operations
+    (``GetControlSocket``/``bind``/``listen``/``recv``).  It never removes a
+    candidate; attribution_eligible remains the only hard path filter.
+    """
+
+    if target.target_type == "network_socket":
+        return 0
+    if not _is_locator_evidence_path(path) or not is_attribution_eligible(path, target=target):
+        return -10_000
+    score = 0
+    score += _path_role_adjustment(path, target)
+    in_context = _path_shares_target_context(path, context_dirs)
+    path_identity = _path_contains_target_identity(path, target)
+    if in_context:
+        score += 120
+    lowered_path = path.casefold()
+    path_client_like = _path_is_client_like(path)
+    filename = path.rsplit("/", 1)[-1].casefold()
+    path_conflict = _named_socket_path_has_conflict(path, executions, target)
+    context_values = (
+        context_dirs
+        if isinstance(context_dirs, (list, tuple, set, frozenset))
+        else ()
+    )
+    exact_deep_context = any(
+        isinstance(context_dir, str)
+        and context_dir.rstrip("/") == path.rsplit("/", 1)[0].rstrip("/")
+        and len([part for part in context_dir.split("/") if part]) >= 6
+        for context_dir in context_values
+    )
+    is_config = filename.endswith((".cfg", ".rc", ".conf", ".ini"))
+    if is_config:
+        # Init ``.cfg``/service metadata is a stronger ownership anchor than
+        # a generated/stub JSON file which merely repeats the target name.
+        score += 68
+    elif filename.endswith(".json"):
+        score += 15
+    if filename in {"build.gn", "build.gni", "bundle.json"}:
+        # Build metadata confirms executable ownership, but source/config
+        # files should win the initial trace ordering when both are present.
+        score += 15
+    if any(word in filename for word in ("socket", "listen", "server", "daemon", "service", "init")):
+        score += 20
+    # Source implementations under ``services``/``server``/``daemon`` (and
+    # init's startup code) are more likely to own the endpoint than a sibling
+    # client library.  This is only a ranking hint; the operation evidence and
+    # model attribution still decide the final role.
+    if re.search(r"/(?:services?|server|daemon|init)(?:/|$)", lowered_path):
+        score += 45
+    target_terms = tuple(term.casefold() for term in target_identity_terms(target) if term)
+    if _line_contains_identity(lowered_path, target_terms):
+        score += 30
+    if path_identity:
+        # ``*_service.c``/``*_server.cpp`` is often the only place where the
+        # init socket name is normalized.  It may not repeat the literal name
+        # on every GetControlSocket/bind/recv line, so let that file act as a
+        # bounded source anchor without making every repository-wide API hit
+        # eligible.
+        score += 65
+    identity_hits = 0
+    server_hits = 0
+    config_hits = 0
+    build_hits = 0
+    client_hits = 0
+    control_acquire_hits = 0
+    for execution in executions:
+        if not isinstance(execution, Mapping) or execution.get("status") != "ok":
+            continue
+        response = execution.get("response")
+        results = response.get("results") if isinstance(response, Mapping) else None
+        raw_hits = results.get(path) if isinstance(results, Mapping) else None
+        if not isinstance(raw_hits, list):
+            continue
+        query = execution.get("query")
+        query_value = query.get("value") if isinstance(query, Mapping) else None
+        query_text = str(query_value or "").strip().casefold()
+        is_generic = query_text in _SOCKET_GENERIC_QUERY_TERMS
+        rows: list[tuple[str, bool, bool, bool, str]] = []
+        for raw_hit in raw_hits[:_MAX_SEARCH_ARTIFACT_HITS_PER_PATH]:
+            if not isinstance(raw_hit, Mapping):
+                continue
+            line = raw_hit.get("line")
+            if not isinstance(line, str):
+                continue
+            kind = _line_kind(line, target, query_value=query_value)
+            has_identity = _line_has_target_identity(line, target)
+            alias_query = _is_socket_alias_query(query_value, target)
+            # A target-specific query is not itself proof that this returned
+            # line contains the target: OpenGrok can return a path/summary
+            # line or a longer identifier containing a common basename.  Use
+            # the actual source identity as the anchor; a narrowly validated
+            # socket alias is the only exception and still needs module
+            # context before it can promote generic operations.
+            # Do not count context-only operations from a file that visibly
+            # creates an IPv4/netlink or differently named socket.  The file
+            # can still contribute an explicit target line, and remains in
+            # the candidate artifact for model review.
+            if is_generic and path_conflict and not has_identity and not alias_query:
+                continue
+            if is_generic and not has_identity and not alias_query and not exact_deep_context:
+                continue
+            rows.append((kind, has_identity, has_identity or alias_query, is_generic, line))
+        # A generic ``socket``/``bind`` hit is useful only in the bounded
+        # module context established by a target-bearing hit.  This prevents
+        # unrelated netlink, iptables and utility calls elsewhere in the tree
+        # from outranking the actual listener while still allowing the common
+        # init-created-socket pattern where the implementation file does not
+        # repeat the socket name.
+        for kind, has_identity, anchor, is_generic, line in rows:
+            if (
+                kind == "socket_acquire"
+                and re.search(r"\b(?:getcontrolsocket|getserversocket)\s*\(", line.casefold()) is not None
+                and (has_identity or anchor or (is_generic and (in_context or path_identity)))
+            ):
+                control_acquire_hits += 1
+            if has_identity or anchor:
+                identity_hits += 1
+                if kind in {"service_config", "socket_server_registration"}:
+                    config_hits += 1
+                if kind in {
+                    "socket_acquire",
+                    "socket_server_registration",
+                    "socket_bind_listen",
+                    "socket_accept_read",
+                    "protocol_dispatch",
+                }:
+                    # A bare ``socket()`` in an inner-kit/client source file is
+                    # normally the client descriptor.  Keep explicit
+                    # OpenHarmony server hand-offs (GetControlSocket,
+                    # GetServerSocket, socketpair) as server evidence, and
+                    # leave bind/listen/accept/dispatch untouched because
+                    # those operations establish the listening direction.
+                    if (
+                        kind == "socket_acquire"
+                        and (
+                            path_client_like
+                            or (
+                                "/interfaces/innerkits/" in lowered_path
+                                and not re.search(r"/(?:services?|server|daemon|init)(?:/|$)", lowered_path)
+                            )
+                        )
+                        and not re.search(
+                            r"\b(?:getcontrolsocket|getserversocket|socketpair)\s*\(",
+                            line.casefold(),
+                        )
+                    ):
+                        client_hits += 1
+                    else:
+                        server_hits += 1
+                if kind in {"client_connect", "client_send", "client_endpoint", "protocol_construction"}:
+                    client_hits += 1
+            elif is_generic and (in_context or path_identity):
+                if kind in {
+                    "socket_acquire",
+                    "socket_server_registration",
+                    "socket_bind_listen",
+                    "socket_accept_read",
+                    "protocol_dispatch",
+                    "executable_build",
+                }:
+                    if kind == "executable_build":
+                        build_hits += 1
+                    else:
+                        server_hits += 1
+    # ``GetControlSocket`` is the canonical OpenHarmony hand-off from init's
+    # named socket configuration to a service listener.  Give that operation
+    # a separate bounded bonus: otherwise a sibling implementation which
+    # happens to contain many generic ``socket``/``bind`` calls (for example a
+    # DNS proxy helper) can tie or outrank the actual Unix-socket listener.
+    # The bonus is counted only for already relevant identity/context rows, so
+    # a repository-wide helper definition cannot become ownership evidence.
+    # Cap repeated basename hits.  A client/header with dozens of comments
+    # must not outrank one config + listener chain merely by volume.
+    score += min(identity_hits, 4) * 12
+    score += min(server_hits, 4) * 52
+    score += min(config_hits, 3) * 38
+    score += min(build_hits, 3) * 18
+    score += min(client_hits, 3) * 3
+    score += min(control_acquire_hits, 3) * 85
+    if "client" in filename and server_hits == 0:
+        score -= 150
+    elif "client" in lowered_path and server_hits == 0:
+        score -= 90
+    if path_client_like and server_hits == 0:
+        score -= 100
+    if is_config and config_hits:
+        score += 35
+    return score
+
+
+def _target_context_directories(
+    executions: Iterable[Mapping[str, Any]],
+    target: TargetSpec,
+) -> tuple[str, ...]:
+    """Collect source directories established by target-specific search hits.
+
+    Network implementations often split their identity across files: a
+    sibling header contains the concrete port while the server .cpp contains
+    ``socket``/``bind`` and uses a variable.  Recording only the exact hit
+    would lose that implementation.  We retain only parent directories of
+    non-generic, target-bearing hits and keep the result bounded/deduplicated.
+    """
+
+    # Collect scored anchors first instead of taking the first 64 OpenGrok
+    # paths.  Full-text basename results are ordered by index/path and can put
+    # hundreds of YAML/BUILD/client files before the real listener; a
+    # two-pass selection keeps the strongest config/server anchors regardless
+    # of response order.
+    anchors: dict[str, int] = {}
+    for execution in executions:
+        if not isinstance(execution, Mapping) or execution.get("status") != "ok":
+            continue
+        query = execution.get("query")
+        query_value = query.get("value") if isinstance(query, Mapping) else None
+        if isinstance(query_value, str) and query_value.strip().casefold() in _SOCKET_GENERIC_QUERY_TERMS:
+            continue
+        response = execution.get("response")
+        results = response.get("results") if isinstance(response, Mapping) else None
+        if not isinstance(results, Mapping):
+            continue
+        for path, raw_hits in results.items():
+            if not isinstance(path, str) or not _is_locator_evidence_path(path) or not isinstance(raw_hits, list):
+                continue
+            try:
+                if not is_attribution_eligible(path, target=target):
+                    continue
+            except Exception:
+                continue
+            best_score = 0
+            for hit in raw_hits:
+                if not isinstance(hit, Mapping) or not _search_hit_is_target_evidence(
+                    {"query": query, "path": path}, hit, target
+                ):
+                    continue
+                line = hit.get("line")
+                if not isinstance(line, str):
+                    continue
+                kind = _line_kind(
+                    line,
+                    target,
+                    query_kind=query.get("kind") if isinstance(query, Mapping) else None,
+                    query_value=query_value,
+                )
+                path_name = path.rsplit("/", 1)[-1].casefold()
+                is_build_metadata = path_name.endswith(("build.gn", "build.gni", "bundle.json", "args.gn"))
+                # Do not let an arbitrary basename/literal (especially a
+                # SELinux label or a log string) establish a repository-wide
+                # context.  Build source-list lines are the one intentional
+                # exception: they may contain only ``"foo/server.cpp"`` but
+                # still prove that the target implementation belongs to this
+                # component.
+                if kind not in _STRONG_CONTEXT_KINDS:
+                    code_line = _strip_source_comments(line)
+                    # A BUILD.gn/bundle.json hit is a useful ownership hint
+                    # only when it names a real source file.  Dependency labels
+                    # such as ``"hisysevent:libhisysevent"`` occur throughout
+                    # the tree and must not make an entire repository a socket
+                    # context.  Executable/component declarations are already
+                    # classified as ``executable_build`` by ``_line_kind``.
+                    build_source_link = bool(
+                        is_build_metadata
+                        and _line_has_target_identity(line, target)
+                        and re.search(
+                            r"[\"'][^\"'\n]+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)\b",
+                            code_line,
+                        )
+                    )
+                    if not (
+                        build_source_link
+                    ):
+                        continue
+                    kind = "executable_build"
+                score = 20
+                if _line_has_target_identity(line, target):
+                    score += 35
+                if kind in {"service_config", "executable_build"}:
+                    score += 35
+                if kind in _COMMUNICATION_EVIDENCE_KINDS:
+                    score += 60
+                if path.rsplit("/", 1)[-1].casefold().endswith((".cfg", ".json", ".gn", ".gni", ".rc")):
+                    score += 15
+                best_score = max(best_score, score)
+            if best_score:
+                anchors[path] = max(anchors.get(path, 0), best_score)
+    directories: list[str] = []
+    seen: set[str] = set()
+    for path, _score in sorted(anchors.items(), key=lambda item: (-item[1], item[0]))[:48]:
+        parent = path.rsplit("/", 1)[0] or "/"
+        # Retain the file directory plus a bounded ancestor window.  A config
+        # under ``services/etc/init`` and an implementation under
+        # ``services/<daemon>/src`` meet at the component services directory.
+        context_candidates = [parent]
+        current = parent
+        for _depth in range(4):
+            current = current.rsplit("/", 1)[0] or "/"
+            if len([part for part in current.split("/") if part]) < 3:
+                break
+            context_candidates.append(current)
+        for context_dir in context_candidates:
+            if context_dir in seen:
+                continue
+            seen.add(context_dir)
+            directories.append(context_dir)
+            if len(directories) >= 128:
+                return tuple(directories)
+    return tuple(directories)
+
+
+def _is_macro_definition_path(path: str) -> bool:
+    """Return whether a path can contain a source/config macro definition."""
+
+    if not isinstance(path, str) or not path.strip():
+        return False
+    lowered = path.rsplit("/", 1)[-1].casefold()
+    return _is_locator_evidence_path(path)
+
+
+def _is_locator_evidence_path(path: str) -> bool:
+    """Return whether a path can carry source, config or build evidence.
+
+    The path classifier intentionally keeps kernel/third_party/generated/out
+    and build paths visible.  This helper only removes non-source records
+    (dependency/object/cache files) and leaves test/fuzz exclusion to
+    ``is_attribution_eligible``.
+    """
+
+    if not isinstance(path, str) or not path.strip():
+        return False
+    lowered = path.rsplit("/", 1)[-1].casefold()
+    return lowered.endswith(
+        (
+            ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+            ".gn", ".gni", ".cfg", ".json", ".rc", ".conf", ".ini",
+            ".xml", ".yaml", ".yml", ".toml", ".te",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -159,6 +1445,10 @@ class SourceLocatorRuntime:
     # unexpected extra model call.  The CLI wires it only when --llm-search is
     # explicitly enabled.
     llm_role_attributor: LLMRoleAttributor | None = None
+    # Optional final PK among multiple Manifest-resolved repositories.  This
+    # is deliberately separate from role attribution: it is only invoked
+    # when two or more candidates expose competing socket evidence.
+    llm_candidate_reviewer: LLMCandidateReviewer | None = None
     # Optional fixed Git command adapter.  Production leaves this unset so
     # the manager uses its non-shell runner; tests and offline callers can
     # inject a deterministic adapter without touching the network.
@@ -175,6 +1465,8 @@ class SourceLocatorRuntime:
             raise SourceLocatorWorkerError("runtime.llm_planner 必须是 LLMSearchPlanner 或 null")
         if self.llm_role_attributor is not None and not isinstance(self.llm_role_attributor, LLMRoleAttributor):
             raise SourceLocatorWorkerError("runtime.llm_role_attributor 必须是 LLMRoleAttributor 或 null")
+        if self.llm_candidate_reviewer is not None and not isinstance(self.llm_candidate_reviewer, LLMCandidateReviewer):
+            raise SourceLocatorWorkerError("runtime.llm_candidate_reviewer 必须是 LLMCandidateReviewer 或 null")
         if self.git_runner is not None and not callable(self.git_runner):
             raise SourceLocatorWorkerError("runtime.git_runner 必须是可调用对象或 null")
         if self.project_root is not None:
@@ -218,6 +1510,7 @@ def runtime_from_config(
     client: Any = None,
     llm_planner: LLMSearchPlanner | None = None,
     llm_role_attributor: LLMRoleAttributor | None = None,
+    llm_candidate_reviewer: LLMCandidateReviewer | None = None,
     max_paths: int = _MAX_PATHS,
     max_source_bytes: int | None = None,
 ) -> SourceLocatorRuntime:
@@ -246,6 +1539,7 @@ def runtime_from_config(
             ),
             llm_planner=llm_planner,
             llm_role_attributor=llm_role_attributor,
+            llm_candidate_reviewer=llm_candidate_reviewer,
         )
     except SourceLocatorWorkerError:
         raise
@@ -315,7 +1609,7 @@ def _planner_action_history(actions: Iterable[str]) -> tuple[str, ...]:
             # deterministic form (``c:foo``).  Only emit the planner form
             # when that shape is intact.
             file_type, type_separator, query = value.partition(":")
-            if type_separator and file_type in {"c", "cxx"}:
+            if type_separator and file_type in {"c", "cxx", "all"}:
                 planner_key = f"{reverse[prefix]}:{query}"
                 if planner_key not in result:
                     result.append(planner_key)
@@ -536,19 +1830,83 @@ def _line_kind(
     query_kind: str | None = None,
     query_value: str | None = None,
 ) -> str:
-    lower = line.lower()
-    identity_terms = [
-        term.lower()
-        for term in (
-            target.socket_path,
-            target.basename,
-            target.service_hint,
-            target.macro_hint,
-            query_value,
+    # Comments are useful for human context but must not become identity or
+    # ownership evidence.  In particular, generated headers often contain
+    # notes such as ``// see hisysevent.h`` next to an unrelated constant.
+    code_line = _strip_source_comments(line)
+    lower = code_line.lower()
+    identity_terms = [term for term in (*target_identity_terms(target), query_value) if term]
+    identity = _line_contains_identity(code_line, identity_terms)
+    # A full-text/path query may find a declaration without carrying the
+    # ``definition`` query kind.  Recognize source-level macro/constant
+    # declarations directly so they can establish a bounded module context
+    # just like an explicit definition search.
+    macro_match = _MACRO_DEFINITION_RE.match(code_line)
+    if macro_match is not None:
+        macro_name = macro_match.group(1)
+        macro_rhs = (macro_match.group(2) or "").strip()
+        target_terms = [term for term in target_identity_terms(target) if term]
+        rhs_has_target = _line_contains_identity(macro_rhs, target_terms)
+        if (
+            target.target_type == "network_socket"
+            and target.address
+            and _line_contains_identity(macro_rhs, [target.address])
+            and target.port is not None
+            and str(target.port) not in macro_rhs
+            and not _NETWORK_SOCKET_CONTEXT_RE.search(code_line)
+        ):
+            # An address-only macro such as ``LOOP_BACK_ADDR`` is common
+            # infrastructure data, not evidence that this file owns the
+            # requested port.  Keep it as a weak literal candidate; the
+            # address query gate and port/source anchors will locate the real
+            # listener without poisoning the module context.
+            rhs_has_target = False
+        # A deterministic alias query is already tied to a stronger target
+        # definition by ``_infer_related_macros``.  Allow its declaration to
+        # participate in the bounded trace even when the RHS is another macro
+        # and does not repeat the socket string.
+        alias_definition = (
+            isinstance(query_value, str)
+            and query_value.casefold() == macro_name.casefold()
+            and _is_socket_alias_query(query_value, target)
         )
-        if term
-    ]
-    identity = any(term in lower for term in identity_terms)
+        if rhs_has_target or _macro_name_is_socket_related(macro_name, target) or alias_definition:
+            return "macro_definition"
+    constant_match = _CONSTANT_DEFINITION_RE.search(code_line)
+    if constant_match is not None and identity:
+        constant_name = constant_match.group(1)
+        constant_rhs = code_line[constant_match.end():].strip()
+        target_terms = [term for term in target_identity_terms(target) if term]
+        rhs_has_target = _line_contains_identity(constant_rhs, target_terms)
+        if (
+            target.target_type == "network_socket"
+            and target.address
+            and _line_contains_identity(constant_rhs, [target.address])
+            and target.port is not None
+            and str(target.port) not in constant_rhs
+            and not _NETWORK_SOCKET_CONTEXT_RE.search(code_line)
+        ):
+            rhs_has_target = False
+        alias_definition = (
+            isinstance(query_value, str)
+            and query_value.casefold() == constant_name.casefold()
+            and _is_socket_alias_query(query_value, target)
+        )
+        if rhs_has_target or _macro_name_is_socket_related(constant_name, target) or alias_definition:
+            return "constant_definition"
+    # Network ports are frequently held in a lower-case member/constant (for
+    # example ``const int udpPort = 8283``), which is intentionally outside
+    # the all-caps constant pattern above.  Treat an assignment of the exact
+    # target port as a bounded constant fact so it can establish the module
+    # context for a sibling ``SpServerSocket``/``bind`` implementation.  A
+    # bare numeric occurrence is not promoted.
+    if (
+        target.target_type == "network_socket"
+        and target.port is not None
+        and str(target.port) in code_line
+        and re.search(r"\b(?:[A-Za-z_][A-Za-z0-9_]*port[A-Za-z0-9_]*|sin_port)\b\s*(?:=|:)", code_line, re.IGNORECASE)
+    ):
+        return "constant_definition"
     # OpenHarmony commonly receives an init-created descriptor through
     # GetControlSocket rather than calling bind() in the service itself.  The
     # operation is only considered relevant when the queried symbol/target is
@@ -556,17 +1914,57 @@ def _line_kind(
     # window), so a generic helper definition does not become a service hit.
     if re.search(r"\b(?:getcontrolsocket|getsocket|socketpair)\s*\(", lower):
         return "socket_acquire"
-    if _is_server_registration_line(lower):
-        return "socket_server_registration"
-    if re.search(r"\b(bind|listen)\s*\(", lower):
+    if re.search(r"\bsocket\s*\(", lower):
+        return "socket_acquire"
+    # ``std::bind`` is a callable adapter, not a socket bind.  Require the
+    # POSIX name not to be preceded by an identifier/namespace/member token so
+    # generic full-text searches do not turn unrelated C++ code into listener
+    # evidence.
+    if re.search(r"(?<![A-Za-z0-9_:.])(?:bind|listen)\s*\(", lower):
         return "socket_bind_listen"
     if re.search(r"\b(accept|recv|recvfrom|read|readv)\s*\(", lower):
         return "socket_accept_read"
+    if _is_server_registration_line(lower):
+        return "socket_server_registration"
+    # Follow-up searches for an inferred socket alias often land on a source
+    # assignment that bridges the init/config name to a sockaddr.  An alias
+    # use alone is not a listener proof: client code also fills
+    # ``addr.sun_path`` before ``connect``.  Promote it to server registration
+    # only when the same line carries an actual registration/acquire operation
+    # (or the generic registration-shape helper matched above).  Otherwise
+    # retain a weaker service/config fact so it can establish bounded context
+    # without claiming server ownership.
+    if (
+        _is_socket_alias_query(query_value, target)
+        and isinstance(query_value, str)
+        and _line_contains_identity(code_line, [query_value])
+    ):
+        if re.search(
+            r"\b(?:getcontrolsocket|socketpair|socket|bind|listen|accept|recv|recvfrom)\s*\(",
+            lower,
+        ) or _is_server_registration_line(lower):
+            return "socket_server_registration"
+        if re.search(r"\b(?:sun_path|sockaddr(?:_in)?)\b", lower):
+            # A sockaddr/path assignment is useful evidence that the alias is
+            # consumed by a socket implementation, but without a registration
+            # operation on the same line it is direction-neutral (and very
+            # often client-side).  Keep it as a communication candidate so the
+            # bounded source window can still recover a nearby bind/listen.
+            return "client_endpoint"
+        return "service_config"
     # Besides POSIX send/write calls, OpenHarmony wrappers such as
     # PollSendData and SendVpnInterfaceFdToClient carry the same direction.
-    if re.search(r"\b(?:connect|send|sendto|write|writev)\s*\(", lower) or re.search(
-        r"\b\w*(?:send|write)\w*\s*\(", lower
-    ):
+    # Do not classify every domain method ending in ``Write`` (for example
+    # ``HiSysEventWrite``) as socket traffic: require a nearby descriptor/
+    # endpoint/message term for wrapper names.  The explicit POSIX calls remain
+    # unambiguous.
+    explicit_send = re.search(r"\b(?:connect|send|sendto|write|writev)\s*\(", lower)
+    wrapper_send = re.search(r"\b\w*(?:send|write)\w*\s*\(", lower)
+    wrapper_context = re.search(
+        r"\b(?:fd|sock(?:et)?|endpoint|connection|channel|pipe|client|server|listener|message|payload|buffer)\w*\b",
+        lower,
+    )
+    if explicit_send or (wrapper_send and wrapper_context):
         return "client_connect" if re.search(r"\bconnect\s*\(", lower) else "client_send"
     # Do not use a bare ``handler``/``dispatch`` substring here.  Generated
     # dependency files commonly contain names such as ``check_deps_handler``
@@ -578,20 +1976,344 @@ def _line_kind(
         or re.search(r"\bswitch\s*\(", lower)
         or re.search(r"\bcase\s+[^:]{1,160}:", lower)
         or re.search(r"\b\w*dispatch\w*\s*\(", lower)
+        or re.search(
+            r"\b(?:recvmessage|onrecv(?:message)?|onreceive(?:request|message)?|"
+            r"handlemsg|process(?:msg|message|request)|messagehandler)\b",
+            lower,
+        )
     ):
         return "protocol_dispatch"
+    # Init/build metadata is a first-class ownership clue.  A socket name is
+    # often declared in a ``.cfg`` file while the executable is selected in a
+    # sibling BUILD.gn; retain that relation instead of treating the lines as
+    # ordinary text hits.
+    if re.search(
+        r"\b(?:ohos_executable|ohos_shared_library|part_name|subsystem_name|sources)\b\s*(?:=|:|\(|\[)",
+        lower,
+    ) or re.search(r"\b(?:bundle|component|module)\b\s*[:=]", lower):
+        return "executable_build"
     # A service/socket assignment is a useful, source-backed ownership
     # relation (for example ``info.server = PIPE_NAME`` or an init
     # ``service_name = ...`` line).  It is deliberately narrower than a raw
     # identity hit, so a random comment containing the basename cannot satisfy
     # the server attribution predicate.
-    if identity and re.search(r"\b(?:service|server|socket|endpoint)(?:[_-](?:name|path|id))?\s*[:=]", lower):
+    if identity and re.search(
+        # Keep the key at an identifier boundary.  Without this boundary,
+        # ``HiSysEvent::EventType::BEHAVIOR`` was matched as ``type:`` and
+        # promoted ordinary event-telemetry code to ``service_config``.  A
+        # small explicit suffix form still covers source fields such as
+        # ``sun_path`` and ``socket_name`` without treating ``EventType`` as
+        # a configuration key.
+        r"(?:\b(?:service|server|socket|endpoint)(?:[._-](?:name|path|id))?\s*[:=]|"
+        r"(?<![A-Za-z0-9_])[\"']?(?:name|path|family|type|protocol|permissions?|uid|gid)[\"']?\s*[:=]|"
+        r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*_(?:name|path|family|protocol|permissions?|uid|gid)\s*[:=])",
+        lower,
+    ):
         return "service_config"
     if identity and query_kind == "definition":
         return "macro_definition" if target.macro_hint else "symbol_reference"
     if identity:
         return "literal_match"
     return "symbol_reference" if query_kind in {"definition", "symbol"} else "literal_match"
+
+
+def _query_value_targets_target(
+    query_value: str | None,
+    target: TargetSpec,
+    *,
+    allow_non_generic: bool = False,
+) -> bool:
+    """Return whether a query value carries target identity, not only API noise.
+
+    Generic searches for ``bind``/``socket`` are useful for recall but their
+    hits cannot establish ownership on their own.  A port, address, endpoint,
+    process hint, Unix path or service name is target-specific and may justify
+    retaining nearby communication calls during bounded source tracing.
+    """
+
+    if not isinstance(query_value, str) or not query_value.strip():
+        return False
+    value = query_value.strip()
+    if value.casefold() in _NETWORK_GENERIC_QUERY_TERMS:
+        return False
+    if target.target_type == "network_socket":
+        target_values = {
+            str(item).casefold()
+            for item in (
+                target.port,
+                target.address,
+                network_endpoint(target),
+                target.process_hint,
+                target.service_hint,
+            )
+            if item is not None
+        }
+        if value.casefold() in target_values:
+            return True
+        # A model-selected wrapper/symbol (for example
+        # ``CreateSocketListener``) can be a useful second-hop query after
+        # the target evidence has already been cited.  It is allowed only for
+        # semantic LLM actions, never for the deterministic broad API plan.
+        return allow_non_generic and re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_.:()\-]{2,127}", value
+        ) is not None
+    if value.casefold() in {item.casefold() for item in target_identity_terms(target)}:
+        return True
+    return allow_non_generic and re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_.:()\-]{2,127}", value
+    ) is not None
+
+
+def _line_has_target_identity(line: str, target: TargetSpec) -> bool:
+    # A comment can mention a socket name without connecting the line to the
+    # implementation.  Keep identity checks consistent with ``_line_kind``
+    # and inspect only source/config text.
+    code_line = _strip_source_comments(line)
+    return _line_contains_identity(code_line, [term for term in target_identity_terms(target) if term])
+
+
+def _line_contains_identity(line: str, terms: Iterable[str | int | None]) -> bool:
+    """Match target tokens without treating a longer symbol as the socket.
+
+    ``AppSpawn`` appears inside symbols such as ``AppSpawnHookExecute`` and
+    ``hisysevent`` appears in ``hisysevent_util``.  Substring matching made
+    those unrelated files look like socket ownership.  Identifier/path/port
+    boundaries preserve exact macro, config and endpoint matches while still
+    accepting punctuation around names such as ``faultloggerd.crash.server``.
+    """
+
+    for raw in terms:
+        if raw is None:
+            continue
+        term = str(raw).strip().casefold()
+        if not term:
+            continue
+        if term.startswith("/"):
+            pattern = rf"(?<![A-Za-z0-9._+@=-]){re.escape(term)}(?![A-Za-z0-9._+@=-])"
+            if re.search(pattern, line.casefold()) is not None:
+                return True
+            continue
+
+        # Do not case-fold an entire C/C++ identifier.  For a lower-case
+        # socket name such as ``paramservice``, that would make the unrelated
+        # lowerCamel variable ``paramService`` look like an exact socket
+        # identity.  First accept the spelling as written (and the all-caps
+        # macro spelling), then allow a title-case symbol only when it is a
+        # complete identifier.  A prefixed/suffixed identifier such as
+        # ``NotifyParamService`` remains a miss.
+        exact_variants = {str(raw).strip(), str(raw).strip().upper()}
+        for variant in exact_variants:
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(variant)}(?![A-Za-z0-9_])"
+            if re.search(pattern, line) is not None:
+                return True
+        if term.isalpha() and term.islower():
+            identifier_pattern = r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*(?![A-Za-z0-9_])"
+            for match in re.finditer(identifier_pattern, line):
+                token = match.group(0)
+                if token.casefold() != term or not token[0].isupper():
+                    continue
+                # Preserve PascalCase symbols (``ParamService``) while
+                # rejecting lowerCamel data fields (``paramService``).
+                if any(char.isupper() for char in token[1:]):
+                    return True
+    return False
+
+
+def _path_contains_target_identity(path: str, target: TargetSpec) -> bool:
+    """Match a target against a source filename/component without substring noise.
+
+    Service implementations frequently use a normalized filename instead of
+    repeating the init socket name (``init_control_fd_service.c`` for
+    ``init_control_fd`` or ``param_service.c`` for ``paramservice``).  A plain
+    substring check is too permissive for names such as
+    ``AppSpawnHookExecute``.  Compare delimiter-separated pieces and allow a
+    small, explicit service suffix (``service``, ``server``, ``daemon``,
+    ``socket``, ``listen`` or ``impl``) after an exact compact target.
+    """
+
+    if not isinstance(path, str) or not path.strip() or not isinstance(target, TargetSpec):
+        return False
+    values = (
+        target.basename,
+        target.service_hint,
+        target.macro_hint,
+        target.process_hint,
+    )
+    components = [part for part in path.split("/") if part]
+    suffixes = {"service", "server", "daemon", "socket", "listen", "impl", "listener"}
+    for raw_value in values:
+        if not raw_value:
+            continue
+        value = str(raw_value).strip().casefold()
+        compact_value = re.sub(r"[^a-z0-9]", "", value)
+        if not compact_value:
+            continue
+        for component in components:
+            stem = component.rsplit(".", 1)[0] if "." in component else component
+            pieces = [piece.casefold() for piece in re.split(r"[^A-Za-z0-9]+", stem) if piece]
+            compact_component = "".join(pieces)
+            if any(piece == value for piece in pieces) and (
+                len(pieces) == 1 or any(piece in suffixes for piece in pieces if piece != value)
+            ):
+                return True
+            if compact_component == compact_value:
+                return True
+            if compact_component.startswith(compact_value):
+                remainder = compact_component[len(compact_value):]
+                if remainder in suffixes:
+                    return True
+    return False
+
+
+def _evidence_symbol_for_line(
+    line: str,
+    target: TargetSpec,
+    *,
+    query_value: str | None = None,
+) -> str | None:
+    """Return a symbol only when the source line actually supports it.
+
+    The old worker copied ``target.service_hint`` into every evidence row.
+    That made a generic hit such as ``SocketDevice::Open`` look as if it were
+    a ``paramservice`` symbol and caused unrelated rows to be merged into the
+    same attribution candidate.  A target name is now retained only when the
+    line contains the target identity; an inferred socket alias is retained
+    when the line contains that alias.  Generic context rows deliberately
+    have no synthetic symbol and are linked by their source location instead.
+    """
+
+    if not isinstance(line, str) or not isinstance(target, TargetSpec):
+        return None
+    code_line = _strip_source_comments(line).lower()
+    target_terms = tuple(term for term in target_identity_terms(target) if term)
+    if _line_contains_identity(code_line, target_terms):
+        return target.service_hint or target.process_hint or target.basename
+    if (
+        isinstance(query_value, str)
+        and _is_socket_alias_query(query_value, target)
+        and _line_contains_identity(code_line, (query_value,))
+    ):
+        return query_value.strip()
+    return None
+
+
+def _target_bound_context_directories(
+    store: EvidenceStore,
+    target: TargetSpec,
+) -> tuple[str, ...]:
+    """Build context directories only from target-anchored source evidence.
+
+    Search plans contain broad API hits and policy/generated references.  They
+    must not establish a repository-wide context by themselves.  This helper
+    derives a bounded directory window from lines that contain the endpoint
+    identity or from a source path whose component clearly names the target.
+    """
+
+    if not isinstance(store, EvidenceStore) or not isinstance(target, TargetSpec):
+        return ()
+    anchors: list[str] = []
+    seen_paths: set[str] = set()
+    for item in store.evidence:
+        if not isinstance(item, Evidence):
+            continue
+        try:
+            path_role = classify_path(item.source_path, target=target).role
+        except (TypeError, ValueError):
+            path_role = "unknown"
+        # SELinux policy/audit snippets can repeat the exact socket path, but
+        # they do not create or consume the socket.  They must remain visible
+        # in the complete evidence graph without establishing source context.
+        if path_role in {"selinux", "log", "test", "fuzz"}:
+            continue
+        if not (
+            _line_has_target_identity(item.excerpt, target)
+            or _path_contains_target_identity(item.source_path, target)
+        ):
+            continue
+        if item.source_path in seen_paths:
+            continue
+        seen_paths.add(item.source_path)
+        anchors.append(item.source_path)
+        if len(anchors) >= 64:
+            break
+    directories: list[str] = []
+    seen_dirs: set[str] = set()
+    for path in anchors:
+        parent = path.rsplit("/", 1)[0] or "/"
+        current = parent
+        for depth in range(5):
+            if len([part for part in current.split("/") if part]) < 3:
+                break
+            if current not in seen_dirs:
+                seen_dirs.add(current)
+                directories.append(current)
+            current = current.rsplit("/", 1)[0] or "/"
+            if depth >= 4:
+                break
+        if len(directories) >= 128:
+            break
+    return tuple(directories[:128])
+
+
+def _target_evidence_is_bound(
+    path: str,
+    line: str,
+    target: TargetSpec,
+    context_dirs: Iterable[str] = (),
+) -> bool:
+    """Whether a source row is tied to this target, not just its API shape."""
+
+    try:
+        path_role = classify_path(path, target=target).role
+    except (TypeError, ValueError):
+        path_role = "unknown"
+    if path_role in {"selinux", "log", "test", "fuzz"}:
+        return False
+    if _line_has_target_identity(line, target):
+        return True
+    if _path_contains_target_identity(path, target):
+        return True
+    return _path_shares_target_context(path, context_dirs)
+
+
+def _target_bound_evidence(
+    store: EvidenceStore,
+    target: TargetSpec,
+) -> tuple[Evidence, ...]:
+    """Return attribution input limited to source rows tied to the target.
+
+    ``evidence.json`` remains append-only and keeps noisy hits for audit.  The
+    role attributors, however, must not let a generic ``SocketDevice`` or
+    ``recv`` row from another component satisfy the target's server predicates.
+    """
+
+    context_dirs = _target_bound_context_directories(store, target)
+    return tuple(
+        item
+        for item in store.evidence
+        if _target_evidence_is_bound(
+            item.source_path,
+            item.excerpt,
+            target,
+            context_dirs,
+        )
+    )
+
+
+def _is_socket_alias_query(query_value: str | None, target: TargetSpec) -> bool:
+    """Whether a deterministic macro follow-up names a socket alias.
+
+    This is intentionally narrower than accepting arbitrary model-selected
+    symbols: only all-caps macro names containing a socket/service/pipe word
+    qualify, and the caller still needs a target context or identity line.
+    """
+
+    if target.target_type == "network_socket" or not isinstance(query_value, str):
+        return False
+    value = query_value.strip()
+    if not _MACRO_NAME_RE.fullmatch(value):
+        return False
+    return _SOCKET_WORD_RE.search(value) is not None
 
 
 def _is_server_registration_line(line: str) -> bool:
@@ -618,13 +2340,87 @@ def _is_server_registration_line(line: str) -> bool:
         r"(?:server|socket|listener|stream|endpoint|channel)[a-z0-9_]*)\s*\(",
         normalized,
     )
-    return bool(field_assignment or factory_call)
+    # Several OpenHarmony components wrap the POSIX calls in a compact
+    # ``*SockInit``/``*SocketCreate`` helper.  For example init's
+    # ``FdHolderSockInit`` creates and binds ``fd_holder`` while the service
+    # source itself only exposes the returned descriptor.  Treat the helper
+    # as a registration fact so the source trace can connect the target macro
+    # to the actual bind path.  The name must contain both a socket token and
+    # an initialization/creation verb; ordinary ``GetSocketFd`` accessors do
+    # not match.
+    socket_named_init = re.search(
+        r"\b(?:[a-z0-9_]*(?:sock|socket)[a-z0-9_]*"
+        r"(?:create|init|start|open|register|setup|listen|bind)[a-z0-9_]*|"
+        r"(?:create|init|start|open|register|setup|make)[a-z0-9_]*"
+        r"(?:sock|socket)[a-z0-9_]*)\s*\(",
+        normalized,
+    )
+    # Device-oriented servers (for example HiView's
+    # ``AddDev(std::make_shared<SocketDevice>(name, ...))``) may not expose a
+    # POSIX bind in the same class.  The device is opened through
+    # ``GetControlSocket`` later, so this registration line is the missing
+    # config-to-consumer edge.  Restrict the pattern to an explicit
+    # ``SocketDevice``/socket device registration; a generic ``AddDev`` must
+    # not classify unrelated devices as listeners.
+    socket_device_registration = re.search(
+        r"\b(?:adddev|adddevice|register(?:dev|device|socket)|addsocket)\s*\([^)]*"
+        r"\b(?:socketdevice|unixsocketdevice|socket_device)\b",
+        normalized,
+    )
+    # ``CmdServiceInit`` is an OpenHarmony control-FD wrapper: its name does
+    # not contain ``socket``, but its signature/call carries a socket path
+    # and the implementation immediately constructs a stream server.  Keep
+    # this generic (service/server + init/create/start/register) and require
+    # a socket-like argument/field, avoiding a global classification of every
+    # unrelated service initializer.
+    service_socket_init = re.search(
+        r"\b[a-z0-9_]*(?:service|server|listener)[a-z0-9_]*"
+        r"(?:init|create|start|open|register|setup|listen|bind)[a-z0-9_]*\s*\([^)]*"
+        r"(?:sock|socket|endpoint|pipe|path|server)[a-z0-9_]*",
+        normalized,
+    )
+    # Project-specific wrappers are common in SmartPerf and other
+    # OpenHarmony components (for example ``SpServerSocket::Init`` or
+    # ``SpThreadSocket::HandleMsg``).  They are useful registration/consumer
+    # clues even when no POSIX ``bind`` appears in the same source file.
+    socket_wrapper_call = re.search(
+        r"\b(?P<class>[a-z0-9_]*(?:server[_]?socket|socket[_]?server|thread[_]?socket|socket[_]?thread)"
+        r"[a-z0-9_]*)(?:::(?P<method>[a-z0-9_]+))?\s*\(",
+        normalized,
+    )
+    if socket_wrapper_call is not None:
+        method = socket_wrapper_call.group("method")
+        class_name = socket_wrapper_call.group("class")
+        registration_methods = {
+            "create",
+            "init",
+            "start",
+            "open",
+            "register",
+            "setup",
+            "listen",
+            "bind",
+        }
+        # A constructor is written ``SpServerSocket::SpServerSocket``; a
+        # message handler such as ``SpThreadSocket::HandleMsg`` is not a
+        # registration fact and must be classified by its receive/dispatch
+        # operation (if present) instead.
+        wrapper_registration = method is None or method in registration_methods or method == class_name
+    else:
+        wrapper_registration = False
+    return bool(
+        field_assignment
+        or factory_call
+        or socket_named_init
+        or socket_device_registration
+        or service_socket_init
+        or wrapper_registration
+    )
 
 
 def _client_kind(line: str, target: TargetSpec) -> str | None:
     lower = line.lower()
-    identity_terms = [term.lower() for term in (target.socket_path, target.basename, target.service_hint, target.macro_hint) if term]
-    if not any(term in lower for term in identity_terms):
+    if not _line_contains_identity(line, target_identity_terms(target)):
         return None
     if re.search(r"\bconnect\s*\(", lower):
         return "client_connect"
@@ -658,7 +2454,7 @@ def _infer_related_macros(
         raise SourceLocatorWorkerError("macro 推断数量必须是 1 到 32 之间的整数")
     identity_terms = tuple(
         term.lower()
-        for term in (target.socket_path, target.basename, target.service_hint, target.macro_hint)
+        for term in target_identity_terms(target)
         if term
     )
     candidates: list[str] = []
@@ -684,11 +2480,12 @@ def _infer_related_macros(
                 line = hit.get("line")
                 if not isinstance(line, str):
                     continue
+                code_line = _strip_source_comments(line)
                 try:
                     line_no = int(hit.get("line_number", hit.get("lineNumber", 0)))
                 except (TypeError, ValueError):
                     line_no = 0
-                match = _MACRO_DEFINITION_RE.match(line)
+                match = _MACRO_DEFINITION_RE.match(code_line)
                 if match is not None:
                     name = match.group(1)
                     rhs = (match.group(2) or "").strip()
@@ -698,20 +2495,30 @@ def _infer_related_macros(
                     # e.g. ``FWMARK_SERVER_PATH = {...}``.  Capture only a
                     # clearly macro-shaped constant immediately before an
                     # assignment/initializer.
-                    constant = _CONSTANT_DEFINITION_RE.search(line)
+                    constant = _CONSTANT_DEFINITION_RE.search(code_line)
                     if constant is None:
                         continue
                     name = constant.group(1)
-                    rhs = line[constant.end():].strip()
+                    rhs = code_line[constant.end():].strip()
                 if not _MACRO_NAME_RE.fullmatch(name):
                     continue
-                rows.append((line_no, name, rhs, line.lower()))
+                rows.append((line_no, name, rhs, code_line.lower()))
 
     # First pass: direct identity-bearing definitions are strongest.
     strong_rows: list[tuple[str, int, str, str]] = []
     for path, rows in by_path.items():
         for line_no, name, rhs, line in rows:
-            if any(term in line or term in rhs.lower() for term in identity_terms):
+            # The target may appear in the value (a literal path/string) or in
+            # an endpoint-shaped alias name such as
+            # ``HISYSEVENT_SOCKET_NAME``.  Generic constants such as
+            # ``ERR_SUCCESS`` must not become aliases merely because their
+            # trailing comment mentioned the target file.
+            direct_value = (
+                _line_contains_identity(line, identity_terms)
+                or _line_contains_identity(rhs, identity_terms)
+            )
+            name_related = _macro_name_is_socket_related(name, target)
+            if direct_value and (name_related or _line_contains_identity(rhs, identity_terms)):
                 strong_rows.append((path, line_no, name, "direct_identity"))
                 if name not in candidates:
                     candidates.append(name)
@@ -726,15 +2533,15 @@ def _infer_related_macros(
                 continue
             if _SOCKET_WORD_RE.search(name):
                 candidates.append(name)
-    # Third pass: a service-shaped macro can be useful even when OpenGrok
-    # returned only the macro definition itself and not a neighbouring path.
-    for _path, rows in by_path.items():
-        for _line_no, name, _rhs, _line in rows:
-            if name not in candidates and _SOCKET_WORD_RE.search(name):
-                candidates.append(name)
+    # Do not add every socket-looking macro from a file that happened to
+    # contain the target.  Headers commonly define unrelated ``KEY_SOCKET_FD``
+    # or ``FUNCTION_BIND_SOCKET`` constants; querying all of them consumed the
+    # bounded follow-up budget and promoted client/UI code.  A macro is now
+    # eligible only when it is identity-bearing or immediately adjacent to an
+    # identity-bearing definition (the two passes above).
     excluded = {
         value.upper()
-        for value in (target.basename, target.service_hint, target.macro_hint)
+        for value in (target.basename, target.service_hint, target.macro_hint, target.process_hint)
         if value
     }
     return tuple(name for name in candidates if name.upper() not in excluded)[:limit]
@@ -802,6 +2609,23 @@ def _compact_attribution_payload(value: Mapping[str, Any]) -> dict[str, Any]:
                 candidate["reasons"] = reasons[:8]
             candidates.append(candidate)
     payload["candidates"] = candidates
+    # ``best_candidate`` is a derived convenience field for the UI.  Apply
+    # the same bounds as the ordinary candidate list so a high-volume
+    # service/config group cannot make the session payload unbounded.
+    best = payload.get("best_candidate")
+    if isinstance(best, Mapping):
+        best_payload = dict(best)
+        if isinstance(best_payload.get("source_locations"), list):
+            best_payload["source_locations"] = [
+                dict(item)
+                for item in best_payload["source_locations"][:8]
+                if isinstance(item, Mapping)
+            ]
+        if isinstance(best_payload.get("evidence_ids"), list):
+            best_payload["evidence_ids"] = best_payload["evidence_ids"][:16]
+        if isinstance(best_payload.get("reasons"), list):
+            best_payload["reasons"] = best_payload["reasons"][:8]
+        payload["best_candidate"] = best_payload
     roles = payload.get("roles")
     if isinstance(roles, Mapping):
         compact_roles: dict[str, list[dict[str, Any]]] = {}
@@ -811,7 +2635,7 @@ def _compact_attribution_payload(value: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             compact_roles[str(role)] = [
                 dict(item)
-                for item in entries[:16]
+                for item in entries[:_MAX_CONFIRMATION_ROLES]
                 if isinstance(item, Mapping)
             ]
             for item in compact_roles[str(role)]:
@@ -825,6 +2649,9 @@ def _compact_attribution_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     evidence_ids = payload.get("evidence_ids")
     if isinstance(evidence_ids, list):
         payload["evidence_ids"] = evidence_ids[:_MAX_ATTRIBUTION_EVIDENCE_IDS]
+    excluded_evidence_ids = payload.get("excluded_evidence_ids")
+    if isinstance(excluded_evidence_ids, list):
+        payload["excluded_evidence_ids"] = excluded_evidence_ids[:_MAX_ATTRIBUTION_EVIDENCE_IDS]
     if isinstance(raw_candidates, (list, tuple)) and len(raw_candidates) > len(candidates):
         payload["truncated"] = True
         payload["truncated_candidate_count"] = len(raw_candidates) - len(candidates)
@@ -1012,6 +2839,61 @@ def _load_llm_role_result(
         )
     except (TypeError, ValueError, KeyError, LLMRoleAttributionError):
         return None
+
+
+def _scope_llm_role_result_to_mapping(
+    result: LLMRoleAttributionResult | None,
+    mapping: RepositoryMapping,
+) -> LLMRoleAttributionResult | None:
+    """Keep semantic role claims only when their evidence belongs to ``mapping``.
+
+    Role attribution runs before competing Manifest candidates are adjudicated,
+    so a valid model answer may cite the implementation copy from a different
+    repository.  Merging that answer after candidate PK would make the final
+    ``best_candidate`` point back to the losing repository.  Keep the original
+    role artifact for audit, but scope the decision used by the final
+    attribution/confirmation payload to the selected mapping.
+    """
+
+    if result is None:
+        return None
+    allowed = set(mapping.evidence_ids)
+
+    def scope(decision: LLMRoleDecision) -> LLMRoleDecision:
+        original_ids = tuple(decision.evidence_ids)
+        if not original_ids or set(original_ids).issubset(allowed):
+            return decision
+        selected_ids = tuple(item for item in original_ids if item in allowed)
+        if not selected_ids:
+            return LLMRoleDecision(
+                role=decision.role,
+                status="unresolved",
+                confidence="low",
+                subject="",
+                evidence_ids=(),
+                reason="原始语义证据属于其他候选仓库，候选 PK 后未合并到所选仓库归因。",
+            )
+        status = "possible" if decision.status == "confirmed" else decision.status
+        confidence = "low" if decision.confidence == "high" else decision.confidence
+        return LLMRoleDecision(
+            role=decision.role,
+            status=status,
+            confidence=confidence,
+            subject=decision.subject,
+            evidence_ids=selected_ids,
+            reason=(
+                decision.reason
+                + "；原始决策包含其他候选仓库证据，最终仅保留所选仓库证据。"
+            ),
+        )
+
+    return LLMRoleAttributionResult(
+        server=scope(result.server),
+        client=scope(result.client),
+        model_calls=result.model_calls,
+        prompt_version=result.prompt_version,
+        schema_version=result.schema_version,
+    )
 
 
 def _save_llm_role_result(
@@ -1335,7 +3217,7 @@ def _llm_context_evidence(store: EvidenceStore, target: TargetSpec) -> tuple[Any
         return items
     terms = tuple(
         term.lower()
-        for term in (target.socket_path, target.basename, target.service_hint, target.macro_hint)
+        for term in target_identity_terms(target)
         if term
     )
     strong_kinds = {
@@ -1414,6 +3296,27 @@ _MAPPING_ROLE_WEIGHTS: Mapping[str, int] = {
     "literal_match": 0,
 }
 
+# A validated semantic server decision is an ownership signal, not merely
+# another occurrence of the socket basename.  Keep the bonus large enough to
+# outrank a repository that only contains many HiSysEvent/API telemetry uses,
+# while preferring an actual registration/bind evidence row when the model
+# cites more than one repository (for example the service and its client
+# library both mention the same endpoint).
+_SEMANTIC_SERVER_ROLE_BONUS: Mapping[str, int] = {
+    "socket_bind_listen": 700,
+    "socket_server_registration": 650,
+    "socket_accept_read": 500,
+    "protocol_dispatch": 450,
+    "socket_acquire": 350,
+    "service_config": 250,
+    "executable_build": 150,
+    "client_endpoint": 50,
+    "client_connect": 25,
+    "client_send": 10,
+    "literal_match": 0,
+    "symbol_reference": 0,
+}
+
 
 def _mapping_role_score(
     mapping: RepositoryMapping,
@@ -1458,7 +3361,8 @@ def _mapping_role_score(
         score += _MAPPING_ROLE_WEIGHTS.get(item.kind, 0)
         if item.evidence_id in semantic_ids:
             counts["llm_server_evidence"] = counts.get("llm_server_evidence", 0) + 1
-            score += 30
+            counts["llm_server_owner_anchor"] = counts.get("llm_server_owner_anchor", 0) + 1
+            score += 900 + _SEMANTIC_SERVER_ROLE_BONUS.get(item.kind, 0)
         role = classification.role if classification is not None else "unknown"
         if role in {"generated", "build", "third_party", "kernel", "log", "selinux"}:
             score -= 30
@@ -1475,13 +3379,10 @@ def _mapping_role_score(
         for kind in ("literal_match", "macro_definition", "constant_definition", "symbol_reference")
     )
     service_anchor_count = counts.get("service_config", 0) + counts.get("executable_build", 0)
+    semantic_anchor_count = counts.get("llm_server_owner_anchor", 0)
     target_anchor_count = 0
     if target is not None:
-        target_terms = tuple(
-            term.casefold()
-            for term in (target.socket_path, target.macro_hint)
-            if isinstance(term, str) and term
-        )
+        target_terms = tuple(term.casefold() for term in target_identity_terms(target) if term)
         for item in store.evidence:
             if item.evidence_id not in ids:
                 continue
@@ -1490,12 +3391,16 @@ def _mapping_role_score(
                     continue
             except Exception:
                 continue
-            excerpt = item.excerpt.casefold()
-            if any(term in excerpt for term in target_terms):
+            if _line_contains_identity(item.excerpt, target_terms):
                 target_anchor_count += 1
         counts["target_identity_anchor"] = target_anchor_count
     identity_anchor_missing = target is not None and target_anchor_count == 0
-    if (identity_count == 0 and service_anchor_count == 0) or identity_anchor_missing:
+    # A confirmed, evidence-linked semantic server decision is itself an
+    # ownership anchor.  Do not apply the generic-only cap to that mapping:
+    # registration rows such as ``SocketDevice("hisysevent", ...)`` may not
+    # carry a separate macro/configuration evidence kind, but the model has
+    # already tied the exact source row to the target.
+    if semantic_anchor_count == 0 and ((identity_count == 0 and service_anchor_count == 0) or identity_anchor_missing):
         score = min(score, 180)
     else:
         score += min(200, (target_anchor_count or identity_count) * 8)
@@ -1527,7 +3432,329 @@ def _mapping_payload(
     return payload
 
 
-def _confirmation_role_payload(result: Any, *, limit: int) -> list[dict[str, Any]]:
+_MAX_CANDIDATE_REVIEW_CANDIDATES = 3
+_MAX_CANDIDATE_METADATA_FILES = 12
+_MAX_CANDIDATE_SOURCE_FACTS = 12
+_MAX_CANDIDATE_SOURCE_FACTS_PER_FILE = 3
+_MAX_CANDIDATE_BUILD_FACTS = 3
+_MAX_CANDIDATE_CONFIG_FACTS = 3
+
+
+def _candidate_metadata_paths(mapping: RepositoryMapping) -> tuple[str, ...]:
+    """Return a bounded, symmetric OpenGrok-only candidate evidence set.
+
+    Duplicate/split OpenHarmony repositories frequently expose the same
+    socket implementation under different roots.  Reading only the first
+    repository's implementation gives the LLM an artificial semantic
+    advantage, so competing candidates receive the same implementation,
+    peer-handler, build and bundle probes.  This is path derivation only; it
+    never reads the local checkout.
+    """
+
+    paths: list[str] = []
+    source_path = mapping.source_path.strip()
+    source_basename = source_path.rsplit("/", 1)[-1] if source_path else ""
+    source_stem = source_basename.rsplit(".", 1)[0] if "." in source_basename else source_basename
+
+    def add(path: str) -> None:
+        normalized = "/" + "/".join(part for part in path.split("/") if part and part != ".")
+        if normalized and normalized not in paths:
+            paths.append(normalized)
+
+    if source_path:
+        directory = source_path.rsplit("/", 1)[0]
+        source_bases: list[str] = []
+        if "/include/" in source_path:
+            source_bases.append(source_path.split("/include/", 1)[0])
+        elif "/src/" in source_path:
+            source_bases.append(source_path.split("/src/", 1)[0])
+        if not source_bases and directory:
+            source_bases.append(directory)
+        # Read the implementation and the adjacent protocol handler for the
+        # common SP_daemon-style split.  Missing paths are normal and ignored
+        # by _candidate_metadata_facts.
+        peer_stems = [source_stem] if source_stem else []
+        if source_stem == "sp_server_socket":
+            peer_stems.append("sp_thread_socket")
+        elif source_stem == "sp_thread_socket":
+            peer_stems.append("sp_server_socket")
+        for base in dict.fromkeys(source_bases):
+            for stem in peer_stems:
+                add(f"{base}/{stem}.cpp")
+                # Some candidates keep headers under ``include/`` while the
+                # implementation is under the sibling ``src/`` directory.
+                # Probe both layouts so the candidate PK sees the same
+                # bind/recv/dispatch implementation for every repository.
+                add(f"{base}/src/{stem}.cpp")
+            add(f"{base}/{source_basename}")
+            add(f"{base}/BUILD.gn")
+            parent = base.rsplit("/", 1)[0]
+            if parent:
+                add(f"{parent}/BUILD.gn")
+    if mapping.source_root:
+        root = "/openharmony/" + mapping.source_root.strip("/")
+        add(f"{root}/BUILD.gn")
+        add(f"{root}/bundle.json")
+    return tuple(paths[:_MAX_CANDIDATE_METADATA_FILES])
+
+
+def _candidate_metadata_facts(
+    *,
+    mapping: RepositoryMapping,
+    target: TargetSpec,
+    client: Any,
+    store: EvidenceStore,
+    max_source_bytes: int,
+) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], tuple[str, ...]]:
+    """Read bounded build/config facts from OpenGrok for one candidate.
+
+    The method never falls back to ``project_root``.  Missing metadata is a
+    normal condition and simply yields no supplemental facts.
+    """
+
+    read_source = getattr(client, "read_source", None)
+    if not callable(read_source):
+        return (), (), ()
+    tokens = tuple(
+        dict.fromkeys(
+            item.casefold()
+            for item in (
+                target.process_hint,
+                target.service_hint,
+                target.basename,
+            )
+            if isinstance(item, str) and item.strip()
+        )
+    )
+    source_basename = mapping.source_path.rsplit("/", 1)[-1].casefold() if mapping.source_path else ""
+    source_stem = source_basename.rsplit(".", 1)[0] if "." in source_basename else source_basename
+    # Keep category budgets separate.  The previous implementation stopped
+    # after the first implementation file produced 12 lines, so BUILD.gn,
+    # bundle.json and the peer protocol handler never reached the PK prompt.
+    # These bounded buckets guarantee that ownership and implementation facts
+    # are both visible without allowing a large source file to dominate.
+    source_candidates: list[tuple[int, int, SourceDocument, str, str]] = []
+    build_candidates: list[tuple[int, int, SourceDocument, str, str]] = []
+    config_candidates: list[tuple[int, int, SourceDocument, str, str]] = []
+    files_read: list[str] = []
+    for path in _candidate_metadata_paths(mapping):
+        try:
+            document = read_source(path, max_bytes=max_source_bytes)
+        except Exception:
+            continue
+        if not isinstance(document, SourceDocument):
+            continue
+        files_read.append(document.path)
+        suffix = document.path.rsplit(".", 1)[-1].casefold() if "." in document.path else ""
+        for line_number, line in enumerate(document.content.splitlines(), 1):
+            lowered = line.casefold()
+            target_match = bool(tokens and any(token in lowered for token in tokens))
+            build_target_match = suffix in {"gn", "gni"} and (
+                target_match
+                or (source_basename and source_basename in lowered)
+                or (source_stem and source_stem in lowered)
+                or "ohos_executable" in lowered
+                and ("executable" in lowered or "target" in lowered)
+            )
+            config_match = suffix in {"json", "cfg", "rc", "conf", "xml"} and target_match
+            # Source implementation facts are collected symmetrically for
+            # competing candidates.  This captures bind/recv/dispatch lines
+            # even when the implementation does not repeat the process name
+            # or port literal on every line.
+            source_operation_match = suffix in {"c", "cc", "cpp", "cxx", "h", "hpp"} and (
+                re.search(r"\b(?:bind|listen|accept|recvfrom|recv)\s*\(", lowered) is not None
+                or "spserversocket::" in lowered
+                or "spthreadsocket::" in lowered
+                or "handlem" in lowered
+                or "udpport" in lowered
+                or "udpexport" in lowered
+                or "tcpport" in lowered
+            )
+            if suffix in {"gn", "gni"}:
+                if not build_target_match:
+                    continue
+                kind = "executable_build"
+                # Direct process/executable declarations outrank source-name
+                # references, which in turn outrank generic target blocks.
+                priority = 5 if target_match else 4 if (target.process_hint and target.process_hint.casefold() in lowered) else 2
+                build_candidates.append((priority, line_number, document, kind, line))
+                continue
+            elif suffix in {"json", "cfg", "rc", "conf", "xml"}:
+                if not config_match:
+                    continue
+                kind = "service_config"
+                config_candidates.append((5 if target_match else 2, line_number, document, kind, line))
+                continue
+            if suffix not in {"c", "cc", "cpp", "cxx", "h", "hpp"} or not source_operation_match:
+                continue
+            if re.search(r"\b(?:bind|listen)\s*\(", lowered):
+                kind = "socket_bind_listen"
+            elif re.search(r"\b(?:accept|recvfrom|recv)\s*\(", lowered):
+                kind = "socket_accept_read"
+            elif "handlem" in lowered or "spthreadsocket::" in lowered:
+                kind = "protocol_dispatch"
+            elif "udpport" in lowered or "udpexport" in lowered or "tcpport" in lowered:
+                kind = "constant_definition"
+            else:
+                kind = "symbol_reference"
+            # Bind/recv/dispatch/port facts are more useful than constructor
+            # and logging lines.  Sorting within each file keeps the bounded
+            # sample stable while ensuring the security-relevant operations
+            # survive truncation.
+            priority = {
+                "socket_bind_listen": 5,
+                "socket_accept_read": 5,
+                "protocol_dispatch": 4,
+                "constant_definition": 4,
+                "symbol_reference": 1,
+            }[kind]
+            source_candidates.append((priority, line_number, document, kind, line))
+
+    def select_candidates(
+        candidates: list[tuple[int, int, SourceDocument, str, str]],
+        limit: int,
+        *,
+        per_file: int | None = None,
+    ) -> list[tuple[int, int, SourceDocument, str, str]]:
+        selected: list[tuple[int, int, SourceDocument, str, str]] = []
+        counts: dict[str, int] = {}
+        # Preserve path discovery order for ties, but prefer concrete
+        # operation/ownership lines over constructors and generic references.
+        for item in sorted(candidates, key=lambda value: (-value[0], value[1], value[2].path)):
+            if len(selected) >= limit:
+                break
+            path_key = item[2].path
+            if per_file is not None and counts.get(path_key, 0) >= per_file:
+                continue
+            selected.append(item)
+            counts[path_key] = counts.get(path_key, 0) + 1
+        return selected
+
+    selected = []
+    # Build/config facts are placed before source facts in the model prompt so
+    # process ownership is visible before the nearly identical socket code.
+    selected.extend(select_candidates(build_candidates, _MAX_CANDIDATE_BUILD_FACTS))
+    selected.extend(select_candidates(config_candidates, _MAX_CANDIDATE_CONFIG_FACTS))
+    selected.extend(
+        select_candidates(
+            source_candidates,
+            _MAX_CANDIDATE_SOURCE_FACTS - _MAX_CANDIDATE_BUILD_FACTS - _MAX_CANDIDATE_CONFIG_FACTS,
+            per_file=_MAX_CANDIDATE_SOURCE_FACTS_PER_FILE,
+        )
+    )
+
+    # If a candidate has no build/config metadata, fill the unused slots with
+    # additional source facts while retaining the per-file cap for the first
+    # pass.  This keeps ordinary single-file services useful without allowing
+    # them to crowd out metadata when it exists.
+    if len(selected) < _MAX_CANDIDATE_SOURCE_FACTS:
+        chosen_keys = {(item[2].path, item[1], item[3]) for item in selected}
+        for item in select_candidates(source_candidates, _MAX_CANDIDATE_SOURCE_FACTS):
+            key = (item[2].path, item[1], item[3])
+            if key in chosen_keys:
+                continue
+            selected.append(item)
+            chosen_keys.add(key)
+            if len(selected) >= _MAX_CANDIDATE_SOURCE_FACTS:
+                break
+
+    evidence_ids: list[str] = []
+    facts: list[dict[str, Any]] = []
+    for _, line_number, document, kind, _line in selected:
+        try:
+            evidence = store.add_source_excerpt(
+                document,
+                line_start=line_number,
+                kind=kind,
+                tool_name="opengrok.read_source.candidate_metadata",
+                source_endpoint="opengrok.read_source",
+                relation_from=target.raw_input,
+                relation_to=f"{mapping.project_name}:{mapping.source_root or mapping.source_path}",
+            )
+        except Exception:
+            continue
+        if evidence.evidence_id in evidence_ids:
+            continue
+        evidence_ids.append(evidence.evidence_id)
+        facts.append(
+            {
+                "evidence_id": evidence.evidence_id,
+                "kind": evidence.kind,
+                "source_path": evidence.source_path,
+                "line_start": evidence.line_start,
+                "line_end": evidence.line_end,
+                "excerpt": evidence.excerpt[:_MAX_CONFIRMATION_TEXT],
+            }
+        )
+    return tuple(evidence_ids), tuple(facts), tuple(files_read)
+
+
+def _compact_repository_mappings_payload(
+    mappings: Iterable[RepositoryMapping | Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Bound repository mappings stored in the session checkpoint.
+
+    ``repository_resolutions.json`` keeps the complete, auditable mapping
+    rows.  The session only needs the highest-ranked rows and enough evidence
+    IDs to reselect a repository in the next stage.  Without this split, a
+    broad LLM search can attach thousands of evidence IDs to dozens of
+    project rows and exceed ``LocatorSession``'s 64 KiB mapping field limit.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for item in mappings:
+        if isinstance(item, RepositoryMapping):
+            row = item.to_dict()
+        elif isinstance(item, Mapping):
+            row = dict(item)
+        else:
+            continue
+        evidence_ids = row.get("evidence_ids")
+        if isinstance(evidence_ids, list):
+            row["evidence_ids"] = evidence_ids[:_MAX_SESSION_MAPPING_EVIDENCE_IDS]
+        warnings = row.get("warnings")
+        if isinstance(warnings, list):
+            row["warnings"] = warnings[:_MAX_CONFIRMATION_REASONS]
+        rows.append(row)
+
+    total = len(rows)
+    rows = rows[:_MAX_SESSION_REPOSITORY_MAPPINGS]
+    payload: dict[str, Any] = {"mappings": rows}
+    if total > len(rows):
+        payload["truncated"] = True
+        payload["total_mappings"] = total
+        payload["truncated_mapping_count"] = total - len(rows)
+    return payload
+
+
+def _session_evidence_checkpoint_updates(
+    evidence_ids: Iterable[str],
+    metrics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a bounded evidence-id patch for the resumable session.
+
+    ``evidence.json`` is the complete evidence store.  The checkpoint only
+    needs a navigational sample.  Keeping this normalization here also lets a
+    session created by an older worker repair its oversized evidence list when
+    it next crosses the repository-resolution boundary.
+    """
+
+    normalized = tuple(dict.fromkeys(str(item) for item in evidence_ids if item))
+    checkpoint_metrics = dict(metrics or {})
+    checkpoint_metrics["evidence_total"] = len(normalized)
+    checkpoint_metrics["evidence_ids_truncated"] = len(normalized) > _MAX_SESSION_EVIDENCE_IDS
+    return {
+        "evidence_ids": normalized[:_MAX_SESSION_EVIDENCE_IDS],
+        "metrics": checkpoint_metrics,
+    }
+
+
+def _confirmation_role_payload(
+    result: Any,
+    *,
+    store: EvidenceStore | None = None,
+    limit: int,
+) -> list[dict[str, Any]]:
     """Return a small, UI-safe slice of attribution candidates.
 
     The complete candidate list remains available in the attribution
@@ -1542,6 +3769,7 @@ def _confirmation_role_payload(result: Any, *, limit: int) -> list[dict[str, Any
     candidates = raw.get("candidates", [])
     if not isinstance(candidates, list):
         return []
+    by_id = {item.evidence_id: item for item in store.evidence} if store else {}
     compact: list[dict[str, Any]] = []
     for candidate in candidates[:limit]:
         if not isinstance(candidate, Mapping):
@@ -1559,6 +3787,29 @@ def _confirmation_role_payload(result: Any, *, limit: int) -> list[dict[str, Any
         ] if isinstance(locations, list) else []
         evidence_ids = candidate.get("evidence_ids", [])
         reasons = candidate.get("reasons", [])
+        source_evidence: list[dict[str, Any]] = []
+        if isinstance(evidence_ids, list) and by_id:
+            for evidence_id in evidence_ids:
+                if not isinstance(evidence_id, str):
+                    continue
+                item = by_id.get(evidence_id)
+                if item is None:
+                    continue
+                source_evidence.append(
+                    {
+                        "evidence_id": item.evidence_id,
+                        "kind": item.kind,
+                        "source_path": item.source_path,
+                        "line_start": item.line_start,
+                        "line_end": item.line_end,
+                        "symbol": item.symbol,
+                        "excerpt": item.excerpt[:_MAX_CONFIRMATION_TEXT],
+                        "relation_from": item.relation_from,
+                        "relation_to": item.relation_to,
+                    }
+                )
+                if len(source_evidence) >= _MAX_CONFIRMATION_LOCATIONS:
+                    break
         compact.append(
             {
                 "role": candidate.get("role"),
@@ -1573,9 +3824,37 @@ def _confirmation_role_payload(result: Any, *, limit: int) -> list[dict[str, Any
                     _compact(item, _MAX_CONFIRMATION_TEXT)
                     for item in reasons[:_MAX_CONFIRMATION_REASONS]
                 ] if isinstance(reasons, list) else [],
+                # Keep the source line beside the role instead of forcing the
+                # confirmation UI to guess which of the global evidence rows
+                # supports this candidate.  This is bounded to the same small
+                # number of locations shown above.
+                "source_evidence": source_evidence,
             }
         )
     return compact
+
+
+def _confirmation_candidate_evidence_ids(result: Any) -> tuple[str, ...]:
+    """Return evidence cited by bounded attribution candidates in stable order."""
+
+    try:
+        raw = result.to_dict()
+    except (AttributeError, TypeError, ValueError):
+        return ()
+    candidates = raw.get("candidates", [])
+    if not isinstance(candidates, list):
+        return ()
+    ids: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        evidence_ids = candidate.get("evidence_ids", [])
+        if not isinstance(evidence_ids, list):
+            continue
+        for evidence_id in evidence_ids:
+            if isinstance(evidence_id, str) and evidence_id not in ids:
+                ids.append(evidence_id)
+    return tuple(ids[:_MAX_ATTRIBUTION_EVIDENCE_IDS])
 
 
 def _confirmation_evidence_payload(
@@ -1637,9 +3916,15 @@ def _confirmation_summary_payload(
     )
     server_payload = _compact_attribution_payload(server.to_dict())
     client_payload = _compact_attribution_payload(client.to_dict())
+    # Candidate role evidence is placed first so the bounded global evidence
+    # list contains the actual server/client source lines shown in the role
+    # cards.  The aggregate result IDs are retained for compatibility and for
+    # repository/target evidence that is useful in the confirmation view.
     referenced_ids = tuple(
         dict.fromkeys(
             (
+                *_confirmation_candidate_evidence_ids(server),
+                *_confirmation_candidate_evidence_ids(client),
                 *server.evidence_ids,
                 *client.evidence_ids,
                 *mapping.evidence_ids,
@@ -1692,6 +3977,10 @@ def _confirmation_summary_payload(
             "basename": target.basename,
             "service_hint": target.service_hint,
             "macro_hint": target.macro_hint,
+            "transport": target.transport,
+            "address": target.address,
+            "port": target.port,
+            "process_hint": target.process_hint,
             "target_revision": target.target_revision,
         },
         "repository": {
@@ -1712,15 +4001,24 @@ def _confirmation_summary_payload(
         },
         "server": {
             "status": server.status,
+            "chain_status": server.status,
             "confirmed": server.confirmed,
             "score": server.score,
+            "best_candidate": server_payload.get("best_candidate"),
+            "repository_confidence": server_payload.get("repository_confidence", "UNKNOWN"),
+            "selection_confidence_score": server_payload.get("selection_confidence_score", 0),
+            "selection_reasons": list(server_payload.get("selection_reasons", ())),
             "predicates": dict(server.predicates),
             "missing_predicates": list(missing_server_predicates),
             # The structural predicates remain an auditable signal.  They are
             # advisory at this point: an explicit user decision is still
             # required before any repository operation is attempted.
             "predicate_gate": "advisory" if missing_server_predicates else "satisfied",
-            "roles": _confirmation_role_payload(server, limit=_MAX_CONFIRMATION_ROLES),
+            "roles": _confirmation_role_payload(
+                server,
+                store=store,
+                limit=_MAX_CONFIRMATION_ROLES,
+            ),
             "evidence_ids": list(server.evidence_ids[:_MAX_ATTRIBUTION_EVIDENCE_IDS]),
             "reasons": list(server.reasons[:_MAX_CONFIRMATION_REASONS]),
             "warnings": list(server.warnings[:_MAX_CONFIRMATION_REASONS]),
@@ -1732,7 +4030,11 @@ def _confirmation_summary_payload(
             "completed": client.completed,
             "score": client.score,
             "predicates": dict(client.predicates),
-            "roles": _confirmation_role_payload(client, limit=_MAX_CONFIRMATION_ROLES),
+            "roles": _confirmation_role_payload(
+                client,
+                store=store,
+                limit=_MAX_CONFIRMATION_ROLES,
+            ),
             "evidence_ids": list(client.evidence_ids[:_MAX_ATTRIBUTION_EVIDENCE_IDS]),
             "reasons": list(client.reasons[:_MAX_CONFIRMATION_REASONS]),
             "warnings": list(client.warnings[:_MAX_CONFIRMATION_REASONS]),
@@ -1761,11 +4063,18 @@ class SourceLocatorWorker:
     def _semantic_server_evidence_ids(self, store: EvidenceStore) -> tuple[str, ...]:
         """Return current-session LLM server anchors after ID validation."""
 
+        target = _target(self.session)
+        bound_ids = {item.evidence_id for item in _target_bound_evidence(store, target)}
         semantic = _load_llm_role_result(
             self.machine,
             allowed_evidence_ids=(item.evidence_id for item in store.evidence),
         )
         if semantic is None or semantic.server.status not in {"confirmed", "possible"}:
+            return ()
+        # A stale role artifact may cite a generic row that was later rejected
+        # by the target-identity gate.  Do not let it add ranking weight back
+        # to an unrelated repository.
+        if any(item not in bound_ids for item in semantic.server.evidence_ids):
             return ()
         return semantic.server.evidence_ids
 
@@ -1795,22 +4104,28 @@ class SourceLocatorWorker:
         """
 
         role_artifact_path = _session_dir(self.machine) / "llm_role_attribution.json"
+        target = _target(self.session)
+        attribution_evidence = _target_bound_evidence(store, target)
         attributor = self.runtime.llm_role_attributor
         if attributor is None:
             return _load_llm_role_result(
                 self.machine,
-                allowed_evidence_ids=(item.evidence_id for item in store.evidence),
+                allowed_evidence_ids=(item.evidence_id for item in attribution_evidence),
             ), dict(self.session.artifacts)
         # The server stage is the owner of this one-call artifact.  When the
         # client stage runs immediately afterwards (or a session is resumed),
         # reuse it instead of spending a second model call.
         if role_artifact_path.exists():
-            return _load_llm_role_result(
+            cached = _load_llm_role_result(
                 self.machine,
-                allowed_evidence_ids=(item.evidence_id for item in store.evidence),
-            ), dict(self.session.artifacts)
-        target = _target(self.session)
-        eligible, excluded = partition_attribution_evidence(store)
+                allowed_evidence_ids=(item.evidence_id for item in attribution_evidence),
+            )
+            if cached is not None:
+                return cached, dict(self.session.artifacts)
+            # A previous run may have cited rows that the stricter target gate
+            # now rejects.  Fall through and regenerate the bounded decision
+            # when a role model is available instead of reusing stale claims.
+        eligible, excluded = partition_attribution_evidence(attribution_evidence)
         if not eligible:
             artifacts = _save_artifact(
                 self.machine,
@@ -1851,6 +4166,213 @@ class SourceLocatorWorker:
             excluded_evidence_ids=excluded,
         )
         return result, artifacts
+
+    def _run_candidate_review(
+        self,
+        resolved: Iterable[RepositoryMapping],
+        store: EvidenceStore,
+        target: TargetSpec,
+    ) -> tuple[RepositoryMapping, dict[str, Any], dict[str, str]]:
+        """Optionally let the model PK competing repository mappings.
+
+        The deterministic score remains the fallback and is never replaced by
+        model prose.  Supplemental build/config evidence is read only through
+        the configured OpenGrok client and is persisted in ``evidence.json``.
+        """
+
+        def enrich_selected_mapping(
+            mapping: RepositoryMapping,
+            review: Mapping[str, Any],
+        ) -> RepositoryMapping:
+            """Attach candidate-PK metadata evidence to the selected mapping.
+
+            Candidate metadata is read after Manifest resolution.  Keeping its
+            evidence IDs on the selected mapping lets the final attribution
+            stage recognize BUILD.gn/bundle.json ownership facts and prevents
+            the confirmation summary from mixing a selected repository with
+            pre-PK evidence from a competing copy.
+            """
+
+            rows = review.get("candidates", []) if isinstance(review, Mapping) else []
+            if not isinstance(rows, list):
+                return mapping
+            row = next(
+                (
+                    item
+                    for item in rows
+                    if isinstance(item, Mapping)
+                    and item.get("project_name") == mapping.project_name
+                ),
+                None,
+            )
+            if not isinstance(row, Mapping):
+                return mapping
+            supplemental_ids: list[str] = []
+            facts = row.get("source_facts", [])
+            if isinstance(facts, list):
+                for fact in facts:
+                    if not isinstance(fact, Mapping):
+                        continue
+                    evidence_id = fact.get("evidence_id")
+                    if isinstance(evidence_id, str) and evidence_id.startswith("E-"):
+                        supplemental_ids.append(evidence_id)
+            if not supplemental_ids:
+                return mapping
+            return replace(
+                mapping,
+                evidence_ids=tuple(
+                    dict.fromkeys((*mapping.evidence_ids, *supplemental_ids))
+                ),
+            )
+
+        ordered = sorted(
+            tuple(resolved),
+            key=lambda item: (
+                -self._mapping_score(item, store, target=target)[0],
+                -(1 if item.status == "resolved" else 0),
+                item.project_name or "",
+            ),
+        )
+        fallback = ordered[0]
+        review_path = _session_dir(self.machine) / "repository_candidate_review.json"
+        if review_path.exists() and review_path.is_file() and not review_path.is_symlink():
+            try:
+                cached = _read_json(review_path)
+                cached_candidates = cached.get("candidates", []) if isinstance(cached, Mapping) else []
+                cached_names = tuple(
+                    item.get("project_name")
+                    for item in cached_candidates
+                    if isinstance(item, Mapping) and isinstance(item.get("project_name"), str)
+                )
+                current_names = tuple(item.project_name for item in ordered[:_MAX_CANDIDATE_REVIEW_CANDIDATES])
+                cached_selected = cached.get("selected_repository") if isinstance(cached, Mapping) else None
+                if (
+                    isinstance(cached, Mapping)
+                    and cached.get("status") in {"complete", "ERROR_FALLBACK", "SKIPPED"}
+                    and cached_names == current_names
+                    and isinstance(cached_selected, str)
+                ):
+                    selected = next(
+                        (item for item in ordered if item.project_name == cached_selected),
+                        fallback,
+                    )
+                    return (
+                        enrich_selected_mapping(selected, cached),
+                        dict(cached),
+                        dict(self.session.artifacts),
+                    )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        competitive: list[RepositoryMapping] = []
+        for item in ordered:
+            kinds = {
+                evidence.kind
+                for evidence in store.evidence
+                if evidence.evidence_id in set(item.evidence_ids)
+            }
+            if "socket_accept_read" in kinds:
+                competitive.append(item)
+        trigger = len(competitive) >= 2 or (bool(target.process_hint) and len(ordered) >= 2)
+        base_payload: dict[str, Any] = {
+            "schema_version": "openant.source-locator.candidate-review.v1",
+            "status": "SKIPPED",
+            "triggered": trigger,
+            "candidate_count": len(ordered),
+            "competing_candidate_count": len(competitive),
+            "fallback_repository": fallback.project_name,
+            "candidates": [],
+            "decision": None,
+        }
+        if self.runtime.llm_candidate_reviewer is None or not trigger:
+            base_payload["reason"] = (
+                "未检测到两个以上具有竞争性 socket 接收证据的候选，"
+                "或未启用候选仓库 LLM 复核。"
+            )
+            artifacts = _save_artifact(
+                self.machine,
+                "repository_candidate_review.json",
+                base_payload,
+                "候选仓库 PK 未触发；保留确定性最高分候选。",
+            )
+            return fallback, base_payload, artifacts
+
+        rows: list[dict[str, Any]] = []
+        for item in ordered[:_MAX_CANDIDATE_REVIEW_CANDIDATES]:
+            supplemental_ids, source_facts, files_read = _candidate_metadata_facts(
+                mapping=item,
+                target=target,
+                client=self.runtime.client,
+                store=store,
+                max_source_bytes=self.runtime.max_source_bytes,
+            )
+            mapping_score, counts = self._mapping_score(item, store, target=target)
+            # Keep newly read build/config IDs first so the bounded candidate
+            # row cannot truncate away the very facts the model is expected to
+            # use when a mapping already carries 64 historical IDs.
+            evidence_ids = tuple(dict.fromkeys((*supplemental_ids, *item.evidence_ids)))
+            rows.append(
+                {
+                    "project_name": item.project_name,
+                    "source_root": item.source_root,
+                    "source_path": item.source_path,
+                    "repo_url": item.repo_url,
+                    "ranking_score": mapping_score,
+                    "role_evidence_counts": counts,
+                    "evidence_ids": list(evidence_ids[:_MAX_SESSION_MAPPING_EVIDENCE_IDS]),
+                    "source_facts": list(source_facts),
+                    "metadata_files_read": list(files_read),
+                }
+            )
+        if any(row.get("source_facts") for row in rows):
+            _json_write(_session_dir(self.machine) / "evidence.json", store.to_dict())
+        base_payload["candidates"] = rows
+        base_payload["metadata_evidence_count"] = sum(
+            len(row.get("source_facts", ())) for row in rows
+        )
+        try:
+            result = self.runtime.llm_candidate_reviewer.review(
+                target=target.to_dict(),
+                candidates=rows,
+            )
+            selected = next(
+                (item for item in ordered if item.project_name == result.primary_repository),
+                None,
+            )
+            if selected is None:
+                raise CandidateReviewError("模型选择的仓库不在 resolved mapping 中")
+            base_payload.update(
+                {
+                    "status": "complete",
+                    "selected_repository": selected.project_name,
+                    "selected_by": "llm_candidate_review",
+                    "decision": result.to_dict(),
+                    "fallback_used": False,
+                }
+            )
+            artifacts = _save_artifact(
+                self.machine,
+                "repository_candidate_review.json",
+                base_payload,
+                "多个候选仓库的最终 LLM PK；只接受候选集合内的项目和源码证据，失败时回退最高分。",
+            )
+            return enrich_selected_mapping(selected, base_payload), base_payload, artifacts
+        except Exception as exc:
+            base_payload.update(
+                {
+                    "status": "ERROR_FALLBACK",
+                    "selected_repository": fallback.project_name,
+                    "selected_by": "deterministic_score",
+                    "fallback_used": True,
+                    "error": _compact(exc),
+                }
+            )
+            artifacts = _save_artifact(
+                self.machine,
+                "repository_candidate_review.json",
+                base_payload,
+                "候选 LLM PK 失败的结构化错误摘要；已安全回退确定性最高分候选。",
+            )
+            return enrich_selected_mapping(fallback, base_payload), base_payload, artifacts
 
     def _transition(
         self,
@@ -1917,7 +4439,7 @@ class SourceLocatorWorker:
             )
         target = _target(self.session)
         try:
-            result = client.probe(probe_path=target.socket_path)
+            result = client.probe(probe_path=target.socket_path if target.target_type == "unix_socket" else None)
         except (OpenGrokError, ValueError) as exc:
             return self._transition(
                 "OPENGROK_UNAVAILABLE",
@@ -2090,6 +4612,7 @@ class SourceLocatorWorker:
             execution = result.executions[0]
             audit["execution"] = execution.to_dict()
             if execution.status == "ok" and execution.response is not None:
+                target_context_dirs = _target_bound_context_directories(store, target)
                 for path, hits in execution.response.results.items():
                     if _excluded_source_path(path, self.session.excluded_paths):
                         continue
@@ -2105,11 +4628,25 @@ class SourceLocatorWorker:
                                 hit.line,
                                 target,
                             )
+                            if (
+                                not _network_operation_matches_target(hit.line, target)
+                                or not _target_evidence_is_bound(
+                                    path,
+                                    hit.line,
+                                    target,
+                                    target_context_dirs,
+                                )
+                            ):
+                                continue
                             store.add_search_hit(
                                 path,
                                 hit,
                                 kind=kind,
-                                symbol=target.service_hint,
+                                symbol=_evidence_symbol_for_line(
+                                    hit.line,
+                                    target,
+                                    query_value=action.query,
+                                ),
                                 query_id=query_id,
                                 source_endpoint="opengrok.search.llm",
                             )
@@ -2175,11 +4712,7 @@ class SourceLocatorWorker:
             audit["execution"] = {"status": "error", "error_message": "read_source 返回类型无效"}
             return audit, action_key
         lines = document.content.splitlines()
-        identity_terms = tuple(
-            term.lower()
-            for term in (target.socket_path, target.basename, target.service_hint, target.macro_hint)
-            if term
-        )
+        identity_terms = tuple(term.lower() for term in target_identity_terms(target) if term)
         selected_lines = [
             index
             for index, line in enumerate(lines, 1)
@@ -2190,16 +4723,33 @@ class SourceLocatorWorker:
         if not selected_lines:
             selected_lines = list(range(1, min(len(lines), _MAX_HITS_PER_PATH) + 1))
         evidence_ids: list[str] = []
+        target_context_dirs = _target_bound_context_directories(store, target)
         for line_no in selected_lines:
             try:
+                if not _network_operation_matches_target(lines[line_no - 1], target):
+                    continue
+                line_kind = self._llm_evidence_kind(action.expected_relation, lines[line_no - 1], target)
+                if (
+                    not _target_evidence_is_bound(
+                        document.path,
+                        lines[line_no - 1],
+                        target,
+                        target_context_dirs,
+                    )
+                ):
+                    continue
                 evidence = store.add_source_excerpt(
                     document,
                     line_start=line_no,
-                    kind=self._llm_evidence_kind(action.expected_relation, lines[line_no - 1], target),
-                    symbol=target.service_hint,
+                    kind=line_kind,
+                    symbol=_evidence_symbol_for_line(
+                        lines[line_no - 1],
+                        target,
+                        query_value=requested_path,
+                    ),
                     query_id=query_id,
                     source_endpoint="opengrok.read_source.llm",
-                    relation_from=target.socket_path or target.service_hint,
+                    relation_from=target_relation(target),
                     relation_to=f"{document.path}:{line_no}",
                 )
             except ValueError:
@@ -2287,7 +4837,17 @@ class SourceLocatorWorker:
         if isinstance(round_offset, bool) or not isinstance(round_offset, int) or round_offset < 0:
             raise SourceLocatorWorkerError("round_offset 必须是非负整数")
         budget = self.session.budget
-        max_actions = _budget_int(budget, "max_llm_actions", default=20, maximum=20, minimum=0)
+        max_actions = _budget_int(
+            budget,
+            "max_llm_actions",
+            default=(
+                planner.budget.max_actions
+                if planner is not None
+                else LLM_SEARCH_DEFAULT_MAX_ACTIONS
+            ),
+            maximum=LLM_SEARCH_MAX_ACTIONS,
+            minimum=0,
+        )
         accepted_before = self._persisted_llm_action_count(self.session.executed_actions)
         remaining_actions = max(0, max_actions - accepted_before)
         if remaining_actions <= 0:
@@ -2299,6 +4859,7 @@ class SourceLocatorWorker:
         action_queries: list[str] = []
         planner_feedback = ""
         duplicate_streak = 0
+        execution_failure_streak = 0
         round_index = 0
         while len(action_keys) < remaining_actions and planner.model_calls < planner.budget.max_model_calls:
             llm_audit, llm_action_key = self._execute_llm_action(
@@ -2335,7 +4896,7 @@ class SourceLocatorWorker:
                     f"上一动作 {rejected} 已执行过，禁止重复；"
                     "请改选不同的 kind 或 query，并优先补足缺失证据。"
                 )
-                if duplicate_streak >= 3:
+                if duplicate_streak >= _MAX_LLM_DUPLICATE_STREAK:
                     self.machine.record_event(
                         event_type="llm.search.retry_exhausted",
                         summary_zh="连续重复检索达到上限，结束本轮语义检索",
@@ -2354,7 +4915,7 @@ class SourceLocatorWorker:
                         f"上一动作 {rejected or '未记录'} 已执行过，禁止重复；"
                         "请改选不同的 kind 或 query，并优先补足缺失证据。"
                     )
-                    if duplicate_streak >= 3:
+                    if duplicate_streak >= _MAX_LLM_DUPLICATE_STREAK:
                         self.machine.record_event(
                             event_type="llm.search.retry_exhausted",
                             summary_zh="连续重复检索达到上限，结束本轮语义检索",
@@ -2369,7 +4930,7 @@ class SourceLocatorWorker:
                     f"上一动作 {llm_action_key} 已执行过，禁止重复；"
                     "请改选不同的 kind 或 query，并优先补足缺失证据。"
                 )
-                if duplicate_streak >= 3:
+                if duplicate_streak >= _MAX_LLM_DUPLICATE_STREAK:
                     self.machine.record_event(
                         event_type="llm.search.retry_exhausted",
                         summary_zh="连续重复检索达到上限，结束本轮语义检索",
@@ -2379,7 +4940,6 @@ class SourceLocatorWorker:
                 continue
 
             duplicate_streak = 0
-            planner_feedback = ""
             local_actions.append(llm_action_key)
             action_keys.append(llm_action_key)
             plan = audit.get("plan")
@@ -2389,7 +4949,34 @@ class SourceLocatorWorker:
                 if isinstance(query, str):
                     action_queries.append(query)
             if isinstance(execution, Mapping) and execution.get("status") not in {"ok", "skipped_duplicate"}:
-                break
+                # OpenGrok 400s, transient connection failures and missing
+                # raw documents are tool failures, not proof that the target
+                # has no source.  Keep the accepted action in history (so it
+                # is not replayed), expose the failure to the next model
+                # turn, and let it choose a different query or file.  A
+                # consecutive cap prevents an unavailable endpoint from
+                # consuming the entire semantic budget.
+                execution_failure_streak += 1
+                error_type = execution.get("error_type") or "OpenGrok 查询失败"
+                error_message = execution.get("error_message") or execution.get("status") or "未知工具错误"
+                planner_feedback = (
+                    f"上一动作 {llm_action_key} 执行失败（{error_type}: {_compact(error_message)}）；"
+                    "不要重复该动作，改用不同的查询类型、目标符号或已知候选文件继续补证。"
+                )
+                if execution_failure_streak >= _MAX_LLM_EXECUTION_FAILURE_STREAK:
+                    self.machine.record_event(
+                        event_type="llm.search.execution_retry_exhausted",
+                        summary_zh="连续 OpenGrok 工具失败达到上限，结束本轮语义检索",
+                        details={
+                            "failure_streak": execution_failure_streak,
+                            "phase": phase,
+                            "last_error": _compact(error_message),
+                        },
+                    )
+                    break
+                continue
+            execution_failure_streak = 0
+            planner_feedback = ""
         return audits, action_keys, action_queries
 
     def _advance_search(self) -> LocatorSession:
@@ -2423,9 +5010,19 @@ class SourceLocatorWorker:
         # executed by this persisted session before touching OpenGrok.  The
         # value-only history is retained for backward compatibility, while
         # executed_actions carries a kind/file-type-aware key for new runs.
+        remaining_query_budget = max(0, session_query_limit - consumed_queries)
+        # Keep one slot for the source-defined alias follow-up (for example
+        # ``PARAM_SERVICE`` discovered beside a path macro).  Without this
+        # reservation a small but valid ``max_queries`` value can consume the
+        # entire budget during the broad first pass and silently skip the
+        # more selective listener query.  If no alias is found the reserved
+        # slot simply remains unused; the session is still bounded.
+        initial_budget = remaining_query_budget
+        if remaining_query_budget > 1:
+            initial_budget -= 1
         initial_queries = build_initial_queries(
             target,
-            max_queries=min(32, max(1, session_query_limit - consumed_queries)),
+            max_queries=min(32, max(1, initial_budget)),
         )
         executed_values = set(self.session.executed_queries)
         executed_actions = set(self.session.executed_actions)
@@ -2502,6 +5099,10 @@ class SourceLocatorWorker:
         # new search may add stronger evidence, but must never erase the old
         # evidence that justified the previous candidate.
         store = _load_evidence(self.machine)
+        target_context_dirs = _target_context_directories(search_result.to_dict().get("executions", ()), target)
+        target_conflicting_paths = _named_socket_conflicting_paths(
+            search_result.to_dict().get("executions", ()), target
+        )
         for execution in search_result.executions:
             if execution.status != "ok" or execution.response is None:
                 continue
@@ -2509,14 +5110,49 @@ class SourceLocatorWorker:
                 for hit in hits:
                     if len(store.evidence) >= _MAX_SEARCH_EVIDENCE:
                         break
+                    execution_payload = {
+                        "query": execution.query.to_dict(),
+                        "path": path,
+                        "target_context_dirs": target_context_dirs,
+                        "target_path_conflict": path in target_conflicting_paths,
+                    }
+                    if not _search_hit_is_target_evidence(execution_payload, hit.to_dict(), target):
+                        # Keep the path in search_plan.json for later ranking,
+                        # but do not let an unrelated numeric/API hit satisfy
+                        # socket_identity or server predicates.
+                        continue
                     try:
+                        # Preserve the semantic kind discovered from the
+                        # actual source line.  In particular, a config
+                        # ``"name": "dnsproxyd"`` or a
+                        # ``GetControlSocket("dnsproxyd")`` hit should not
+                        # be flattened into ``literal_match`` merely because
+                        # it came from a full-text query.
+                        semantic_kind = _line_kind(
+                            hit.line,
+                            target,
+                            query_kind=execution.query.kind,
+                            query_value=execution.query.value,
+                        )
+                        if semantic_kind not in _LLM_EVIDENCE_KINDS:
+                            semantic_kind = (
+                                "macro_definition"
+                                if execution.query.kind == "definition" and target.macro_hint
+                                else (
+                                    "symbol_reference"
+                                    if execution.query.kind in {"definition", "symbol"}
+                                    else "literal_match"
+                                )
+                            )
                         store.add_search_hit(
                             path,
                             hit,
-                            kind="macro_definition" if execution.query.kind == "definition" and target.macro_hint else (
-                                "symbol_reference" if execution.query.kind in {"definition", "symbol"} else "literal_match"
+                            kind=semantic_kind,
+                            symbol=_evidence_symbol_for_line(
+                                hit.line,
+                                target,
+                                query_value=execution.query.value,
                             ),
-                            symbol=target.service_hint,
                             query_id=execution.query.query_id,
                             source_endpoint="opengrok.search",
                         )
@@ -2610,6 +5246,11 @@ class SourceLocatorWorker:
         target = _target(self.session)
         store = _load_evidence(self.machine)
         search_payload = _read_json(_session_dir(self.machine) / "search_plan.json")
+        target_context_dirs = _target_context_directories(search_payload.get("executions", ()), target)
+        target_bound_context_dirs = _target_bound_context_directories(store, target)
+        target_conflicting_paths = _named_socket_conflicting_paths(
+            search_payload.get("executions", ()), target
+        )
         paths: list[str] = []
         for execution in search_payload.get("executions", []):
             response = execution.get("response") or {}
@@ -2620,7 +5261,34 @@ class SourceLocatorWorker:
             path for path in paths
             if not _excluded_source_path(path, self.session.excluded_paths)
         ]
-        ranked = rank_paths(paths, target=target)[: self.runtime.max_paths]
+        ranked_candidates = list(rank_paths(paths, target=target))
+        if target.target_type == "network_socket":
+            ranked_candidates.sort(
+                key=lambda item: (
+                    -_network_path_priority(
+                        item.path,
+                        search_payload.get("executions", ()),
+                        target,
+                        target_context_dirs,
+                    ),
+                    -item.score,
+                    item.path,
+                )
+            )
+        elif target.target_type in {"unix_socket", "service_name", "macro"}:
+            ranked_candidates.sort(
+                key=lambda item: (
+                    -_unix_path_priority(
+                        item.path,
+                        search_payload.get("executions", ()),
+                        target,
+                        target_context_dirs,
+                    ),
+                    -item.score,
+                    item.path,
+                )
+            )
+        ranked = tuple(ranked_candidates[: self.runtime.max_paths])
         classifications = [item.to_dict() for item in ranked]
         for classification in ranked:
             # Search results intentionally retain every path in
@@ -2662,12 +5330,47 @@ class SourceLocatorWorker:
                 if line < 1 or line > len(document.content.splitlines()):
                     continue
                 lines = document.content.splitlines()
+                query_kind = query.get("kind") if isinstance(query, Mapping) else None
+                query_value = query.get("value") if isinstance(query, Mapping) else None
+                # A broad API hit is only a candidate.  Do not let a generic
+                # ``recvfrom``/``bind`` declaration, or an incidental port in
+                # a lookup table, anchor the whole nearby window.  For a
+                # process path query OpenGrok may return an ellipsis instead
+                # of source text; the path itself is the explicit anchor in
+                # that one bounded case.
+                hit_payload = hit if isinstance(hit, Mapping) else {}
+                hit_is_evidence = _search_hit_is_target_evidence(
+                    {
+                        "query": query,
+                        "path": path,
+                        "target_context_dirs": target_context_dirs,
+                        "target_path_conflict": path in target_conflicting_paths,
+                    },
+                    hit_payload,
+                    target,
+                )
+                path_anchor = (
+                    isinstance(query_kind, str)
+                    and query_kind == "path"
+                    and target.process_hint is not None
+                    and target.process_hint.casefold() in path.casefold()
+                )
+                if not hit_is_evidence and not path_anchor:
+                    continue
+                # Keep the decision made for the actual search hit constant
+                # while walking its bounded source window.  The previous
+                # implementation recomputed it for every neighbouring line,
+                # which meant a valid ``sin_port = htons(8283)`` hit could not
+                # retain the adjacent socket()/bind()/recvfrom() calls.
+                query_anchor_ok = hit_is_evidence or path_anchor
                 start = max(1, line - _TRACE_CONTEXT_LINES)
                 end = min(len(lines), line + _TRACE_CONTEXT_LINES)
                 for line_no in range(start, end + 1):
                     excerpt = lines[line_no - 1]
-                    query_kind = query.get("kind") if isinstance(query, Mapping) else None
-                    query_value = query.get("value") if isinstance(query, Mapping) else None
+                    if not _network_operation_matches_target(excerpt, target):
+                        continue
+                    if not _named_socket_operation_matches_target(excerpt, target):
+                        continue
                     kind = _line_kind(
                         excerpt,
                         target,
@@ -2678,15 +5381,36 @@ class SourceLocatorWorker:
                     if client_kind is not None and kind in {"literal_match", "symbol_reference"}:
                         kind = client_kind
                     identity_terms = tuple(
-                        term.lower()
-                        for term in (target.socket_path, target.basename, target.service_hint, target.macro_hint, query_value)
-                        if term
+                        term.lower() for term in (*target_identity_terms(target), query_value) if term
                     )
+                    has_target_identity = _line_has_target_identity(excerpt, target)
+                    # The search-hit filter above establishes the target
+                    # anchor.  It applies to every line in this bounded
+                    # context, so a target-specific port/path hit can recover
+                    # the adjacent server operations while generic queries
+                    # remain recall-only.
                     # Keep the exact hit, identity-bearing context, and
                     # concrete communication operations.  A 129-line window
                     # is useful for OpenHarmony's init-created descriptor and
                     # switch-based handlers, but retaining every line would
                     # turn comments and unrelated helpers into evidence.
+                    # Generic API queries (``bind``, ``socket``, ``recvfrom``,
+                    # and similar) are recall-only.  Their hits cannot become
+                    # positive server/client evidence unless the line or its
+                    # target-specific query also carries this target's
+                    # identity.  A port/process/path query may promote a
+                    # nearby operation because the window is anchored by a
+                    # target-bearing hit.
+                    if (
+                        kind in _COMMUNICATION_EVIDENCE_KINDS
+                        and not _target_evidence_is_bound(
+                            path,
+                            excerpt,
+                            target,
+                            target_bound_context_dirs,
+                        )
+                    ):
+                        continue
                     if (
                         line_no != line
                         and not any(term in excerpt.lower() for term in identity_terms)
@@ -2711,18 +5435,23 @@ class SourceLocatorWorker:
                             document,
                             line_start=line_no,
                             kind=kind,
-                            symbol=target.service_hint,
+                            symbol=_evidence_symbol_for_line(
+                                excerpt,
+                                target,
+                                query_value=query_value,
+                            ),
                             query_id=query.get("query_id"),
                             source_endpoint="opengrok.read_source",
-                            relation_from=target.socket_path or target.service_hint,
+                            relation_from=target_relation(target),
                             relation_to=f"{path}:{line_no}",
                         )
                         # Attach the target relation for attribution and client
                         # completion without making a claim about business callers.
-                        if target.service_hint:
+                        relation = target_relation(target)
+                        if relation:
                             try:
                                 store.add_edge(
-                                    src=target.service_hint,
+                                    src=relation,
                                     relation="candidate_source",
                                     dst=f"{path}:{line_no}",
                                     evidence_ids=(evidence.evidence_id,),
@@ -2739,17 +5468,30 @@ class SourceLocatorWorker:
         # _save_artifact starts from the current session map, so preserve the
         # evidence description added above.
         artifacts["evidence.json"] = "经过源码读取和 bind/accept/connect/dispatch 分类后的带行号证据图。"
+        all_evidence_ids = tuple(item.evidence_id for item in store.evidence)
+        checkpoint_metrics = dict(self.session.metrics)
+        checkpoint_metrics["evidence_total"] = len(all_evidence_ids)
+        checkpoint_metrics["evidence_ids_truncated"] = len(all_evidence_ids) > _MAX_SESSION_EVIDENCE_IDS
         return self._transition(
             "ATTRIBUTION_SERVER",
             f"已读取 {len(ranked)} 个候选文件并生成证据图，开始区分服务端角色",
-            updates={"artifacts": artifacts, "evidence_ids": tuple(item.evidence_id for item in store.evidence)},
+            updates={
+                "artifacts": artifacts,
+                # evidence.json is the complete source of truth; the session
+                # checkpoint keeps only a navigational sample so thousands of
+                # noisy search hits cannot overflow the 256 KiB checkpoint.
+                "evidence_ids": all_evidence_ids[:_MAX_SESSION_EVIDENCE_IDS],
+                "metrics": checkpoint_metrics,
+            },
             event_type="evidence.traced",
-            evidence_ids=tuple(item.evidence_id for item in store.evidence),
+            evidence_ids=all_evidence_ids,
         )
 
     def _advance_server(self) -> LocatorSession:
         store = _load_evidence(self.machine)
-        result = ServiceAttributor().attribute(store)
+        target = _target(self.session)
+        attribution_evidence = _target_bound_evidence(store, target)
+        result = ServiceAttributor().attribute(attribution_evidence)
         semantic, role_artifacts = self._run_llm_role_attribution(store)
         if semantic is not None:
             result = _merge_server_semantic(result, semantic.server, store)
@@ -2770,7 +5512,9 @@ class SourceLocatorWorker:
 
     def _advance_client(self) -> LocatorSession:
         store = _load_evidence(self.machine)
-        result = ClientLocator().locate(store)
+        target = _target(self.session)
+        attribution_evidence = _target_bound_evidence(store, target)
+        result = ClientLocator().locate(attribution_evidence)
         semantic, role_artifacts = self._run_llm_role_attribution(store)
         if semantic is not None:
             result = _merge_client_semantic(result, semantic.client, store)
@@ -2794,10 +5538,20 @@ class SourceLocatorWorker:
             return self._transition(
                 "NEEDS_REVIEW",
                 "没有 Manifest 配置，保留代码证据但不猜测 GitCode 仓库",
-                updates={"last_error": "未配置可验证的 Manifest"},
+                updates={
+                    **_session_evidence_checkpoint_updates(
+                        self.session.evidence_ids,
+                        self.session.metrics,
+                    ),
+                    "last_error": "未配置可验证的 Manifest",
+                },
                 event_type="repository.mapping.missing_manifest",
             )
         store = _load_evidence(self.machine)
+        checkpoint_updates = _session_evidence_checkpoint_updates(
+            (item.evidence_id for item in store.evidence),
+            self.session.metrics,
+        )
         target = _target(self.session)
         semantic_server_evidence_ids = self._semantic_server_evidence_ids(store)
         resolver = ManifestResolver(self.runtime.manifest, target_revision=self.runtime.target_revision or self.session.target_revision)
@@ -2820,9 +5574,23 @@ class SourceLocatorWorker:
                 if _mapping_contains_path(item.source_path, mapping)
             )
             if project_evidence_ids:
+                # Keep model-confirmed server anchors at the front of the
+                # bounded session copy.  The complete repository artifact
+                # remains unchanged, while VERIFY_EVIDENCE must not lose the
+                # semantic IDs when a noisy project has more than the session
+                # evidence-id limit.
+                semantic_project_ids = tuple(
+                    evidence_id
+                    for evidence_id in semantic_server_evidence_ids
+                    if evidence_id in project_evidence_ids
+                )
                 mapping = replace(
                     mapping,
-                    evidence_ids=tuple(dict.fromkeys((*mapping.evidence_ids, *project_evidence_ids))),
+                    evidence_ids=tuple(
+                        dict.fromkeys(
+                            (*semantic_project_ids, *mapping.evidence_ids, *project_evidence_ids)
+                        )
+                    ),
                 )
             mappings.append(mapping)
         # Keep one mapping per project and prefer the one with the strongest
@@ -2866,50 +5634,120 @@ class SourceLocatorWorker:
             "通过 Manifest 最长路径前缀和服务端角色证据得到的 GitCode 映射；候选按源码角色加权排序，未通过策略的映射仍保留但不可 clone。",
         )
         if not mappings:
-            return self._transition("NEEDS_REVIEW", "Manifest 没有匹配任何证据路径，等待人工选择版本或补充 Manifest", updates={"artifacts": artifacts, "last_error": "没有 Manifest 路径匹配"}, event_type="repository.mapping.empty")
+            return self._transition(
+                "NEEDS_REVIEW",
+                "Manifest 没有匹配任何证据路径，等待人工选择版本或补充 Manifest",
+                updates={
+                    **checkpoint_updates,
+                    "artifacts": artifacts,
+                    "last_error": "没有 Manifest 路径匹配",
+                },
+                event_type="repository.mapping.empty",
+            )
         if any(item.status == "version_mismatch" for item in mappings):
-            return self._transition("VERSION_MISMATCH", "Manifest revision 与目标版本不一致，禁止自动拉取", updates={"repository_mappings": {"mappings": [item.to_dict() for item in mappings]}, "artifacts": artifacts, "last_error": "Manifest revision 与目标 revision 不一致"}, event_type="repository.mapping.version_mismatch")
+            return self._transition(
+                "VERSION_MISMATCH",
+                "Manifest revision 与目标版本不一致，禁止自动拉取",
+                updates={
+                    **checkpoint_updates,
+                    "repository_mappings": _compact_repository_mappings_payload(mappings),
+                    "artifacts": artifacts,
+                    "last_error": "Manifest revision 与目标 revision 不一致",
+                },
+                event_type="repository.mapping.version_mismatch",
+            )
         resolved = [item for item in mappings if item.is_resolved]
         if not resolved:
-            return self._transition("NEEDS_REVIEW", "候选路径存在但没有可验证的 GitCode 映射，等待人工复核", updates={"repository_mappings": {"mappings": [item.to_dict() for item in mappings]}, "artifacts": artifacts, "last_error": "没有 resolved repository mapping"}, event_type="repository.mapping.needs_review")
+            return self._transition(
+                "NEEDS_REVIEW",
+                "候选路径存在但没有可验证的 GitCode 映射，等待人工复核",
+                updates={
+                    **checkpoint_updates,
+                    "repository_mappings": _compact_repository_mappings_payload(mappings),
+                    "artifacts": artifacts,
+                    "last_error": "没有 resolved repository mapping",
+                },
+                event_type="repository.mapping.needs_review",
+            )
         return self._transition(
             "VERIFY_EVIDENCE",
             f"已得到 {len(resolved)} 个可验证仓库映射，执行服务端强制谓词复核",
-            updates={"repository_mappings": {"mappings": [item.to_dict() for item in mappings]}, "artifacts": artifacts},
+            updates={
+                **checkpoint_updates,
+                "repository_mappings": _compact_repository_mappings_payload(mappings),
+                "artifacts": artifacts,
+            },
             event_type="repository.mapping.resolved",
         )
 
     def _advance_verify(self) -> LocatorSession:
         store = _load_evidence(self.machine)
         target = _target(self.session)
+        attribution_evidence = _target_bound_evidence(store, target)
         mapping_data = self.session.repository_mappings or {}
         mappings = mapping_data.get("mappings", []) if isinstance(mapping_data, Mapping) else []
         resolved = [_mapping_from_dict(item) for item in mappings if isinstance(item, Mapping) and item.get("status") == "resolved"]
         if not resolved:
             return self._transition("NEEDS_REVIEW", "没有可供确认的 resolved 仓库映射", updates={"last_error": "VERIFY_EVIDENCE 缺少 resolved mapping"}, event_type="verification.missing_mapping")
-        mapping = max(resolved, key=lambda item: self._mapping_score(item, store, target=target)[0])
-        server = ServiceAttributor(mapping=mapping).attribute(store, mapping=mapping)
-        client = ClientLocator(mapping=mapping).locate(store, mapping=mapping)
+        mapping, candidate_review, candidate_review_artifacts = self._run_candidate_review(
+            resolved,
+            store,
+            target,
+        )
+        # Candidate PK may have read additional BUILD.gn/bundle/source facts
+        # into the in-memory evidence store.  Rebuild the attribution input so
+        # the selected repository's metadata participates in the final result;
+        # the tuple captured before PK would otherwise omit those facts.
+        attribution_evidence = _target_bound_evidence(store, target)
+        server = ServiceAttributor(mapping=mapping).attribute(attribution_evidence, mapping=mapping)
+        client = ClientLocator(mapping=mapping).locate(attribution_evidence, mapping=mapping)
         semantic = _load_llm_role_result(
             self.machine,
-            allowed_evidence_ids=(item.evidence_id for item in store.evidence),
+            allowed_evidence_ids=(item.evidence_id for item in attribution_evidence),
         )
         if semantic is not None:
+            # The role review predates repository PK and may have cited a
+            # duplicate/split implementation.  Do not let that stale semantic
+            # candidate overwrite the selected repository's best evidence.
+            semantic = _scope_llm_role_result_to_mapping(semantic, mapping)
             server = _merge_server_semantic(server, semantic.server, store)
             client = _merge_client_semantic(client, semantic.client, store)
         missing_predicates = tuple(
             name for name in _REQUIRED_SERVER_PREDICATES
             if not bool(server.predicates.get(name, False))
         )
+        server_payload = _compact_attribution_payload(server.to_dict())
+        client_payload = _compact_attribution_payload(client.to_dict())
+        # The initial ATTRIBUTION_SERVER artifact is intentionally produced
+        # before repository PK.  Overwrite it here with the final, selected-
+        # mapping-scoped view so users do not see smartperf_host evidence after
+        # developtools_profiler has been chosen.
+        artifacts = dict(self.session.artifacts)
+        _json_write(_session_dir(self.machine) / "server_attribution.json", server_payload)
+        _json_write(_session_dir(self.machine) / "client_attribution.json", client_payload)
+        artifacts.update(
+            {
+                "server_attribution.json": "最终候选仓库范围内的服务端角色、结构性谓词、语义判定和源码证据。",
+                "client_attribution.json": "最终候选仓库范围内的客户端通信边界和源码证据。",
+            }
+        )
         payload = {
-            "server": _compact_attribution_payload(server.to_dict()),
-            "client": _compact_attribution_payload(client.to_dict()),
+            "server": server_payload,
+            "client": client_payload,
             "mapping": mapping.to_dict(),
             "missing_server_predicates": list(missing_predicates),
             "predicate_gate": "advisory" if missing_predicates else "satisfied",
             "semantic_review": semantic.to_dict() if semantic else None,
+            "candidate_review": candidate_review,
         }
-        artifacts = _save_artifact(self.machine, "verification.json", payload, "进入人工确认前的结构性谓词、服务端/客户端状态和主仓库候选。")
+        verification_artifacts = _save_artifact(
+            self.machine,
+            "verification.json",
+            payload,
+            "进入人工确认前的结构性谓词、服务端/客户端状态和主仓库候选。",
+        )
+        artifacts.update(verification_artifacts)
+        artifacts.update(candidate_review_artifacts)
         confirmation_summary = _confirmation_summary_payload(
             target=target,
             mapping=mapping,
@@ -2920,12 +5758,15 @@ class SourceLocatorWorker:
             gitcode=self.runtime.gitcode,
             semantic_server_evidence_ids=self._semantic_server_evidence_ids(store),
         )
-        artifacts = _save_artifact(
+        confirmation_summary["candidate_review"] = candidate_review
+        summary_artifacts = _save_artifact(
             self.machine,
             "confirmation_summary.json",
             confirmation_summary,
             "确认前摘要：将拉取的 GitCode 仓库、版本、落盘位置、服务端判定和关键源码证据。",
         )
+        summary_artifacts.update(artifacts)
+        artifacts = summary_artifacts
         if not server.confirmed:
             # An incomplete source graph is recoverable.  The semantic
             # planner receives the exact missing predicates and candidate
@@ -2952,8 +5793,12 @@ class SourceLocatorWorker:
             max_actions = _budget_int(
                 budget,
                 "max_llm_actions",
-                default=20,
-                maximum=20,
+                default=(
+                    self.runtime.llm_planner.budget.max_actions
+                    if self.runtime.llm_planner is not None
+                    else LLM_SEARCH_DEFAULT_MAX_ACTIONS
+                ),
+                maximum=LLM_SEARCH_MAX_ACTIONS,
                 minimum=0,
             )
             accepted_actions = self._persisted_llm_action_count(self.session.executed_actions)
@@ -3054,6 +5899,7 @@ class SourceLocatorWorker:
             )
         target = _target(self.session)
         store = _load_evidence(self.machine)
+        attribution_evidence = _target_bound_evidence(store, target)
         mapping_data = self.session.repository_mappings or {}
         raw_mappings = mapping_data.get("mappings", []) if isinstance(mapping_data, Mapping) else []
         resolved = [
@@ -3069,7 +5915,7 @@ class SourceLocatorWorker:
                 event_type="verification.recovery.missing_mapping",
             )
         mapping = max(resolved, key=lambda item: self._mapping_score(item, store, target=target)[0])
-        server = ServiceAttributor(mapping=mapping).attribute(store, mapping=mapping)
+        server = ServiceAttributor(mapping=mapping).attribute(attribution_evidence, mapping=mapping)
         missing_predicates = tuple(
             name for name in _REQUIRED_SERVER_PREDICATES
             if not bool(server.predicates.get(name, False))
@@ -3142,9 +5988,14 @@ class SourceLocatorWorker:
         )
         executed_values = tuple(dict.fromkeys((*self.session.executed_queries, *action_queries)))
         executed_actions = tuple(dict.fromkeys((*self.session.executed_actions, *action_keys)))
+        all_evidence_ids = tuple(item.evidence_id for item in store.evidence)
+        checkpoint_metrics = dict(self.session.metrics)
+        checkpoint_metrics["evidence_total"] = len(all_evidence_ids)
+        checkpoint_metrics["evidence_ids_truncated"] = len(all_evidence_ids) > _MAX_SESSION_EVIDENCE_IDS
         updates = {
             "artifacts": artifacts,
-            "evidence_ids": tuple(item.evidence_id for item in store.evidence),
+            "evidence_ids": all_evidence_ids[:_MAX_SESSION_EVIDENCE_IDS],
+            "metrics": checkpoint_metrics,
             "executed_queries": executed_values,
             "executed_actions": executed_actions,
             "last_error": "补证阶段新增动作：" + str(len(action_keys)),
@@ -3185,6 +6036,22 @@ class SourceLocatorWorker:
         candidates = [_mapping_from_dict(item) for item in mappings if isinstance(item, Mapping) and item.get("status") == "resolved"]
         if not candidates:
             raise SourceLocatorWorkerError("没有可拉取的 resolved mapping")
+        review_path = _session_dir(self.machine) / "repository_candidate_review.json"
+        if review_path.exists() and review_path.is_file() and not review_path.is_symlink():
+            try:
+                review = _read_json(review_path)
+                selected_name = review.get("selected_repository") if isinstance(review, Mapping) else None
+                if isinstance(selected_name, str):
+                    selected = next(
+                        (item for item in candidates if item.project_name == selected_name),
+                        None,
+                    )
+                    if selected is not None:
+                        return selected
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                # The deterministic score below remains the safe fallback if
+                # the optional audit artifact is missing or malformed.
+                pass
         store = _load_evidence(self.machine)
         return max(candidates, key=lambda item: self._mapping_score(item, store, target=_target(self.session))[0])
 
@@ -3343,8 +6210,22 @@ class SourceLocatorWorker:
         )
         request = PostCloneVerificationRequest(
             source_paths=source_paths[:128],
-            symbols=tuple(item for item in (target.service_hint, target.macro_hint) if item),
-            literals=tuple(item for item in (target.socket_path, target.basename) if item),
+            symbols=tuple(
+                item
+                for item in (target.service_hint, target.process_hint, target.macro_hint)
+                if item
+            ),
+            literals=tuple(
+                item
+                for item in (
+                    target.socket_path,
+                    target.basename,
+                    target.address,
+                    str(target.port) if target.port is not None else None,
+                    target_relation(target),
+                )
+                if item
+            ),
         )
         verifier = PostCloneVerifier(self.runtime.project_root, config=self.runtime.gitcode)
         try:

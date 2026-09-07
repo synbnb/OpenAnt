@@ -23,3 +23,17 @@ docs/
 libs/openant-core/utilities/dynamic_tester/toolchains/
 libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/.hvigor-user-home/
 libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/signing/*.p12
+
+# Local OpenHarmony repositories, evaluation checkouts and scan outputs.
+# These can be multi-gigabyte or contain device-specific/generated data and
+# should remain local rather than being uploaded with the application source.
+/source_code_base/
+/debug_outputs/
+/repro_outputs/
+/test_records/
+/exposure_surface_*/
+/evaluation_dataset/vulnerability/vulnerable_source_code_base/
+/log.txt
+**/.DS_Store
+libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/.hvigor/
+libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app/signing/

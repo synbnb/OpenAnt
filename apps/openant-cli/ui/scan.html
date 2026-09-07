@@ -88,6 +88,8 @@
   .step.active { background: var(--accent-soft); color: #164d5c; }
   .step.active::before { background: var(--accent); border-color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
   .step.done::before { background: var(--success); border-color: var(--success); }
+  .step.partial { background: var(--warning-soft); color: #7a520d; }
+  .step.partial::before { background: #c28728; border-color: #c28728; }
   .step.skipped::before { background: #8896a1; border-color: #8896a1; }
   .step.error { background: var(--danger-soft); color: var(--danger); }
   .step.error::before { background: var(--danger); border-color: var(--danger); }
@@ -214,6 +216,26 @@
   .stage-result-detail-label { color: #607b84; font-size: 0.67rem; line-height: 1.45; }
   .stage-result-detail-text { overflow-wrap: anywhere; color: #244c58; font-size: 0.72rem; line-height: 1.5; white-space: pre-wrap; }
   .stage-result-note { grid-column: 1 / -1; color: var(--ink-faint); font-size: 0.72rem; line-height: 1.45; }
+  .stage-result-evidence { margin: 0 12px 12px; border-top: 1px solid #d1e1e5; }
+  .stage-result-evidence-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 0 8px; }
+  .stage-result-evidence-title { color: #164d5c; font-size: 0.78rem; font-weight: 850; }
+  .stage-result-evidence-subtitle { color: #718b93; font-size: 0.68rem; line-height: 1.45; }
+  .stage-result-evidence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 9px; padding-bottom: 1px; }
+  .stage-result-evidence-card { min-width: 0; border: 1px solid #cfe0e4; border-radius: 8px; background: #fff; overflow: hidden; }
+  .stage-result-evidence-card summary { display: flex; align-items: baseline; gap: 8px; padding: 9px 10px; cursor: pointer; background: #f8fbfc; color: #245e6b; font-size: 0.72rem; font-weight: 800; }
+  .stage-result-evidence-card summary::marker { color: #5b929e; }
+  .stage-result-evidence-card[open] summary { border-bottom: 1px solid #e0ebed; }
+  .stage-result-evidence-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stage-result-evidence-badge { flex: 0 0 auto; margin-left: auto; padding: 2px 6px; border-radius: 999px; background: #edf2f4; color: #607b84; font: 700 0.61rem var(--mono); }
+  .stage-result-evidence-badge.accepted { background: var(--success-soft); color: var(--success); }
+  .stage-result-evidence-badge.unresolved, .stage-result-evidence-badge.rejected { background: var(--warning-soft); color: var(--warning); }
+  .stage-result-evidence-body { display: grid; gap: 7px; padding: 9px 10px; }
+  .stage-result-evidence-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; align-items: start; }
+  .stage-result-evidence-label { color: #718b93; font-size: 0.65rem; line-height: 1.45; }
+  .stage-result-evidence-value { min-width: 0; overflow-wrap: anywhere; color: #244c58; font-size: 0.7rem; line-height: 1.5; white-space: pre-wrap; }
+  .stage-result-evidence-code { padding: 7px 8px; border-radius: 5px; background: #15232b; color: #dce5ea; font: 0.66rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .stage-result-evidence-empty { padding: 10px; border: 1px dashed #cfe0e4; border-radius: 8px; color: #718b93; background: #fbfdfd; font-size: 0.7rem; line-height: 1.5; }
+  .stage-result-evidence-more { padding: 7px 0 0; color: #718b93; font-size: 0.67rem; }
 
   .runtime-log-panel { margin-bottom: 20px; }
   .runtime-log-badge {
@@ -394,6 +416,15 @@
   }
 
   .disclosures { display: none; }
+  .disclosure-toolbar { display: flex; align-items: end; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px; border: 1px solid #e9b7bc; border-radius: 8px; background: #fff8f8; }
+  .disclosure-search-field { display: grid; flex: 1 1 280px; gap: 4px; min-width: min(100%, 260px); }
+  .disclosure-search-field label { color: #8a5a60; font-size: 0.69rem; font-weight: 750; }
+  .disclosure-search-field input { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid #dca8ae; border-radius: 7px; background: #fff; color: var(--ink); font-size: 0.76rem; }
+  .disclosure-search-field input:focus { border-color: #a7444d; outline: 2px solid rgba(167, 68, 77, 0.16); outline-offset: 1px; }
+  .disclosure-search-count { align-self: center; color: #8a5a60; font: 0.69rem var(--mono); white-space: nowrap; }
+  .disclosure-search-clear { min-height: 34px; padding: 7px 9px; border: 1px solid #dca8ae; border-radius: 7px; background: #fff; color: #7d2029; font-size: 0.72rem; font-weight: 750; cursor: pointer; }
+  .disclosure-search-clear:hover { background: #fff0f1; border-color: #c7848c; }
+  .disclosure-empty { padding: 22px 14px; border: 1px dashed #dca8ae; border-radius: 8px; color: #8a5a60; background: #fff8f8; text-align: center; font-size: 0.76rem; line-height: 1.5; }
   .disclosure-links { display: grid; gap: 10px; }
   .disclosure-card {
     display: grid; gap: 8px; min-width: 0; padding: 12px 14px;
@@ -460,6 +491,10 @@
     .claude-meta { grid-template-columns: 1fr; }
     .claude-files { display: block; }
     .claude-file-viewer { border-top: 1px solid var(--line); border-left: 0; }
+    .disclosure-search-field { min-width: 100%; }
+    .disclosure-search-count { width: 100%; }
+    .stage-result-evidence-list { grid-template-columns: 1fr; }
+    .stage-result-evidence-row { grid-template-columns: 82px minmax(0, 1fr); }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
@@ -506,6 +541,10 @@
         <div class="step-item"><button type="button" class="step selected" id="step-parse" role="tab" aria-selected="true" aria-controls="stage-workbench" data-stage="parse"><span><span class="step-label" data-stage-label="parse">源码解析</span><span class="step-count" id="count-parse"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-app-context" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="app-context"><span><span class="step-label" data-stage-label="app-context">应用上下文</span><span class="step-count" id="count-app-context"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-llm-reachability" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="llm-reachability"><span><span class="step-label" data-stage-label="llm-reachability">LLM 可达性</span><span class="step-count" id="count-llm-reachability"></span></span></button></div>
+        <div class="step-item"><button type="button" class="step" id="step-llm-call-graph-recovery" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="llm-call-graph-recovery"><span><span class="step-label" data-stage-label="llm-call-graph-recovery">调用图恢复</span><span class="step-count" id="count-llm-call-graph-recovery"></span></span></button></div>
+        <div class="step-item"><button type="button" class="step" id="step-llm-call-graph-candidate-review" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="llm-call-graph-candidate-review"><span><span class="step-label" data-stage-label="llm-call-graph-candidate-review">候选边复核</span><span class="step-count" id="count-llm-call-graph-candidate-review"></span></span></button></div>
+        <div class="step-item"><button type="button" class="step" id="step-llm-call-graph-projection" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="llm-call-graph-projection"><span><span class="step-label" data-stage-label="llm-call-graph-projection">调用边投影</span><span class="step-count" id="count-llm-call-graph-projection"></span></span></button></div>
+        <div class="step-item"><button type="button" class="step" id="step-openharmony-dispatch-code-evidence" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="openharmony-dispatch-code-evidence"><span><span class="step-label" data-stage-label="openharmony-dispatch-code-evidence">分派码证据</span><span class="step-count" id="count-openharmony-dispatch-code-evidence"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-enhance" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="enhance"><span><span class="step-label" data-stage-label="enhance">上下文增强</span><span class="step-count" id="count-enhance"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-analyze" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="analyze"><span><span class="step-label" data-stage-label="analyze">漏洞分析</span><span class="step-count" id="count-analyze"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-verify" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="verify"><span><span class="step-label" data-stage-label="verify">结果验证</span><span class="step-count" id="count-verify"></span></span></button></div>
@@ -572,6 +611,15 @@
               <div class="stage-result-groups" id="selected-stage-results" aria-live="polite">
                 <div class="pipeline-empty" data-i18n="details.resultsLoading">正在读取阶段关键结果...</div>
               </div>
+              <section class="stage-result-evidence" id="stage-result-evidence" aria-labelledby="stage-result-evidence-title" hidden>
+                <div class="stage-result-evidence-header">
+                  <div>
+                    <div class="stage-result-evidence-title" id="stage-result-evidence-title" data-i18n="details.evidenceTitle">关键证据与站点</div>
+                    <div class="stage-result-evidence-subtitle" data-i18n="details.evidenceSubtitle">展示少量最有价值的调用点、模型决策和源码证据；完整内容仍保留在产物中。</div>
+                  </div>
+                </div>
+                <div class="stage-result-evidence-list" id="stage-result-evidence-list" aria-live="polite"></div>
+              </section>
             </section>
             <div class="stage-errors" id="selected-stage-errors" role="alert"></div>
             <div class="pipeline-details" id="pipeline-details">
@@ -630,7 +678,18 @@
 
       <section class="section-panel disclosures" id="disclosures" aria-labelledby="disclosures-title">
         <div class="section-header"><div><h2 id="disclosures-title" data-i18n="disclosures.title">漏洞披露报告</h2><p data-i18n="disclosures.subtitle">为已确认问题生成的独立披露文件。</p></div></div>
-        <div class="section-body"><div class="disclosure-links" id="disclosure-links"></div></div>
+        <div class="section-body">
+          <div class="disclosure-toolbar" role="search" aria-label="漏洞披露报告筛选">
+            <div class="disclosure-search-field">
+              <label for="disclosure-search" data-i18n="disclosures.searchLabel">筛选报告</label>
+              <input id="disclosure-search" type="search" autocomplete="off" data-i18n-placeholder="disclosures.searchPlaceholder" placeholder="输入函数名称或 CVE 名称" aria-describedby="disclosure-search-count">
+            </div>
+            <span class="disclosure-search-count" id="disclosure-search-count" role="status" aria-live="polite"></span>
+            <button type="button" class="disclosure-search-clear" id="disclosure-search-clear" data-i18n="disclosures.clearSearch" hidden>清空筛选</button>
+          </div>
+          <div class="disclosure-empty" id="disclosure-empty" role="status" hidden></div>
+          <div class="disclosure-links" id="disclosure-links"></div>
+        </div>
       </section>
 
       <section class="section-panel explorer-panel" id="explorer-panel" aria-labelledby="explorer-title" hidden>
@@ -683,6 +742,10 @@ const translations = {
     'stage.parse': '源码解析',
     'stage.app-context': '应用上下文',
     'stage.llm-reachability': 'LLM 可达性',
+    'stage.llm-call-graph-recovery': '调用图恢复',
+    'stage.llm-call-graph-candidate-review': '候选边复核',
+    'stage.llm-call-graph-projection': '调用边投影',
+    'stage.openharmony-dispatch-code-evidence': '分派码证据',
     'stage.enhance': '上下文增强',
     'stage.analyze': '漏洞分析',
     'stage.verify': '结果验证',
@@ -695,6 +758,7 @@ const translations = {
     'status.disconnected': '实时连接已断开，请刷新页面重新连接。',
     'status.live': '此页面会自动接收实时日志和阶段状态。',
     'step.success': '成功',
+    'step.partial': '部分完成',
     'step.running': '运行中',
     'step.skipped': '已跳过',
     'step.not_requested': '未启用',
@@ -733,7 +797,11 @@ const translations = {
     'details.outcomeUnavailable': '暂时没有足够的阶段数据生成结论，请查看下方产物或运行日志。',
     'details.outcomeParse': '已解析 {parsed} / {discovered} 个文件；生成 {units} 个进入后续分析的单元，原生调用图包含 {edges} 条调用边。',
     'details.outcomeContext': '已建立安全上下文：{attackers} 个攻击者画像、{inputs} 个输入源、{boundaries} 个信任边界。',
-    'details.outcomeReachability': '可达性复核记录 {signals} 条模型信号，其中入口候选 {entries} 条。',
+    'details.outcomeReachability': '可达性复核记录 {signals} 条模型信号：提升入口 {entries} 个，high 语义种子 {seeds} 个，medium 直接保留 {retained} 个（不扩散 BFS）。',
+    'details.outcomeRecovery': '调用图恢复复核 {sites} 个残余点，接受 {accepted} 条边，仍有 {unresolved} 个点未解决。',
+    'details.outcomeCandidateReview': '候选边复核完成 {reviewed} 个站点，接受 {accepted} 条边，拒绝 {rejected} 条边。',
+    'details.outcomeProjection': '语义投影接收 {accepted} 条输入边，生成 {projected} 条附加边，拒绝 {rejected} 条。',
+    'details.outcomeDispatch': '分派码证据扫描 {sites} 个站点，解析 {resolved} 个选择值，未解析符号 {unresolved} 个。',
     'details.outcomeEnhance': '已为 {units} 个单元补充上下文；当前增强模式为“{mode}”，错误 {errors} 个。',
     'details.outcomeAnalyze': '初步分析得到：漏洞候选 {vulnerable} 个、可绕过 {bypassable} 个、待定 {inconclusive} 个。',
     'details.outcomeVerify': '验证结果：确认漏洞 {confirmed} 个，一致 {agreed} 个，不一致 {disagreed} 个，需人工复核 {review} 个。',
@@ -746,6 +814,26 @@ const translations = {
     'details.resultsCount': '{count} 个产物摘要',
     'details.resultsStage': '阶段摘要',
     'details.resultsArtifact': '产物文件',
+    'details.evidenceTitle': '关键证据与站点',
+    'details.evidenceSubtitle': '展示少量最有价值的调用点、模型决策和源码证据；完整内容仍保留在产物中。',
+    'details.evidenceEmpty': '当前产物没有可展示的站点级证据。若统计为 0，请查看上方阶段结论了解原因。',
+    'details.evidenceMore': '其余 {count} 个站点仍保留在产物中。',
+    'details.evidenceSite': '站点',
+    'details.evidenceCaller': '调用者',
+    'details.evidenceCallSite': '调用点',
+    'details.evidenceTarget': '候选目标',
+    'details.evidenceDecision': '模型决策',
+    'details.evidenceConfidence': '置信度',
+    'details.evidenceReason': '未解决原因',
+    'details.evidenceSource': '源码位置',
+    'details.evidenceSnippet': '证据片段',
+    'details.evidenceDispatch': '分派表达式',
+    'details.evidenceSelector': '分派选择值',
+    'details.evidenceNoSelector': '没有已解析的整数分派值',
+    'details.evidenceAccepted': '已接受',
+    'details.evidenceUnresolved': '未解决',
+    'details.evidenceRejected': '已拒绝',
+    'details.evidenceUnreviewed': '未复核',
     'details.raw': '查看原始阶段 JSON',
     'claude.title': 'Claude Code 动态验证',
     'claude.subtitle': '静态分析已停在动态测试边界。你可以直接在这里与 Claude Code 对话，并观察任务目录的实时变化。',
@@ -823,6 +911,13 @@ const translations = {
     'explorer.rawUnavailable': '原始 JSON 暂不可用。',
     'disclosures.title': '漏洞披露报告',
     'disclosures.subtitle': '为已确认问题生成的独立披露文件。',
+    'disclosures.searchLabel': '筛选报告',
+    'disclosures.searchPlaceholder': '输入函数名称或 CVE 名称',
+    'disclosures.searchCount': '显示 {visible} / {total} 个报告',
+    'disclosures.clearSearch': '清空筛选',
+    'disclosures.searchRegion': '漏洞披露报告筛选',
+    'disclosures.noMatches': '没有匹配的漏洞披露报告，请尝试函数名或 CVE 名称。',
+    'disclosures.cve': 'CVE',
     'disclosures.status': '判定',
     'disclosures.type': '漏洞类型',
     'disclosures.cwe': 'CWE',
@@ -858,6 +953,10 @@ const translations = {
     'stage.parse': 'Source parsing',
     'stage.app-context': 'Application context',
     'stage.llm-reachability': 'LLM reachability',
+    'stage.llm-call-graph-recovery': 'Call-graph recovery',
+    'stage.llm-call-graph-candidate-review': 'Candidate edge review',
+    'stage.llm-call-graph-projection': 'Call-edge projection',
+    'stage.openharmony-dispatch-code-evidence': 'Dispatch-code evidence',
     'stage.enhance': 'Context enhancement',
     'stage.analyze': 'Vulnerability analysis',
     'stage.verify': 'Finding verification',
@@ -870,6 +969,7 @@ const translations = {
     'status.disconnected': 'Live updates disconnected. Reload the page to reconnect.',
     'status.live': 'This page receives live logs and stage status automatically.',
     'step.success': 'Success',
+    'step.partial': 'Partial',
     'step.running': 'Running',
     'step.skipped': 'Skipped',
     'step.not_requested': 'Not enabled',
@@ -908,7 +1008,11 @@ const translations = {
     'details.outcomeUnavailable': 'There is not enough stage data for a conclusion yet. Review the artifacts or runtime log below.',
     'details.outcomeParse': 'Parsed {parsed} / {discovered} files; produced {units} units for downstream analysis, with {edges} native call-graph edges.',
     'details.outcomeContext': 'Security context built: {attackers} attacker profiles, {inputs} input sources, and {boundaries} trust boundaries.',
-    'details.outcomeReachability': 'Recorded {signals} model reachability signals, including {entries} entry candidates.',
+    'details.outcomeReachability': 'Recorded {signals} model reachability signals: {entries} promoted entries, {seeds} high-confidence semantic BFS seeds, and {retained} medium-confidence retained units (no BFS expansion).',
+    'details.outcomeRecovery': 'Reviewed {sites} call-graph residual sites; accepted {accepted} edges and left {unresolved} sites unresolved.',
+    'details.outcomeCandidateReview': 'Reviewed {reviewed} candidate sites; accepted {accepted} edges and rejected {rejected}.',
+    'details.outcomeProjection': 'Projected {projected} additive edges from {accepted} accepted inputs; rejected {rejected}.',
+    'details.outcomeDispatch': 'Scanned {sites} dispatch sites; resolved {resolved} selectors and left {unresolved} symbols unresolved.',
     'details.outcomeEnhance': 'Added context to {units} units; enhancement mode is “{mode}” with {errors} errors.',
     'details.outcomeAnalyze': 'Initial analysis found {vulnerable} vulnerable candidates, {bypassable} bypassable candidates, and {inconclusive} inconclusive results.',
     'details.outcomeVerify': 'Verification: {confirmed} confirmed vulnerabilities, {agreed} agreed results, {disagreed} disagreements, and {review} items needing manual review.',
@@ -921,6 +1025,26 @@ const translations = {
     'details.resultsCount': '{count} artifact summaries',
     'details.resultsStage': 'Stage summary',
     'details.resultsArtifact': 'Artifact file',
+    'details.evidenceTitle': 'Key evidence and sites',
+    'details.evidenceSubtitle': 'A compact view of the most useful call sites, model decisions, and source evidence; the complete data remains in the artifact.',
+    'details.evidenceEmpty': 'No site-level evidence is available in this artifact. If a counter is zero, read the stage conclusion above for the reason.',
+    'details.evidenceMore': '{count} additional sites remain in the artifact.',
+    'details.evidenceSite': 'Site',
+    'details.evidenceCaller': 'Caller',
+    'details.evidenceCallSite': 'Call site',
+    'details.evidenceTarget': 'Candidate target',
+    'details.evidenceDecision': 'Model decision',
+    'details.evidenceConfidence': 'Confidence',
+    'details.evidenceReason': 'Unresolved reason',
+    'details.evidenceSource': 'Source location',
+    'details.evidenceSnippet': 'Evidence excerpt',
+    'details.evidenceDispatch': 'Dispatch expression',
+    'details.evidenceSelector': 'Dispatch selector',
+    'details.evidenceNoSelector': 'No integer dispatch selector was resolved',
+    'details.evidenceAccepted': 'Accepted',
+    'details.evidenceUnresolved': 'Unresolved',
+    'details.evidenceRejected': 'Rejected',
+    'details.evidenceUnreviewed': 'Unreviewed',
     'details.raw': 'View raw stage JSON',
     'claude.title': 'Claude Code dynamic verification',
     'claude.subtitle': 'Static analysis is paused at the dynamic-test boundary. Chat with Claude Code here and watch the task workspace change live.',
@@ -998,6 +1122,13 @@ const translations = {
     'explorer.rawUnavailable': 'Raw JSON is not available yet.',
     'disclosures.title': 'Disclosure reports',
     'disclosures.subtitle': 'Standalone disclosure files generated for confirmed findings.',
+    'disclosures.searchLabel': 'Filter reports',
+    'disclosures.searchPlaceholder': 'Enter a function name or CVE name',
+    'disclosures.searchCount': 'Showing {visible} / {total} reports',
+    'disclosures.clearSearch': 'Clear filter',
+    'disclosures.searchRegion': 'Disclosure report filter',
+    'disclosures.noMatches': 'No disclosure reports match this search. Try a function or CVE name.',
+    'disclosures.cve': 'CVE',
     'disclosures.status': 'Verdict',
     'disclosures.type': 'Vulnerability type',
     'disclosures.cwe': 'CWE',
@@ -1038,9 +1169,29 @@ const stageGuides = {
       outputs: ['应用安全上下文']
     },
     'llm-reachability': {
-      description: '可选地让模型复核完整数据集，补充结构化规则可能遗漏的入口函数、外部输入点和跨进程边界。',
+      description: '可选地让模型复核完整数据集：high 信号提升为入口或语义 BFS 种子，medium 信号直接纳入 reachable 但不扩散 BFS，补充结构化规则可能遗漏的边界。',
       inputs: ['完整解析数据集', '应用安全上下文'],
       outputs: ['LLM 可达性信号', '新增入口候选']
+    },
+    'llm-call-graph-recovery': {
+      description: '复核原生解析器留下的间接调用残余点，记录有证据支持的候选边。结果写入独立产物，不直接改写原生调用图。',
+      inputs: ['调用图残余诊断', '函数索引', '入口提示'],
+      outputs: ['恢复决策', '恢复报告']
+    },
+    'llm-call-graph-candidate-review': {
+      description: '让模型审核规则已经提出的候选 handler 边，区分真实调用关系和仅凭命名推测的边。',
+      inputs: ['候选调用边', '源码证据', '函数索引'],
+      outputs: ['候选边复核结果', '复核报告']
+    },
+    'llm-call-graph-projection': {
+      description: '把高置信恢复决策投影为独立语义调用图 overlay，并在启用时以只增不减的方式辅助可达性过滤。',
+      inputs: ['恢复报告', '候选边复核报告', '未过滤数据集'],
+      outputs: ['语义调用图 overlay', '投影统计']
+    },
+    'openharmony-dispatch-code-evidence': {
+      description: '从宏、枚举和 constexpr 定义中提取 OpenHarmony IPC 或 System Ability 的整数分派码，为调用链审计和动态验证提供源码证据。',
+      inputs: ['分派注册点', '源码和头文件常量', '调用图残余'],
+      outputs: ['分派码证据']
     },
     'enhance': {
       description: '为待分析函数补充调用者、被调用者、语义上下文、平台边界和安全 guard，让模型看到更完整的执行语境。',
@@ -1085,9 +1236,29 @@ const stageGuides = {
       outputs: ['Application security context']
     },
     'llm-reachability': {
-      description: 'Optionally review the full dataset with a model to add entry points, external inputs, or cross-process boundaries missed structurally.',
+      description: 'Optionally review the full dataset: high-confidence signals become entry points or semantic BFS seeds, while medium-confidence signals are retained in reachable without expanding BFS.',
       inputs: ['Full parsed dataset', 'Application security context'],
       outputs: ['LLM reachability signals', 'Promoted entry candidates']
+    },
+    'llm-call-graph-recovery': {
+      description: 'Review indirect-call residual sites left by the native parser and record evidence-backed candidate edges without rewriting the native graph.',
+      inputs: ['Call-graph residual diagnostics', 'Function index', 'Entry hints'],
+      outputs: ['Recovery decisions', 'Recovery report']
+    },
+    'llm-call-graph-candidate-review': {
+      description: 'Ask the model to audit deterministic candidate handler edges and distinguish real relationships from name-based guesses.',
+      inputs: ['Candidate call edges', 'Source evidence', 'Function index'],
+      outputs: ['Candidate-review decisions', 'Review report']
+    },
+    'llm-call-graph-projection': {
+      description: 'Project high-confidence recovery decisions into an additive semantic call-graph overlay and, when enabled, use it to promote reachability without pruning native edges.',
+      inputs: ['Recovery report', 'Candidate-review report', 'Unfiltered dataset'],
+      outputs: ['Semantic call-graph overlay', 'Projection summary']
+    },
+    'openharmony-dispatch-code-evidence': {
+      description: 'Extract integer dispatch selectors from OpenHarmony IPC or System Ability macros, enums, and constexpr definitions for call-chain audits and dynamic verification.',
+      inputs: ['Dispatch registrations', 'Source and header constants', 'Call-graph residuals'],
+      outputs: ['Dispatch-code evidence']
     },
     'enhance': {
       description: 'Attach callers, callees, semantic context, platform boundaries, and security guards to each selected function.',
@@ -1126,6 +1297,11 @@ const artifactGuidesZH = {
   'parse.report.json': ['解析阶段执行记录', '记录源码解析阶段的状态、耗时、统计、模型用量和错误。'],
   'app-context.report.json': ['应用上下文阶段执行记录', '记录应用分类和威胁模型构建是否成功，以及该阶段的耗时和错误。'],
   'llm-reachability.report.json': ['LLM 可达性阶段执行记录', '记录可选的模型可达性复核是否执行，以及模型用量和结果摘要。'],
+  'llm_call_graph_recovery.json': ['调用图恢复结果', '记录模型对间接调用残余点的证据判断、接受边和仍未解决的站点。'],
+  'llm_call_graph_recovery_rounds.json': ['多轮调用图恢复结果', '记录从入口出发的多轮复核计划、模型调用、接受边和未决站点。'],
+  'llm_call_graph_candidate_review.json': ['候选调用边复核结果', '记录模型对规则候选 handler 边的接受、拒绝和证据说明。'],
+  'llm_call_graph_overlay.json': ['语义调用图 overlay', '记录经过验证的附加调用边、投影统计、重复边和被拒绝的边。'],
+  'openharmony_dispatch_code_evidence.json': ['OpenHarmony 分派码证据', '记录 IPC 或 System Ability 注册点对应的宏、枚举和整数选择值。'],
   'enhance.report.json': ['上下文增强阶段执行记录', '记录调用上下文、平台语义和安全信号增强过程的状态与统计。'],
   'analyze.report.json': ['漏洞分析阶段执行记录', '记录主模型漏洞检测阶段的执行状态、模型用量、费用和错误。'],
   'verify.report.json': ['结果验证阶段执行记录', '记录攻击路径验证和误报过滤阶段的执行情况。'],
@@ -1205,12 +1381,118 @@ const stageResultDefinitions = {
     ]
   },
   'llm-reachability': {
-    summary: [],
+    summary: [
+      ['summary.signals_received', '模型信号数', 'Signals received'],
+      ['summary.signals_applied', '有效信号数', 'Signals applied'],
+      ['summary.entry_points_promoted', '提升入口数', 'Entry points promoted'],
+      ['summary.semantic_seed_ids', '语义 BFS 种子数', 'Semantic BFS seeds'],
+      ['summary.reachable_only_ids', 'medium 直接保留数', 'Medium retained-only units'],
+      ['summary.retained_only_counts', '直接保留类型统计', 'Retained-only counts by type'],
+      ['summary.seed_counts.external_input', '外部输入种子数', 'External-input seeds'],
+      ['summary.seed_counts.cross_process', '跨进程种子数', 'Cross-process seeds'],
+      ['summary.seed_counts.cross_process_receive', '其中入站或双向', 'Inbound or bidirectional subset'],
+      ['summary.review_only', '待复核信号数', 'Review-only signals'],
+      ['summary.duplicates_removed', '去重信号数', 'Duplicates removed'],
+    ],
     artifacts: [
       { name: 'llm_reachability.json', title: ['LLM 可达性信号', 'LLM reachability signals'], fields: [
-        ['entries', '模型入口候选', 'Model entry candidates'], ['entry_points', '入口函数', 'Entry functions'],
-        ['external_inputs', '外部输入点', 'External inputs'], ['cross_process', '跨进程信号', 'Cross-process signals'],
-        ['confidence', '整体置信度', 'Overall confidence'], ['applied', '是否采用', 'Applied']
+        ['summary.signals_received', '模型信号数', 'Signals received'],
+        ['summary.signals_applied', '有效信号数', 'Signals applied'],
+        ['summary.entry_points_promoted', '提升入口数', 'Entry points promoted'],
+        ['summary.semantic_seed_ids', '语义 BFS 种子', 'Semantic BFS seeds'],
+        ['summary.reachable_only_ids', 'medium 直接保留单元', 'Medium retained-only units'],
+        ['summary.retained_only_counts', '直接保留类型统计', 'Retained-only counts by type'],
+        ['summary.seed_counts', '按类型种子统计', 'Seed counts by type'],
+        ['summary.rejected_counts', '未采用原因统计', 'Rejected/review counts'],
+        ['summary.review_only', '待复核信号数', 'Review-only signals'],
+        ['signals', '逐单元信号与证据', 'Per-unit signals and evidence']
+      ] }
+    ]
+  },
+  'llm-call-graph-recovery': {
+    summary: [
+      ['summary.worklist_sites', '待复核残余点', 'Residual sites'],
+      ['summary.sites_scheduled', '已调度站点', 'Scheduled sites'],
+      ['summary.sites_reviewed', '已复核站点', 'Reviewed sites'],
+      ['summary.attempts', '复核尝试次数', 'Attempts'],
+      ['summary.llm_calls', '模型调用次数', 'LLM calls'],
+      ['summary.parsed_decisions', '解析决策数', 'Parsed decisions'],
+      ['summary.accepted', '接受调用边数', 'Accepted edges'],
+      ['summary.accepted_decisions', '接受决策数', 'Accepted decisions'],
+      ['summary.kept_unresolved', '仍未解决点', 'Kept unresolved'],
+      ['summary.rejected', '拒绝决策数', 'Rejected decisions'],
+      ['summary.unreviewed_sites', '未复核站点', 'Unreviewed sites']
+    ],
+    artifacts: [
+      { name: 'llm_call_graph_recovery.json', title: ['调用图恢复结果', 'Call-graph recovery'], fields: [
+        ['status', '恢复状态', 'Recovery status'], ['summary.worklist_sites', '待复核残余点', 'Residual sites'],
+        ['summary.llm_calls', '模型调用次数', 'LLM calls'], ['summary.accepted', '接受边数', 'Accepted edges'],
+        ['summary.rejected', '拒绝边数', 'Rejected edges'], ['summary.kept_unresolved', '未解决点', 'Unresolved sites'],
+        ['decisions', '边恢复决策', 'Recovery decisions'], ['errors', '错误', 'Errors']
+      ] },
+      { name: 'llm_call_graph_recovery_rounds.json', title: ['多轮调用图恢复', 'Iterative call-graph recovery'], fields: [
+        ['status', '恢复状态', 'Recovery status'], ['summary.worklist_sites', '待复核残余点', 'Residual sites'],
+        ['summary.sites_scheduled', '已调度站点', 'Scheduled sites'], ['summary.sites_reviewed', '已复核站点', 'Reviewed sites'],
+        ['summary.attempts', '复核尝试次数', 'Attempts'], ['summary.llm_calls', '模型调用次数', 'LLM calls'],
+        ['summary.parsed_decisions', '解析决策数', 'Parsed decisions'], ['summary.accepted', '接受边数', 'Accepted edges'],
+        ['summary.accepted_decisions', '接受决策数', 'Accepted decisions'], ['summary.kept_unresolved', '未决站点', 'Unresolved sites'],
+        ['summary.rejected', '拒绝决策数', 'Rejected decisions'], ['summary.unreviewed_sites', '未复核站点', 'Unreviewed sites'],
+        ['summary.projected_edges', '投影边数', 'Projected edges'], ['summary.rounds', '复核轮次', 'Rounds'],
+        ['summary.termination_reason', '结束原因', 'Termination reason'], ['rounds', '复核轮次详情', 'Round details']
+      ] }
+    ]
+  },
+  'llm-call-graph-candidate-review': {
+    summary: [
+      ['summary.worklist_sites', '待复核候选点', 'Candidate sites'],
+      ['summary.attempts', '复核尝试次数', 'Attempts'],
+      ['summary.llm_calls', '模型调用次数', 'LLM calls'],
+      ['summary.parsed_decisions', '解析决策数', 'Parsed decisions'],
+      ['summary.accepted', '接受候选边', 'Accepted edges'],
+      ['summary.kept_unresolved', '仍未解决点', 'Kept unresolved'],
+      ['summary.rejected', '拒绝候选边', 'Rejected edges'],
+      ['summary.unreviewed_sites', '未复核站点', 'Unreviewed sites']
+    ],
+    artifacts: [
+      { name: 'llm_call_graph_candidate_review.json', title: ['候选调用边复核', 'Candidate edge review'], fields: [
+        ['status', '复核状态', 'Review status'], ['summary.worklist_sites', '待复核候选点', 'Candidate sites'],
+        ['summary.attempts', '复核尝试次数', 'Attempts'], ['summary.llm_calls', '模型调用次数', 'LLM calls'],
+        ['summary.parsed_decisions', '解析决策数', 'Parsed decisions'], ['summary.accepted', '接受边数', 'Accepted edges'],
+        ['summary.kept_unresolved', '未决站点', 'Unresolved sites'], ['summary.rejected', '拒绝边数', 'Rejected edges'],
+        ['summary.unreviewed_sites', '未复核站点', 'Unreviewed sites'],
+        ['reports', '候选边报告数', 'Candidate reports'], ['errors', '错误', 'Errors']
+      ] }
+    ]
+  },
+  'llm-call-graph-projection': {
+    summary: [
+      ['summary.accepted_input', '输入已接受边', 'Accepted input edges'],
+      ['summary.projected_edges', '投影边数', 'Projected edges'],
+      ['summary.rejected', '拒绝边数', 'Rejected edges'],
+      ['summary.duplicate_edges', '重复边数', 'Duplicate edges']
+    ],
+    artifacts: [
+      { name: 'llm_call_graph_overlay.json', title: ['语义调用图 overlay', 'Semantic call-graph overlay'], fields: [
+        ['status', '投影状态', 'Projection status'], ['summary.accepted_input', '输入已接受边', 'Accepted input edges'],
+        ['summary.projected_edges', '投影边数', 'Projected edges'], ['summary.rejected', '拒绝边数', 'Rejected edges'],
+        ['summary.duplicate_edges', '重复边数', 'Duplicate edges'], ['summary.minimum_confidence', '最低置信度', 'Minimum confidence'],
+        ['nodes', '投影节点数', 'Projected nodes'], ['edges', '投影边记录', 'Projected edges']
+      ] }
+    ]
+  },
+  'openharmony-dispatch-code-evidence': {
+    summary: [
+      ['summary.sites', '分派站点数', 'Dispatch sites'],
+      ['summary.candidate_cases', '候选分派值', 'Candidate cases'],
+      ['summary.resolved_cases', '已解析分派值', 'Resolved cases'],
+      ['summary.unresolved_symbols', '未解析符号', 'Unresolved symbols']
+    ],
+    artifacts: [
+      { name: 'openharmony_dispatch_code_evidence.json', title: ['分派码证据', 'Dispatch-code evidence'], fields: [
+        ['status', '证据状态', 'Evidence status'], ['platform', '目标平台', 'Target platform'],
+        ['summary.sites', '分派站点数', 'Dispatch sites'], ['summary.candidate_cases', '候选值数', 'Candidate cases'],
+        ['summary.resolved_cases', '已解析值数', 'Resolved cases'], ['summary.unresolved_symbols', '未解析符号', 'Unresolved symbols'],
+        ['summary.files_scanned', '扫描文件数', 'Files scanned'], ['sites', '分派站点记录', 'Dispatch sites'], ['errors', '错误', 'Errors']
       ] }
     ]
   },
@@ -1320,14 +1602,27 @@ const categoryLabels = {
     'context': '安全上下文',
     'dataset': '数据集',
     'graph': '调用关系',
+    'graph-recovery': '调用图语义复核',
+    'dispatch-evidence': '分派码证据',
     'reachability': '可达性',
     'results': '分析结果',
     'dynamic-test': '动态测试'
   },
-  'en': {}
+  'en': {
+    'stage-report': 'Stage reports',
+    'platform': 'Platform',
+    'context': 'Security context',
+    'dataset': 'Dataset',
+    'graph': 'Call graph',
+    'graph-recovery': 'Graph semantic review',
+    'dispatch-evidence': 'Dispatch evidence',
+    'reachability': 'Reachability',
+    'results': 'Analysis results',
+    'dynamic-test': 'Dynamic testing'
+  }
 };
 
-const steps = ['parse', 'app-context', 'llm-reachability', 'enhance', 'analyze', 'verify', 'build-output', 'dynamic-test', 'report'];
+const steps = ['parse', 'app-context', 'llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'enhance', 'analyze', 'verify', 'build-output', 'dynamic-test', 'report'];
 const stepEls = {};
 const countEls = {};
 steps.forEach(function(stage) {
@@ -1343,6 +1638,7 @@ let artifactTimer = null;
 let lastPipelineView = null;
 let lastArtifacts = null;
 let lastDisclosures = [];
+let disclosureQuery = '';
 let selectedStage = 'parse';
 let stageWasChosen = false;
 const stageCounts = {};
@@ -1402,6 +1698,8 @@ function applyLanguage(language) {
   document.querySelectorAll('[data-stage-label]').forEach(function(el) {
     el.textContent = t('stage.' + el.dataset.stageLabel);
   });
+  const disclosureToolbar = document.querySelector('.disclosure-toolbar');
+  if (disclosureToolbar) disclosureToolbar.setAttribute('aria-label', t('disclosures.searchRegion'));
   renderStageWorkbench();
   renderArtifacts(lastArtifacts || []);
   renderDisclosures(lastDisclosures || []);
@@ -1412,6 +1710,23 @@ if (languageSelect) {
   languageSelect.addEventListener('change', function() {
     try { localStorage.setItem('openant.ui.language', languageSelect.value); } catch (_) {}
     applyLanguage(languageSelect.value);
+  });
+}
+
+const disclosureSearch = document.getElementById('disclosure-search');
+const disclosureSearchClear = document.getElementById('disclosure-search-clear');
+if (disclosureSearch) {
+  disclosureSearch.addEventListener('input', function() {
+    disclosureQuery = disclosureSearch.value;
+    renderDisclosures(lastDisclosures);
+  });
+}
+if (disclosureSearchClear) {
+  disclosureSearchClear.addEventListener('click', function() {
+    disclosureQuery = '';
+    if (disclosureSearch) disclosureSearch.value = '';
+    renderDisclosures(lastDisclosures);
+    if (disclosureSearch) disclosureSearch.focus();
   });
 }
 
@@ -1460,8 +1775,9 @@ function setCount(stage, value) {
 function setStepStatus(name, status) {
   const el = stepEls[name];
   if (!el) return;
-  el.classList.remove('active', 'done', 'skipped', 'error');
+  el.classList.remove('active', 'done', 'partial', 'skipped', 'error');
   if (status === 'success') el.classList.add('done');
+  else if (status === 'partial') el.classList.add('partial');
   else if (status === 'running') el.classList.add('active');
   else if (status === 'skipped' || status === 'not_requested') el.classList.add('skipped');
   else if (status === 'error') el.classList.add('error');
@@ -1554,6 +1870,17 @@ const stageResultFallbackLabels = {
   bypassable: ['可绕过数', 'Bypassable'], protected: ['受保护数', 'Protected'], safe: ['安全数', 'Safe'],
   inconclusive: ['待定数', 'Inconclusive'], confirmed: ['确认数', 'Confirmed'], agreed: ['一致数', 'Agreed'],
   disagreed: ['不一致数', 'Disagreed'], confirmed_vulnerabilities: ['确认漏洞数', 'Confirmed vulnerabilities'],
+  worklist_sites: ['待复核残余点', 'Residual sites'], attempts: ['复核尝试次数', 'Attempts'],
+  accepted: ['接受边数', 'Accepted edges'], accepted_edges: ['接受边数', 'Accepted edges'],
+  kept_unresolved: ['仍未解决点', 'Kept unresolved'], rejected: ['拒绝边数', 'Rejected edges'],
+  reviewed: ['已复核站点', 'Reviewed sites'], reviewed_sites: ['已复核站点', 'Reviewed sites'],
+  projected_edges: ['投影边数', 'Projected edges'], accepted_input: ['输入已接受边', 'Accepted input edges'],
+  duplicate_edges: ['重复边数', 'Duplicate edges'], sites: ['分派站点数', 'Dispatch sites'],
+  candidate_cases: ['候选分派值', 'Candidate cases'], resolved_cases: ['已解析分派值', 'Resolved cases'],
+  unresolved_symbols: ['未解析符号', 'Unresolved symbols'], files_scanned: ['扫描文件数', 'Files scanned'],
+  definitions: ['常量定义数', 'Definitions'], scheduled: ['已调度站点', 'Scheduled sites'],
+  rounds: ['复核轮次', 'Rounds'], reports: ['报告记录数', 'Reports'], nodes: ['节点数', 'Nodes'],
+  edges: ['边数', 'Edges'], minimum_confidence: ['最低置信度', 'Minimum confidence'],
   findings_input: ['输入候选数', 'Input candidates'], findings_verified: ['已验证数', 'Verified findings'],
   needs_review: ['需人工复核数', 'Needs manual review'], findings: ['问题数', 'Findings'], observations: ['观察数', 'Observations'],
   results: ['结果数', 'Results'], steps: ['步骤数', 'Steps'], formats_generated: ['生成格式', 'Generated formats'],
@@ -1830,6 +2157,341 @@ function stageResultMetricDisplay(groups, paths) {
   return stageResultCount(result.value).toLocaleString(currentLanguage);
 }
 
+function stageResultMetricNumber(groups, paths) {
+  const result = stageResultPick(groups, paths);
+  return result.found ? stageResultCount(result.value) : null;
+}
+
+function stageResultRecoveryUnresolvedDisplay(groups) {
+  const direct = stageResultMetricNumber(groups, ['summary.kept_unresolved']);
+  const reviewed = stageResultMetricNumber(groups, ['summary.sites_reviewed', 'summary.worklist_sites']);
+  const accepted = stageResultMetricNumber(groups, ['summary.accepted_decisions', 'summary.accepted']);
+  const rejected = stageResultMetricNumber(groups, ['summary.rejected']);
+  const unreviewed = stageResultMetricNumber(groups, ['summary.unreviewed_sites']);
+  if (reviewed !== null && accepted !== null && rejected !== null && unreviewed !== null) {
+    // Older iterative reports wrote the legacy counter as zero even though
+    // their canonical counters and nested round results recorded unresolved
+    // sites. Recover that display value without changing the persisted data.
+    const derived = Math.max(0, reviewed - accepted - rejected - unreviewed);
+    if (direct === null || (direct === 0 && derived > 0)) {
+      return derived.toLocaleString(currentLanguage);
+    }
+  }
+  return direct === null ? '-' : direct.toLocaleString(currentLanguage);
+}
+
+function normalizeCallGraphStageArtifact(name, data) {
+  if (name !== 'llm_call_graph_recovery_rounds.json' || !data || typeof data !== 'object' || Array.isArray(data)) {
+    return data;
+  }
+  const root = data;
+  const rootSummary = root.summary && typeof root.summary === 'object' && !Array.isArray(root.summary)
+    ? root.summary
+    : null;
+  if (!rootSummary) return data;
+
+  // Older iterative reports put the per-language report below ``reports`` and
+  // left the one-shot counters at zero in the aggregate summary.  Rebuild
+  // those counters from the persisted round summaries (or their validation
+  // lists) so opening a historical scan is truthful too.
+  const reportItems = Array.isArray(root.rounds)
+    ? [root]
+    : (Array.isArray(root.reports) ? root.reports.map(function(item) { return item && item.report; }).filter(Boolean) : []);
+  const totals = { attempts: 0, parsed_decisions: 0, accepted: 0, kept_unresolved: 0, rejected: 0 };
+  const present = { attempts: false, parsed_decisions: false, accepted: false, kept_unresolved: false, rejected: false };
+  reportItems.forEach(function(report) {
+    const rounds = Array.isArray(report.rounds) ? report.rounds : [];
+    rounds.forEach(function(round) {
+      const review = round && round.review && typeof round.review === 'object' ? round.review : {};
+      const nested = review.summary && typeof review.summary === 'object' && !Array.isArray(review.summary)
+        ? review.summary
+        : null;
+      if (nested) {
+        Object.keys(totals).forEach(function(key) {
+          if (Object.prototype.hasOwnProperty.call(nested, key)) {
+            totals[key] += stageResultCount(nested[key]);
+            present[key] = true;
+          }
+        });
+        return;
+      }
+      const validation = review.validation && typeof review.validation === 'object' ? review.validation : {};
+      let parsed = 0;
+      ['accepted', 'kept_unresolved', 'rejected'].forEach(function(key) {
+        if (Array.isArray(validation[key])) {
+          totals[key] += validation[key].length;
+          parsed += validation[key].length;
+          present[key] = true;
+        }
+      });
+      if (parsed || ['accepted', 'kept_unresolved', 'rejected'].some(function(key) { return Array.isArray(validation[key]); })) {
+        totals.parsed_decisions += parsed;
+        present.parsed_decisions = true;
+      }
+    });
+  });
+
+  const summary = Object.assign({}, rootSummary);
+  Object.keys(totals).forEach(function(key) {
+    if (present[key]) summary[key] = totals[key];
+  });
+  if (!present.attempts && stageResultCount(rootSummary.attempts) === 0) {
+    summary.attempts = stageResultCount(rootSummary.llm_calls);
+  }
+  if (!present.accepted && stageResultCount(rootSummary.accepted) === 0) {
+    summary.accepted = stageResultCount(rootSummary.accepted_decisions);
+  }
+  if (!present.parsed_decisions && stageResultCount(rootSummary.parsed_decisions) === 0) {
+    summary.parsed_decisions = stageResultCount(summary.accepted) + stageResultCount(summary.kept_unresolved) + stageResultCount(summary.rejected);
+  }
+  if (!present.kept_unresolved && stageResultCount(rootSummary.kept_unresolved) === 0) {
+    summary.kept_unresolved = Math.max(0,
+      stageResultCount(rootSummary.worklist_sites) - stageResultCount(summary.accepted) -
+      stageResultCount(summary.rejected) - stageResultCount(rootSummary.unreviewed_sites));
+  }
+  return Object.assign({}, root, { summary: summary });
+}
+
+function stageResultEvidenceReports(data) {
+  const reports = [];
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return reports;
+  if (Array.isArray(data.rounds)) reports.push(data);
+  if (Array.isArray(data.reports)) {
+    data.reports.forEach(function(item) {
+      if (item && item.report && typeof item.report === 'object' && !Array.isArray(item.report)) reports.push(item.report);
+    });
+  }
+  if (!reports.length) reports.push(data);
+  return reports;
+}
+
+function stageResultEvidenceLocation(item) {
+  if (!item || typeof item !== 'object') return '';
+  const file = item.file || item.file_path || item.filePath || '';
+  const start = item.start_line !== undefined ? item.start_line
+    : (item.startLine !== undefined ? item.startLine : (item.line !== undefined ? item.line : ''));
+  const end = item.end_line !== undefined ? item.end_line
+    : (item.endLine !== undefined ? item.endLine : '');
+  if (!file) return '';
+  if (start === '' || start === null || start === undefined) return String(file);
+  const suffix = end !== '' && end !== null && end !== undefined && String(end) !== String(start)
+    ? ':' + String(start) + '-' + String(end)
+    : ':' + String(start);
+  return String(file) + suffix;
+}
+
+function stageResultEvidenceValue(value, path) {
+  if (value === null || value === undefined) return '-';
+  if (Array.isArray(value)) {
+    if (!value.length) return '0';
+    return value.slice(0, 8).map(function(item, index) {
+      return stageResultEvidenceValue(item, (path || '') + '[' + index + ']');
+    }).join('、') + (value.length > 8 ? ' …' : '');
+  }
+  if (value && typeof value === 'object') return stageResultValueSummary(value, path || '', 0);
+  return stageResultPrimitive(value, path || '');
+}
+
+function stageResultEvidenceDecisionLabel(decision) {
+  const value = String(decision || '').toLowerCase();
+  if (value === 'add_edge' || value === 'accepted' || value === 'accept') return t('details.evidenceAccepted');
+  if (value === 'keep_unresolved' || value === 'unresolved') return t('details.evidenceUnresolved');
+  if (value === 'reject' || value === 'rejected') return t('details.evidenceRejected');
+  return t('details.evidenceUnreviewed');
+}
+
+function stageResultEvidenceBadgeClass(decision) {
+  const value = String(decision || '').toLowerCase();
+  if (value === 'add_edge' || value === 'accepted' || value === 'accept') return 'accepted';
+  if (value === 'reject' || value === 'rejected') return 'rejected';
+  if (value === 'keep_unresolved' || value === 'unresolved') return 'unresolved';
+  return '';
+}
+
+function stageResultReviewEvidenceRecords(stage, data) {
+  const records = new Map();
+  const reports = stageResultEvidenceReports(data);
+
+  function put(site, decision) {
+    const source = site && typeof site === 'object' ? site : {};
+    const item = decision && typeof decision === 'object' ? decision : {};
+    const siteID = String(item.site_id || source.site_id || source.id || source.caller_id || '').trim();
+    if (!siteID) return;
+    const current = records.get(siteID) || { site: {}, decision: null };
+    if (Object.keys(source).length) current.site = Object.assign({}, current.site, source);
+    if (Object.keys(item).length && (!current.decision || !current.decision.decision || item.decision !== '')) current.decision = Object.assign({}, current.decision || {}, item);
+    records.set(siteID, current);
+  }
+
+  function consumeReview(review) {
+    if (!review || typeof review !== 'object') return;
+    (Array.isArray(review.worklist) ? review.worklist : []).forEach(function(site) { put(site, null); });
+    (Array.isArray(review.decisions) ? review.decisions : []).forEach(function(decision) { put(null, decision); });
+    const validation = review.validation && typeof review.validation === 'object' ? review.validation : {};
+    ['accepted', 'kept_unresolved', 'rejected'].forEach(function(key) {
+      (Array.isArray(validation[key]) ? validation[key] : []).forEach(function(decision) { put(null, decision); });
+    });
+  }
+
+  reports.forEach(function(report) {
+    if (stage === 'llm-call-graph-recovery' && Array.isArray(report.rounds)) {
+      report.rounds.forEach(function(round) { consumeReview(round && round.review); });
+    } else {
+      consumeReview(report);
+    }
+  });
+
+  return Array.from(records.keys()).map(function(siteID) {
+    const record = records.get(siteID) || {};
+    const site = record.site || {};
+    const decision = record.decision || {};
+    const decisionKind = String(decision.decision || '').toLowerCase();
+    const callEvidence = Array.isArray(decision.evidence) ? decision.evidence : [];
+    const callEvidenceItem = callEvidence.find(function(item) { return item && (item.kind === 'call_site' || item.kind === 'callsite'); }) || callEvidence[0] || {};
+    const location = stageResultEvidenceLocation(site) || stageResultEvidenceLocation(callEvidenceItem);
+    const caller = (site.caller && (site.caller.name || site.caller.function_id)) || site.caller_id || site.caller || '-';
+    const expression = site.expression || callEvidenceItem.text || '-';
+    const targets = decision.target_id || (Array.isArray(site.candidate_target_ids) && site.candidate_target_ids.length
+      ? site.candidate_target_ids.join('、') : '-');
+    const reason = decision.reason || site.reason || '-';
+    const rows = [
+      { label: t('details.evidenceCaller'), value: stageResultEvidenceValue(caller, siteID + '.caller') },
+      { label: t('details.evidenceSource'), value: location || '-' },
+      { label: t('details.evidenceCallSite'), value: expression },
+      { label: t('details.evidenceTarget'), value: stageResultEvidenceValue(targets, siteID + '.target') },
+      { label: t('details.evidenceDecision'), value: stageResultEvidenceDecisionLabel(decisionKind) },
+      { label: t('details.evidenceConfidence'), value: decision.confidence || '-' }
+    ];
+    if (reason !== '-') rows.push({ label: t('details.evidenceReason'), value: reason });
+    return {
+      key: siteID,
+      title: siteID,
+      badge: stageResultEvidenceDecisionLabel(decisionKind),
+      badgeClass: stageResultEvidenceBadgeClass(decisionKind),
+      rows: rows,
+      snippets: callEvidence.slice(0, 3).map(function(item) {
+        const text = item && (item.text || item.excerpt || item.code) ? (item.text || item.excerpt || item.code) : '';
+        const itemLocation = stageResultEvidenceLocation(item);
+        return (itemLocation ? itemLocation + ' · ' : '') + (text || stageResultEvidenceValue(item, siteID + '.evidence'));
+      }).filter(Boolean)
+    };
+  });
+}
+
+function stageResultProjectionEvidenceRecords(data) {
+  const edges = [];
+  if (data && Array.isArray(data.edges)) edges.push.apply(edges, data.edges);
+  if (data && Array.isArray(data.reports)) {
+    data.reports.forEach(function(item) {
+      const overlay = item && item.overlay;
+      if (overlay && Array.isArray(overlay.edges)) edges.push.apply(edges, overlay.edges);
+    });
+  }
+  return edges.filter(function(edge) { return edge && typeof edge === 'object'; }).map(function(edge, index) {
+    const source = edge.source_id || edge.source || '-';
+    const target = edge.target_id || edge.target || '-';
+    const evidence = Array.isArray(edge.evidence) ? edge.evidence : [];
+    return {
+      key: String(source) + '->' + String(target) + '#' + index,
+      title: String(source) + ' → ' + String(target),
+      badge: t('details.evidenceAccepted'),
+      badgeClass: 'accepted',
+      rows: [
+        { label: t('details.evidenceCaller'), value: stageResultEvidenceValue(source, 'edge.source') },
+        { label: t('details.evidenceTarget'), value: stageResultEvidenceValue(target, 'edge.target') },
+        { label: t('details.evidenceConfidence'), value: edge.confidence || '-' },
+        { label: t('details.evidenceReason'), value: edge.reason || '-' }
+      ],
+      snippets: evidence.slice(0, 3).map(function(item) {
+        return (stageResultEvidenceLocation(item) ? stageResultEvidenceLocation(item) + ' · ' : '') + stageResultEvidenceValue(item && (item.text || item.excerpt || item.code), 'edge.evidence');
+      })
+    };
+  });
+}
+
+function stageResultDispatchEvidenceRecords(data) {
+  const records = [];
+  stageResultEvidenceReports(data).forEach(function(report) {
+    (Array.isArray(report.sites) ? report.sites : []).forEach(function(site) {
+      if (!site || typeof site !== 'object') return;
+      const cases = Array.isArray(site.cases) ? site.cases : [];
+      records.push({
+        key: String(site.site_id || stageResultEvidenceLocation(site) || records.length),
+        title: String(site.site_id || stageResultEvidenceLocation(site) || t('details.evidenceDispatch')),
+        badge: cases.length ? t('details.evidenceAccepted') : t('details.evidenceUnresolved'),
+        badgeClass: cases.length ? 'accepted' : 'unresolved',
+        rows: [
+          { label: t('details.evidenceCaller'), value: site.caller_id || '-' },
+          { label: t('details.evidenceSource'), value: stageResultEvidenceLocation(site) || '-' },
+          { label: t('details.evidenceDispatch'), value: site.expression || '-' },
+          { label: t('details.evidenceSelector'), value: cases.length ? stageResultEvidenceValue(cases, 'dispatch.cases') : t('details.evidenceNoSelector') }
+        ],
+        snippets: []
+      });
+    });
+  });
+  return records;
+}
+
+function stageResultEvidenceRecords(stage, name, data) {
+  if (stage === 'llm-call-graph-recovery' || stage === 'llm-call-graph-candidate-review') return stageResultReviewEvidenceRecords(stage, data);
+  if (stage === 'llm-call-graph-projection') return stageResultProjectionEvidenceRecords(data);
+  if (stage === 'openharmony-dispatch-code-evidence' || (data && data.review_scope === 'dispatch_code_values')) return stageResultDispatchEvidenceRecords(data);
+  return [];
+}
+
+function renderStageResultEvidence(stage, records, available) {
+  const section = document.getElementById('stage-result-evidence');
+  const list = document.getElementById('stage-result-evidence-list');
+  if (!section || !list) return;
+  const evidenceStages = ['llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence'];
+  if (evidenceStages.indexOf(stage) === -1 || !available) {
+    section.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  section.hidden = false;
+  list.replaceChildren();
+  const unique = [];
+  const seen = new Set();
+  (records || []).forEach(function(record) {
+    if (!record || seen.has(record.key)) return;
+    seen.add(record.key);
+    unique.push(record);
+  });
+  if (!unique.length) {
+    list.appendChild(element('div', 'stage-result-evidence-empty', t('details.evidenceEmpty')));
+    return;
+  }
+  const limit = 12;
+  unique.slice(0, limit).forEach(function(record, index) {
+    const details = document.createElement('details');
+    details.className = 'stage-result-evidence-card';
+    if (index === 0) details.open = true;
+    const summary = document.createElement('summary');
+    const title = element('span', 'stage-result-evidence-card-title', record.title);
+    const badge = element('span', 'stage-result-evidence-badge ' + (record.badgeClass || ''), record.badge || '');
+    summary.appendChild(title);
+    summary.appendChild(badge);
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    body.className = 'stage-result-evidence-body';
+    (record.rows || []).forEach(function(row) {
+      const line = document.createElement('div');
+      line.className = 'stage-result-evidence-row';
+      line.appendChild(element('span', 'stage-result-evidence-label', row.label));
+      line.appendChild(element('span', 'stage-result-evidence-value', row.value));
+      body.appendChild(line);
+    });
+    (record.snippets || []).forEach(function(snippet) {
+      body.appendChild(element('div', 'stage-result-evidence-code', snippet));
+    });
+    details.appendChild(body);
+    list.appendChild(details);
+  });
+  if (unique.length > limit) list.appendChild(element('div', 'stage-result-evidence-more', stageResultInterpolate(t('details.evidenceMore'), { count: unique.length - limit })));
+}
+
 function stageResultMetricText(groups, paths) {
   const result = stageResultPick(groups, paths);
   if (!result.found) return '-';
@@ -1900,7 +2562,42 @@ function renderStageResultLead(step, groups) {
       case 'llm-reachability': {
         const signals = stageResultMetric(groups, ['signals']);
         const entries = stageResultMetric(groups, ['entry_points', 'entries']);
-        body = stageResultInterpolate(t('details.outcomeReachability'), { signals: signals.toLocaleString(currentLanguage), entries: entries.toLocaleString(currentLanguage) });
+        const seeds = stageResultMetric(groups, ['summary.semantic_seed_ids', 'summary.semantic_seed_count', 'semantic_seed_ids']);
+        const retained = stageResultMetric(groups, ['summary.reachable_only_ids', 'summary.reachable_only_count', 'summary.retained_only', 'reachable_only_ids']);
+        body = stageResultInterpolate(t('details.outcomeReachability'), {
+          signals: signals.toLocaleString(currentLanguage),
+          entries: entries.toLocaleString(currentLanguage),
+          seeds: seeds.toLocaleString(currentLanguage),
+          retained: retained.toLocaleString(currentLanguage)
+        });
+        break;
+      }
+      case 'llm-call-graph-recovery': {
+        const sites = stageResultMetricDisplay(groups, ['summary.worklist_sites', 'summary.sites_scheduled', 'summary.sites_reviewed', 'worklist']);
+        const accepted = stageResultMetricDisplay(groups, ['summary.accepted_decisions', 'summary.accepted', 'summary.accepted_edges']);
+        const unresolved = stageResultRecoveryUnresolvedDisplay(groups);
+        body = stageResultInterpolate(t('details.outcomeRecovery'), { sites: sites, accepted: accepted, unresolved: unresolved });
+        break;
+      }
+      case 'llm-call-graph-candidate-review': {
+        const reviewed = stageResultMetricDisplay(groups, ['summary.worklist_sites', 'summary.sites_reviewed', 'summary.parsed_decisions']);
+        const accepted = stageResultMetricDisplay(groups, ['summary.accepted', 'summary.accepted_edges']);
+        const rejected = stageResultMetricDisplay(groups, ['summary.rejected', 'summary.rejected_edges']);
+        body = stageResultInterpolate(t('details.outcomeCandidateReview'), { reviewed: reviewed, accepted: accepted, rejected: rejected });
+        break;
+      }
+      case 'llm-call-graph-projection': {
+        const accepted = stageResultMetricDisplay(groups, ['summary.accepted_input', 'summary.accepted']);
+        const projected = stageResultMetricDisplay(groups, ['summary.projected_edges', 'edges']);
+        const rejected = stageResultMetricDisplay(groups, ['summary.rejected']);
+        body = stageResultInterpolate(t('details.outcomeProjection'), { accepted: accepted, projected: projected, rejected: rejected });
+        break;
+      }
+      case 'openharmony-dispatch-code-evidence': {
+        const sites = stageResultMetricDisplay(groups, ['summary.sites', 'sites']);
+        const resolved = stageResultMetricDisplay(groups, ['summary.resolved_cases']);
+        const unresolved = stageResultMetricDisplay(groups, ['summary.unresolved_symbols']);
+        body = stageResultInterpolate(t('details.outcomeDispatch'), { sites: sites, resolved: resolved, unresolved: unresolved });
         break;
       }
       case 'enhance': {
@@ -1973,8 +2670,9 @@ function loadStageResultArtifact(name) {
     .then(function(response) { if (!response.ok) throw new Error('artifact unavailable'); return response.json(); })
     .then(function(view) {
       const data = view && view.kind === 'collection' ? (view.root_summary || {}) : (view && Object.prototype.hasOwnProperty.call(view, 'data') ? view.data : view);
-      stageResultJSONCache.set(name, { revision: revision, data: data });
-      return data;
+      const normalized = normalizeCallGraphStageArtifact(name, data);
+      stageResultJSONCache.set(name, { revision: revision, data: normalized });
+      return normalized;
     });
 }
 
@@ -1997,11 +2695,12 @@ function collectStageResultFields(root, definitions) {
   return fields;
 }
 
-function renderStageResultGroups(groups) {
+function renderStageResultGroups(groups, evidenceRecords, evidenceAvailable) {
   const container = document.getElementById('selected-stage-results');
   const badge = document.getElementById('stage-results-badge');
   if (!container) return;
   renderStageResultLead(selectedStepView(), groups);
+  renderStageResultEvidence(selectedStage, evidenceRecords || [], Boolean(evidenceAvailable));
   container.replaceChildren();
   if (!groups.length) {
     const empty = document.createElement('div');
@@ -2072,20 +2771,35 @@ function renderStageResultHighlights() {
   loading.textContent = t('details.resultsLoading');
   container.appendChild(loading);
   const groups = [];
+  const evidenceRecords = [];
+  let evidenceAvailable = false;
   const summaryFields = collectStageResultFields(step, definition.summary || []);
   if (summaryFields.length) groups.push({ title: t('details.resultsStage'), source: 'pipeline summary', fields: summaryFields });
   if (!artifactDefs.length) {
-    renderStageResultGroups(groups);
+    renderStageResultGroups(groups, evidenceRecords, evidenceAvailable);
     return;
   }
   Promise.all(artifactDefs.map(function(item) {
     return loadStageResultArtifact(item.name).then(function(data) {
+      const extractedEvidence = stageResultEvidenceRecords(selectedStage, item.name, data);
+      if (['llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence'].indexOf(selectedStage) !== -1) {
+        evidenceAvailable = true;
+        evidenceRecords.push.apply(evidenceRecords, extractedEvidence);
+      }
+      // For iterative recovery, the artifact contains per-round evidence and
+      // can repair stale aggregate counters from historical scans. Do not
+      // leave the old pipeline-summary card beside it with contradictory
+      // zeros; keep the normalized artifact as the single source of truth.
+      if (selectedStage === 'llm-call-graph-recovery' && item.name === 'llm_call_graph_recovery_rounds.json' && data && data.summary) {
+        const summaryIndex = groups.findIndex(function(group) { return group.source === 'pipeline summary'; });
+        if (summaryIndex >= 0) groups.splice(summaryIndex, 1);
+      }
       const fields = collectStageResultFields(data, item.fields || []);
       if (fields.length) groups.push({ title: currentLanguage === 'zh-CN' ? item.title[0] : item.title[1], source: item.name, fields: fields });
     }).catch(function() {});
   })).then(function() {
     if (requestID !== stageResultRequestID) return;
-    renderStageResultGroups(groups);
+    renderStageResultGroups(groups, evidenceRecords, evidenceAvailable);
   });
 }
 
@@ -2113,7 +2827,7 @@ function renderStageWorkbench() {
   const usage = (step && step.token_usage) || {};
   if (tokens) tokens.textContent = typeof usage.total_tokens === 'number' ? usage.total_tokens.toLocaleString(currentLanguage) : '-';
   if (cost) cost.textContent = formatPipelineCost(step) || '-';
-  const optionalStages = ['llm-reachability', 'verify', 'dynamic-test'];
+  const optionalStages = ['llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'verify', 'dynamic-test'];
   const isOptional = step ? Boolean(step.optional) : optionalStages.indexOf(selectedStage) !== -1;
   if (optional) optional.textContent = t(isOptional ? 'details.optionalYes' : 'details.optionalNo');
 
@@ -3296,17 +4010,76 @@ function disclosureLineRange(disclosure) {
   return '';
 }
 
+function disclosureSearchText(disclosure) {
+  if (!disclosure || typeof disclosure !== 'object') return '';
+  const values = [
+    disclosure.name,
+    disclosure.label,
+    disclosure.vulnerability_type,
+    disclosure.cwe_id,
+    disclosure.cwe_name,
+    disclosure.file_path,
+    disclosure.function,
+    disclosure.affected_version,
+    disclosure.repair_status,
+    disclosure.summary,
+    disclosure.source_to_sink,
+    // Keep compatibility with future server fields without requiring a UI
+    // change whenever a CVE identifier is added to the list response.
+    disclosure.cve,
+    disclosure.cve_id,
+    disclosure.identifier,
+    disclosure.url
+  ];
+  const chain = Array.isArray(disclosure.call_chain) ? disclosure.call_chain : [];
+  chain.forEach(function(node) {
+    if (!node || typeof node !== 'object') return;
+    values.push(node.function, node.file, node.role);
+  });
+  return values.filter(function(value) { return value !== null && value !== undefined; })
+    .map(function(value) { return String(value); })
+    .join(' ')
+    .toLocaleLowerCase();
+}
+
+function disclosureMatches(disclosure) {
+  const query = String(disclosureQuery || '').trim().toLocaleLowerCase();
+  return !query || disclosureSearchText(disclosure).includes(query);
+}
+
+function updateDisclosureSearchUI(total, visible) {
+  const count = document.getElementById('disclosure-search-count');
+  const clear = document.getElementById('disclosure-search-clear');
+  const query = String(disclosureQuery || '').trim();
+  if (count) {
+    count.textContent = t('disclosures.searchCount')
+      .replace('{visible}', String(visible))
+      .replace('{total}', String(total));
+  }
+  if (clear) clear.hidden = query === '';
+}
+
 function renderDisclosures(list) {
   lastDisclosures = Array.isArray(list) ? list : [];
   const container = document.getElementById('disclosures');
   const links = document.getElementById('disclosure-links');
+  const empty = document.getElementById('disclosure-empty');
   if (!container || !links) return;
   links.replaceChildren();
   if (lastDisclosures.length === 0) {
     container.style.display = 'none';
+    if (empty) empty.hidden = true;
+    updateDisclosureSearchUI(0, 0);
     return;
   }
-  lastDisclosures.forEach(function(disclosure) {
+  const filtered = lastDisclosures.filter(disclosureMatches);
+  updateDisclosureSearchUI(lastDisclosures.length, filtered.length);
+  container.style.display = 'block';
+  if (empty) {
+    empty.hidden = filtered.length !== 0;
+    empty.textContent = filtered.length === 0 ? t('disclosures.noMatches') : '';
+  }
+  filtered.forEach(function(disclosure) {
     const card = document.createElement('article');
     card.className = 'disclosure-card';
     const link = document.createElement('a');
@@ -3345,6 +4118,7 @@ function renderDisclosures(list) {
     }
     const cwe = disclosure.cwe_id ? 'CWE-' + disclosure.cwe_id + (disclosure.cwe_name ? ' (' + disclosure.cwe_name + ')' : '') : disclosure.vulnerability_type;
     appendMeta('disclosures.cwe', cwe, false);
+    if (disclosure.cve) appendMeta('disclosures.cve', disclosure.cve, true);
     appendMeta('disclosures.file', disclosure.file_path, true);
     appendMeta('disclosures.function', disclosure.function, true);
     appendMeta('disclosures.lines', disclosureLineRange(disclosure), false);
@@ -3419,7 +4193,6 @@ function renderDisclosures(list) {
     card.appendChild(evidence);
     links.appendChild(card);
   });
-  container.style.display = 'block';
 }
 
 function loadDisclosures() {

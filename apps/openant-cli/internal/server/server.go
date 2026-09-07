@@ -47,8 +47,31 @@ type jobMeta struct {
 	Repo                        string    `json:"repo"`
 	StartedAt                   time.Time `json:"started_at"`
 	Platform                    string    `json:"platform,omitempty"`
+	Languages                   []string  `json:"languages,omitempty"`
+	Level                       string    `json:"level,omitempty"`
+	NoContext                   bool      `json:"no_context,omitempty"`
+	NoEnhance                   bool      `json:"no_enhance,omitempty"`
+	EnhanceMode                 string    `json:"enhance_mode,omitempty"`
+	NoReport                    bool      `json:"no_report,omitempty"`
+	NoSkipTests                 bool      `json:"no_skip_tests,omitempty"`
+	AllLanguages                bool      `json:"all_languages,omitempty"`
+	MultiLanguage               bool      `json:"multi_language,omitempty"`
+	MinLanguageFiles            int       `json:"min_language_files,omitempty"`
+	MinLanguageShare            float64   `json:"min_language_share,omitempty"`
+	StrictLanguages             bool      `json:"strict_languages,omitempty"`
+	Limit                       int       `json:"limit,omitempty"`
+	Verify                      bool      `json:"verify,omitempty"`
+	LibraryMode                 bool      `json:"library_mode,omitempty"`
+	LLMConfig                   string    `json:"llm_config,omitempty"`
+	Workers                     int       `json:"workers,omitempty"`
+	Backoff                     int       `json:"backoff,omitempty"`
 	LLMReachability             bool      `json:"llm_reachability,omitempty"`
 	LLMReachabilityMaxCodeBytes int       `json:"llm_reachability_max_code_bytes,omitempty"`
+	LLMCallGraphRecovery        bool      `json:"llm_call_graph_recovery,omitempty"`
+	LLMCallGraphIterative       bool      `json:"llm_call_graph_iterative_recovery,omitempty"`
+	LLMCallGraphCandidateReview bool      `json:"llm_call_graph_candidate_review,omitempty"`
+	LLMCallGraphProjection      bool      `json:"llm_call_graph_projection,omitempty"`
+	DispatchCodeEvidence        bool      `json:"openharmony_dispatch_code_evidence,omitempty"`
 	DynamicTest                 bool      `json:"dynamic_test,omitempty"`
 	DynamicTestMode             string    `json:"dynamic_test_mode,omitempty"`
 	TaskWorkspace               string    `json:"task_workspace,omitempty"`
@@ -80,10 +103,30 @@ type Job struct {
 	apiKey                      string
 	languages                   []string
 	platform                    string
+	level                       string
+	noContext                   bool
+	noEnhance                   bool
+	enhanceMode                 string
+	noReport                    bool
+	noSkipTests                 bool
+	allLanguages                bool
+	multiLanguage               bool
+	minLanguageFiles            int
+	minLanguageShare            float64
+	strictLanguages             bool
+	limit                       int
+	llmConfig                   string
+	workers                     int
+	backoff                     int
 	libraryMode                 bool
 	verify                      bool
 	llmReachability             bool
 	llmReachabilityMaxCodeBytes int
+	llmCallGraphRecovery        bool
+	llmCallGraphIterative       bool
+	llmCallGraphCandidateReview bool
+	llmCallGraphProjection      bool
+	dispatchCodeEvidence        bool
 	dynamicTest                 bool
 	dynamicTestMode             string
 	claudeTask                  *claudeTaskInfo
@@ -190,22 +233,24 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
-	pythonPath        string
-	outDir            string
-	mgr               *manager
-	tmplIndex         *template.Template
-	tmplScan          *template.Template
-	tmplArtifact      *template.Template
-	tmplSum           *template.Template
-	tmplDisclosure    *template.Template
-	tmplSourceLocator *template.Template
-	sem               chan struct{}
-	csrfToken         string
-	sourceLocatorMu   sync.Mutex     // serializes Web source-locator mutations, including deletion
-	wg                sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
-	shutdownDone      chan struct{}  // closed once cancel+drain completes
-	drainMu           sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
-	draining          bool           // set at shutdown so no new job is added after Wait starts
+	pythonPath          string
+	outDir              string
+	mgr                 *manager
+	tmplIndex           *template.Template
+	tmplScan            *template.Template
+	tmplArtifact        *template.Template
+	tmplSum             *template.Template
+	tmplDisclosure      *template.Template
+	tmplSourceLocator   *template.Template
+	tmplExposureSurface *template.Template
+	sem                 chan struct{}
+	csrfToken           string
+	sourceLocatorMu     sync.Mutex     // serializes Web source-locator mutations, including deletion
+	exposureSurfaceMu   sync.Mutex     // serializes Web exposure-surface mutations, including deletion
+	wg                  sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
+	shutdownDone        chan struct{}  // closed once cancel+drain completes
+	drainMu             sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
+	draining            bool           // set at shutdown so no new job is added after Wait starts
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
@@ -235,6 +280,10 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse source-locator.html: %w", err)
 	}
+	tmplExposureSurface, err := template.ParseFS(uifiles.FS, "exposure-surface.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse exposure-surface.html: %w", err)
+	}
 
 	// Per-instance CSRF synchronizer token: 32 hex chars from crypto/rand,
 	// stable for the server's lifetime and embedded in served pages.
@@ -244,18 +293,19 @@ func New(pythonPath, outDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		pythonPath:        pythonPath,
-		outDir:            outDir,
-		mgr:               newManager(outDir),
-		tmplIndex:         tmplIndex,
-		tmplScan:          tmplScan,
-		tmplArtifact:      tmplArtifact,
-		tmplSum:           tmplSum,
-		tmplDisclosure:    tmplDisclosure,
-		tmplSourceLocator: tmplSourceLocator,
-		sem:               make(chan struct{}, 4),
-		csrfToken:         hex.EncodeToString(tokBytes),
-		shutdownDone:      make(chan struct{}),
+		pythonPath:          pythonPath,
+		outDir:              outDir,
+		mgr:                 newManager(outDir),
+		tmplIndex:           tmplIndex,
+		tmplScan:            tmplScan,
+		tmplArtifact:        tmplArtifact,
+		tmplSum:             tmplSum,
+		tmplDisclosure:      tmplDisclosure,
+		tmplSourceLocator:   tmplSourceLocator,
+		tmplExposureSurface: tmplExposureSurface,
+		sem:                 make(chan struct{}, 4),
+		csrfToken:           hex.EncodeToString(tokBytes),
+		shutdownDone:        make(chan struct{}),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -288,11 +338,52 @@ func (s *Server) recoverJobs() {
 				job.Repo = m.Repo
 				job.StartedAt = m.StartedAt
 				job.platform = m.Platform
+				job.languages = append([]string(nil), m.Languages...)
+				job.level = m.Level
+				if job.level == "" {
+					job.level = defaultScanLevel
+				}
+				job.noContext = m.NoContext
+				job.noEnhance = m.NoEnhance
+				job.enhanceMode = m.EnhanceMode
+				if job.enhanceMode == "" {
+					job.enhanceMode = defaultEnhanceMode
+				}
+				job.noReport = m.NoReport
+				job.noSkipTests = m.NoSkipTests
+				job.allLanguages = m.AllLanguages
+				job.multiLanguage = m.MultiLanguage
+				job.minLanguageFiles = m.MinLanguageFiles
+				if job.minLanguageFiles == 0 {
+					job.minLanguageFiles = defaultMinLanguageFiles
+				}
+				job.minLanguageShare = m.MinLanguageShare
+				if job.minLanguageShare == 0 {
+					job.minLanguageShare = defaultMinLanguageShare
+				}
+				job.strictLanguages = m.StrictLanguages
+				job.limit = m.Limit
+				job.verify = m.Verify
+				job.libraryMode = m.LibraryMode
+				job.llmConfig = m.LLMConfig
+				job.workers = m.Workers
+				if job.workers == 0 {
+					job.workers = defaultScanWorkers
+				}
+				job.backoff = m.Backoff
+				if job.backoff == 0 {
+					job.backoff = defaultScanBackoff
+				}
 				job.llmReachability = m.LLMReachability
 				job.llmReachabilityMaxCodeBytes = m.LLMReachabilityMaxCodeBytes
 				if job.llmReachabilityMaxCodeBytes == 0 {
 					job.llmReachabilityMaxCodeBytes = defaultLLMReachabilityMaxCodeBytes
 				}
+				job.llmCallGraphRecovery = m.LLMCallGraphRecovery
+				job.llmCallGraphIterative = m.LLMCallGraphIterative
+				job.llmCallGraphCandidateReview = m.LLMCallGraphCandidateReview
+				job.llmCallGraphProjection = m.LLMCallGraphProjection
+				job.dispatchCodeEvidence = m.DispatchCodeEvidence
 				job.dynamicTest = m.DynamicTest
 				job.dynamicTestMode = m.DynamicTestMode
 				if job.dynamicTestMode == "" && job.dynamicTest {
@@ -445,6 +536,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /source-locator/sessions/{id}/cancel", s.handleSourceLocatorCancel)
 	mux.HandleFunc("DELETE /source-locator/sessions/{id}", s.handleSourceLocatorDelete)
 	mux.HandleFunc("GET /source-locator/sessions/{id}/artifact/{name...}", s.handleSourceLocatorArtifact)
+	// Standalone OpenHarmony device exposure-surface inspection. Its initial
+	// probes are read-only; the separate start/skip decision routes require
+	// CSRF and an explicit pending option, and do not alter ordinary scan jobs
+	// or source-locator handoff behavior.
+	mux.HandleFunc("GET /exposure-surface", s.handleExposureSurfaceIndex)
+	mux.HandleFunc("GET /exposure-surface/sessions", s.handleExposureSurfaceSessions)
+	mux.HandleFunc("POST /exposure-surface/sessions", s.handleExposureSurfaceCreate)
+	mux.HandleFunc("GET /exposure-surface/sessions/{id}", s.handleExposureSurfaceStatus)
+	mux.HandleFunc("POST /exposure-surface/sessions/{id}/start", s.handleExposureSurfaceStart)
+	mux.HandleFunc("POST /exposure-surface/sessions/{id}/start-service", s.handleExposureSurfaceStartService)
+	mux.HandleFunc("POST /exposure-surface/sessions/{id}/skip-start", s.handleExposureSurfaceSkipStart)
+	mux.HandleFunc("POST /exposure-surface/sessions/{id}/cancel", s.handleExposureSurfaceCancel)
+	mux.HandleFunc("GET /exposure-surface/sessions/{id}/events/snapshot", s.handleExposureSurfaceEventSnapshot)
+	mux.HandleFunc("GET /exposure-surface/sessions/{id}/events", s.handleExposureSurfaceEvents)
+	mux.HandleFunc("DELETE /exposure-surface/sessions/{id}", s.handleExposureSurfaceDelete)
+	mux.HandleFunc("GET /exposure-surface/sessions/{id}/artifact/{name}", s.handleExposureSurfaceArtifact)
 	return securityHeaders(mux)
 }
 
@@ -486,10 +593,88 @@ var supportedPlatforms = map[string]bool{
 }
 
 const (
+	defaultScanLevel                   = "reachable"
+	defaultEnhanceMode                 = "agentic"
+	defaultScanWorkers                 = 8
+	defaultScanBackoff                 = 30
+	defaultMinLanguageFiles            = 5
+	defaultMinLanguageShare            = 0.02
+	maxScanLimit                       = 1_000_000
+	maxScanWorkers                     = 64
+	maxScanBackoff                     = 3600
+	maxMinLanguageFiles                = 1_000_000
 	defaultLLMReachabilityMaxCodeBytes = 1500
 	minLLMReachabilityMaxCodeBytes     = 256
 	maxLLMReachabilityMaxCodeBytes     = 32768
 )
+
+var supportedScanLevels = map[string]bool{
+	"all":         true,
+	"reachable":   true,
+	"codeql":      true,
+	"exploitable": true,
+}
+
+var supportedEnhanceModes = map[string]bool{
+	"agentic":     true,
+	"single-shot": true,
+}
+
+// normalizeBoundedInt validates a numeric Web option before it is placed in
+// the child-process argv. Empty values use the scanner's documented default.
+func normalizeBoundedInt(raw string, fallback, min, max int) (int, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return fallback, true
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < min || parsed > max {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func normalizeScanLevel(raw string) (string, bool) {
+	level := strings.TrimSpace(raw)
+	if level == "" {
+		level = defaultScanLevel
+	}
+	return level, supportedScanLevels[level]
+}
+
+func normalizeEnhanceMode(raw string) (string, bool) {
+	mode := strings.TrimSpace(raw)
+	if mode == "" {
+		mode = defaultEnhanceMode
+	}
+	return mode, supportedEnhanceModes[mode]
+}
+
+func normalizeMinLanguageShare(raw string) (float64, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultMinLanguageShare, true
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 || parsed > 1 {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func normalizeLLMConfigName(raw string, cfg *config.Config) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", true
+	}
+	if name == "openant-default" {
+		return name, true
+	}
+	if cfg == nil || !cfg.LLMConfigExists(name) {
+		return "", false
+	}
+	return name, true
+}
 
 // normalizeLLMReachabilityMaxCodeBytes keeps the Web option within a bounded
 // range. The reachability stage reviews the whole repository, so an
@@ -828,6 +1013,38 @@ var pipelineStepSpecs = []pipelineStepSpec{
 		Optional:    true,
 	},
 	{
+		ID:          "llm-call-graph-recovery",
+		Label:       "LLM Call-Graph Recovery",
+		Description: "Review OpenHarmony residual indirect-call sites and record evidence-backed recovery decisions without rewriting the native graph.",
+		Inputs:      []string{"call-graph residual diagnostics", "function index", "entry-point hints"},
+		Outputs:     []string{"recovery decisions", "recovery report"},
+		Optional:    true,
+	},
+	{
+		ID:          "llm-call-graph-candidate-review",
+		Label:       "Candidate Edge Review",
+		Description: "Audit deterministic candidate handlers with a model and keep accepted edges separate from the native call graph.",
+		Inputs:      []string{"candidate call edges", "source evidence", "function index"},
+		Outputs:     []string{"candidate-review decisions", "candidate-review report"},
+		Optional:    true,
+	},
+	{
+		ID:          "llm-call-graph-projection",
+		Label:       "Call-Graph Projection",
+		Description: "Project validated recovery decisions into an additive semantic overlay and optionally re-run promote-only reachability filtering.",
+		Inputs:      []string{"recovery report", "candidate-review report", "unfiltered dataset"},
+		Outputs:     []string{"semantic call-graph overlay", "reachability projection summary"},
+		Optional:    true,
+	},
+	{
+		ID:          "openharmony-dispatch-code-evidence",
+		Label:       "Dispatch-Code Evidence",
+		Description: "Extract source-backed integer dispatch selectors for OpenHarmony IPC and System Ability registrations without changing graph edges.",
+		Inputs:      []string{"dispatch registrations", "source and header constants", "call-graph residuals"},
+		Outputs:     []string{"dispatch-code evidence"},
+		Optional:    true,
+	},
+	{
 		ID:          "enhance",
 		Label:       "Enhance",
 		Description: "Attach callers, callees, semantic context, platform boundaries, and security guards to analysis units.",
@@ -903,6 +1120,20 @@ type pipelineView struct {
 	Steps       []pipelineStepView `json:"steps"`
 }
 
+type pipelineRequestOptions struct {
+	verify                      bool
+	noContext                   bool
+	noEnhance                   bool
+	noReport                    bool
+	llmReachability             bool
+	llmCallGraphRecovery        bool
+	llmCallGraphIterative       bool
+	llmCallGraphCandidateReview bool
+	llmCallGraphProjection      bool
+	dispatchCodeEvidence        bool
+	dynamicTest                 bool
+}
+
 type pipelineReportFile struct {
 	Step            string             `json:"step"`
 	Status          string             `json:"status"`
@@ -921,16 +1152,30 @@ type pipelineReportFile struct {
 const maxPipelineReportBytes = 2 << 20
 
 // requestedPipelineStep reflects the Web UI's invocation choices. Optional
-// stages are marked not_requested only when the corresponding form option was
-// not selected.
-func requestedPipelineStep(id string, verify, llmReachability, dynamicTest bool) bool {
+// stages and explicitly skipped core stages are marked not_requested when the
+// corresponding form option was not selected.
+func requestedPipelineStep(id string, opts pipelineRequestOptions) bool {
 	switch id {
+	case "app-context":
+		return !opts.noContext
+	case "enhance":
+		return !opts.noEnhance
+	case "report":
+		return !opts.noReport
 	case "llm-reachability":
-		return llmReachability
+		return opts.llmReachability
+	case "llm-call-graph-recovery":
+		return opts.llmCallGraphRecovery || opts.llmCallGraphIterative
+	case "llm-call-graph-candidate-review":
+		return opts.llmCallGraphCandidateReview
+	case "llm-call-graph-projection":
+		return opts.llmCallGraphProjection
+	case "openharmony-dispatch-code-evidence":
+		return opts.dispatchCodeEvidence
 	case "verify":
-		return verify
+		return opts.verify
 	case "dynamic-test":
-		return dynamicTest
+		return opts.dynamicTest
 	default:
 		return true
 	}
@@ -974,6 +1219,18 @@ func pipelineStepFromLog(line string) string {
 		return "app-context"
 	case strings.Contains(lower, "[llm-reachability]") || strings.Contains(lower, "llm reachability"):
 		return "llm-reachability"
+	case strings.Contains(lower, "call-graph recovery") || strings.Contains(lower, "call graph recovery") ||
+		strings.Contains(lower, "indirect-call recovery") || strings.Contains(lower, "调用图恢复"):
+		return "llm-call-graph-recovery"
+	case strings.Contains(lower, "candidate-edge review") || strings.Contains(lower, "candidate edge review") ||
+		strings.Contains(lower, "候选边复核"):
+		return "llm-call-graph-candidate-review"
+	case strings.Contains(lower, "call-edge projection") || strings.Contains(lower, "call edge projection") ||
+		strings.Contains(lower, "调用边投影"):
+		return "llm-call-graph-projection"
+	case strings.Contains(lower, "dispatch-code evidence") || strings.Contains(lower, "dispatch code evidence") ||
+		strings.Contains(lower, "分派码证据"):
+		return "openharmony-dispatch-code-evidence"
 	case strings.Contains(lower, "[enhance]") || strings.Contains(lower, "context enhancement"):
 		return "enhance"
 	case strings.Contains(lower, "[analyze]") || strings.Contains(lower, "[detect]") || strings.Contains(lower, "vulnerability analysis"):
@@ -996,7 +1253,15 @@ func (s *Server) pipelineView(job *Job) pipelineView {
 	status := job.Status
 	logs := append([]string(nil), job.LogBuf...)
 	verify := job.verify
+	noContext := job.noContext
+	noEnhance := job.noEnhance
+	noReport := job.noReport
 	llmReachability := job.llmReachability
+	llmCallGraphRecovery := job.llmCallGraphRecovery
+	llmCallGraphIterative := job.llmCallGraphIterative
+	llmCallGraphCandidateReview := job.llmCallGraphCandidateReview
+	llmCallGraphProjection := job.llmCallGraphProjection
+	dispatchCodeEvidence := job.dispatchCodeEvidence
 	dynamicTest := job.dynamicTest
 	dynamicTestMode := job.dynamicTestMode
 	claudeStatus := ""
@@ -1020,6 +1285,14 @@ func (s *Server) pipelineView(job *Job) pipelineView {
 	}
 
 	jobDir := filepath.Join(s.outDir, job.ID)
+	requestOptions := pipelineRequestOptions{
+		verify: verify, noContext: noContext, noEnhance: noEnhance, noReport: noReport,
+		llmReachability:      llmReachability,
+		llmCallGraphRecovery: llmCallGraphRecovery, llmCallGraphIterative: llmCallGraphIterative,
+		llmCallGraphCandidateReview: llmCallGraphCandidateReview,
+		llmCallGraphProjection:      llmCallGraphProjection, dispatchCodeEvidence: dispatchCodeEvidence,
+		dynamicTest: dynamicTest,
+	}
 	view.Steps = make([]pipelineStepView, 0, len(pipelineStepSpecs))
 	for _, spec := range pipelineStepSpecs {
 		step := pipelineStepView{
@@ -1047,7 +1320,7 @@ func (s *Server) pipelineView(job *Job) pipelineView {
 			step.TokenUsage = report.TokenUsage
 			step.Summary = report.Summary
 			step.Errors = report.Errors
-		} else if !requestedPipelineStep(spec.ID, verify, llmReachability, dynamicTest) {
+		} else if !requestedPipelineStep(spec.ID, requestOptions) {
 			step.Status = "not_requested"
 		} else if status == StatusRunning && view.CurrentStep == spec.ID {
 			step.Status = "running"
@@ -1095,6 +1368,10 @@ var scanArtifactSpecs = []artifactSpec{
 	{Name: "parse.report.json", Label: "Parse stage report", Category: "stage-report", Stage: "parse", Description: "Execution status, duration, summary counters, token usage, and errors recorded for source parsing."},
 	{Name: "app-context.report.json", Label: "Application context stage report", Category: "stage-report", Stage: "app-context", Description: "Execution record for application classification and threat-model construction."},
 	{Name: "llm-reachability.report.json", Label: "LLM reachability stage report", Category: "stage-report", Stage: "llm-reachability", Description: "Execution record for the optional model-assisted reachability review."},
+	{Name: "llm-call-graph-recovery.report.json", Label: "LLM call-graph recovery stage report", Category: "stage-report", Stage: "llm-call-graph-recovery", Description: "Execution record for model review of OpenHarmony indirect-call residuals."},
+	{Name: "llm-call-graph-candidate-review.report.json", Label: "Candidate edge review stage report", Category: "stage-report", Stage: "llm-call-graph-candidate-review", Description: "Execution record for model review of deterministic candidate handler edges."},
+	{Name: "llm-call-graph-projection.report.json", Label: "Call-graph projection stage report", Category: "stage-report", Stage: "llm-call-graph-projection", Description: "Execution record for the additive semantic call-graph overlay."},
+	{Name: "openharmony-dispatch-code-evidence.report.json", Label: "Dispatch-code evidence stage report", Category: "stage-report", Stage: "openharmony-dispatch-code-evidence", Description: "Execution record for source-backed OpenHarmony dispatch selector extraction."},
 	{Name: "enhance.report.json", Label: "Enhancement stage report", Category: "stage-report", Stage: "enhance", Description: "Execution record for adding callers, callees, semantic context, and platform security signals."},
 	{Name: "analyze.report.json", Label: "Analysis stage report", Category: "stage-report", Stage: "analyze", Description: "Execution record for primary LLM vulnerability detection, including model usage and errors."},
 	{Name: "verify.report.json", Label: "Verification stage report", Category: "stage-report", Stage: "verify", Description: "Execution record for attacker-path verification and false-positive reduction."},
@@ -1110,7 +1387,12 @@ var scanArtifactSpecs = []artifactSpec{
 	{Name: "analyzer_output.json", Label: "Native analyzer output", Category: "graph", Stage: "parse", Description: "Native parser output containing function definitions, source locations, code, forward calls, and reverse calls."},
 	{Name: "call_graph.json", Label: "Raw call-graph index", Category: "graph", Stage: "parse", Description: "Native call-graph index containing functions, forward edges, reverse edges, and graph statistics."},
 	{Name: "call_graphs.json", Label: "Call-graph index", Category: "graph", Stage: "parse", Description: "Language-to-file index locating the call graph generated for each parsed language."},
-	{Name: "llm_reachability.json", Label: "LLM reachability signals", Category: "reachability", Stage: "llm-reachability", Description: "Model-proposed entry-point, external-input, and cross-process signals with confidence and application results."},
+	{Name: "llm_reachability.json", Label: "LLM reachability signals", Category: "reachability", Stage: "llm-reachability", Description: "Model-proposed entry-point, external-input, and cross-process signals with confidence, source evidence, semantic-BFS seed decisions, and review reasons."},
+	{Name: "llm_call_graph_recovery.json", Label: "LLM call-graph recovery", Category: "graph-recovery", Stage: "llm-call-graph-recovery", Description: "Evidence-backed model decisions for residual indirect-call sites. This advisory artifact does not rewrite the native call graph."},
+	{Name: "llm_call_graph_recovery_rounds.json", Label: "Iterative call-graph recovery", Category: "graph-recovery", Stage: "llm-call-graph-recovery", Description: "Entry-driven multi-round recovery trace, including scheduled sites, model decisions, accepted edges, and unresolved sites."},
+	{Name: "llm_call_graph_candidate_review.json", Label: "Candidate edge review", Category: "graph-recovery", Stage: "llm-call-graph-candidate-review", Description: "Separate model review of deterministic candidate handler edges, with evidence and confidence for each accepted or rejected candidate."},
+	{Name: "llm_call_graph_overlay.json", Label: "Semantic call-graph overlay", Category: "graph-recovery", Stage: "llm-call-graph-projection", Description: "Additive projection of validated semantic edges. It is kept separate from call_graph.json and records rejected or duplicate edges."},
+	{Name: "openharmony_dispatch_code_evidence.json", Label: "Dispatch-code evidence", Category: "dispatch-evidence", Stage: "openharmony-dispatch-code-evidence", Description: "Source-backed integer selector evidence for OpenHarmony IPC/System Ability dispatch registrations."},
 	{Name: "results.json", Label: "Stage 1 analysis results", Category: "results", Stage: "analyze", Description: "Candidate vulnerabilities emitted by the primary analysis before attacker-path verification."},
 	{Name: "results_verified.json", Label: "Stage 2 verified results", Category: "results", Stage: "verify", Description: "Candidate findings annotated with verification verdicts, exploit paths, confidence, and rejection reasons."},
 	{Name: "dynamic_test_results.json", Label: "Dynamic-test results", Category: "dynamic-test", Stage: "dynamic-test", Description: "Structured observations from isolated runtime checks for selected findings."},
@@ -2079,12 +2361,18 @@ type llmPhaseView struct {
 	Model    string
 }
 
+type llmConfigOption struct {
+	Name     string
+	Selected bool
+}
+
 // llmStatusView deliberately contains only provider metadata and credential
 // presence. API-key values never leave the process and are not rendered into
 // the HTML response.
 type llmStatusView struct {
 	Available      bool
 	ConfigName     string
+	Configs        []llmConfigOption
 	Providers      []llmProviderView
 	Phases         []llmPhaseView
 	ShowLegacyKey  bool
@@ -2133,6 +2421,7 @@ func buildLLMStatus(cfg *config.Config) llmStatusView {
 		Available:     true, // the built-in openant-default config is always available
 		ConfigName:    "openant-default",
 		ShowLegacyKey: true,
+		Configs:       []llmConfigOption{{Name: "openant-default", Selected: true}},
 	}
 	if cfg == nil {
 		status.Providers = []llmProviderView{{
@@ -2145,6 +2434,21 @@ func buildLLMStatus(cfg *config.Config) llmStatusView {
 	}
 
 	status.ConfigName = cfg.DefaultLLMName()
+	configNames := cfg.LLMConfigNames()
+	sort.Strings(configNames)
+	status.Configs = []llmConfigOption{{Name: "openant-default", Selected: status.ConfigName == "openant-default"}}
+	selected := status.ConfigName == "openant-default"
+	for _, name := range configNames {
+		isSelected := name == status.ConfigName
+		selected = selected || isSelected
+		status.Configs = append(status.Configs, llmConfigOption{Name: name, Selected: isSelected})
+	}
+	if !selected {
+		// A stale default_llm should not leave the select with no selected
+		// option. Python falls back to the built-in config in this situation.
+		status.ConfigName = "openant-default"
+		status.Configs[0].Selected = true
+	}
 	status.ShowLegacyKey = !cfg.HasV2Providers()
 	if !cfg.HasV2Providers() {
 		status.Providers = []llmProviderView{{
@@ -2360,14 +2664,66 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported platform", http.StatusBadRequest)
 		return
 	}
+	cfg, _ := config.Load()
 	libraryMode := r.FormValue("library_mode") == "on"
 	apiKey := r.FormValue("api_key")
 	if apiKey == "" {
 		// Fall back to the configured key, mirroring cmd/root.go: a v2
 		// llm_providers config deliberately suppresses the legacy key.
-		if cfg, _ := config.Load(); cfg != nil && !cfg.HasV2Providers() {
+		if cfg != nil && !cfg.HasV2Providers() {
 			apiKey = cfg.APIKey
 		}
+	}
+	level, ok := normalizeScanLevel(r.FormValue("level"))
+	if !ok {
+		http.Error(w, "unsupported scan level", http.StatusBadRequest)
+		return
+	}
+	enhanceMode, ok := normalizeEnhanceMode(r.FormValue("enhance_mode"))
+	if !ok {
+		http.Error(w, "unsupported enhancement mode", http.StatusBadRequest)
+		return
+	}
+	noContext := r.FormValue("no_context") == "on"
+	noEnhance := r.FormValue("no_enhance") == "on"
+	noReport := r.FormValue("no_report") == "on"
+	noSkipTests := r.FormValue("no_skip_tests") == "on"
+	allLanguages := r.FormValue("all_languages") == "on"
+	multiLanguage := r.FormValue("multi_language") == "on"
+	strictLanguages := r.FormValue("strict_languages") == "on"
+	if (allLanguages || multiLanguage) && len(languages) > 0 {
+		http.Error(w, "all-languages or multi-language cannot be combined with explicit language selection", http.StatusBadRequest)
+		return
+	}
+	minLanguageFiles, ok := normalizeBoundedInt(r.FormValue("min_language_files"), defaultMinLanguageFiles, 1, maxMinLanguageFiles)
+	if !ok {
+		http.Error(w, fmt.Sprintf("min language files must be between 1 and %d", maxMinLanguageFiles), http.StatusBadRequest)
+		return
+	}
+	minLanguageShare, ok := normalizeMinLanguageShare(r.FormValue("min_language_share"))
+	if !ok {
+		http.Error(w, "min language share must be between 0 and 1", http.StatusBadRequest)
+		return
+	}
+	limit, ok := normalizeBoundedInt(r.FormValue("limit"), 0, 0, maxScanLimit)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unit limit must be between 0 and %d", maxScanLimit), http.StatusBadRequest)
+		return
+	}
+	llmConfig, ok := normalizeLLMConfigName(r.FormValue("llm_config"), cfg)
+	if !ok {
+		http.Error(w, "unknown LLM configuration", http.StatusBadRequest)
+		return
+	}
+	workers, ok := normalizeBoundedInt(r.FormValue("workers"), defaultScanWorkers, 1, maxScanWorkers)
+	if !ok {
+		http.Error(w, fmt.Sprintf("workers must be between 1 and %d", maxScanWorkers), http.StatusBadRequest)
+		return
+	}
+	backoff, ok := normalizeBoundedInt(r.FormValue("backoff"), defaultScanBackoff, 0, maxScanBackoff)
+	if !ok {
+		http.Error(w, fmt.Sprintf("backoff must be between 0 and %d seconds", maxScanBackoff), http.StatusBadRequest)
+		return
 	}
 	verify := r.FormValue("verify") == "on"
 	llmReachability := r.FormValue("llm_reachability") == "on"
@@ -2394,6 +2750,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		// stale browser value must not alter the normal static pipeline.
 		dynamicTestMode = "docker"
 	}
+	llmCallGraphRecovery := r.FormValue("llm_call_graph_recovery") == "on"
+	llmCallGraphIterative := r.FormValue("llm_call_graph_iterative_recovery") == "on"
+	llmCallGraphCandidateReview := r.FormValue("llm_call_graph_candidate_review") == "on"
+	llmCallGraphProjection := r.FormValue("llm_call_graph_projection") == "on"
+	dispatchCodeEvidence := r.FormValue("openharmony_dispatch_code_evidence") == "on"
 
 	// Gate new work at shutdown BEFORE creating any disk/manager state, and
 	// register with the WaitGroup under drainMu so wg.Add can never race the
@@ -2426,6 +2787,15 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	// Write meta.json immediately.
 	meta := jobMeta{
 		ID: id, Repo: repo, StartedAt: time.Now().UTC(), Platform: platform,
+		Level: level, NoContext: noContext, NoEnhance: noEnhance, EnhanceMode: enhanceMode,
+		NoReport: noReport, NoSkipTests: noSkipTests, AllLanguages: allLanguages,
+		MultiLanguage: multiLanguage, MinLanguageFiles: minLanguageFiles,
+		MinLanguageShare: minLanguageShare, StrictLanguages: strictLanguages, Limit: limit,
+		Languages: languages, Verify: verify, LibraryMode: libraryMode,
+		LLMConfig: llmConfig, Workers: workers, Backoff: backoff,
+		LLMCallGraphRecovery: llmCallGraphRecovery, LLMCallGraphIterative: llmCallGraphIterative,
+		LLMCallGraphCandidateReview: llmCallGraphCandidateReview,
+		LLMCallGraphProjection:      llmCallGraphProjection, DispatchCodeEvidence: dispatchCodeEvidence,
 		DynamicTest: dynamicTest, DynamicTestMode: dynamicTestMode,
 	}
 	if llmReachability {
@@ -2447,10 +2817,30 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		apiKey:                      apiKey,
 		languages:                   languages,
 		platform:                    platform,
+		level:                       level,
+		noContext:                   noContext,
+		noEnhance:                   noEnhance,
+		enhanceMode:                 enhanceMode,
+		noReport:                    noReport,
+		noSkipTests:                 noSkipTests,
+		allLanguages:                allLanguages,
+		multiLanguage:               multiLanguage,
+		minLanguageFiles:            minLanguageFiles,
+		minLanguageShare:            minLanguageShare,
+		strictLanguages:             strictLanguages,
+		limit:                       limit,
+		llmConfig:                   llmConfig,
+		workers:                     workers,
+		backoff:                     backoff,
 		libraryMode:                 libraryMode,
 		verify:                      verify,
 		llmReachability:             llmReachability,
 		llmReachabilityMaxCodeBytes: llmReachabilityMaxCodeBytes,
+		llmCallGraphRecovery:        llmCallGraphRecovery,
+		llmCallGraphIterative:       llmCallGraphIterative,
+		llmCallGraphCandidateReview: llmCallGraphCandidateReview,
+		llmCallGraphProjection:      llmCallGraphProjection,
+		dispatchCodeEvidence:        dispatchCodeEvidence,
 		dynamicTest:                 dynamicTest,
 		dynamicTestMode:             dynamicTestMode,
 		done:                        make(chan struct{}),
@@ -2644,6 +3034,7 @@ type disclosureInfo struct {
 	Name              string               `json:"name"`
 	Label             string               `json:"label"`
 	URL               string               `json:"url"`
+	CVE               string               `json:"cve,omitempty"`
 	VulnerabilityType string               `json:"vulnerability_type,omitempty"`
 	CWEID             string               `json:"cwe_id,omitempty"`
 	CWEName           string               `json:"cwe_name,omitempty"`
@@ -2677,6 +3068,7 @@ type disclosureCallNode struct {
 // available through the existing disclosure URL.
 type disclosureMetadata struct {
 	Label             string
+	CVE               string
 	VulnerabilityType string
 	CWEID             string
 	CWEName           string
@@ -2715,6 +3107,7 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 			Name:              name,
 			Label:             label,
 			URL:               "/disclosure/" + id + "/" + name,
+			CVE:               metadata.CVE,
 			VulnerabilityType: metadata.VulnerabilityType,
 			CWEID:             metadata.CWEID,
 			CWEName:           metadata.CWEName,
@@ -2851,6 +3244,7 @@ var (
 	reDisclosureEvidenceFunc   = regexp.MustCompile("(?m)^-\\s+\\*\\*Function:\\*\\*\\s+`([^`\\n]+)`")
 	reDisclosureRepairStatus   = regexp.MustCompile("(?mi)(?:修复状态|repair\\s+status)\\s*[：:]\\s*`?([^`\\n]+)")
 	reDisclosureCWE            = regexp.MustCompile(`(?i)^CWE[- ]?(\d+)\s*(?:\(([^)]*)\))?`)
+	reDisclosureCVE            = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,7}\b`)
 )
 
 const maxDisclosurePipelineBytes = 32 << 20
@@ -3062,6 +3456,14 @@ func applyDisclosureFinding(info *disclosureInfo, finding map[string]any, pipeli
 	if info.CWEID == "" {
 		info.CWEID = disclosureScalar(finding["cwe_id"])
 	}
+	if info.CVE == "" {
+		for _, key := range []string{"cve", "cve_id", "cve_name", "advisory_id"} {
+			if value := disclosureFirstCVE(disclosureScalar(finding[key])); value != "" {
+				info.CVE = value
+				break
+			}
+		}
+	}
 	if info.CWEName == "" {
 		info.CWEName = disclosureScalar(finding["cwe_name"])
 	}
@@ -3151,6 +3553,7 @@ func parseDisclosureMetadata(markdown string) disclosureMetadata {
 	metadata := disclosureMetadata{
 		Label: disclosureTitleFromMarkdown(markdown),
 	}
+	metadata.CVE = disclosureFirstCVE(markdown)
 	for _, line := range strings.Split(markdown, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "**Type:**") {
@@ -3205,6 +3608,16 @@ func parseDisclosureMetadata(markdown string) disclosureMetadata {
 		}
 	}
 	return metadata
+}
+
+// disclosureFirstCVE extracts a canonical CVE identifier from a structured
+// finding field. Reports may contain prose around the identifier, so return
+// only the identifier rather than exposing the whole field in the list API.
+func disclosureFirstCVE(value string) string {
+	if match := reDisclosureCVE.FindString(value); match != "" {
+		return strings.ToUpper(match)
+	}
+	return ""
 }
 
 func disclosureTitleFromMarkdown(markdown string) string {
@@ -3365,6 +3778,107 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// buildScanArgs translates the persisted Web options to the scanner's argv.
+// Keeping this mapping in one pure helper makes it auditable and prevents a UI
+// checkbox from silently becoming metadata that never reaches Python.
+func buildScanArgs(job *Job, outDir, localPath string, isURL bool) []string {
+	args := []string{"scan", "--output", outDir}
+	if len(job.languages) == 1 {
+		args = append(args, "--language", job.languages[0])
+	} else if len(job.languages) > 1 {
+		args = append(args, "--languages", strings.Join(job.languages, ","))
+	}
+	args = append(args, platformArgs(job.platform)...)
+	if job.level != "" && job.level != defaultScanLevel {
+		args = append(args, "--level", job.level)
+	}
+	if job.noContext {
+		args = append(args, "--no-context")
+	}
+	if job.noEnhance {
+		args = append(args, "--no-enhance")
+	} else if job.enhanceMode != "" && job.enhanceMode != defaultEnhanceMode {
+		args = append(args, "--enhance-mode", job.enhanceMode)
+	}
+	if job.noReport {
+		args = append(args, "--no-report")
+	}
+	if job.noSkipTests {
+		args = append(args, "--no-skip-tests")
+	}
+	if job.allLanguages {
+		args = append(args, "--all-languages")
+	}
+	if job.multiLanguage {
+		args = append(args, "--multi-language")
+	}
+	if job.minLanguageFiles != 0 && job.minLanguageFiles != defaultMinLanguageFiles {
+		args = append(args, "--min-language-files", strconv.Itoa(job.minLanguageFiles))
+	}
+	if job.minLanguageShare != defaultMinLanguageShare {
+		args = append(args, "--min-language-share", strconv.FormatFloat(job.minLanguageShare, 'f', -1, 64))
+	}
+	if job.strictLanguages {
+		args = append(args, "--strict-languages")
+	}
+	if job.limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(job.limit))
+	}
+	if job.llmConfig != "" {
+		args = append(args, "--llm-config", job.llmConfig)
+	}
+	if job.workers != 0 && job.workers != defaultScanWorkers {
+		args = append(args, "--workers", strconv.Itoa(job.workers))
+	}
+	if job.backoff != defaultScanBackoff {
+		args = append(args, "--backoff", strconv.Itoa(job.backoff))
+	}
+	if job.verify {
+		args = append(args, "--verify")
+	}
+	if job.llmReachability {
+		args = append(args, "--llm-reachability")
+		maxCodeBytes := job.llmReachabilityMaxCodeBytes
+		if maxCodeBytes == 0 {
+			maxCodeBytes = defaultLLMReachabilityMaxCodeBytes
+		}
+		if maxCodeBytes != defaultLLMReachabilityMaxCodeBytes {
+			args = append(args, "--llm-reachability-max-code-bytes", strconv.Itoa(maxCodeBytes))
+		}
+	}
+	if job.llmCallGraphRecovery {
+		args = append(args, "--llm-call-graph-recovery")
+	}
+	if job.llmCallGraphIterative {
+		args = append(args, "--llm-call-graph-iterative-recovery")
+	}
+	if job.llmCallGraphCandidateReview {
+		args = append(args, "--llm-call-graph-candidate-review")
+	}
+	if job.llmCallGraphProjection {
+		args = append(args, "--llm-call-graph-projection")
+	}
+	if job.dispatchCodeEvidence {
+		args = append(args, "--openharmony-dispatch-code-evidence")
+	}
+	if job.dynamicTest {
+		if job.dynamicTestMode == "claude-code" {
+			if !job.noReport {
+				args = append(args, "--no-report")
+			}
+		} else {
+			args = append(args, "--dynamic-test")
+		}
+	}
+	if job.libraryMode {
+		args = append(args, "--library-mode")
+	}
+	if isURL {
+		args = append(args, "--repo-url", job.Repo)
+	}
+	return append(args, "--", localPath)
+}
+
 // ─── Background job runner ─────────────────────────────────────────────────
 
 func (s *Server) runJob(job *Job) {
@@ -3426,53 +3940,7 @@ func (s *Server) runJob(job *Job) {
 		localPath = cloneDir
 	}
 
-	// Build scan args.
-	args := []string{"scan", "--output", outDir}
-	// Language selection mirrors the CLI. No selection = the auto default: every
-	// detected language above the size threshold (NOT just the dominant one — see
-	// core/language_selection.py select_languages). One selection = --language;
-	// several = --languages (a subset). The CLI's --all-languages mode (also scan
-	// below-threshold trivial languages) is intentionally not exposed — auto covers
-	// the common case.
-	if len(job.languages) == 1 {
-		args = append(args, "--language", job.languages[0])
-	} else if len(job.languages) > 1 {
-		args = append(args, "--languages", strings.Join(job.languages, ","))
-	}
-	// The historical Web UI invocation used the scanner's implicit auto mode.
-	// Keep that exact argv for auto, while allowing an explicit generic or
-	// OpenHarmony selection to reach the Python CLI.
-	args = append(args, platformArgs(job.platform)...)
-	if job.verify {
-		args = append(args, "--verify")
-	}
-	if job.llmReachability {
-		args = append(args, "--llm-reachability")
-		maxCodeBytes := job.llmReachabilityMaxCodeBytes
-		if maxCodeBytes == 0 {
-			maxCodeBytes = defaultLLMReachabilityMaxCodeBytes
-		}
-		if maxCodeBytes != defaultLLMReachabilityMaxCodeBytes {
-			args = append(args, "--llm-reachability-max-code-bytes", strconv.Itoa(maxCodeBytes))
-		}
-	}
-	if job.dynamicTest {
-		if job.dynamicTestMode == "claude-code" {
-			// Claude Code needs a live pause between static analysis and report
-			// generation. The Web runner prepares the task and resumes reporting
-			// after the PTY session ends.
-			args = append(args, "--no-report")
-		} else {
-			args = append(args, "--dynamic-test")
-		}
-	}
-	if job.libraryMode {
-		args = append(args, "--library-mode")
-	}
-	if isURL {
-		args = append(args, "--repo-url", job.Repo)
-	}
-	args = append(args, "--", localPath)
+	args := buildScanArgs(job, outDir, localPath, isURL)
 
 	job.addLog("→ Running: python -m openant " + strings.Join(args, " "))
 
@@ -3516,6 +3984,15 @@ func (s *Server) runJob(job *Job) {
 		if job.ctx.Err() != nil {
 			return
 		}
+	}
+	if job.noReport {
+		// The scanner itself honors --no-report, but the Web runner normally
+		// performs a post-scan report fallback (including the Chinese report).
+		// Do not silently undo the operator's explicit choice by generating a
+		// report here; the scan artifacts remain available in the stage viewer.
+		job.addLog("[report] 已按执行选项跳过报告生成（--no-report）")
+		job.setDone("", "", "", "", nil)
+		return
 	}
 
 	// Locate or generate report.html.

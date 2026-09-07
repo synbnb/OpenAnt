@@ -39,14 +39,67 @@ class RepositoryIndex:
         self.functions = {}  # function_id -> function_data
         self.by_name = {}    # function_name -> [function_ids]
         self.by_file = {}    # file_path -> [function_ids]
+        # Keep the parser's native graph alongside the searchable function
+        # index.  Stage 2 previously ignored the top-level call_graph fields
+        # from analyzer_output.json and therefore had to rediscover every
+        # caller/callee by textual search (often missing dispatch or member
+        # edges).  These maps are evidence only; the verifier still asks the
+        # model to inspect the referenced function bodies.
+        self.call_graph = {}
+        self.reverse_call_graph = {}
 
         self._build_index(analyzer_output)
 
     def _build_index(self, analyzer_output: dict):
         """Build the searchable index from analyzer output."""
+        if not isinstance(analyzer_output, dict):
+            return
         functions = analyzer_output.get("functions", {})
+        if not isinstance(functions, dict):
+            functions = {}
+
+        # Python analyzer output uses camelCase (``callGraph``) while the C/
+        # C++/JS adapters generally use snake_case.  Accept both at the
+        # artifact boundary; otherwise Stage 2's static-dependency tool would
+        # silently return an empty graph for Python repositories.
+        native_graphs = [
+            analyzer_output.get(key)
+            for key in ("call_graph", "callGraph")
+            if isinstance(analyzer_output.get(key), dict)
+        ]
+        for native_graph in native_graphs:
+            for source, targets in native_graph.items():
+                source = self._normalize_graph_id(source)
+                if not source or not isinstance(targets, (list, tuple)):
+                    continue
+                existing = self.call_graph.setdefault(source, [])
+                for target in targets:
+                    normalized = self._normalize_graph_id(target)
+                    if normalized and normalized not in existing and len(existing) < 100:
+                        existing.append(normalized)
+
+        reverse_graphs = [
+            analyzer_output.get(key)
+            for key in ("reverse_call_graph", "reverseCallGraph")
+            if isinstance(analyzer_output.get(key), dict)
+        ]
+        for reverse_graph in reverse_graphs:
+            for target, callers in reverse_graph.items():
+                target = self._normalize_graph_id(target)
+                if not target or not isinstance(callers, (list, tuple)):
+                    continue
+                existing = self.reverse_call_graph.setdefault(target, [])
+                for caller in callers:
+                    normalized = self._normalize_graph_id(caller)
+                    if normalized and normalized not in existing and len(existing) < 100:
+                        existing.append(normalized)
 
         for func_id, func_data in functions.items():
+            # Analyzer artifacts are an untrusted interchange boundary. Keep
+            # malformed entries out of every index so a single model/parser
+            # record cannot abort the whole Stage-2 batch.
+            if not isinstance(func_id, str) or not isinstance(func_data, dict):
+                continue
             # Store full function data
             self.functions[func_id] = func_data
 
@@ -65,6 +118,24 @@ class RepositoryIndex:
                 if file_path not in self.by_file:
                     self.by_file[file_path] = []
                 self.by_file[file_path].append(func_id)
+
+    @staticmethod
+    def _normalize_graph_id(value) -> str:
+        """Normalize graph IDs without changing function-index IDs.
+
+        Parser generations differ on whether graph nodes carry the
+        ``function:`` semantic prefix.  Stage 2 tools consume function IDs
+        from ``functions`` (which do not carry that prefix), so normalize the
+        optional wrapper at the artifact boundary.  Non-string/empty nodes
+        are discarded rather than leaking malformed model-like data into the
+        tool context.
+        """
+        if not isinstance(value, str):
+            return ""
+        value = value.strip()
+        if value.startswith("function:"):
+            value = value[len("function:"):]
+        return value
 
     def get_function(self, func_id: str) -> Optional[dict]:
         """
@@ -156,7 +227,9 @@ class RepositoryIndex:
         ]
 
         for func_id, func in self.functions.items():
-            code = func.get("code", "")
+            code = func.get("code", "") if isinstance(func, dict) else ""
+            if not isinstance(code, str):
+                continue
             for pattern in patterns:
                 if pattern.search(code):
                     # Extract the matching line(s)
@@ -228,8 +301,20 @@ class RepositoryIndex:
         Returns:
             File content or None if file not found
         """
-        if not self.repo_path:
+        if not self.repo_path or not isinstance(file_path, str) or not file_path:
             return None
+        if (not isinstance(start_line, int) or isinstance(start_line, bool)
+                or not isinstance(end_line, int) or isinstance(end_line, bool)):
+            return None
+        if start_line < 1 or end_line < start_line:
+            return None
+        # Keep section reads bounded. Full function bodies are served by
+        # ``read_function``; this tool is for registration/guard/sink context
+        # around a function and must not allow a model to request an entire
+        # multi-megabyte generated file.
+        max_lines = 240
+        if end_line - start_line + 1 > max_lines:
+            end_line = start_line + max_lines - 1
 
         # file_path is model-controlled (the agent's read_file_section tool
         # arg). Resolve and confine to the repo root so a ``..`` or absolute
@@ -250,7 +335,9 @@ class RepositoryIndex:
             start_idx = max(0, start_line - 1)
             end_idx = min(len(lines), end_line)
 
-            return ''.join(lines[start_idx:end_idx])
+            content = ''.join(lines[start_idx:end_idx])
+            max_chars = 24_000
+            return content if len(content) <= max_chars else content[:max_chars] + "\n…[section truncated]"
         except Exception:
             return None
 
@@ -310,6 +397,17 @@ class RepositoryIndex:
             List of function IDs
         """
         return list(self.functions.keys())
+
+    def get_call_graph_context(self, func_id: str) -> dict:
+        """Return bounded native callers/callees for one function."""
+        if not isinstance(func_id, str) or not func_id:
+            return {"function_id": "", "callees": [], "callers": []}
+        normalized = self._normalize_graph_id(func_id)
+        return {
+            "function_id": func_id,
+            "callees": list(self.call_graph.get(normalized, []))[:50],
+            "callers": list(self.reverse_call_graph.get(normalized, []))[:50],
+        }
 
     def get_statistics(self) -> dict:
         """

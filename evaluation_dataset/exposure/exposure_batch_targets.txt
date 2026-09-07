@@ -1,0 +1,27 @@
+SP_daemon UDP 127.0.0.1:8283
+SP_daemon TCP 127.0.0.1:8284
+SP_daemon UDP 127.0.0.1:8285
+/dev/unix/socket/paramservice
+/dev/unix/socket/fd_holder
+/dev/unix/socket/init_control_fd
+/dev/unix/socket/AppSpawn
+/dev/unix/socket/CJAppSpawn
+/dev/unix/socket/NativeSpawn
+/dev/unix/socket/HybridSpawn
+/dev/unix/socket/NWebSpawn
+/dev/unix/socket/faultloggerd.server
+/dev/unix/socket/faultloggerd.crash.server
+/dev/unix/socket/faultloggerd.sdkdump.server
+/dev/unix/socket/hilogInput
+/dev/unix/socket/hilogOutput
+/dev/unix/socket/hilogControl
+/dev/unix/socket/hisysevent
+/dev/unix/socket/hisysevent_fast
+/dev/unix/socket/native
+/dev/unix/socket/fusioncall
+/dev/unix/socket/dnsproxyd
+/dev/unix/socket/multivpnfd
+/dev/unix/socket/tunfd
+/dev/unix/socket/fwmarkd
+/dev/unix/socket/hdcd
+/dev/unix/socket/hiprofiler_unix_socket

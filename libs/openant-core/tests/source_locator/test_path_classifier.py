@@ -127,6 +127,11 @@ def test_only_explicit_test_or_fuzz_signals_are_attribution_ineligible():
     assert selftest.attribution_eligible is False
     assert "test" in selftest.path_signals
     assert "kernel" in selftest.path_signals
+    libc_test = classify_path(
+        "/openharmony/out/rk3568/obj/third_party/musl/libc-test/src/functionalext/supplement/network/accept4.c"
+    )
+    assert libc_test.attribution_eligible is False
+    assert "test" in libc_test.path_signals
 
     for path in (
         "/openharmony/kernel/linux/linux-6.6/net/unix/af_unix.c",

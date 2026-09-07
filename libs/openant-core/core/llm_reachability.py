@@ -16,10 +16,14 @@ Pipeline ordering (managed by ``core/scanner.py``):
 1. Parse with ``processing_level="all"`` so every unit is available.
 2. ``analyze_reachability`` reviews all units and returns signals.
 3. ``apply_signals`` promotes high-confidence ``entry_point`` signals by
-   setting ``is_entry_point=True`` on the target unit.
-4. The structural reachability filter re-runs with LLM-promoted entry
-   points added as extra BFS seeds, yielding a dataset filtered to the
-   user's requested ``processing_level`` but expanded by LLM findings.
+   setting ``is_entry_point=True`` on the target unit and derives semantic
+   BFS seeds from high-confidence ``external_input`` and ``cross_process``
+   signals. Every valid medium-confidence signal is retained as a
+   reachable-only unit, but deliberately does not become a BFS root.
+4. The structural reachability filter re-runs with both LLM-promoted entry
+   points and high-confidence semantic signals added as extra BFS seeds,
+   yielding a dataset filtered to the user's requested ``processing_level``
+   but expanded by LLM findings.
 
 Signals are **promote-only** — they never DEMOTE a unit that structural
 analysis already kept. This matches the "complements, not replaces" intent
@@ -29,8 +33,13 @@ Output:
 - ``analyze_reachability(...)`` returns a list of ``ReachabilitySignal``
   dicts.
 - ``apply_signals(dataset, signals)`` mutates the dataset in place so each
-  unit gains an ``llm_reachability_signals`` field, and high-confidence
-  ``entry_point`` signals set ``is_entry_point = True`` on the target unit.
+  unit gains an ``llm_reachability_signals`` field. High-confidence
+  ``entry_point`` signals set ``is_entry_point = True``; high-confidence
+  ``external_input`` and ``cross_process`` signals set
+  ``semantic_reachability_seed = True`` without changing the entry-point flag;
+  medium-confidence signals of every valid kind set
+  ``reachability_retain_only = True`` and are retained without BFS; semantic
+  input signals also set ``semantic_reachability_retain_only = True``.
 
 Usage:
     from core.llm_reachability import analyze_reachability, apply_signals
@@ -87,16 +96,34 @@ class ReachabilitySignal:
       - ``external_input`` — unit receives external/untrusted input.
       - ``cross_process`` — unit participates in async / cross-process data flow.
 
-    ``confidence`` is one of ``high``, ``medium``, ``low``.
+    ``confidence`` is one of ``high``, ``medium``, ``low``. ``direction`` is
+    used only for ``cross_process``; ``external_input`` is inherently an
+    inbound/read signal and does not need a direction value. Evidence fields
+    are model-provided audit claims; semantic-seed admission is intentionally
+    based only on signal kind and high confidence.
     """
 
     unit_id: str
     kind: str
     confidence: str
     reason: str
+    boundary: str = "unknown"
+    evidence: str = ""
+    evidence_excerpt: str = ""
+    evidence_line_start: Optional[int] = None
+    evidence_line_end: Optional[int] = None
+    direction: str = ""
+    evidence_status: str = "missing"
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Direction is meaningful only for cross-process signals.  Keep the
+        # internal empty value for compatibility with callers that inspect the
+        # dataclass, but do not emit a misleading field for external input or
+        # entry-point records in persisted artifacts.
+        if self.kind != "cross_process":
+            payload.pop("direction", None)
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +145,13 @@ Be conservative. Only emit a signal when the code clearly indicates one of:
                          scheduled task, framework lifecycle hook, etc.).
   - "external_input"   — this unit reads or accepts data from an external
                          source (request body, file, socket, env, argv, stdin,
-                         child-process output, untrusted message, etc.).
+                         child-process output, untrusted message, etc.). This
+                         kind is inherently inbound; do not add a direction.
   - "cross_process"    — this unit dispatches or receives data across async
                          / process / queue boundaries (so taint may flow in
-                         or out via a path the static call-graph misses).
+                         or out via a path the static call-graph misses). For
+                         this kind, direction MUST be receive, send,
+                         bidirectional, or unknown.
 
 Confidence levels:
   - "high"   — the code unambiguously demonstrates the pattern.
@@ -133,13 +163,27 @@ Return STRICT JSON of the form:
   {{
     "signals": [
       {{"unit_id": "<id>", "kind": "entry_point|external_input|cross_process",
-        "confidence": "high|medium|low", "reason": "<one short sentence>"}},
+        "confidence": "high|medium|low", "boundary": "binder|socket|hdf_hdi|napi|queue|file|network|unknown",
+        "direction": "receive|send|bidirectional|unknown (cross_process only)",
+        "evidence": "<short factual claim>",
+        "evidence_excerpt": "<source or behavior excerpt, or empty string>",
+        "evidence_line_start": <integer or null>,
+        "evidence_line_end": <integer or null>,
+        "reason": "<one short sentence>"}},
       ...
     ]
   }}
 
 If no signals apply, return ``{{"signals": []}}``. Do NOT wrap the JSON in
 markdown fences. Do NOT include any prose outside the JSON.
+
+For ``external_input``, cite the concrete read/receive operation or its
+registration context in ``evidence_excerpt``. For ``cross_process``, cite the
+operation and state whether this unit receives or sends. Evidence is retained
+for audit and explanation; it is not a local source-matching admission gate.
+A function parameter alone is weaker evidence, but may still be reported when
+the model's confidence is high. Do not invent line numbers; use null when the
+source span is not visible.
 
 {app_context_block}
 
@@ -190,6 +234,24 @@ def _unit_for_prompt(
         "code": _trim_code(code_blob, max_bytes=max_code_bytes),
     }
 
+    # Source provenance and direct graph neighbors let the model cite an
+    # actual boundary operation instead of guessing from a parameter name.
+    # These fields are advisory context only; seed admission uses the model's
+    # signal kind and confidence, while evidence remains for audit.
+    origin = code.get("primary_origin") if isinstance(code, dict) else None
+    if isinstance(origin, dict):
+        projected["source_path"] = str(origin.get("file_path") or "")
+        projected["source_start_line"] = origin.get("start_line")
+        projected["source_end_line"] = origin.get("end_line")
+    metadata = unit.get("metadata")
+    if isinstance(metadata, dict):
+        direct_calls = metadata.get("direct_calls")
+        direct_callers = metadata.get("direct_callers")
+        if isinstance(direct_calls, list):
+            projected["direct_calls"] = direct_calls[:32]
+        if isinstance(direct_callers, list):
+            projected["direct_callers"] = direct_callers[:32]
+
     raw_platform_context = unit.get("platform_context")
     if raw_platform_context is None:
         raw_platform_context = unit.get("platformContext")
@@ -236,6 +298,34 @@ def build_prompt(
 
 _VALID_KINDS = {"entry_point", "external_input", "cross_process"}
 _VALID_CONFIDENCES = {"high", "medium", "low"}
+_VALID_DIRECTIONS = {"receive", "send", "bidirectional", "unknown"}
+_VALID_BOUNDARIES = {
+    "binder", "socket", "hdf_hdi", "napi", "queue", "file", "network", "unknown"
+}
+_VALID_EVIDENCE_STATUSES = {"provided", "missing", "local_verified", "model_only"}
+_VALID_SEED_STATUSES = {
+    "accepted_seed", "reachable_only", "review_only", "rejected"
+}
+
+
+def _short_text(value: Any, limit: int = 2_000) -> str:
+    """Coerce a model field to a bounded plain string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value[:limit]
+    # Keep malformed nested values from leaking a large repr into artifacts.
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)[:limit]
+    except (TypeError, ValueError):
+        return str(value)[:limit]
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    """Return a JSON integer, rejecting bools and arbitrary numeric strings."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -317,22 +407,62 @@ def parse_response(
         if not isinstance(unit_id, str) or not unit_id:
             log(f"signal #{idx}: missing unit_id — skipped")
             continue
-        if kind not in _VALID_KINDS:
+        if not isinstance(kind, str) or kind not in _VALID_KINDS:
             log(f"signal #{idx}: invalid kind {kind!r} — skipped")
             continue
-        if confidence not in _VALID_CONFIDENCES:
+        if not isinstance(confidence, str) or confidence not in _VALID_CONFIDENCES:
             log(f"signal #{idx}: invalid confidence {confidence!r} — skipped")
             continue
         if valid_unit_ids is not None and unit_id not in valid_unit_ids:
             log(f"signal #{idx}: unknown unit_id {unit_id!r} — skipped")
             continue
 
+        boundary = item.get("boundary", "unknown")
+        if boundary is None:
+            boundary = "unknown"
+        if not isinstance(boundary, str) or boundary not in _VALID_BOUNDARIES:
+            log(f"signal #{idx}: invalid boundary {boundary!r} — skipped")
+            continue
+
+        # ``external_input`` is inherently inbound. Direction is meaningful
+        # only for ``cross_process``; accepting it on other kinds would make
+        # old and new producers disagree about seed semantics.
+        direction = item.get("direction", "")
+        if kind == "cross_process":
+            if direction in (None, ""):
+                direction = "unknown"
+            if not isinstance(direction, str) or direction not in _VALID_DIRECTIONS:
+                log(f"signal #{idx}: invalid direction {direction!r} — skipped")
+                continue
+        else:
+            direction = ""
+
+        evidence = _short_text(item.get("evidence", ""), limit=2_000)
+        evidence_excerpt = _short_text(
+            item.get("evidence_excerpt", ""), limit=4_000
+        )
+        evidence_line_start = _optional_int(item.get("evidence_line_start"))
+        evidence_line_end = _optional_int(item.get("evidence_line_end"))
+        if evidence_line_end is None and evidence_line_start is not None:
+            evidence_line_end = evidence_line_start
+
         out.append(
             ReachabilitySignal(
                 unit_id=unit_id,
                 kind=kind,
                 confidence=confidence,
-                reason=str(reason)[:500],
+                reason=_short_text(reason, limit=500),
+                boundary=boundary,
+                evidence=evidence,
+                evidence_excerpt=evidence_excerpt,
+                evidence_line_start=evidence_line_start,
+                evidence_line_end=evidence_line_end,
+                direction=direction,
+                # This is an audit-only marker; seed admission depends only on
+                # kind and confidence.
+                evidence_status=(
+                    "provided" if evidence or evidence_excerpt else "missing"
+                ),
             )
         )
     return out
@@ -488,10 +618,102 @@ def analyze_reachability(
 _PROMOTE_ENTRY_POINT_AT = {"high"}
 
 
+def _evidence_status_for_signal(signal: ReachabilitySignal) -> str:
+    """Classify whether the model supplied any evidence for audit display.
+
+    This deliberately does not inspect repository source.  The reachability
+    seed gate is confidence-only; evidence remains optional explanatory
+    metadata and is never treated as a provenance barrier.
+    """
+    return "provided" if signal.evidence or signal.evidence_excerpt else "missing"
+
+
+def evaluate_seed_eligibility(
+    unit: Dict[str, Any], signal: ReachabilitySignal
+) -> Dict[str, str]:
+    """Decide how a semantic signal participates in reachability.
+
+    The BFS seed gate intentionally has one semantic requirement: the model
+    must report high confidence for an ``external_input`` or ``cross_process``
+    signal. Medium-confidence semantic signals are admitted as
+    ``reachable_only``: the target unit is retained in the final dataset, but
+    it cannot expand the BFS frontier. This applies to every valid
+    medium-confidence signal kind, including ``entry_point``. Boundary labels,
+    direction, and evidence are retained as audit metadata only. Low-confidence
+    signals remain ``review_only`` evidence.
+    """
+    del unit  # Kept in the signature for compatibility with existing callers.
+    evidence_status = _evidence_status_for_signal(signal)
+    signal.evidence_status = evidence_status
+    if signal.kind not in {"external_input", "cross_process"}:
+        return {"status": "review_only", "reason": "not a semantic input signal"}
+    if signal.confidence == "medium":
+        return {
+            "status": "reachable_only",
+            "reason": "medium-confidence semantic signal retained without BFS expansion",
+        }
+    if signal.confidence != "high":
+        return {
+            "status": "review_only",
+            "reason": "confidence is below the high-confidence seed threshold",
+        }
+    return {
+        "status": "accepted_seed",
+        "reason": "high-confidence semantic signal",
+    }
+
+
+def _signal_identity(signal: ReachabilitySignal) -> tuple:
+    """Build a stable identity for duplicate model emissions."""
+    direction = signal.direction if signal.kind == "cross_process" else ""
+    return (signal.unit_id, signal.kind, signal.boundary, direction)
+
+
+def _confidence_rank(value: str) -> int:
+    return {"low": 0, "medium": 1, "high": 2}.get(value, -1)
+
+
+def _signal_quality(signal: ReachabilitySignal) -> tuple:
+    """Rank duplicate signals without deciding their semantic truth.
+
+    Confidence remains the primary rank.  For equal confidence, retain the
+    emission that carries a concrete excerpt/evidence and a known boundary or
+    direction; otherwise a first, evidence-free duplicate could hide a later
+    usable signal from the same model batch.
+    """
+    return (
+        _confidence_rank(signal.confidence),
+        bool(signal.evidence_excerpt),
+        bool(signal.evidence),
+        signal.boundary != "unknown",
+        signal.direction not in {"", "unknown"},
+        len(signal.evidence_excerpt or ""),
+    )
+
+
+def _deduplicate_signals(
+    signals: List[ReachabilitySignal],
+) -> tuple[List[ReachabilitySignal], int]:
+    """Deduplicate repeated per-unit signals, retaining the strongest one."""
+    best: Dict[tuple, ReachabilitySignal] = {}
+    order: List[tuple] = []
+    for signal in signals:
+        key = _signal_identity(signal)
+        current = best.get(key)
+        if current is None:
+            best[key] = signal
+            order.append(key)
+            continue
+        if _signal_quality(signal) > _signal_quality(current):
+            best[key] = signal
+    deduplicated = [best[key] for key in order]
+    return deduplicated, len(signals) - len(deduplicated)
+
+
 def apply_signals(
     dataset: Dict[str, Any],
     signals: List[ReachabilitySignal],
-) -> Dict[str, int]:
+) -> Dict[str, Any]:
     """Merge LLM signals back into ``dataset`` (in place, promote-only).
 
     For each unit referenced by a signal:
@@ -499,6 +721,14 @@ def apply_signals(
       - If the signal kind is ``entry_point`` AND its confidence is in
         :data:`_PROMOTE_ENTRY_POINT_AT`, the unit's ``is_entry_point`` field
         is set to ``True`` (never set back to ``False``).
+      - A high-confidence ``external_input`` or ``cross_process`` signal is
+        marked as a semantic BFS seed. Evidence fields are retained for audit
+        display but do not gate admission.
+      - A medium-confidence signal marks its target as
+        ``reachability_retain_only`` (and semantic input signals additionally
+        use ``semantic_reachability_retain_only``). The target is retained
+        after the structural BFS, but it is not used as a BFS root and
+        therefore cannot pull in neighboring units.
 
     Crucially, this never DEMOTES a unit. ``is_entry_point=True`` set by the
     structural pass remains true regardless of what the LLM said.
@@ -506,25 +736,70 @@ def apply_signals(
     Returns a small summary dict::
 
         {
+            "signals_received": <n>,
             "signals_applied": <n>,
             "entry_points_promoted": <n>,
+            "semantic_seed_ids": [...],
+            "semantic_retain_only_ids": [...],
+            "reachable_only_ids": [...],
+            "seed_counts": {...},
+            "retained_only_counts": {...},
+            "rejected_counts": {...},
+            "review_only": <n>,
+            "retained_only": <n>,
+            "duplicates_removed": <n>,
             "units_touched": <n>,
         }
     """
     units = dataset.get("units") or []
     by_id = {u.get("id"): u for u in units if u.get("id")}
 
+    normalized_signals, duplicates_removed = _deduplicate_signals(signals)
     promoted = 0
     touched: set = set()
+    semantic_seed_ids: set[str] = set()
+    semantic_retain_only_ids: set[str] = set()
+    reachable_only_ids: set[str] = set()
+    seed_counts = {
+        "entry_point": 0,
+        "external_input": 0,
+        # ``cross_process`` is the total number of accepted semantic seeds.
+        # Keep the receive subset separately for compatibility with older
+        # reports and UI consumers.
+        "cross_process": 0,
+        "cross_process_receive": 0,
+    }
+    retained_only_counts = {
+        "entry_point": 0,
+        "external_input": 0,
+        "cross_process": 0,
+    }
+    rejected_counts: Dict[str, int] = {}
+    review_only = 0
+    retained_only = 0
     applied = 0
 
-    for sig in signals:
+    for sig in normalized_signals:
         unit = by_id.get(sig.unit_id)
         if unit is None:
             continue
 
+        decision = None
+        if sig.kind in {"external_input", "cross_process"}:
+            decision = evaluate_seed_eligibility(unit, sig)
+            sig.evidence_status = _evidence_status_for_signal(sig)
+        elif sig.kind == "entry_point" and sig.confidence == "medium":
+            decision = {
+                "status": "reachable_only",
+                "reason": "medium-confidence entry-point signal retained without BFS expansion",
+            }
+
         existing = unit.setdefault("llm_reachability_signals", [])
-        existing.append(sig.to_dict())
+        record = sig.to_dict()
+        if decision is not None:
+            record["seed_status"] = decision["status"]
+            record["seed_reason"] = decision["reason"]
+        existing.append(record)
         applied += 1
         touched.add(sig.unit_id)
 
@@ -537,10 +812,99 @@ def apply_signals(
             unit["entry_point_reason"] = f"llm_reachability: {sig.reason}"
             promoted += 1
 
+        if sig.kind == "entry_point" and sig.confidence in _PROMOTE_ENTRY_POINT_AT:
+            seed_counts["entry_point"] += 1
+
+        if decision is not None:
+            status = decision["status"]
+            if status == "accepted_seed":
+                semantic_seed_ids.add(sig.unit_id)
+                if sig.kind == "external_input":
+                    seed_counts["external_input"] += 1
+                    source = "llm_external_input"
+                else:
+                    seed_counts["cross_process"] += 1
+                    if sig.direction in {"receive", "bidirectional"}:
+                        seed_counts["cross_process_receive"] += 1
+                        source = "llm_cross_process_inbound"
+                    else:
+                        source = "llm_cross_process"
+                unit["semantic_reachability_seed"] = True
+                sources = unit.setdefault("reachability_seed_source", [])
+                if isinstance(sources, str):
+                    sources = [sources]
+                    unit["reachability_seed_source"] = sources
+                if not isinstance(sources, list):
+                    sources = []
+                    unit["reachability_seed_source"] = sources
+                if source not in sources:
+                    sources.append(source)
+                reasons = unit.setdefault("semantic_seed_reasons", [])
+                if isinstance(reasons, str):
+                    reasons = [reasons]
+                    unit["semantic_seed_reasons"] = reasons
+                if not isinstance(reasons, list):
+                    reasons = []
+                    unit["semantic_seed_reasons"] = reasons
+                reason = decision["reason"]
+                if reason not in reasons:
+                    reasons.append(reason)
+            elif status == "review_only":
+                review_only += 1
+                rejected_counts["review_only"] = rejected_counts.get("review_only", 0) + 1
+            elif status == "reachable_only":
+                retained_only += 1
+                reachable_only_ids.add(sig.unit_id)
+                if sig.kind in {"external_input", "cross_process"}:
+                    semantic_retain_only_ids.add(sig.unit_id)
+                retained_only_counts[sig.kind] += 1
+                unit["reachability_retain_only"] = True
+                if sig.kind in {"external_input", "cross_process"}:
+                    unit["semantic_reachability_retain_only"] = True
+                if sig.kind == "entry_point":
+                    source = "llm_entry_point_retain_only"
+                elif sig.kind == "external_input":
+                    source = "llm_external_input_retain_only"
+                elif sig.direction in {"receive", "bidirectional"}:
+                    source = "llm_cross_process_inbound_retain_only"
+                else:
+                    source = "llm_cross_process_retain_only"
+                sources = unit.setdefault("reachability_retain_only_source", [])
+                if isinstance(sources, str):
+                    sources = [sources]
+                    unit["reachability_retain_only_source"] = sources
+                if not isinstance(sources, list):
+                    sources = []
+                    unit["reachability_retain_only_source"] = sources
+                if source not in sources:
+                    sources.append(source)
+                reasons = unit.setdefault("semantic_retain_only_reasons", [])
+                if isinstance(reasons, str):
+                    reasons = [reasons]
+                    unit["semantic_retain_only_reasons"] = reasons
+                if not isinstance(reasons, list):
+                    reasons = []
+                    unit["semantic_retain_only_reasons"] = reasons
+                reason = decision["reason"]
+                if reason not in reasons:
+                    reasons.append(reason)
+            else:
+                rejected_counts[status] = rejected_counts.get(status, 0) + 1
+
     return {
+        "signals_received": len(signals),
         "signals_applied": applied,
         "entry_points_promoted": promoted,
         "units_touched": len(touched),
+        "semantic_seed_ids": sorted(semantic_seed_ids),
+        "semantic_retain_only_ids": sorted(semantic_retain_only_ids),
+        "reachable_only_ids": sorted(reachable_only_ids),
+        "seed_counts": seed_counts,
+        "retained_only_counts": retained_only_counts,
+        "rejected_counts": rejected_counts,
+        "review_only": review_only,
+        "retained_only": retained_only,
+        "duplicates_removed": duplicates_removed,
     }
 
 

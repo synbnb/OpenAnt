@@ -15,6 +15,7 @@ func TestParseDisclosureMetadata(t *testing.T) {
 
 **Product:** sensors_medical_sensor
 **Type:** CWE-862 (Missing Authorization)
+**CVE:** cve-2026-55989
 **Affected:** [NOT PROVIDED]
 
 ## Summary
@@ -40,6 +41,9 @@ int32_t SomeStub::OnRemoteRequest(uint32_t code, MessageParcel& data)
 	}
 	if got.VulnerabilityType != "CWE-862 (Missing Authorization)" {
 		t.Fatalf("VulnerabilityType = %q", got.VulnerabilityType)
+	}
+	if got.CVE != "CVE-2026-55989" {
+		t.Fatalf("CVE = %q, want CVE-2026-55989", got.CVE)
 	}
 	if got.FilePath != "services/samgr/native/source/stub.cpp" {
 		t.Fatalf("FilePath = %q", got.FilePath)
@@ -89,6 +93,7 @@ func TestDisclosureListIncludesEvidenceContext(t *testing.T) {
 
 **Product:** fixture
 **Type:** CWE-476 (NULL Pointer Dereference)
+**CVE:** CVE-2026-55989
 **Affected:** release-6.1
 
 ## Summary
@@ -159,6 +164,9 @@ if (item == nullptr) return ERR_INVALID_VALUE;
 	info := got[0]
 	if info.CWEID != "476" || info.CWEName != "NULL Pointer Dereference" {
 		t.Fatalf("CWE metadata = %#v", info)
+	}
+	if info.CVE != "CVE-2026-55989" {
+		t.Fatalf("CVE metadata = %#v", info)
 	}
 	if info.FilePath != "services/service.cpp" || info.Function != "Service::Handle" || info.StartLine != 40 || info.EndLine != 48 {
 		t.Fatalf("location metadata = %#v", info)

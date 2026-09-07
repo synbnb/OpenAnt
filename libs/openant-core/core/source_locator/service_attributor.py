@@ -37,6 +37,11 @@ _STATUSES = frozenset({"HIGH", "PARTIAL", "UNRESOLVED"})
 _IDENTITY_KINDS = frozenset(
     {"literal_match", "macro_definition", "constant_definition", "symbol_reference"}
 )
+# OpenHarmony commonly declares a named socket only in an init ``.cfg``/JSON
+# record (``socket.name``).  That record is an identity anchor even when the
+# service obtains an already-created descriptor with ``GetControlSocket`` and
+# therefore never repeats the full path in C/C++.
+_CONFIG_IDENTITY_KINDS = frozenset({"service_config"})
 _CREATOR_KINDS = frozenset({"service_config", "socket_server_registration", "socket_acquire"})
 _OWNER_KINDS = frozenset({"socket_server_registration", "socket_acquire", "socket_bind_listen"})
 _CONSUMER_KINDS = frozenset({"socket_accept_read"})
@@ -187,10 +192,10 @@ class AttributionCandidate:
         if not locations or any(not isinstance(item, SourceLocation) for item in locations):
             raise ServiceAttributionError("候选必须包含源码位置")
         ids = tuple(dict.fromkeys(self.evidence_ids))
-        if not ids or len(ids) > _MAX_EVIDENCE_IDS or any(
-            not isinstance(item, str) or not item.startswith("E-") for item in ids
-        ):
+        if not ids or any(not isinstance(item, str) or not item.startswith("E-") for item in ids):
             raise ServiceAttributionError("候选 evidence_ids 无效")
+        if len(ids) > _MAX_EVIDENCE_IDS:
+            raise ServiceAttributionError("候选 evidence_ids 超过数量上限")
         if isinstance(self.score, bool) or not isinstance(self.score, int) or self.score < 0:
             raise ServiceAttributionError("候选 score 无效")
         object.__setattr__(self, "subject", self.subject.strip())
@@ -267,6 +272,144 @@ class ServerAttributionResult:
     def server_repo(self) -> str | None:
         return self.mapping.project_name if self.mapping and self.mapping.is_resolved else None
 
+    @property
+    def best_candidate(self) -> AttributionCandidate | None:
+        """Return the highest-scoring source-backed candidate.
+
+        ``status`` answers whether the complete server receive chain has been
+        proven.  It is intentionally not reused for candidate selection: a
+        useful ``.cfg socket.name`` mapping can be the best repository answer
+        while the later ``GetControlSocket``/consumer edge is still missing.
+        Ties are resolved deterministically so a resumed session produces the
+        same result.
+        """
+
+        if not self.candidates:
+            return None
+        # A confirmed, evidence-backed LLM decision is the semantic owner
+        # decision for this target.  Do not let a later noisy repository
+        # mapping hide that candidate merely because the mapping was built
+        # from basename/API hits.  Repository selection is separately scored
+        # with the same semantic evidence; this override keeps
+        # ``server_attribution.json`` and ``confirmation_summary.json``
+        # consistent while retaining all deterministic candidates for audit.
+        if isinstance(self.semantic_decision, Mapping) and self.semantic_decision.get("status") == "confirmed":
+            semantic_ids = {
+                item
+                for item in self.semantic_decision.get("evidence_ids", ())
+                if isinstance(item, str)
+            }
+            semantic_candidates = [
+                item
+                for item in self.candidates
+                if item.role == "service_owner"
+                and bool(semantic_ids.intersection(item.evidence_ids))
+            ]
+            if semantic_candidates:
+                return max(
+                    semantic_candidates,
+                    key=lambda item: (item.score, item.subject, item.evidence_ids),
+                )
+        # Older/hand-built mappings may not carry evidence_ids.  Treat an
+        # empty list as "linkage unknown" rather than as proof that the config
+        # row is unrelated; populated mappings are checked strictly.
+        mapping_ids = (
+            set(self.mapping.evidence_ids)
+            if self.mapping is not None and self.mapping.evidence_ids
+            else None
+        )
+        return min(
+            self.candidates,
+            key=lambda item: (
+                # When a mapping is available, prefer a role whose evidence
+                # is actually part of that mapping.  The evidence store can
+                # contain several repositories with the same basename or
+                # generic ``bind``/``recv`` calls; an unrelated high-score
+                # candidate must not displace the mapped ``socket.name``
+                # owner merely because it has more communication hits.
+                0 if mapping_ids is None or bool(mapping_ids.intersection(item.evidence_ids)) else 1,
+                -item.score,
+                item.role,
+                item.subject,
+                item.evidence_ids,
+            ),
+        )
+
+    @property
+    def _has_config_identity(self) -> bool:
+        """Whether a candidate is explicitly backed by a service config row."""
+
+        mapping_ids = (
+            set(self.mapping.evidence_ids)
+            if self.mapping is not None and self.mapping.evidence_ids
+            else None
+        )
+        return any(
+            (mapping_ids is None or bool(mapping_ids.intersection(candidate.evidence_ids)))
+            and any(
+                reason.startswith("service_config：") or reason.startswith("service_config:")
+                for reason in candidate.reasons
+            )
+            for candidate in self.candidates
+        )
+
+    @property
+    def repository_confidence(self) -> str:
+        """Confidence of the repository choice, independent of chain completeness.
+
+        This is an explainable triage label, not a calibrated probability.  A
+        resolved Manifest mapping joined to ``socket.name`` is the strongest
+        practical ownership anchor for named OpenHarmony sockets.  It is
+        therefore HIGH even when the service-side consumer was not recovered.
+        """
+
+        if self.mapping is None or not self.mapping.is_resolved:
+            return "UNKNOWN"
+        if self._has_config_identity:
+            return "HIGH"
+        if self.predicates.get("socket_identity") and self.predicates.get("service_relation"):
+            return "HIGH"
+        if self.predicates.get("socket_identity"):
+            return "MEDIUM"
+        if self.candidates:
+            return "LOW"
+        return "UNKNOWN"
+
+    @property
+    def selection_confidence_score(self) -> int:
+        """Return a bounded, explainable score for the selected candidate."""
+
+        score = self.score
+        candidate = self.best_candidate
+        if candidate is not None:
+            score = max(score, min(100, candidate.score))
+        score += {"HIGH": 20, "MEDIUM": 10, "LOW": 0, "UNKNOWN": 0}[self.repository_confidence]
+        return min(100, max(0, score))
+
+    @property
+    def selection_reasons(self) -> tuple[str, ...]:
+        """Explain why the current repository candidate was preferred."""
+
+        reasons: list[str] = []
+        if self.mapping is not None and self.mapping.is_resolved:
+            reasons.append("Manifest 已解析仓库映射")
+        if self._has_config_identity:
+            reasons.append("发现 init 配置 socket.name 身份锚点")
+        elif self.predicates.get("socket_identity"):
+            reasons.append("发现源码中的 socket 字面量/宏/常量身份锚点")
+        if self.predicates.get("socket_acquire_or_bind"):
+            reasons.append("发现服务端获取 descriptor 或 bind/listen 线索")
+        if self.predicates.get("server_consumer"):
+            reasons.append("发现服务端 accept/read/recv 或协议分派线索")
+        missing = [
+            key
+            for key in ("socket_identity", "socket_acquire_or_bind", "server_consumer", "manifest_mapping")
+            if not self.predicates.get(key, False)
+        ]
+        if missing:
+            reasons.append("仍缺少：" + "、".join(missing))
+        return tuple(dict.fromkeys(reasons))
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -281,6 +424,11 @@ class ServerAttributionResult:
             "evidence_ids": list(self.evidence_ids),
             "mapping": self.mapping.to_dict() if self.mapping else None,
             "server_repo": self.server_repo,
+            "chain_status": self.status,
+            "best_candidate": self.best_candidate.to_dict() if self.best_candidate else None,
+            "repository_confidence": self.repository_confidence,
+            "selection_confidence_score": self.selection_confidence_score,
+            "selection_reasons": list(self.selection_reasons),
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
             "excluded_evidence_ids": list(self.excluded_evidence_ids),
@@ -305,20 +453,48 @@ def _candidate_locations(items: Iterable[Evidence]) -> tuple[SourceLocation, ...
 
 
 def _build_candidates(items: tuple[Evidence, ...], role: str, kinds: frozenset[str]) -> tuple[AttributionCandidate, ...]:
-    groups: dict[str, list[Evidence]] = {}
+    # Search evidence often has no relation_to and historically every row was
+    # assigned the requested socket name as ``symbol``.  Grouping only by that
+    # name merged unrelated repositories (for example ``hisysevent`` and
+    # ``paramservice``) into one candidate.  Keep the human-facing subject,
+    # but scope symbol-only rows to their source path.  Explicit traced
+    # relation_to values already identify a function/location and keep their
+    # previous grouping behavior.
+    groups: dict[tuple[str, str | None], list[Evidence]] = {}
     for item in items:
         if item.kind in kinds:
-            groups.setdefault(_candidate_subject(item), []).append(item)
+            subject = _candidate_subject(item)
+            scope = None if item.relation_to else item.source_path
+            groups.setdefault((subject, scope), []).append(item)
     candidates: list[AttributionCandidate] = []
-    for subject, group in groups.items():
-        ids = tuple(item.evidence_id for item in group)
-        score = min(100, sum(_KIND_WEIGHTS.get(item.kind, 0) for item in group))
-        reasons = tuple(dict.fromkeys(f"{item.kind}：{item.source_path}:{item.line_start}" for item in group))
+    for (subject, _scope), group in groups.items():
+        # A broad socket.name/basename query can produce hundreds of records
+        # with the same relation_to (for example, ``paramservice``).  The
+        # candidate schema deliberately bounds evidence references, but an
+        # overfull group must be reduced here rather than making the whole
+        # attribution stage fail.  Prefer communication evidence over weaker
+        # identity/configuration repetitions, while retaining input order for
+        # deterministic replay.
+        ranked_group = sorted(
+            enumerate(group),
+            key=lambda pair: (-_KIND_WEIGHTS.get(pair[1].kind, 0), pair[0]),
+        )
+        selected = tuple(item for _, item in ranked_group[:_MAX_EVIDENCE_IDS])
+        ids = tuple(item.evidence_id for item in selected)
+        score = min(100, sum(_KIND_WEIGHTS.get(item.kind, 0) for item in selected))
+        reasons_list = list(dict.fromkeys(
+            f"{item.kind}：{item.source_path}:{item.line_start}" for item in selected
+        ))
+        if len(group) > len(selected):
+            reasons_list.append(
+                f"证据过多：从 {len(group)} 条候选中按证据类型权重保留 {len(selected)} 条"
+            )
+        reasons = tuple(reasons_list)
         candidates.append(
             AttributionCandidate(
                 role=role,
                 subject=subject,
-                source_locations=_candidate_locations(group),
+                source_locations=_candidate_locations(selected),
                 evidence_ids=ids,
                 score=score,
                 reasons=reasons,
@@ -364,7 +540,7 @@ class ServiceAttributor:
         handler_candidates = _build_candidates(items, "server_handler", _HANDLER_KINDS)
         candidates = creator_candidates + owner_candidates + consumer_candidates + handler_candidates
 
-        has_identity = any(item.kind in _IDENTITY_KINDS for item in items)
+        has_identity = any(item.kind in (_IDENTITY_KINDS | _CONFIG_IDENTITY_KINDS) for item in items)
         has_service_relation = any(item.kind in {"service_config", "executable_build"} for item in items)
         has_acquire_or_bind = any(
             item.kind in {"socket_server_registration", "socket_acquire", "socket_bind_listen"}

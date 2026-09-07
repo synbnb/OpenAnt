@@ -73,6 +73,24 @@ def test_local_corpus_scans_multiple_targets_in_one_pass(tmp_path: Path) -> None
     assert matches["/dev/unix/socket/Demo"].casefold_basename_hits == 2
 
 
+def test_local_corpus_keeps_generated_build_and_kernel_scopes_for_audit(tmp_path: Path) -> None:
+    # These scopes are candidates, not hard exclusions.  Attribution later
+    # filters only explicit test/fuzz paths, so an init-generated source or a
+    # kernel helper that owns a socket is still available to the locator.
+    (tmp_path / "repo" / "out").mkdir(parents=True)
+    (tmp_path / "repo" / "build").mkdir(parents=True)
+    (tmp_path / "repo" / "kernel" / "linux").mkdir(parents=True)
+    (tmp_path / "repo" / "out" / "generated.c").write_text("socket_name = demo;\n", encoding="utf-8")
+    (tmp_path / "repo" / "build" / "BUILD.gn").write_text('sources = [ "generated.c" ]  # demo socket target\n', encoding="utf-8")
+    (tmp_path / "repo" / "kernel" / "linux" / "socket.te").write_text("type demo_socket, file_type;\n", encoding="utf-8")
+    client = LocalCorpusClient(tmp_path)
+
+    response = client.search(full="demo", file_type="all", max_results=10, max_hits_per_file=3)
+    assert "/openharmony/repo/out/generated.c" in response.results
+    assert "/openharmony/repo/build/BUILD.gn" in response.results
+    assert "/openharmony/repo/kernel/linux/socket.te" in response.results
+
+
 def test_socket_target_fixture_covers_every_requested_service() -> None:
     fixture = Path(__file__).parent / "fixtures" / "socket_targets.txt"
     targets = [line.strip()[2:] for line in fixture.read_text(encoding="utf-8").splitlines() if line.strip()]

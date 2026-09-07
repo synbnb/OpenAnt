@@ -77,6 +77,12 @@ INSTRUCTIONS:
   Distinguish native local edges from semantic/recovered or cross-process
   evidence; absence of a native edge is not proof that a Binder/SA path is
   unreachable.
+- If `review_status` is `needs_review`, or the Stage-2 assessment says that
+  defect, reachability, impact, or evidence completeness is unknown/partial,
+  describe the item as an unverified candidate and state the missing evidence.
+  Do not present it as confirmed, safe, or a false positive. If a minimal fix
+  cannot be justified by the supplied code, say so instead of inventing an API
+  or a complete patch.
 - Impact: 3-5 bullet points, no sub-bullets
 - Suggested Fix: show minimal code change, use comments to indicate what was added
 - Do not include CVSS scores or severity ratings

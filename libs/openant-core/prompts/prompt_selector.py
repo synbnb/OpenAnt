@@ -20,7 +20,8 @@ def get_analysis_prompt(
     security_classification: str = None,
     classification_reasoning: str = None,
     app_context: "ApplicationContext" = None,
-    platform_context: dict | None = None
+    platform_context: dict | None = None,
+    reachability_context: dict | None = None,
 ) -> str:
     """
     Get the security assessment prompt for the given code.
@@ -34,6 +35,7 @@ def get_analysis_prompt(
         classification_reasoning: Optional reasoning for classification
         app_context: Optional ApplicationContext for reducing false positives
         platform_context: Optional bounded OpenHarmony unit metadata
+        reachability_context: Optional bounded, advisory LLM reachability evidence
 
     Returns:
         Prompt string for security assessment
@@ -51,4 +53,5 @@ def get_analysis_prompt(
         classification_reasoning=classification_reasoning,
         app_context=app_context,
         platform_context=platform_context,
+        reachability_context=reachability_context,
     )

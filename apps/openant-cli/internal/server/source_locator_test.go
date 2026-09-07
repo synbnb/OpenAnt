@@ -282,7 +282,7 @@ func TestSourceLocatorAdvancePassesOptInLLMFlags(t *testing.T) {
 	envelope := `{"status":"success","data":{"session":{"session_id":"loc_api123456","state":"SEARCH_INITIAL"}},"errors":[]}`
 	pythonStub, argsPath := sourceLocatorFakePythonRecordingArgs(t, envelope)
 	s := &Server{outDir: filepath.Dir(root), pythonPath: pythonStub, csrfToken: "token"}
-	req := sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_api123456/advance", `{"max_steps":2,"llm_search":true,"llm_config":"openharmony-live-gpt"}`)
+	req := sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_api123456/advance", `{"max_steps":2,"llm_search":true,"llm_search_rounds":24,"llm_config":"openharmony-live-gpt"}`)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", "token")
 	req.SetPathValue("id", sessionID)
@@ -296,7 +296,7 @@ func TestSourceLocatorAdvancePassesOptInLLMFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	argv := strings.Fields(string(args))
-	for _, want := range []string{"source-locator", "advance", sessionID, "--max-steps", "2", "--llm-search", "--llm-config", "openharmony-live-gpt"} {
+	for _, want := range []string{"source-locator", "advance", sessionID, "--max-steps", "2", "--llm-search", "--llm-search-rounds", "24", "--llm-config", "openharmony-live-gpt"} {
 		found := false
 		for _, got := range argv {
 			if got == want {
@@ -322,11 +322,22 @@ func TestSourceLocatorAdvanceRejectsUnsafeLLMConfig(t *testing.T) {
 	}
 	envelope := `{"status":"success","data":{"session":{"session_id":"loc_api123456","state":"SEARCH_INITIAL"}},"errors":[]}`
 	s := &Server{outDir: filepath.Dir(root), pythonPath: sourceLocatorFakePython(t, envelope), csrfToken: "token"}
-	req := sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_api123456/advance", `{"llm_search":true,"llm_config":"../../secrets"}`)
+	// The browser control and the API boundary must reject values outside the
+	// bounded planner budget before invoking the Python worker.
+	req := sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_api123456/advance", `{"llm_search":true,"llm_search_rounds":41}`)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRF-Token", "token")
 	req.SetPathValue("id", sessionID)
 	rec := httptest.NewRecorder()
+	s.handleSourceLocatorAdvance(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "llm_search_rounds") {
+		t.Fatalf("out-of-range rounds status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	req = sourceLocatorRequest(t, http.MethodPost, "/source-locator/sessions/loc_api123456/advance", `{"llm_search":true,"llm_config":"../../secrets"}`)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.SetPathValue("id", sessionID)
+	rec = httptest.NewRecorder()
 	s.handleSourceLocatorAdvance(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "llm_config") {
 		t.Fatalf("unsafe config status=%d body=%s", rec.Code, rec.Body.String())

@@ -435,6 +435,8 @@ def apply_reachability_filter(
     library_mode: bool = False,
     platform: str = "generic",
     semantic_graph_overlay: Mapping | None = None,
+    extra_reachability_seeds: "set[str] | None" = None,
+    extra_retain_only_units: "set[str] | None" = None,
 ) -> dict:
     """Filter dataset units to only those reachable from entry points.
 
@@ -442,9 +444,15 @@ def apply_reachability_filter(
     detects entry points, computes reachability via BFS, and removes
     unreachable units from the dataset.
 
-    ``extra_entry_points`` supplements the structurally-detected seed set.
-    Pass LLM-promoted unit IDs here so the BFS propagates from them even if
-    the structural heuristics missed them.  Any unit that already has
+    ``extra_entry_points`` supplements the structurally-detected seed set and
+    keeps the ``is_entry_point`` label. ``extra_reachability_seeds`` supplements
+    the BFS without changing that label; use it for high-confidence semantic
+    input signals. ``extra_retain_only_units`` adds units to the final
+    reachable set *after* BFS and never seeds or expands the traversal; use it
+    for medium-confidence signals. The two BFS seed inputs are additive and
+    allow traversal to propagate from units the structural heuristics missed;
+    the retain-only input is deliberately outside that frontier.
+    Any unit that already has
     ``is_entry_point=True`` in the dataset (e.g. set by the LLM reachability
     stage) keeps that flag — this function never demotes it.
 
@@ -457,7 +465,14 @@ def apply_reachability_filter(
         dataset: The full, unfiltered dataset dict (mutated in place).
         output_dir: Directory containing call_graph.json from the parser.
         processing_level: One of "reachable", "codeql", "exploitable".
-        extra_entry_points: Additional unit IDs to seed the BFS (e.g. from LLM).
+        extra_entry_points: Additional unit IDs to seed the BFS (e.g. an LLM
+            entry point). These IDs are also rendered as entry points.
+        extra_reachability_seeds: Additional unit IDs to seed the BFS without
+            promoting them to ``is_entry_point`` (e.g. a validated external-
+            input or cross-process signal).
+        extra_retain_only_units: Additional unit IDs to retain in the final
+            reachable dataset without using them as BFS roots (e.g. a
+            medium-confidence external-input or cross-process signal).
         platform: Platform-specific entry-point mode. Defaults to generic for
             backward compatibility; ``openharmony`` enables native hooks.
         semantic_graph_overlay: Optional additive semantic-graph payload (for
@@ -507,7 +522,9 @@ def apply_reachability_filter(
     call_graph = call_graph_data.get("call_graph", {})
     reverse_call_graph = call_graph_data.get("reverse_call_graph", {})
 
-    # Detect entry points structurally, then seed with any extras (e.g. LLM-promoted).
+    # Detect entry points structurally, then add caller-provided BFS seeds.
+    # ``extra_entry_points`` keeps the entry-point label; semantic seeds
+    # participate in BFS only and remain distinguishable in the dataset.
     detector = EntryPointDetector(
         functions,
         call_graph,
@@ -516,17 +533,59 @@ def apply_reachability_filter(
         if platform == "openharmony"
         else None,
     )
-    entry_points = detector.detect_entry_points()
-    if extra_entry_points:
-        entry_points = entry_points | extra_entry_points
+    structural_entry_points = detector.detect_entry_points()
+    known_function_ids = set(functions)
+    llm_entry_points = {
+        str(unit_id)
+        for unit_id in (extra_entry_points or set())
+        if isinstance(unit_id, str) and unit_id in known_function_ids
+    }
+    semantic_seed_points = {
+        str(unit_id)
+        for unit_id in (extra_reachability_seeds or set())
+        if isinstance(unit_id, str) and unit_id in known_function_ids
+    }
+    entry_points = structural_entry_points | llm_entry_points | semantic_seed_points
     # Library-mode (opt-in): the public API is the entry surface. Union-only —
     # never demotes a structurally-detected app entry point, so an app scan with
     # the flag on can only gain reachable units, never lose one.
     if library_mode:
-        entry_points = entry_points | library_seed_ids(functions)
+        library_entries = library_seed_ids(functions)
+        entry_points = entry_points | library_entries
+    else:
+        library_entries = set()
+
+    # Only structural, explicit LLM-entry, and library seeds are rendered as
+    # entry points. Semantic seeds are intentionally BFS roots without that
+    # identity label.
+    entry_point_labels = structural_entry_points | llm_entry_points | library_entries
 
     units = dataset.get("units", [])
     original_count = len(units)
+    unit_ids = {
+        str(unit.get("id"))
+        for unit in units
+        if isinstance(unit, Mapping) and unit.get("id")
+    }
+    # Medium-confidence LLM signals are additive retention hints, not roots.
+    # Accept both the explicit scanner argument and the per-unit flag
+    # so direct callers can pass either a summary-derived set or a dataset
+    # that already carries LLM annotations.
+    semantic_retain_only_points = {
+        str(unit_id)
+        for unit_id in (extra_retain_only_units or set())
+        if isinstance(unit_id, str) and unit_id in unit_ids
+    }
+    semantic_retain_only_points.update(
+        str(unit.get("id"))
+        for unit in units
+        if isinstance(unit, Mapping)
+        and unit.get("id")
+        and (
+            unit.get("semantic_reachability_retain_only") is True
+            or unit.get("reachability_retain_only") is True
+        )
+    )
 
     # Compute the native result first.  OpenHarmony semantic IPC edges are an
     # additive, in-memory overlay; the persisted native call graph remains the
@@ -697,6 +756,13 @@ def apply_reachability_filter(
         filter_metadata = {
             "original_units": original_count,
             "entry_points": len(entry_points),
+            "entry_point_labels": len(entry_point_labels),
+            "semantic_seed_count": len(semantic_seed_points),
+            "semantic_seed_ids": sorted(semantic_seed_points),
+            "semantic_retain_only_count": len(semantic_retain_only_points),
+            "semantic_retain_only_ids": sorted(semantic_retain_only_points),
+            "reachable_only_count": len(semantic_retain_only_points),
+            "reachable_only_ids": sorted(semantic_retain_only_points),
             "reachable_units": original_count,
             "filtered_out": 0,
             "reduction_percentage": 0,
@@ -723,6 +789,10 @@ def apply_reachability_filter(
         # Defensive fallback: a semantic resolver must never cause native units
         # to disappear, even if a future graph adapter changes the BFS input.
         reachable_ids |= native_reachable_ids
+    # Retain medium-confidence semantic units after the BFS.  Deliberately do
+    # not add these IDs to ``entry_points``: their outgoing edges must not
+    # expand the reachable frontier solely because of a medium signal.
+    reachable_ids |= semantic_retain_only_points
     if semantic_overlay_metadata is not None:
         semantic_overlay_metadata["monotonicity_violation"] = monotonicity_violation
 
@@ -733,8 +803,10 @@ def apply_reachability_filter(
         if unit_id in reachable_ids:
             u["reachable"] = True
             # Preserve any is_entry_point=True already set (e.g. by LLM stage).
-            u["is_entry_point"] = (unit_id in entry_points) or u.get("is_entry_point", False)
-            if unit_id in entry_points and not u.get("entry_point_reason"):
+            u["is_entry_point"] = (
+                unit_id in entry_point_labels or u.get("is_entry_point", False)
+            )
+            if unit_id in entry_point_labels and not u.get("entry_point_reason"):
                 u["entry_point_reason"] = detector.get_entry_point_reason(unit_id)
             filtered_units.append(u)
 
@@ -749,6 +821,13 @@ def apply_reachability_filter(
     filter_metadata = {
         "original_units": original_count,
         "entry_points": len(entry_points),
+        "entry_point_labels": len(entry_point_labels),
+        "semantic_seed_count": len(semantic_seed_points),
+        "semantic_seed_ids": sorted(semantic_seed_points),
+        "semantic_retain_only_count": len(semantic_retain_only_points),
+        "semantic_retain_only_ids": sorted(semantic_retain_only_points),
+        "reachable_only_count": len(semantic_retain_only_points),
+        "reachable_only_ids": sorted(semantic_retain_only_points),
         "reachable_units": len(filtered_units),
         "filtered_out": original_count - len(filtered_units),
         "reduction_percentage": reduction_pct,

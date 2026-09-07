@@ -396,6 +396,30 @@ def test_request_shape_floor_effort_store_instructions():
                               "parameters": _tools()[0].input_schema, "strict": False}
 
 
+def test_responses_output_floor_can_be_lowered_for_bounded_phase(monkeypatch):
+    """The source locator may use a smaller visible-output floor than scans."""
+
+    monkeypatch.setenv("OPENANT_OPENAI_MIN_OUTPUT_TOKENS", "4096")
+    adapter, client = _stub_resp(lambda **kw: _resp(output=[_msg_item(_text_part("x"))]))
+    adapter.complete(model=G5, system=None, messages=_hi(), max_tokens=2048)
+    assert client.responses.create.call_args.kwargs["max_output_tokens"] == 4096
+
+
+def test_sdk_request_limits_are_environment_overridable(monkeypatch):
+    captured = {}
+
+    def fake_openai(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(openai, "OpenAI", fake_openai)
+    monkeypatch.setenv("OPENANT_OPENAI_MAX_RETRIES", "0")
+    monkeypatch.setenv("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "120")
+    OpenAIAdapter(api_key="test-key", base_url="https://example.invalid/v1")
+    assert captured["max_retries"] == 0
+    assert captured["timeout"] == 120.0
+
+
 def test_tools_omitted_when_none():
     # helpers.simple_text calls complete() with no tools; must not send tools=[]
     adapter, client = _stub_resp(lambda **kw: _resp(output=[_msg_item(_text_part("x"))]))

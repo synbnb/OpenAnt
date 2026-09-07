@@ -17,6 +17,7 @@ sys.path.insert(0, str(CORE_ROOT))
 from core.source_locator import (  # noqa: E402
     CommandResult,
     EndpointCapability,
+    EvidenceStore,
     LocatorSessionStore,
     OpenGrokHTTPError,
     ProbeResult,
@@ -29,14 +30,85 @@ from core.source_locator import (  # noqa: E402
     LLMSearchPlanner,
     PlannerBudget,
     LLMRoleAttributor,
+    LLMRoleAttributionResult,
+    LLMRoleDecision,
+    LLMCandidateReviewer,
     load_manifest,
     runtime_from_config,
 )
 from core.source_locator.target_normalizer import normalize_target  # noqa: E402
-from core.source_locator.worker import _budget_int, _line_kind, _mapping_role_score  # noqa: E402
+from core.source_locator.worker import (  # noqa: E402
+    _budget_int,
+    _candidate_metadata_paths,
+    _client_kind,
+    _compact_repository_mappings_payload,
+    _infer_related_macros,
+    _line_kind,
+    _line_has_target_identity,
+    _named_socket_path_has_conflict,
+    _network_operation_matches_target,
+    _network_path_priority,
+    _path_contains_target_identity,
+    _path_shares_target_context,
+    _path_role_adjustment,
+    _evidence_symbol_for_line,
+    _target_bound_context_directories,
+    _target_evidence_is_bound,
+    _target_context_directories,
+    _unix_path_priority,
+    _mapping_role_score,
+    _search_hit_is_target_evidence,
+    _scope_llm_role_result_to_mapping,
+)
 
 
 TARGET_PATH = "/openharmony/base/startup/init/services/param/param_service.c"
+
+
+def test_candidate_metadata_paths_cover_split_src_implementation_layout() -> None:
+    mapping = RepositoryMapping(
+        project_name="developtools_smartperf_host",
+        source_root="developtools/smartperf_host",
+        source_path=(
+            "/openharmony/developtools/smartperf_host/"
+            "smartperf_device/device_command/services/ipc/include/sp_server_socket.h"
+        ),
+    )
+
+    paths = _candidate_metadata_paths(mapping)
+
+    assert (
+        "/openharmony/developtools/smartperf_host/"
+        "smartperf_device/device_command/services/ipc/src/sp_server_socket.cpp"
+    ) in paths
+    assert (
+        "/openharmony/developtools/smartperf_host/"
+        "smartperf_device/device_command/services/ipc/src/sp_thread_socket.cpp"
+    ) in paths
+
+
+def test_repository_mapping_checkpoint_is_bounded_but_artifact_rows_can_stay_full() -> None:
+    evidence_ids = tuple(f"E-{index:016x}" for index in range(300))
+    mappings = tuple(
+        RepositoryMapping(
+            project_name=f"project_{index}",
+            source_root=f"base/project_{index}",
+            repo_url=f"https://gitcode.com/openharmony/project_{index}",
+            revision="OpenHarmony-6.1-LTS",
+            source_path=f"/openharmony/base/project_{index}/service.c",
+            evidence_ids=evidence_ids,
+        )
+        for index in range(56)
+    )
+
+    payload = _compact_repository_mappings_payload(mappings)
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    assert len(encoded) < 64 * 1024
+    assert len(payload["mappings"]) == 32
+    assert len(payload["mappings"][0]["evidence_ids"]) == 64
+    assert payload["truncated"] is True
+    assert payload["total_mappings"] == 56
 
 
 def test_generated_dependency_name_is_not_protocol_dispatch() -> None:
@@ -49,10 +121,695 @@ def test_generated_dependency_name_is_not_protocol_dispatch() -> None:
 
 def test_server_registration_wrapper_shape_is_generic_and_source_backed() -> None:
     target = normalize_target("/dev/unix/socket/paramservice")
+    assert _line_kind('"name" : "paramservice",', target) == "service_config"
+    assert _line_kind('socket.name = "paramservice";', target) == "service_config"
     assert _line_kind("info.server = PIPE_NAME;", target) == "socket_server_registration"
     assert _line_kind("info.server = NULL;", target) != "socket_server_registration"
     assert _line_kind("ret = ParamServerCreate(&task, &info);", target) == "socket_server_registration"
     assert _line_kind("CreateSocketListener(&listener, endpoint);", target) == "socket_server_registration"
+    # OpenHarmony's init service has wrappers whose names are shorter than
+    # ``*SocketCreate``.  They still establish the source-level registration
+    # edge that connects a named socket macro to the returned descriptor.
+    assert _line_kind("static int FdHolderSockInit(void)", target) == "socket_server_registration"
+    assert _line_kind("CmdServiceInit(INIT_CONTROL_FD_SOCKET_PATH, ProcessControlFd, loop);", target) == "socket_server_registration"
+    assert _line_kind("void CmdServiceInit(const char *socketPath, Callback func, LoopHandle loop)", target) == "socket_server_registration"
+    assert _line_kind(
+        'AddDev(std::make_shared<SocketDevice>("hisysevent", eventCount));',
+        normalize_target("/dev/unix/socket/hisysevent"),
+    ) == "socket_server_registration"
+    # C++'s std::bind must not be confused with the POSIX socket bind API.
+    assert _line_kind("std::function<void()> fn = std::bind(&Worker::Run, this);", target) != "socket_bind_listen"
+
+
+def test_generic_socketdevice_from_other_component_is_not_paramservice_evidence() -> None:
+    """A generic SocketDevice registration must not inherit another target's name."""
+
+    target = normalize_target("/dev/unix/socket/paramservice")
+    # A lowerCamel field/type parameter is not the named socket identity.  A
+    # case-folded substring check would incorrectly anchor the whole hiview
+    # component through ``paramService``.
+    assert not _line_has_target_identity(
+        "static void HandleInsert(const NotifyParamService &paramService);",
+        target,
+    )
+    line = 'AddDev(std::make_shared<SocketDevice>("hisysevent", eventCountPerCycle));'
+    path = "/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp"
+    assert not _target_evidence_is_bound(path, line, target, ())
+    assert _evidence_symbol_for_line(line, target, query_value="SocketDevice") is None
+
+    store = EvidenceStore()
+    store.add_evidence(
+        kind="literal_match",
+        source_path="/openharmony/base/startup/init/services/param/include/param_utils.h",
+        line_start=80,
+        excerpt='#define PIPE_NAME "/dev/unix/socket/paramservice"',
+        tool_name="fixture",
+    )
+    context = _target_bound_context_directories(store, target)
+    assert _target_evidence_is_bound(
+        "/openharmony/base/startup/init/services/param/linux/param_service.c",
+        "ret = ParamServerCreate(&task, &info);",
+        target,
+        context,
+    )
+    assert not _target_evidence_is_bound(path, line, target, context)
+
+
+def test_comments_and_unrelated_constants_do_not_become_socket_macro_evidence() -> None:
+    target = normalize_target("/dev/unix/socket/hisysevent")
+    assert _line_kind("static constexpr int ERR_SUCCESS = 0; // see hisysevent.h", target) != "constant_definition"
+    # ``EventType::`` is a C++ scope-qualified enum, not a configuration
+    # assignment.  The old unbounded ``type:`` pattern promoted these client
+    # telemetry lines to service_config and could make an unrelated repository
+    # outrank the actual SocketDevice owner.
+    assert _line_kind("HiSysEvent::EventType::BEHAVIOR,", target) != "service_config"
+    assert _line_kind(
+        "OHOS::HiviewDFX::HiSysEvent::EventType::FAULT,", target
+    ) != "service_config"
+    assert _line_kind(".sun_path = /dev/unix/socket/hisysevent", target) == "service_config"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "hisysevent"},
+            "response": {
+                "results": {
+                    "/openharmony/base/hiviewdfx/hiview/include/hisysevent.h": [
+                        {"line": "static constexpr int ERR_SUCCESS = 0; // hisysevent.h", "line_number": "12"},
+                        {"line": "#define HISYSEVENT_SOCKET_NAME \"hisysevent\"", "line_number": "20"},
+                    ]
+                }
+            },
+        },
+    )
+    assert _infer_related_macros(executions, target) == ("HISYSEVENT_SOCKET_NAME",)
+
+
+def test_socket_alias_use_bridges_init_path_without_assuming_server_role() -> None:
+    target = normalize_target("/dev/unix/socket/fd_holder")
+    # Filling ``sun_path`` only connects an alias to a sockaddr.  It is also a
+    # normal client-side step before ``connect``; the actual server role must
+    # be established by socket()/bind()/listen() or a server factory on the
+    # same line/context.
+    assert _line_kind(
+        "addr.sun_path = INIT_HOLDER_SOCKET_PATH;",
+        target,
+        query_value="INIT_HOLDER_SOCKET_PATH",
+    ) == "client_endpoint"
+    assert _line_kind(
+        "if (unlink(INIT_HOLDER_SOCKET_PATH) < 0) {}",
+        target,
+        query_value="INIT_HOLDER_SOCKET_PATH",
+    ) == "service_config"
+
+
+def test_network_address_only_hits_do_not_anchor_unrelated_repositories() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    # Loopback defaults and firewall rules are common, but they do not prove
+    # that a file owns this endpoint without a socket/network operation.
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "127.0.0.1"},
+            "path": "/openharmony/communication_netmanager_base/services/netmanagernative/include/netsys/dns_config_client.h",
+        },
+        {"line": '#define LOOP_BACK_ADDR1 "127.0.0.1"', "line_number": "44"},
+        target,
+    )
+    # A target port held in a lower-case member is a useful bounded source
+    # anchor and must be classified as a constant fact rather than discarded.
+    assert _line_kind("const int udpPort = 8283;", target) == "constant_definition"
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "8283"},
+            "path": "/openharmony/developtools_profiler/host/smartperf/client/client_command/include/sp_server_socket.h",
+        },
+        {"line": "const int udpPort = 8283;", "line_number": "52"},
+        target,
+    )
+
+
+def test_network_socket_lines_distinguish_server_wrapper_and_client_direction() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    assert _line_kind("SpServerSocket::SpServerSocket()", target) == "socket_server_registration"
+    assert _line_kind("int fd = socket(AF_INET, SOCK_DGRAM, 0);", target) == "socket_acquire"
+    assert _line_kind("bind(fd, reinterpret_cast<const sockaddr *>(&addr), len);", target) == "socket_bind_listen"
+    assert _line_kind("recvfrom(fd, buffer, size, 0, nullptr, nullptr);", target) == "socket_accept_read"
+    assert _line_kind("connect(fd, reinterpret_cast<const sockaddr *>(&addr), len);", target) == "client_connect"
+    assert _line_kind("sendto(fd, buffer, size, 0, addr, len);", target) == "client_send"
+    assert _line_kind("SpThreadSocket::HandleMsg()", target) != "socket_server_registration"
+    assert _line_kind("info.recvMessage = CmdOnRecvMessage;", target) == "protocol_dispatch"
+    assert _line_kind("SpThreadSocket::HandleMsg();", target) == "protocol_dispatch"
+
+
+def test_network_evidence_keeps_only_the_requested_transport_branch() -> None:
+    udp = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    tcp = normalize_target("SP_daemon TCP 127.0.0.1:8284")
+    assert _network_operation_matches_target("socket(AF_INET, SOCK_DGRAM, 0)", udp)
+    assert not _network_operation_matches_target("socket(AF_INET, SOCK_STREAM, 0)", udp)
+    assert _network_operation_matches_target("recvfrom(fd, buf, len, 0, addr, addrlen)", udp)
+    # Connected UDP sockets may use recv()/send() instead of recvfrom()/sendto;
+    # these calls are still valid UDP server/response operations and must not
+    # be discarded as TCP evidence.
+    assert _network_operation_matches_target("recv(fd, buf, len, 0)", udp)
+    assert _network_operation_matches_target("send(fd, buf, len, 0)", udp)
+    assert not _network_operation_matches_target("listen(fd, 5)", udp)
+    assert _network_operation_matches_target("socket(AF_INET, SOCK_STREAM, 0)", tcp)
+    assert not _network_operation_matches_target("socket(AF_INET, SOCK_DGRAM, 0)", tcp)
+    assert _network_operation_matches_target("accept(fd, nullptr, nullptr)", tcp)
+    assert not _network_operation_matches_target("recvfrom(fd, buf, len, 0, addr, addrlen)", tcp)
+
+
+def test_network_generic_search_hits_do_not_become_identity_without_port_context() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    generic = {"query": {"kind": "full", "value": "recvfrom"}}
+    assert not _search_hit_is_target_evidence(
+        generic,
+        {"line": "ssize_t recvfrom(int fd, void *buf, size_t len, int flags);"},
+        target,
+    )
+    assert _search_hit_is_target_evidence(
+        {"query": {"kind": "full", "value": "8283"}},
+        {"line": "addr.sin_port = htons(8283);"},
+        target,
+    )
+    assert _search_hit_is_target_evidence(
+        {"query": {"kind": "full", "value": "8283"}},
+        {"line": "const int udpPort = 8283;"},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {"query": {"kind": "full", "value": "8283"}},
+        {"line": "static const uint16_t table[] = {8283, 8284};"},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {"query": {"kind": "full", "value": "SP_daemon"}, "path": "/openharmony/base/log.cpp"},
+        {"line": 'LOGI("SP_daemon started");'},
+        target,
+    )
+    assert _search_hit_is_target_evidence(
+        {"query": {"kind": "full", "value": "SP_daemon"}, "path": "/openharmony/base/sp_server.cpp"},
+        {"line": "int fd = socket(AF_INET, SOCK_DGRAM, 0); // SP_daemon"},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "8283"},
+            "path": "/openharmony/kernel/linux/linux-6.6/tools/testing/selftests/net/udp_8283.c",
+        },
+        {"line": "server_fd = start_server(AF_INET, SOCK_DGRAM, NULL, 8283, 0);"},
+        target,
+    )
+
+
+def test_network_generic_source_hit_can_follow_target_sibling_directory() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    context = "/openharmony/developtools/profiler/host/smartperf/client/client_command"
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "sin_port"},
+            "path": context + "/sp_server_socket.cpp",
+            "target_context_dirs": (context,),
+        },
+        {"line": "local.sin_port = htons(sockPort);"},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "sin_port"},
+            "path": "/openharmony/.ccache/1/2/metadata.d",
+            "target_context_dirs": ("/openharmony/.ccache/1/2",),
+        },
+        {"line": "local.sin_port = htons(8283);"},
+        target,
+    )
+
+
+def test_network_generic_source_hit_can_follow_include_src_module_context() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    module = "/openharmony/developtools/smartperf_host/smartperf_device/device_command/services/ipc"
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "sin_port"},
+            "path": module + "/src/sp_server_socket.cpp",
+            "target_context_dirs": (module + "/include", module),
+        },
+        {"line": "local.sin_port = htons(sockPort);"},
+        target,
+    )
+
+
+def test_named_socket_test_path_is_excluded_but_config_and_production_are_kept() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    config = {
+        "query": {"kind": "full", "value": "dnsproxyd"},
+        "path": "/openharmony/base/communication/netmanager_base/services/etc/init/netsysnative.cfg",
+    }
+    assert _search_hit_is_target_evidence(
+        config,
+        {"line": '{"name": "dnsproxyd", "family": "AF_UNIX"}'},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "GetControlSocket"},
+            "path": "/openharmony/base/communication/netmanager_base/test/dnsproxyd_test.cpp",
+            "target_context_dirs": ("/openharmony/base/communication/netmanager_base/services",),
+        },
+        {"line": 'fd = GetControlSocket("dnsproxyd");'},
+        target,
+    )
+
+
+def test_named_socket_generic_probe_uses_bounded_context() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    module = "/openharmony/base/communication/netmanager_base/services/netmanagernative/src/netsys/dnsresolv"
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "GetControlSocket"},
+            "path": module + "/dns_resolv_listen.cpp",
+            "target_context_dirs": (module,),
+        },
+        {"line": 'fd = GetControlSocket("dnsproxyd");'},
+        target,
+    )
+    assert _line_kind('{"name": "dnsproxyd", "family": "AF_UNIX"}', target) == "service_config"
+
+
+def test_named_socket_generic_probe_rejects_other_transport_and_socket_name() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    context = "/openharmony/base/communication/netmanager_base/services/netmanagernative"
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "socket"},
+            "path": context + "/src/dns_proxy_listen.cpp",
+            "target_context_dirs": (context,),
+        },
+        {"line": "socketFd = socket(AF_INET, SOCK_DGRAM, 0);"},
+        target,
+    )
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "GetControlSocket"},
+            "path": context + "/src/manager/multi_vpn_manager.cpp",
+            "target_context_dirs": (context,),
+        },
+        {"line": 'fd = GetControlSocket("multivpnfd");'},
+        target,
+    )
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "GetControlSocket"},
+            "path": context + "/src/netsys/dnsresolv/dns_resolv_listen.cpp",
+            "target_context_dirs": (context,),
+        },
+        {"line": 'fd = GetControlSocket("dnsproxyd");'},
+        target,
+    )
+
+
+def test_named_socket_conflict_signal_covers_entire_candidate_file() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    path = "/openharmony/base/communication/netmanager_base/src/dns_proxy.cpp"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "socket"},
+            "response": {
+                "results": {
+                    path: [
+                        {"line": "fd = socket(AF_INET, SOCK_DGRAM, 0);"},
+                        {"line": "recv(fd, buffer, size, 0);"},
+                    ]
+                }
+            },
+        },
+    )
+    assert _named_socket_path_has_conflict(path, executions, target)
+
+
+def test_context_matching_ignores_broad_structural_ancestors() -> None:
+    """A repository/services ancestor must not bless every sibling API hit."""
+
+    param_header = "/openharmony/base/startup/init/services/param/include"
+    param_source = "/openharmony/base/startup/init/services/param/linux/param_service.c"
+    unrelated_service = "/openharmony/base/startup/init/services/other/src/stream_task.c"
+    assert _path_shares_target_context(param_source, (param_header, "/openharmony/base/startup/init/services"))
+    assert not _path_shares_target_context(unrelated_service, (param_header, "/openharmony/base/startup/init/services"))
+
+
+def test_context_matching_requires_component_overlap_for_sibling_network_services() -> None:
+    """DNS/VPN siblings share a repository but not the target module."""
+
+    target_context = "/openharmony/communication_netmanager_base/services/netmanagernative/include/netsys"
+    dns_source = "/openharmony/communication_netmanager_base/services/netmanagernative/src/netsys/dnsresolv"
+    vpn_source = "/openharmony/communication_netmanager_base/services/netmanagernative/src/manager/multi_vpn"
+    assert _path_shares_target_context(dns_source, (target_context, "/openharmony/communication_netmanager_base/services"))
+    assert not _path_shares_target_context(vpn_source, (target_context, "/openharmony/communication_netmanager_base/services"))
+
+
+def test_named_socket_path_query_line_is_candidate_only_without_identity() -> None:
+    target = normalize_target("/dev/unix/socket/AppSpawn")
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "path", "value": "AppSpawn"},
+            "path": "/openharmony/base/startup/appspawn/standard/appspawn_service.c",
+        },
+        {"line": "/* source file summary */", "line_number": "1"},
+        target,
+    )
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "path", "value": "AppSpawn"},
+            "path": "/openharmony/base/startup/appspawn/standard/appspawn_service.c",
+        },
+        {"line": 'const char *name = "AppSpawn";', "line_number": "42"},
+        target,
+    )
+
+
+def test_named_socket_basename_query_does_not_anchor_unrelated_longer_symbol() -> None:
+    target = normalize_target("/dev/unix/socket/AppSpawn")
+    assert not _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "AppSpawn"},
+            "path": "/openharmony/base/startup/appspawn/modules/module.c",
+        },
+        {"line": "void AddAppSpawnHookExecute() {}", "line_number": "8"},
+        target,
+    )
+
+
+def test_named_socket_path_identity_recovers_normalized_service_filename() -> None:
+    target = normalize_target("/dev/unix/socket/init_control_fd")
+    assert _path_contains_target_identity(
+        "/openharmony/base/startup/init/services/init/standard/init_control_fd_service.c",
+        target,
+    )
+    assert _path_contains_target_identity(
+        "/openharmony/base/startup/init/services/param/linux/param_service.c",
+        normalize_target("/dev/unix/socket/paramservice"),
+    )
+    assert not _path_contains_target_identity(
+        "/openharmony/base/startup/modules/module_engine/stub/appspawn_hook.cpp",
+        normalize_target("/dev/unix/socket/AppSpawn"),
+    )
+
+
+def test_client_kind_uses_identifier_boundaries() -> None:
+    target = normalize_target("/dev/unix/socket/AppSpawn")
+    assert _client_kind('connect(fd, &addr, len); // AppSpawn', target) == "client_connect"
+    assert _client_kind("void AppSpawnHookExecute();", target) is None
+
+
+def test_named_socket_macro_alias_can_recover_descriptor_acquire() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    module = "/openharmony/base/communication/netmanager_base/services/netmanagernative"
+    assert _search_hit_is_target_evidence(
+        {
+            "query": {"kind": "full", "value": "DNS_SOCKET_NAME"},
+            "path": module + "/src/netsys/dnsresolv/dns_resolv_listen.cpp",
+            "target_context_dirs": (module, ),
+        },
+        {"line": "serverSockFd_ = GetControlSocket(DNS_SOCKET_NAME);"},
+        target,
+    )
+
+
+def test_unix_path_priority_prefers_socket_config_and_server_chain() -> None:
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    module = "/openharmony/base/communication/netmanager_base/services/netmanagernative/src/netsys/dnsresolv"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "dnsproxyd"},
+            "response": {
+                "results": {
+                    "/openharmony/base/communication/netmanager_base/services/etc/init/netsysnative.cfg": [
+                        {"line": '{"name": "dnsproxyd", "family": "AF_UNIX"}'}
+                    ],
+                    module + "/dns_resolv_listen.cpp": [
+                        {"line": 'fd = GetControlSocket("dnsproxyd");'}
+                    ],
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "recv"},
+            "response": {
+                "results": {
+                    module + "/dns_resolv_listen.cpp": [
+                        {"line": "recvfrom(fd, buf, len, 0, nullptr, nullptr);"}
+                    ],
+                    "/openharmony/foundation/communication/foo.cpp": [
+                        {"line": "recvfrom(fd, buf, len, 0, nullptr, nullptr);"}
+                    ],
+                }
+            },
+        },
+    )
+    assert _unix_path_priority(
+        module + "/dns_resolv_listen.cpp", executions, target, (module,)
+    ) > _unix_path_priority(
+        "/openharmony/foundation/communication/foo.cpp", executions, target, (module,)
+    )
+
+
+def test_unix_path_priority_prefers_get_control_socket_over_sibling_proxy() -> None:
+    """The init-created listener wins over a generic sibling socket helper."""
+
+    target = normalize_target("/dev/unix/socket/dnsproxyd")
+    module = "/openharmony/base/communication/netmanager_base/services/netmanagernative/src/netsys/dnsresolv"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "dnsproxyd"},
+            "response": {
+                "results": {
+                    "/openharmony/base/communication/netmanager_base/services/etc/init/netsysnative.cfg": [
+                        {"line": '{"name": "dnsproxyd", "family": "AF_UNIX"}'}
+                    ]
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "DNS_SOCKET_NAME"},
+            "response": {
+                "results": {
+                    module + "/dns_resolv_listen.cpp": [
+                        {"line": "serverSockFd_ = GetControlSocket(DNS_SOCKET_NAME);"}
+                    ]
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "socket"},
+            "response": {
+                "results": {
+                    module + "/dns_proxy_listen.cpp": [
+                        {"line": "proxySockFd_ = socket(AF_INET, SOCK_DGRAM, 0);"},
+                        {"line": "bind(proxySockFd_, (sockaddr *)&proxyAddr, sizeof(proxyAddr));"},
+                    ]
+                }
+            },
+        },
+    )
+    resolver_score = _unix_path_priority(
+        module + "/dns_resolv_listen.cpp", executions, target, (module,)
+    )
+    proxy_score = _unix_path_priority(
+        module + "/dns_proxy_listen.cpp", executions, target, (module,)
+    )
+    assert resolver_score > proxy_score
+
+
+def test_unix_path_priority_keeps_init_created_socket_server_in_context() -> None:
+    target = normalize_target("/dev/unix/socket/fd_holder")
+    module = "/openharmony/base/startup/init/services/init/standard"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "fd_holder"},
+            "response": {
+                "results": {
+                    "/openharmony/base/startup/init/services/init/include/fd_holder_service.h": [
+                        {"line": "typedef struct FdHolderService fd_holder;"}
+                    ]
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "socket"},
+            "response": {
+                "results": {
+                    module + "/init.c": [
+                        {"line": "sock = socket(AF_UNIX, SOCK_DGRAM, 0);"},
+                        {"line": "if (bind(sock, (struct sockaddr *)&addr, len) < 0) {}"},
+                    ],
+                    "/openharmony/base/startup/init/interfaces/innerkits/fd_holder/fd_holder.c": [
+                        {"line": "sockFd = socket(AF_UNIX, SOCK_DGRAM, 0);"}
+                    ],
+                }
+            },
+        },
+    )
+    # The init implementation is in the target module context and carries a
+    # bind path; a client helper that only calls socket() must not outrank it.
+    assert _unix_path_priority(module + "/init.c", executions, target, (module,)) > _unix_path_priority(
+        "/openharmony/base/startup/init/interfaces/innerkits/fd_holder/fd_holder.c",
+        executions,
+        target,
+        (module,),
+    )
+
+
+def test_target_context_ignores_policy_literal_but_keeps_socket_config_anchor() -> None:
+    target = normalize_target("/dev/unix/socket/paramservice")
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "paramservice"},
+            "response": {
+                "results": {
+                    "/openharmony/base/security/selinux/paramservice.te": [
+                        {"line": "type paramservice_socket, file_type;"}
+                    ],
+                    "/openharmony/base/startup/init/services/param/include/param_utils.h": [
+                        {"line": '#define PIPE_NAME "/dev/unix/socket/paramservice"'}
+                    ],
+                }
+            },
+        },
+    )
+    contexts = _target_context_directories(executions, target)
+    assert "/openharmony/base/security/selinux" not in contexts
+    assert "/openharmony/base/startup/init/services/param/include" in contexts
+    assert _path_role_adjustment("/openharmony/base/security/selinux/paramservice.te", target) < 0
+
+
+def test_network_path_priority_prefers_socket_server_module_over_generic_source() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    module = "/openharmony/developtools/smartperf_host/smartperf_device/device_command/services/ipc"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "8283"},
+            "response": {
+                "results": {
+                    module + "/include/sp_server_socket.h": [
+                        {"line": "const int udpPort = 8283;"}
+                    ]
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "socket"},
+            "response": {
+                "results": {
+                    module + "/src/sp_server_socket.cpp": [
+                        {"line": "int fd = socket(AF_INET, SOCK_DGRAM, 0);"}
+                    ],
+                    "/openharmony/foundation/communication/foo.cpp": [
+                        {"line": "int fd = socket(AF_INET, SOCK_DGRAM, 0);"}
+                    ],
+                }
+            },
+        },
+    )
+    server_score = _network_path_priority(
+        module + "/src/sp_server_socket.cpp", executions, target, (module + "/include", module)
+    )
+    unrelated_score = _network_path_priority(
+        "/openharmony/foundation/communication/foo.cpp", executions, target, (module + "/include", module)
+    )
+    assert server_score > unrelated_score
+
+
+def test_network_path_priority_does_not_promote_client_only_port_usage() -> None:
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    module = "/openharmony/developtools/smartperf"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "8283"},
+            "response": {
+                "results": {
+                    module + "/client.cpp": [
+                        {"line": "const int serverPort = 8283;"},
+                        {"line": "sendto(fd, buf, len, 0, &addr, addrLen);"},
+                    ],
+                    module + "/server.cpp": [
+                        {"line": "addr.sin_port = htons(8283);"},
+                        {"line": "bind(fd, (sockaddr *)&addr, sizeof(addr));"},
+                        {"line": "recvfrom(fd, buf, len, 0, nullptr, nullptr);"},
+                    ],
+                }
+            },
+        },
+    )
+    assert _network_path_priority(module + "/server.cpp", executions, target, (module,)) > _network_path_priority(
+        module + "/client.cpp", executions, target, (module,)
+    )
+
+
+def test_network_path_priority_ignores_rejected_generic_hits() -> None:
+    """排序不得重新计入证据门禁已经拒绝的跨模块 API 命中。"""
+
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    module = "/openharmony/developtools_profiler/host/smartperf/client/client_command"
+    unrelated = "/openharmony/foundation/communication/netmanager/dnsproxy.cpp"
+    executions = (
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "8283"},
+            "response": {
+                "results": {
+                    module + "/include/sp_server_socket.h": [
+                        {"line": "const int udpPort = 8283;"}
+                    ],
+                    unrelated: [{"line": "const int tablePort = 8283;"}],
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "socket"},
+            "response": {
+                "results": {
+                    module + "/sp_server_socket.cpp": [
+                        {"line": "int fd = socket(AF_INET, SOCK_DGRAM, 0);"}
+                    ],
+                    unrelated: [
+                        {"line": "int fd = socket(AF_INET, SOCK_DGRAM, 0);"}
+                    ],
+                }
+            },
+        },
+        {
+            "status": "ok",
+            "query": {"kind": "full", "value": "bind"},
+            "response": {
+                "results": {
+                    module + "/sp_server_socket.cpp": [
+                        {"line": "bind(fd, reinterpret_cast<sockaddr *>(&local), sizeof(local));"}
+                    ],
+                    unrelated: [
+                        {"line": "bind(fd, reinterpret_cast<sockaddr *>(&local), sizeof(local));"}
+                    ],
+                }
+            },
+        },
+    )
+    server_score = _network_path_priority(
+        module + "/sp_server_socket.cpp", executions, target, (module,)
+    )
+    unrelated_score = _network_path_priority(unrelated, executions, target, (module,))
+    assert server_score > unrelated_score
+    assert unrelated_score < 100
 
 
 def test_repository_mapping_ranking_prefers_server_roles_over_noisy_text_hits() -> None:
@@ -121,9 +878,87 @@ def test_repository_mapping_ranking_prefers_server_roles_over_noisy_text_hits() 
     assert startup_score > noisy_score
 
 
-def test_llm_search_default_budget_is_twenty_rounds_and_hard_capped() -> None:
-    assert _budget_int({}, "max_llm_actions", default=20, maximum=20, minimum=0) == 20
-    assert _budget_int({"max_llm_actions": 99}, "max_llm_actions", default=20, maximum=20, minimum=0) == 20
+def test_repository_mapping_ranking_prefers_confirmed_semantic_server_owner() -> None:
+    """A model-confirmed registration must beat telemetry API basename hits."""
+
+    target = normalize_target("/dev/unix/socket/hisysevent")
+    store = EvidenceStore()
+    owner = store.add_evidence(
+        kind="socket_server_registration",
+        source_path="/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp",
+        line_start=313,
+        excerpt='AddDev(std::make_shared<SocketDevice>("hisysevent", eventCountPerCycle));',
+        tool_name="fixture",
+    )
+    noisy_ids = [
+        store.add_evidence(
+            kind="service_config",
+            source_path=f"/openharmony/foundation/distributedhardware/distributed_audio/common/dfx_utils/src/daudio_{index}.cpp",
+            line_start=index + 1,
+            excerpt="HiSysEvent::EventType::BEHAVIOR,",
+            tool_name="fixture",
+        ).evidence_id
+        for index in range(12)
+    ]
+    semantic_mapping = RepositoryMapping(
+        project_name="hiviewdfx_hiview",
+        source_root="base/hiviewdfx/hiview",
+        repo_url="https://gitcode.com/openharmony/hiviewdfx_hiview",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=owner.source_path,
+        evidence_ids=(owner.evidence_id,),
+    )
+    noisy_mapping = RepositoryMapping(
+        project_name="distributedhardware_distributed_audio",
+        source_root="foundation/distributedhardware/distributed_audio",
+        repo_url="https://gitcode.com/openharmony/distributedhardware_distributed_audio",
+        revision="OpenHarmony-6.1-LTS",
+        source_path="/openharmony/foundation/distributedhardware/distributed_audio/common/dfx_utils/src/daudio_0.cpp",
+        evidence_ids=tuple(noisy_ids),
+    )
+
+    owner_score, owner_counts = _mapping_role_score(
+        semantic_mapping,
+        store,
+        target=target,
+        semantic_server_evidence_ids=(owner.evidence_id,),
+    )
+    noisy_score, noisy_counts = _mapping_role_score(
+        noisy_mapping,
+        store,
+        target=target,
+        semantic_server_evidence_ids=(owner.evidence_id,),
+    )
+    assert owner_score > noisy_score
+    assert owner_counts["llm_server_owner_anchor"] == 1
+    assert "llm_server_owner_anchor" not in noisy_counts
+
+
+def test_llm_search_default_budget_is_forty_rounds_and_hard_capped() -> None:
+    from core.source_locator import (
+        LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+        LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS,
+        LLM_SEARCH_MAX_MODEL_CALLS,
+        PlannerBudget,
+    )
+
+    assert _budget_int(
+        {},
+        "max_llm_actions",
+        default=LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+        maximum=LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+        minimum=0,
+    ) == 40
+    assert _budget_int(
+        {"max_llm_actions": 99},
+        "max_llm_actions",
+        default=LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+        maximum=LLM_SEARCH_DEFAULT_MAX_ACTIONS,
+        minimum=0,
+    ) == 40
+    assert PlannerBudget(max_actions=40, max_model_calls=LLM_SEARCH_DEFAULT_MAX_MODEL_CALLS).max_actions == 40
+    assert PlannerBudget(max_actions=40, max_model_calls=48).max_model_calls == 48
+    assert LLM_SEARCH_MAX_MODEL_CALLS >= 48
 
 
 class _FakeOpenGrok:
@@ -235,6 +1070,21 @@ def test_worker_reaches_confirmation_with_all_audit_artifacts(tmp_path: Path) ->
     assert summary["server"]["confirmed"] is True
     assert summary["evidence"]
     assert all("source_path" in item and "excerpt" in item for item in summary["evidence"])
+    role_evidence = summary["server"]["roles"][0]["source_evidence"]
+    assert role_evidence
+    assert all(
+        "source_path" in item
+        and "line_start" in item
+        and "line_end" in item
+        and "excerpt" in item
+        for item in role_evidence
+    )
+    role_ids = {
+        evidence_id
+        for role in summary["server"]["roles"]
+        for evidence_id in role["evidence_ids"]
+    }
+    assert role_ids <= {item["evidence_id"] for item in summary["evidence"]}
 
 
 def test_worker_follows_source_defined_alias_to_cpp_listener(tmp_path: Path) -> None:
@@ -434,6 +1284,154 @@ def test_worker_persists_one_evidence_constrained_llm_role_review(tmp_path: Path
     assert server_payload["semantic_decision"]["status"] == "confirmed"
 
 
+def test_worker_candidate_pk_can_override_noisy_high_score_copy(tmp_path: Path) -> None:
+    class _MetadataOpenGrok(_FakeOpenGrok):
+        def __init__(self) -> None:
+            super().__init__()
+            self.metadata = {
+                "/openharmony/developtools/profiler/host/smartperf/client/client_command/BUILD.gn": SourceDocument(
+                    path="/openharmony/developtools/profiler/host/smartperf/client/client_command/BUILD.gn",
+                    source="fixture",
+                    content='ohos_executable("SP_daemon") {\n  "sp_server_socket.cpp",\n}\n',
+                ),
+                "/openharmony/developtools/smartperf_host/smartperf_device/device_command/services/ipc/BUILD.gn": SourceDocument(
+                    path="/openharmony/developtools/smartperf_host/smartperf_device/device_command/services/ipc/BUILD.gn",
+                    source="fixture",
+                    content='ohos_shared_library("smartperf_ipc") {\n  "sp_server_socket.cpp",\n}\n',
+                ),
+            }
+
+        def read_source(self, path: str, *, max_bytes: int | None = None) -> SourceDocument:
+            if path in self.metadata:
+                return self.metadata[path]
+            return super().read_source(path, max_bytes=max_bytes)
+
+    client = _MetadataOpenGrok()
+    machine = LocatorSessionStore(tmp_path / "sessions").create(
+        "SP_daemon UDP 127.0.0.1:8283",
+        target_revision="OpenHarmony-6.1-LTS",
+        session_id="loc_candidatepk01",
+    )
+    target = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    machine.transition(
+        "NORMALIZE_TARGET",
+        summary_zh="fixture target normalized",
+        updates={"target": target.to_dict()},
+    )
+    store = EvidenceStore()
+    profiler_source = "/openharmony/developtools/profiler/host/smartperf/client/client_command/sp_server_socket.cpp"
+    smartperf_source = "/openharmony/developtools/smartperf_host/smartperf_device/device_command/services/ipc/sp_server_socket.cpp"
+    profiler_evidence = store.add_evidence(
+        kind="socket_accept_read",
+        source_path=profiler_source,
+        line_start=10,
+        excerpt="recvfrom(fd, buffer, size, 0, nullptr, nullptr);",
+        tool_name="fixture",
+    )
+    smartperf_evidence = store.add_evidence(
+        kind="socket_accept_read",
+        source_path=smartperf_source,
+        line_start=10,
+        excerpt="recvfrom(fd, buffer, size, 0, nullptr, nullptr);",
+        tool_name="fixture",
+    )
+    profiler = RepositoryMapping(
+        project_name="developtools_profiler",
+        source_root="developtools/profiler",
+        repo_url="https://gitcode.com/openharmony/developtools_profiler",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=profiler_source,
+        evidence_ids=(profiler_evidence.evidence_id,),
+    )
+    smartperf = RepositoryMapping(
+        project_name="developtools_smartperf_host",
+        source_root="developtools/smartperf_host",
+        repo_url="https://gitcode.com/openharmony/developtools_smartperf_host",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=smartperf_source,
+        evidence_ids=(smartperf_evidence.evidence_id,),
+    )
+
+    def model(prompt: str):
+        payload = json.loads(prompt)
+        profiler_row = next(item for item in payload["candidates"] if item["project_name"] == "developtools_profiler")
+        build_id = profiler_row["source_facts"][0]["evidence_id"]
+        return {
+            "primary_repository": "developtools_profiler",
+            "primary_role": "process_owner",
+            "confidence": "high",
+            "reason": "BUILD.gn 明确声明 SP_daemon，另一仓库只有共享库副本",
+            "evidence_ids": [build_id],
+            "related_repositories": [
+                {
+                    "project_name": "developtools_smartperf_host",
+                    "role": "duplicate_or_split_source",
+                    "evidence_ids": [smartperf_evidence.evidence_id],
+                }
+            ],
+        }
+
+    worker = SourceLocatorWorker(
+        machine,
+        runtime=SourceLocatorRuntime(
+            client=client,
+            llm_candidate_reviewer=LLMCandidateReviewer(model_call=model),
+        ),
+    )
+    selected, review, artifacts = worker._run_candidate_review((smartperf, profiler), store, target)
+    assert selected.project_name == "developtools_profiler"
+    assert review["status"] == "complete"
+    assert review["selected_by"] == "llm_candidate_review"
+    assert review["decision"]["primary_role"] == "process_owner"
+    assert "repository_candidate_review.json" in artifacts
+    assert (tmp_path / "sessions" / machine.session.session_id / "repository_candidate_review.json").exists()
+    selected_row = next(
+        item for item in review["candidates"] if item["project_name"] == "developtools_profiler"
+    )
+    metadata_ids = {
+        fact["evidence_id"]
+        for fact in selected_row["source_facts"]
+        if isinstance(fact, dict) and isinstance(fact.get("evidence_id"), str)
+    }
+    assert metadata_ids & set(selected.evidence_ids)
+
+
+def test_final_role_review_ignores_evidence_from_losing_repository() -> None:
+    mapping = RepositoryMapping(
+        project_name="developtools_profiler",
+        source_root="developtools/profiler",
+        repo_url="https://gitcode.com/openharmony/developtools_profiler",
+        revision="OpenHarmony-6.1-LTS",
+        source_path="/openharmony/developtools/profiler/sp_server_socket.cpp",
+        evidence_ids=("E-prof-build",),
+    )
+    result = LLMRoleAttributionResult(
+        server=LLMRoleDecision(
+            role="server",
+            status="confirmed",
+            confidence="high",
+            subject="SpServerSocket",
+            evidence_ids=("E-smart-bind",),
+            reason="模型依据另一候选仓库中的 bind/recvfrom 证据确认服务端。",
+        ),
+        client=LLMRoleDecision(
+            role="client",
+            status="unresolved",
+            confidence="low",
+            subject="",
+            evidence_ids=(),
+            reason="未发现客户端连接证据。",
+        ),
+    )
+
+    scoped = _scope_llm_role_result_to_mapping(result, mapping)
+
+    assert scoped is not None
+    assert scoped.server.status == "unresolved"
+    assert scoped.server.evidence_ids == ()
+    assert "其他候选仓库" in scoped.server.reason
+
+
 def test_worker_feeds_each_llm_tool_result_into_next_round(tmp_path: Path) -> None:
     """Semantic rounds must observe evidence produced by the prior tool call."""
 
@@ -496,6 +1494,71 @@ def test_worker_feeds_each_llm_tool_result_into_next_round(tmp_path: Path) -> No
         execution.get("kind") == "read_file" and execution.get("path") == TARGET_PATH
         for execution in search_plan["executions"]
     )
+
+
+def test_worker_continues_after_transient_llm_tool_failure(tmp_path: Path) -> None:
+    """A failed OpenGrok action is fed back instead of ending the loop."""
+
+    class _FailOnceOpenGrok(_FakeOpenGrok):
+        def search(self, **kwargs) -> SearchResponse:
+            if kwargs.get("full") == "bind":
+                raise OpenGrokHTTPError(
+                    "fixture rejects the broad bind probe",
+                    status_code=400,
+                    endpoint="/api/v1/search",
+                )
+            return super().search(**kwargs)
+
+    store = EvidenceStore()
+    evidence = store.add_evidence(
+        kind="service_config",
+        source_path="/openharmony/base/startup/init/services/param/param_utils.h",
+        line_start=1,
+        excerpt='#define PARAM_SERVICE "/dev/unix/socket/paramservice"',
+        tool_name="fixture",
+    )
+    target = normalize_target("/dev/unix/socket/paramservice")
+    machine = LocatorSessionStore(tmp_path / "sessions").create(
+        "/dev/unix/socket/paramservice",
+        budget={"max_llm_actions": 2},
+        session_id="loc_workerllmfail1",
+    )
+    contexts: list[dict[str, object]] = []
+
+    def model(prompt: str):
+        context_text = prompt.split("<untrusted-context>\n", 1)[1].split("\n</untrusted-context>", 1)[0]
+        context = json.loads(context_text)
+        contexts.append(context)
+        query = "bind(" if len(contexts) == 1 else "GetControlSocket"
+        return {
+            "kind": "search_full",
+            "query": query,
+            "justification": "补充服务端通信证据",
+            "expected_relation": "socket_acquire_or_bind",
+            "purpose": "normal",
+            "evidence_used": [evidence.evidence_id],
+        }
+
+    planner = LLMSearchPlanner(
+        model_call=model,
+        budget=PlannerBudget(max_actions=2, max_model_calls=2),
+    )
+    worker = SourceLocatorWorker(
+        machine,
+        runtime=SourceLocatorRuntime(client=_FailOnceOpenGrok(), llm_planner=planner),
+    )
+
+    audits, action_keys, _queries = worker._run_llm_actions(
+        target=target,
+        store=store,
+        search_payload={"executions": []},
+    )
+
+    assert len(audits) == 2
+    assert action_keys == ["search_full:bind", "search_full:GetControlSocket"]
+    assert audits[0]["execution"]["status"] == "error"
+    assert audits[1]["execution"]["status"] == "ok"
+    assert "执行失败" in contexts[1]["recovery"]["last_feedback"]
 
 
 class _RecoveryOpenGrok:

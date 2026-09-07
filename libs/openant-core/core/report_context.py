@@ -490,6 +490,15 @@ def build_disclosure_context(
         full_result.get("attack_scenario") or finding.get("attack_scenario"),
         MAX_TEXT_CHARS,
     )
+    verification = full_result.get("verification")
+    if not isinstance(verification, Mapping) or not verification:
+        verification = finding.get("verification")
+    verification = verification if isinstance(verification, Mapping) else {}
+    assessment = verification.get("assessment")
+    if not isinstance(assessment, Mapping) or not assessment:
+        assessment = full_result.get("verification_assessment") or finding.get("verification_assessment")
+    if not isinstance(assessment, Mapping):
+        assessment = {}
 
     ordered_routes: list[str] = []
     path_routes: list[str] = []
@@ -631,6 +640,10 @@ def build_disclosure_context(
             "source_truncated": bool(target.get("source_truncated")),
         },
         "source_to_sink": source_sink,
+        # Stage 2's orthogonal assessment is kept next to the deterministic
+        # path data so report consumers can distinguish a confirmed defect
+        # from a conditional/unknown route without parsing model prose.
+        "assessment": dict(assessment),
         "call_chain": {
             "nodes": chain,
             "node_count": len(chain),

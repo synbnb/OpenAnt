@@ -86,6 +86,45 @@ def test_cli_iterative_recovery_flag_is_opt_in_and_forwarded(monkeypatch, tmp_pa
     assert captured["llm_call_graph_iterative_recovery"] is True
 
 
+def test_iterative_summary_normalizer_handles_aggregate_wrappers():
+    """Historical aggregate reports must not hide nested review counters."""
+    aggregate = {
+        "summary": {
+            "worklist_sites": 6,
+            "sites_reviewed": 6,
+            "attempts": 0,
+            "parsed_decisions": 0,
+            "accepted": 0,
+            "kept_unresolved": 0,
+            "rejected": 0,
+            "unreviewed_sites": 0,
+            "llm_calls": 5,
+            "accepted_decisions": 0,
+        },
+        "reports": [{
+            "report": {
+                "rounds": [
+                    {"review": {"summary": {
+                        "attempts": 1, "parsed_decisions": 2,
+                        "accepted": 0, "kept_unresolved": 2, "rejected": 0,
+                    }}},
+                    {"review": {"summary": {
+                        "attempts": 4, "parsed_decisions": 4,
+                        "accepted": 0, "kept_unresolved": 4, "rejected": 0,
+                    }}},
+                ]
+            }
+        }],
+    }
+
+    normalized = scanner_mod._normalise_call_graph_review_summary(
+        aggregate, iterative=True
+    )
+    assert normalized["attempts"] == 5
+    assert normalized["parsed_decisions"] == 6
+    assert normalized["kept_unresolved"] == 6
+
+
 def test_cli_candidate_review_flag_is_opt_in_and_forwarded(monkeypatch, tmp_path):
     parser = cli.build_parser()
     repo = tmp_path / "repo"
@@ -330,6 +369,56 @@ def test_generic_scan_skips_openharmony_stage_without_model_call(monkeypatch, tm
     assert json.loads(report.read_text(encoding="utf-8"))["status"] == "skipped"
 
 
+def test_recovery_partial_status_is_preserved_in_step_report(monkeypatch, tmp_path):
+    _install_minimal_pipeline(monkeypatch, tmp_path)
+
+    def partial_review(*args, **kwargs):
+        return {
+            "schema_version": 1,
+            "task": "openharmony_call_edge_recovery",
+            "status": "partial",
+            "summary": {
+                "worklist_sites": 1,
+                "attempts": 1,
+                "llm_calls": 1,
+                "retry_count": 0,
+                "parsed_decisions": 0,
+                "accepted": 0,
+                "kept_unresolved": 1,
+                "rejected": 0,
+                "unreviewed_sites": 0,
+            },
+            "worklist": [],
+            "decisions": [],
+            "validation": {"accepted": [], "kept_unresolved": [], "rejected": []},
+            "errors": ["one site exceeded the review budget"],
+        }
+
+    import core.platforms.openharmony.llm_call_graph_recovery as recovery
+
+    monkeypatch.setattr(recovery, "run_recovery_review", partial_review)
+
+    scanner_mod.scan_repository(
+        repo_path=str(tmp_path),
+        output_dir=str(tmp_path / "out"),
+        platform="openharmony",
+        processing_level="all",
+        generate_context=False,
+        enhance=False,
+        verify=False,
+        generate_report=False,
+        dynamic_test=False,
+        llm_call_graph_recovery=True,
+    )
+
+    report = json.loads(
+        (tmp_path / "out" / "llm-call-graph-recovery.report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["status"] == "partial"
+
+
 def test_candidate_review_writes_separate_artifact_and_includes_candidates(
     monkeypatch, tmp_path
 ):
@@ -393,6 +482,57 @@ def test_candidate_review_writes_separate_artifact_and_includes_candidates(
     assert result.llm_call_graph_candidate_review_path == str(artifact)
     assert result.llm_call_graph_recovery_path is None
     assert len(calls) == 1
+
+
+def test_candidate_review_partial_status_is_preserved_in_step_report(
+    monkeypatch, tmp_path
+):
+    _install_minimal_pipeline(monkeypatch, tmp_path, candidate_site=True)
+
+    def partial_review(*args, **kwargs):
+        return {
+            "schema_version": 1,
+            "task": "openharmony_call_edge_recovery",
+            "status": "partial",
+            "summary": {
+                "worklist_sites": 1,
+                "attempts": 1,
+                "llm_calls": 1,
+                "parsed_decisions": 0,
+                "accepted": 0,
+                "kept_unresolved": 1,
+                "rejected": 0,
+                "unreviewed_sites": 1,
+            },
+            "worklist": [],
+            "decisions": [],
+            "validation": {"accepted": [], "kept_unresolved": [], "rejected": []},
+            "errors": ["one candidate site exceeded the review budget"],
+        }
+
+    import core.platforms.openharmony.llm_call_graph_recovery as recovery
+
+    monkeypatch.setattr(recovery, "run_recovery_review", partial_review)
+
+    scanner_mod.scan_repository(
+        repo_path=str(tmp_path),
+        output_dir=str(tmp_path / "out"),
+        platform="openharmony",
+        processing_level="all",
+        generate_context=False,
+        enhance=False,
+        verify=False,
+        generate_report=False,
+        dynamic_test=False,
+        llm_call_graph_candidate_review=True,
+    )
+
+    report = json.loads(
+        (tmp_path / "out" / "llm-call-graph-candidate-review.report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["status"] == "partial"
 
 
 def test_generic_scan_skips_candidate_review_without_model_call(monkeypatch, tmp_path):
@@ -740,6 +880,13 @@ def test_iterative_recovery_writes_rounds_and_projection_revalidates_each_round(
     )
     assert overlay["summary"]["projected_edges"] == 1
     assert overlay["edges"][0]["target_id"] == "function:entry.cpp:target"
+    recovery_report = json.loads(
+        (output / "llm-call-graph-recovery.report.json").read_text(encoding="utf-8")
+    )
+    assert recovery_report["summary"]["attempts"] == 1
+    assert recovery_report["summary"]["parsed_decisions"] == 1
+    assert recovery_report["summary"]["accepted"] == 1
+    assert recovery_report["summary"]["kept_unresolved"] == 0
     scan_report = json.loads((output / "scan.report.json").read_text(encoding="utf-8"))
     assert scan_report["outputs"]["llm_call_graph_rounds_path"] == str(rounds_path)
 

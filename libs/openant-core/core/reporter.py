@@ -393,6 +393,13 @@ def build_pipeline_output(
     # it to [] would silently skip that fallback.
     if "confirmed_findings" in experiment:
         normalize_results(experiment, "confirmed_findings")
+    # Stage 2 keeps unresolved high-risk candidates separately from strict
+    # confirmed findings.  Load that additive collection here so evidence
+    # gaps are visible in the report instead of looking like the candidate was
+    # silently filtered out.  It is deliberately not merged into the strict
+    # ``confirmed_findings`` artifact used by dynamic testing.
+    if "review_findings" in experiment:
+        normalize_results(experiment, "review_findings")
     # FAM-ROBUST (fa15/fa16, kept as defense-in-depth): `results` is
     # model-supplied; a non-Anthropic model can emit a bare string/number where a
     # result dict is expected. Drop non-dict elements once at the entry so the
@@ -429,6 +436,9 @@ def build_pipeline_output(
     # top-level `for finding in confirmed` loop `.get()`s each element.
     confirmed = [c for c in confirmed if isinstance(c, dict)]
 
+    review = experiment.get("review_findings") or []
+    review = [r for r in review if isinstance(r, dict)]
+
     # ---------------------------------------------------------------
     # Dedup: collapse caller/callee pairs that share the same attack
     # vector. The call graph records A→B edges; if B is only reachable
@@ -437,7 +447,26 @@ def build_pipeline_output(
     call_graph_path = os.path.join(
         os.path.dirname(os.path.abspath(results_path)), "call_graph.json"
     )
+    # Deduplicate only the strict findings.  An unresolved Stage-2 candidate
+    # is a separate review record and must not disappear merely because it
+    # shares a CWE with a caller/callee that was confirmed elsewhere.
     confirmed = _dedup_caller_callee(confirmed, all_results, call_graph_path)
+    if review:
+        # Preserve strict findings first, then append unresolved candidates in
+        # stable order. A route can appear in both collections when an older
+        # artifact was resumed; do not duplicate it in the human report.
+        seen_routes = {
+            r.get("route_key") or r.get("unit_id")
+            for r in confirmed
+            if r.get("route_key") or r.get("unit_id")
+        }
+        for candidate in review:
+            key = candidate.get("route_key") or candidate.get("unit_id")
+            if key and key in seen_routes:
+                continue
+            confirmed.append(candidate)
+            if key:
+                seen_routes.add(key)
 
     # Build findings in PipelineOutput schema
     findings_data = []
@@ -556,16 +585,53 @@ def build_pipeline_output(
         # wrong (verify never rejected) and silently drops it from disclosures.
         # Map incomplete → "unverified" so it renders distinctly and stays
         # disclosure-eligible (surfaced for manual review).
-        verification = finding.get("verification", {})
+        verification = finding.get("verification")
+        if not isinstance(verification, dict) or not verification:
+            # ``confirmed_findings`` in older artifacts sometimes contains a
+            # compact copy without the verifier payload while the matching
+            # entry in ``results`` still has it. Prefer that full evidence
+            # before falling back to an empty mapping.
+            verification = full_result.get("verification")
         # A non-Anthropic model can return ``verification`` as a truthy
         # non-dict (e.g. the string "agreed"); the ``.get`` calls below
         # would raise AttributeError and crash report generation. Coerce
         # to an empty dict — same read-side guard as exploit_path / M3.
         if not isinstance(verification, dict):
             verification = {}
-        if verification.get("agree", False):
-            stage2_verdict = "confirmed" if finding.get("exploit_path") else "agreed"
-        elif verification.get("incomplete"):
+        raw_agree = verification.get("agree", False)
+        agree = (
+            raw_agree if isinstance(raw_agree, bool)
+            else isinstance(raw_agree, str) and raw_agree.strip().lower() == "true"
+        )
+        raw_incomplete = verification.get("incomplete", False)
+        incomplete = (
+            raw_incomplete if isinstance(raw_incomplete, bool)
+            else isinstance(raw_incomplete, str) and raw_incomplete.strip().lower() == "true"
+        )
+        if agree:
+            # ``agree`` means agreement with Stage 1, not that the finding is
+            # necessarily a confirmed vulnerability.  In particular, Stage 2
+            # may agree that Stage 1 is INCONCLUSIVE.  The old mapping turned
+            # that into ``agreed`` (and therefore disclosure-eligible), which
+            # made an unresolved route look like a completed verification.
+            # Keep only a conclusive vulnerable/bypassable agreement as a
+            # normal Stage-2 verdict; an agreement on safe/protected is a
+            # resolved non-finding and an agreement on inconclusive remains
+            # explicitly unverified.
+            agreed_finding = str(
+                verification.get("correct_finding")
+                or finding.get("finding")
+                or finding.get("verdict")
+                or ""
+            ).strip().lower()
+            if agreed_finding in ("vulnerable", "bypassable"):
+                agreed_path = finding.get("exploit_path") or verification.get("exploit_path")
+                stage2_verdict = "confirmed" if isinstance(agreed_path, dict) and agreed_path else "agreed"
+            elif agreed_finding == "inconclusive" or not agreed_finding:
+                stage2_verdict = "unverified"
+            else:
+                stage2_verdict = "rejected"
+        elif incomplete:
             stage2_verdict = "unverified"
         elif verification:
             # A Stage-2 disagreement can still *promote* an inconclusive
@@ -574,11 +640,28 @@ def build_pipeline_output(
             # result "rejected" (which would drop a real vulnerability from
             # disclosure).  Only a conclusive non-vulnerable final finding is
             # a rejection.
-            final_finding = str(
-                finding.get("finding")
+            stage1_finding = str(
+                verification.get("stage1_finding")
+                or finding.get("stage1_finding")
+                or finding.get("finding")
                 or finding.get("verdict")
-                or verification.get("correct_finding", "")
+                or ""
             ).strip().lower()
+            recorded_finding = str(finding.get("finding") or "").strip().lower()
+            corrected_finding = str(
+                verification.get("correct_finding") or ""
+            ).strip().lower()
+            # A current verifier writes the corrected verdict back to
+            # ``finding``.  Historical artifacts may not have done so; when
+            # the field still equals the recorded Stage-1 verdict, prefer the
+            # verifier's explicit correction instead of accidentally treating
+            # a vulnerable->safe disagreement as vulnerable.
+            if corrected_finding and recorded_finding in ("", stage1_finding):
+                final_finding = corrected_finding
+            else:
+                final_finding = recorded_finding or str(
+                    finding.get("verdict") or corrected_finding or ""
+                ).strip().lower()
             if final_finding in ("vulnerable", "bypassable"):
                 exploit_path = verification.get("exploit_path")
                 complete_path = (
@@ -596,6 +679,26 @@ def build_pipeline_output(
                 stage2_verdict = "rejected"
         else:
             stage2_verdict = finding.get("finding", "vulnerable")
+
+        assessment = verification.get("assessment")
+        if not isinstance(assessment, dict) or not assessment:
+            # New artifacts normally keep the assessment under the verifier
+            # payload.  Keep the additive field readable for resumed/legacy
+            # artifacts where the verifier payload was flattened onto the
+            # result or finding record.
+            assessment = (
+                full_result.get("verification_assessment")
+                or finding.get("verification_assessment")
+                or {}
+            )
+        if not isinstance(assessment, dict):
+            assessment = {}
+        if stage2_verdict in ("unverified", "inconclusive"):
+            review_status = "needs_review"
+        elif stage2_verdict in ("confirmed", "agreed", "vulnerable", "bypassable"):
+            review_status = "confirmed_or_stage1_candidate"
+        else:
+            review_status = "resolved"
 
         report_context = build_disclosure_context(
             report_context_index,
@@ -626,6 +729,11 @@ def build_pipeline_output(
             "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "Unknown"),
             "stage1_verdict": finding.get("verdict", finding.get("finding", "vulnerable")),
             "stage2_verdict": stage2_verdict,
+            # Additive status fields make a Stage-2 downgrade explainable in
+            # the UI/report.  They do not change the strict dynamic-testing
+            # filter or the confirmed_findings artifact.
+            "review_status": review_status,
+            "verification_assessment": assessment,
             "description": description,
             "vulnerable_code": vulnerable_code,
             "vulnerable_code_section": vulnerable_code_section,
