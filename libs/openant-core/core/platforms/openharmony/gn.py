@@ -24,7 +24,7 @@ GN_SUFFIXES = frozenset({".gn", ".gni"})
 
 _TARGET_KIND_PATTERN = (
     r"(?:group|executable|static_library|shared_library|source_set|"
-    r"action|action_foreach|component|"
+    r"action|action_foreach|component|config|"
     r"host_[A-Za-z0-9_]+|test_group|unittest|moduletest|lite_component|"
     r"ohos_[A-Za-z0-9_]+|rust_[A-Za-z0-9_]+|generate_[A-Za-z0-9_]+)"
 )
@@ -34,7 +34,7 @@ _TARGET_HEAD_RE = re.compile(
 )
 _IF_HEAD_RE = re.compile(r"(?<![A-Za-z0-9_])if\s*\(", re.MULTILINE)
 _ASSIGNMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?P<key>sources|deps|external_deps|defines|include_dirs)"
+    r"(?<![A-Za-z0-9_])(?P<key>sources|deps|external_deps|defines|include_dirs|cflags_cc|cflags)"
     r"\s*(?:\+?=)\s*\[",
     re.MULTILINE,
 )
@@ -53,6 +53,7 @@ class GNTarget:
     external_deps: list[str] = field(default_factory=list)
     defines: list[str] = field(default_factory=list)
     include_dirs: list[str] = field(default_factory=list)
+    cflags_cc: list[str] = field(default_factory=list)
     unknown_conditions: list[str] = field(default_factory=list)
 
     @property
@@ -101,6 +102,7 @@ class GNTarget:
             "external_deps": list(self.external_deps),
             "defines": list(self.defines),
             "include_dirs": list(self.include_dirs),
+            "cflags_cc": list(self.cflags_cc),
             "unknown_conditions": list(self.unknown_conditions),
             "unknown_condition_count": len(self.unknown_conditions),
         }
@@ -329,6 +331,8 @@ def _list_assignments(original: str, masked: str) -> dict[str, list[str]]:
         "external_deps": [],
         "defines": [],
         "include_dirs": [],
+        "cflags_cc": [],
+        "cflags": [],
     }
     for match in _ASSIGNMENT_RE.finditer(masked):
         opening = match.end() - 1
@@ -444,6 +448,7 @@ class OpenHarmonyGNParser:
                 external_deps=assignments["external_deps"],
                 defines=assignments["defines"],
                 include_dirs=assignments["include_dirs"],
+                cflags_cc=assignments["cflags_cc"] + assignments["cflags"],
                 unknown_conditions=_conditions(original_block),
             )
             result.targets.append(target)

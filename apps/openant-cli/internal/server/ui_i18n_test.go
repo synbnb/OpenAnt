@@ -2,6 +2,8 @@ package server
 
 import (
 	"html/template"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -18,9 +20,152 @@ func readUITemplate(t *testing.T, name string) string {
 }
 
 func TestWebTemplatesParseAfterRedesign(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html"} {
+	for _, name := range []string{
+		"index.html",
+		"scan.html",
+		"artifact-view.html",
+		"source-locator.html",
+		"exposure-surface.html",
+		"exposure-locator.html",
+		"device-socket-assets.html",
+		"socket-scope.html",
+		"summary.html",
+		"disclosure.html",
+	} {
 		if _, err := template.ParseFS(uifiles.FS, name); err != nil {
 			t.Errorf("parse %s: %v", name, err)
+		}
+	}
+}
+
+func TestWebTemplatesUseSharedVisualLanguage(t *testing.T) {
+	for _, name := range []string{
+		"index.html",
+		"scan.html",
+		"artifact-view.html",
+		"source-locator.html",
+		"exposure-surface.html",
+		"exposure-locator.html",
+		"device-socket-assets.html",
+		"socket-scope.html",
+		"summary.html",
+		"disclosure.html",
+	} {
+		body := readUITemplate(t, name)
+		if !strings.Contains(body, `href="/assets/openant-theme.css"`) {
+			t.Errorf("%s does not load the shared OpenAnt theme", name)
+		}
+	}
+
+	theme := readUITemplate(t, "openant-theme.css")
+	for _, want := range []string{
+		"--oa-canvas:",
+		"--oa-accent:",
+		".device-assets-page",
+		".socket-scope-page",
+		".report-reader-page",
+		"@media (prefers-reduced-motion: reduce)",
+	} {
+		if !strings.Contains(theme, want) {
+			t.Errorf("openant-theme.css missing design-system marker %q", want)
+		}
+	}
+}
+
+func TestSharedThemeAssetIsServedAsCSS(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/assets/openant-theme.css", nil)
+	req.SetPathValue("name", "openant-theme.css")
+	rec := httptest.NewRecorder()
+
+	(&Server{}).handleAsset(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("theme status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/css; charset=utf-8" {
+		t.Fatalf("theme content type = %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("theme cache control = %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "OpenAnt shared visual language") {
+		t.Fatal("theme response does not contain the shared stylesheet")
+	}
+}
+
+func TestWorkbenchTemplatesUseSharedStageNavigation(t *testing.T) {
+	for _, name := range []string{
+		"index.html",
+		"scan.html",
+		"artifact-view.html",
+		"source-locator.html",
+		"exposure-surface.html",
+		"exposure-locator.html",
+		"device-socket-assets.html",
+		"socket-scope.html",
+	} {
+		body := readUITemplate(t, name)
+		for _, want := range []string{
+			`src="/assets/openant-navigation.js"`,
+			"<openant-workspace-nav",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s missing shared navigation marker %q", name, want)
+			}
+		}
+	}
+
+	navigation := readUITemplate(t, "openant-navigation.js")
+	for _, want := range []string{
+		`href: "/"`,
+		`href: "/exposure-locator"`,
+		`href: "/device-socket-assets#asset-history"`,
+		`href: "/source-locator"`,
+		`href: "/socket-scope"`,
+		`link.setAttribute("aria-current", "page")`,
+		`event.key === "Escape"`,
+	} {
+		if !strings.Contains(navigation, want) {
+			t.Errorf("openant-navigation.js missing navigation behavior %q", want)
+		}
+	}
+}
+
+func TestSharedNavigationAssetIsServedAsJavaScript(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/assets/openant-navigation.js", nil)
+	req.SetPathValue("name", "openant-navigation.js")
+	rec := httptest.NewRecorder()
+
+	(&Server{}).handleAsset(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("navigation status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/javascript; charset=utf-8" {
+		t.Fatalf("navigation content type = %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("navigation cache control = %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "OpenAntWorkspaceNav") {
+		t.Fatal("navigation response does not contain the shared component")
+	}
+}
+
+func TestSocketScopeTemplateProvidesDiscoveryAndConfirmationControls(t *testing.T) {
+	body := readUITemplate(t, "socket-scope.html")
+	for _, want := range []string{
+		"{{.CSRF}}",
+		"/socket-scope/discover",
+		"/socket-scope/select",
+		"scan_scope.json",
+		"candidate_id",
+		"服务端收包",
+		"确认并用于普通扫描",
+		"textContent",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("socket-scope.html missing interactive marker %q", want)
 		}
 	}
 }
@@ -87,7 +232,7 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 }
 
 func TestWebTemplatesProvidePersistentChineseEnglishSwitch(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html"} {
+	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html", "device-socket-assets.html"} {
 		body := readUITemplate(t, name)
 		for _, want := range []string{
 			"id=\"language-select\"",
@@ -136,6 +281,31 @@ func TestExposureSurfaceTemplateProvidesStandaloneWorkbench(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("exposure-surface.html missing interactive marker %q", want)
+		}
+	}
+}
+
+func TestDeviceSocketAssetsTemplateProvidesAgenticInventoryControls(t *testing.T) {
+	body := readUITemplate(t, "device-socket-assets.html")
+	for _, want := range []string{
+		"设备 Socket 资产发现",
+		"{{.CSRF}}",
+		"/device-socket-assets/scan",
+		"/device-socket-assets/snapshots",
+		"finish_inventory",
+		"动态选择",
+		"只读",
+		"device_serial",
+		"observed_socket_records",
+		"全部 Socket 实例（原始枚举）",
+		"socket-record-search",
+		"socket-record-prev",
+		"id=\"asset-history\"",
+		"设备 Socket 资产历史",
+		"textContent",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("device-socket-assets.html missing interactive marker %q", want)
 		}
 	}
 }
@@ -214,6 +384,42 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 		if !strings.Contains(scan, want) {
 			t.Errorf("scan.html missing preserved behavior/state %q", want)
 		}
+	}
+}
+
+func TestHomeProvidesPhaseNavigation(t *testing.T) {
+	index := readUITemplate(t, "index.html")
+	for _, want := range []string{
+		"class=\"stage-nav\"",
+		"id=\"stage-nav-toggle\"",
+		"aria-controls=\"stage-nav-groups\"",
+		"class=\"stage-nav-groups\"",
+		"data-stage=\"exposure\"",
+		"data-stage=\"source\"",
+		"data-stage=\"static\"",
+		"data-stage=\"analysis\"",
+		"href=\"/device-socket-assets\"",
+		"href=\"/exposure-locator\"",
+		"href=\"/source-locator\"",
+		"href=\"/socket-scope\"",
+		"href=\"#new-scan-title\"",
+		"href=\"#recent-title\"",
+		"initStageNav",
+		"persistStageNavState",
+		"localStorage.getItem(stageNavStorageKey)",
+		"nav.exposure.title",
+		"nav.source.title",
+		"nav.static.title",
+		"nav.analysis.title",
+		"nav.analysis.assets",
+		"/device-socket-assets#asset-history",
+	} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index.html missing phase navigation marker %q", want)
+		}
+	}
+	if got := strings.Count(index, "<details class=\"stage-nav-group\""); got != 4 {
+		t.Errorf("phase navigation groups = %d, want 4", got)
 	}
 }
 

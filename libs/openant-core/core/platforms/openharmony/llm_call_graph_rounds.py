@@ -214,6 +214,7 @@ def run_iterative_recovery_review(
     binding: Any = None,
     completion: Callable[[str], str] | None = None,
     entry_point_ids: Iterable[str] | None = None,
+    candidate_seed_ids: Iterable[str] | None = None,
     call_graph: Mapping[str, Any] | None = None,
     semantic_graph: Mapping[str, Any] | SemanticGraph | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -247,6 +248,9 @@ def run_iterative_recovery_review(
     index = _normalize_functions(functions)
     known = set(index)
     seeds = _seed_ids(index, entry_point_ids)
+    candidate_seeds = sorted(
+        _normalize_ids(candidate_seed_ids, known) - set(seeds)
+    )
     normalized_rounds = _bound_int(max_rounds, DEFAULT_MAX_ROUNDS)
     site_budget = _optional_budget(max_sites, DEFAULT_MAX_SITES)
     per_round_budget = _optional_budget(max_sites_per_round, 50)
@@ -310,11 +314,13 @@ def run_iterative_recovery_review(
         "task": ROUND_TASK,
         "status": "complete",
         "entry_point_ids": seeds,
+        "candidate_seed_ids": candidate_seeds,
         "rounds": [],
         "graph": _empty_graph(),
         "errors": [],
         "summary": {
             "entry_points": len(seeds),
+            "candidate_seed_points": len(candidate_seeds),
             "worklist_sites": len(all_worklist),
             "rounds": 0,
             "sites_scheduled": 0,
@@ -350,7 +356,7 @@ def run_iterative_recovery_review(
     }
     summary = result["summary"]
 
-    if not seeds:
+    if not seeds and not candidate_seeds:
         result["status"] = "no_entry_points"
         summary["termination_reason"] = "no_entry_points"
         summary["unreviewed_sites"] = len(all_worklist)
@@ -363,7 +369,10 @@ def run_iterative_recovery_review(
         summary["termination_reason"] = "no_sites"
         return result
 
-    pending = set(seeds)
+    # Candidate seeds are a separate recall-first frontier.  They are allowed
+    # to schedule residual sites and traverse accepted edges, but are never
+    # written into ``entry_point_ids`` or promoted to strict roots.
+    pending = set(seeds) | set(candidate_seeds)
     expanded_functions: set[str] = set()
     processed_sites: set[str] = set()
     projected_pairs: set[tuple[str, str]] = set()

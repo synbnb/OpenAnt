@@ -236,11 +236,29 @@ def _normalise_edge(edge, *, source_key="source_id", target_key="target_id") -> 
         "target": target,
         "kind": _text(edge.get("kind"), 256),
     }
-    for key in ("confidence", "resolver_version", "edge_kinds", "is_new", "selector"):
+    for key in (
+        "confidence", "resolver_version", "edge_kinds", "is_new", "selector",
+        "site_id", "site_ids", "site_evidence", "evidence_quality",
+        "evidence_status", "reachability_tier", "call_site",
+    ):
         value = edge.get(key)
         if value not in (None, "", []):
             if isinstance(value, (str, int, float, bool, list)):
                 output[key] = value
+    attributes = edge.get("attributes")
+    if isinstance(attributes, Mapping):
+        # Projection stores the most useful call-site provenance under
+        # attributes. Preserve the bounded, JSON-safe fields in the report
+        # context so a disclosure can show the actual site rather than only
+        # the caller/callee pair. Do not copy arbitrary artifact keys.
+        for key in (
+            "site_id", "site_ids", "site_evidence", "evidence_quality",
+            "evidence_status", "reachability_tier", "call_site",
+        ):
+            value = attributes.get(key)
+            if value not in (None, "", []):
+                if isinstance(value, (str, int, float, bool, list, dict)):
+                    output[key] = value
     return output
 
 
@@ -288,7 +306,12 @@ def _load_optional_call_graphs(index: dict, scan_dir: Path, payload) -> None:
             candidate.relative_to(scan_dir.resolve())
         except ValueError:
             continue
-        _add_graph_functions(index, _read_json(candidate))
+        effective_candidate = candidate.parent / "effective_call_graph.json"
+        effective_payload = _read_json(effective_candidate)
+        _add_graph_functions(
+            index,
+            effective_payload if effective_payload is not None else _read_json(candidate),
+        )
 
 
 def load_report_context_index(scan_dir: str | Path) -> dict:
@@ -303,7 +326,10 @@ def load_report_context_index(scan_dir: str | Path) -> dict:
         "semantic_edges": [],
         "projected_edges": [],
         "graph_statistics": {},
+        "graph_source": None,
         "recovery_summary": {},
+        "ablation": {},
+        "callsite_ledger": {},
         "artifacts": [],
         "dataset_enhanced": False,
     }
@@ -315,9 +341,16 @@ def load_report_context_index(scan_dir: str | Path) -> dict:
             index["artifacts"].append(name)
         return payload
 
-    # Prefer the full native graph first; dataset origins then fill missing
-    # records and preserve agentic context from enhanced datasets.
-    _add_graph_functions(index, load("call_graph.json"))
+    # Prefer the audited effective graph when available.  It contains the
+    # native functions plus resolved call-site repairs and validated semantic
+    # edges; the immutable native graph remains a fallback for old scans.
+    effective_graph = load("effective_call_graph.json")
+    if effective_graph is not None:
+        _add_graph_functions(index, effective_graph)
+        index["graph_source"] = "effective_call_graph.json"
+    else:
+        _add_graph_functions(index, load("call_graph.json"))
+        index["graph_source"] = "call_graph.json"
     _load_optional_call_graphs(index, root, load("call_graphs.json"))
     enhanced = load("dataset_enhanced.json")
     if enhanced is not None:
@@ -326,14 +359,54 @@ def load_report_context_index(scan_dir: str | Path) -> dict:
     _add_dataset_units(index, load("dataset.json"))
     _add_semantic_edges(index, load("semantic_graph.json"))
     _add_projected_edges(index, load("dispatch_recovery_diff.json"))
+    ablation = load("llm_call_graph_ablation.json")
+    if isinstance(ablation, Mapping):
+        # Keep the complete target matrix and arm counters available to the
+        # disclosure/UI layer, but do not merge its diagnostic paths into the
+        # ordinary call graph.
+        index["ablation"] = {
+            key: value
+            for key, value in ablation.items()
+            if key in {"schema_version", "task", "processing_level", "fixed_input", "arms", "target_matrix"}
+        }
     residual = load("call_graph_residuals.json")
     if isinstance(residual, Mapping):
+        ledger = residual.get("callsite_ledger")
+        if isinstance(ledger, Mapping):
+            index["callsite_ledger"] = {
+                str(key): value
+                for key, value in ledger.items()
+                if isinstance(key, str)
+                and isinstance(value, (str, int, float, bool, list, dict))
+            }
         index["residual_summary"] = {
             "residual_site_count": len(residual.get("residual_sites", []) or []),
             "unresolved_count": len(residual.get("unresolved", []) or []),
+            "callsite_count": len(residual.get("call_sites", []) or []),
+            "callsite_graph_edge_missing": int(
+                (ledger or {}).get("graph_edge_missing", 0)
+            ) if isinstance(ledger, Mapping) else 0,
+            "callsite_dynamic_or_candidate": int(
+                (ledger or {}).get("dynamic_or_candidate_sites", 0)
+            ) if isinstance(ledger, Mapping) else 0,
         }
     else:
         index["residual_summary"] = {}
+    if not index["callsite_ledger"]:
+        ledger_payload = load("callsite_ledger.json")
+        if isinstance(ledger_payload, Mapping):
+            ledger = ledger_payload.get("callsite_ledger")
+            if isinstance(ledger, Mapping):
+                index["callsite_ledger"] = {
+                    str(key): value
+                    for key, value in ledger.items()
+                    if isinstance(key, str)
+                    and isinstance(value, (str, int, float, bool, list, dict))
+                }
+            if isinstance(ledger_payload.get("call_sites"), list):
+                index.setdefault("residual_summary", {})["callsite_count"] = len(
+                    ledger_payload["call_sites"]
+                )
     return index
 
 
@@ -499,6 +572,25 @@ def build_disclosure_context(
         assessment = full_result.get("verification_assessment") or finding.get("verification_assessment")
     if not isinstance(assessment, Mapping):
         assessment = {}
+    stage_context = full_result.get("stage_context") or finding.get("stage_context")
+    if not isinstance(stage_context, Mapping):
+        stage_context = {}
+    stage2_context = stage_context.get("stage2")
+    if not isinstance(stage2_context, Mapping):
+        stage2_context = {}
+    stage1_context = stage_context.get("stage1")
+    if not isinstance(stage1_context, Mapping):
+        stage1_context = {}
+    phase_dataflow_status = (
+        assessment.get("parameter_dataflow_status")
+        or stage2_context.get("parameter_dataflow_status")
+        or "not_evaluated"
+    )
+    phase_dataflow_missing = [
+        str(item)[:500]
+        for item in (stage2_context.get("missing_evidence") or [])[:12]
+        if item not in (None, "")
+    ]
 
     ordered_routes: list[str] = []
     path_routes: list[str] = []
@@ -526,6 +618,34 @@ def build_disclosure_context(
     for step in data_flow:
         for resolved in _references_from_text(step, functions, names):
             add_route(resolved, "path", path=True)
+
+    # Stage 2 is optional.  When it is disabled, preserve the source-backed
+    # Stage-1 structural entry path instead of reducing the disclosure to a
+    # target plus two-hop neighbourhood.  This is an execution path claim,
+    # not a parameter-taint proof; the report labels it as structural context.
+    structural_paths = []
+    for source in (
+        stage1_context.get("entry_path_ids"),
+        stage1_context.get("candidate_entry_path_ids"),
+        (full_result.get("reachability_context") or {}).get("primary_entry_path_ids")
+        if isinstance(full_result.get("reachability_context"), Mapping) else None,
+        (full_result.get("reachability_context") or {}).get("entry_path_ids")
+        if isinstance(full_result.get("reachability_context"), Mapping) else None,
+    ):
+        if not isinstance(source, list):
+            continue
+        for path in source:
+            if isinstance(path, list) and path:
+                structural_paths.append(path)
+    if not path_routes and structural_paths:
+        for token in structural_paths[0][:24]:
+            resolved = _resolve_reference(str(token), functions, names)
+            if resolved:
+                add_route(resolved, "entry" if not path_routes else "path", path=True)
+            elif token and len(unresolved) < MAX_UNRESOLVED_REFERENCES:
+                unresolved.append(str(token))
+        if not entry_text and path_routes:
+            entry_text = " -> ".join(path_routes)
 
     # Agentic context explicitly names downstream functions even when native
     # call-graph edges cannot cross a Binder/System Ability boundary.
@@ -644,6 +764,14 @@ def build_disclosure_context(
         # path data so report consumers can distinguish a confirmed defect
         # from a conditional/unknown route without parsing model prose.
         "assessment": dict(assessment),
+        "phase_context": {
+            "stage1": dict(stage_context.get("stage1") or {})
+            if isinstance(stage_context.get("stage1"), Mapping) else {},
+            "stage2": {
+                "parameter_dataflow_status": phase_dataflow_status,
+                "missing_evidence": phase_dataflow_missing,
+            },
+        },
         "call_chain": {
             "nodes": chain,
             "node_count": len(chain),
@@ -657,6 +785,7 @@ def build_disclosure_context(
             "projected_edges": projected_edges,
             "statistics": dict(index.get("graph_statistics", {})),
             "recovery_summary": dict(index.get("recovery_summary", {})),
+            "ablation": dict(index.get("ablation", {})),
             "coverage_note": coverage_note,
             "enhanced_dataset": bool(index.get("dataset_enhanced")),
         },

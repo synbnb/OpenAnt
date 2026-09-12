@@ -99,6 +99,7 @@ def cmd_scan(args):
             llm_reachability_max_code_bytes=getattr(
                 args, "llm_reachability_max_code_bytes", 1500
             ),
+            stop_after=getattr(args, "stop_after", None),
             llm_call_graph_recovery=getattr(
                 args, "llm_call_graph_recovery", False
             ),
@@ -114,6 +115,18 @@ def cmd_scan(args):
             openharmony_dispatch_code_evidence=getattr(
                 args, "openharmony_dispatch_code_evidence", False
             ),
+            clang_semantic=getattr(args, "clang_semantic", False),
+            clang_compile_commands=getattr(args, "clang_compile_commands", None),
+            clang_build_status=getattr(args, "clang_build_status", "compile_database"),
+            clang_max_files=getattr(args, "clang_max_files", 128),
+            clang_timeout_seconds=getattr(args, "clang_timeout_seconds", 30),
+            clang_auto_context=getattr(args, "clang_auto_context", True),
+            clang_batch_size=getattr(args, "clang_batch_size", 16),
+            clang_force_recompute=getattr(args, "clang_force_recompute", False),
+            clang_dependency_retry_attempts=getattr(args, "clang_dependency_retry_attempts", 1),
+            clang_dependency_retry_low_trust=getattr(args, "clang_dependency_retry_low_trust", False),
+            clang_definition_load_max_files=getattr(args, "clang_definition_load_max_files", 16),
+            scope_manifest=getattr(args, "scope_manifest", None),
         )
 
         scan_payload = result.to_dict()
@@ -137,6 +150,50 @@ def cmd_scan(args):
 
     except Exception as e:
         _output_json(error(str(e)))
+        return 2
+
+
+def cmd_socket_scope_discover(args):
+    """Use the agentic LLM to discover candidate scan roots for a socket target."""
+    from core.socket_scope import discover_socket_scope, write_scope_manifest
+
+    try:
+        payload = discover_socket_scope(
+            args.repo,
+            args.target,
+            max_candidates=args.max_candidates,
+            max_files=args.max_files,
+            max_file_bytes=args.max_file_bytes,
+            # Kept for CLI compatibility; socket-scope discovery is always
+            # agentic now and never falls back to deterministic ranking.
+            llm_rank=True,
+            llm_config=getattr(args, "llm_config", None),
+        )
+        if args.select:
+            from core.socket_scope import select_socket_scope
+            payload = select_socket_scope(payload, args.select)
+        if args.output:
+            write_scope_manifest(payload, args.output)
+        _output_json({"status": "success", "scope": payload, "output": args.output})
+        return 0
+    except Exception as exc:
+        _output_json({"status": "error", "errors": [str(exc)]})
+        return 2
+
+
+def cmd_socket_scope_select(args):
+    """Select a candidate in an existing socket scope manifest."""
+    from core.socket_scope import select_socket_scope, write_scope_manifest
+
+    try:
+        payload = read_json(args.manifest)
+        selected = select_socket_scope(payload, args.candidate_id)
+        output = args.output or args.manifest
+        write_scope_manifest(selected, output)
+        _output_json({"status": "success", "scope": selected, "output": output})
+        return 0
+    except Exception as exc:
+        _output_json({"status": "error", "errors": [str(exc)]})
         return 2
 
 
@@ -911,6 +968,7 @@ def _source_locator_runtime(args):
         return SourceLocatorRuntime(project_root=_source_locator_project_root(args))
     llm_planner = _source_locator_llm_planner(args)
     llm_role_attributor = _source_locator_llm_role_attributor(args)
+    llm_entrypoint_attributor = _source_locator_llm_entrypoint_attributor(args)
     llm_candidate_reviewer = _source_locator_llm_candidate_reviewer(args)
     return runtime_from_config(
         config_path,
@@ -919,6 +977,7 @@ def _source_locator_runtime(args):
         max_source_bytes=getattr(args, "max_source_bytes", None),
         llm_planner=llm_planner,
         llm_role_attributor=llm_role_attributor,
+        llm_entrypoint_attributor=llm_entrypoint_attributor,
         llm_candidate_reviewer=llm_candidate_reviewer,
     )
 
@@ -1067,6 +1126,54 @@ def _source_locator_llm_role_attributor(args):
         return LLMRoleAttributor(model_call=call)
     except Exception as exc:  # optional enhancement must never block locator
         print(f"source-locator LLM 角色复核不可用，继续确定性归因：{_compact_cli_error(exc)}", file=sys.stderr)
+        return None
+
+
+def _source_locator_llm_entrypoint_attributor(args):
+    """Build the optional semantic reviewer for concrete socket entrypoints.
+
+    This shares the configured provider with the other source-locator LLM
+    steps, while using a dedicated prompt/schema.  It is enabled by the
+    existing ``--llm-search`` switch so the Web and CLI paths keep one
+    explicit opt-in and deterministic runs make no extra model request.
+    """
+
+    if not bool(getattr(args, "llm_search", False)):
+        return None
+    os.environ.setdefault("OPENANT_OPENAI_REASONING_EFFORT", "low")
+    os.environ.setdefault("OPENANT_OPENAI_MIN_OUTPUT_TOKENS", "4096")
+    os.environ.setdefault("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", "120")
+    os.environ.setdefault("OPENANT_OPENAI_MAX_RETRIES", "0")
+    try:
+        from core.source_locator import LLMEntrypointAttributor
+        from core.source_locator.llm_entrypoint_attributor import ENTRYPOINT_ATTRIBUTION_SYSTEM
+        from utilities.llm import (
+            build_phase_registry,
+            load_config_file,
+            resolve_llm_config,
+            simple_text,
+        )
+
+        config_path = _source_locator_config_path(args)
+        config_file = load_config_file(Path(config_path))
+        llm_config = resolve_llm_config(config_file, getattr(args, "llm_config", None))
+        registry = build_phase_registry(config_file, llm_config)
+        try:
+            binding = registry.get("app_context")
+        except KeyError:
+            binding = registry.get("llm_reach")
+
+        def call(prompt: str):
+            return simple_text(
+                binding,
+                prompt,
+                system=ENTRYPOINT_ATTRIBUTION_SYSTEM,
+                max_tokens=4096,
+            )
+
+        return LLMEntrypointAttributor(model_call=call)
+    except Exception as exc:  # optional enhancement must never block locator
+        print(f"source-locator LLM 入口函数复核不可用，继续确定性筛选：{_compact_cli_error(exc)}", file=sys.stderr)
         return None
 
 
@@ -1604,6 +1711,86 @@ def cmd_exposure_surface_delete(args):
     try:
         _exposure_surface_store(args).delete(args.session_id)
         _output_json(success({"session_id": args.session_id, "deleted": True}))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+# ---------------------------------------------------------------------------
+# device-socket-inventory — device-scoped Agentic Socket asset discovery
+# ---------------------------------------------------------------------------
+
+def _device_socket_inventory_store(args):
+    from core.device_socket_inventory import DeviceSocketAssetStore
+
+    return DeviceSocketAssetStore(args.root)
+
+
+def cmd_device_socket_inventory_scan(args):
+    """让 Agent 动态选择只读 HDC 命令，生成当前设备的 Socket 资产快照。"""
+
+    from core.schemas import error, success
+    from core.device_socket_inventory import SocketInventoryConfig, run_socket_asset_discovery
+    from core.observability import print_chinese_log
+
+    try:
+        from core.exposure_surface import _resolve_exposure_llm_binding
+
+        print_chinese_log("设备 Socket 资产 Agent 开始准备设备身份和模型绑定")
+        binding = _resolve_exposure_llm_binding(getattr(args, "llm_config", None))
+        config = SocketInventoryConfig(
+            max_rounds=args.max_rounds,
+            max_commands=args.max_commands,
+            max_wall_seconds=args.max_wall_seconds,
+            command_timeout_seconds=args.command_timeout_seconds,
+            max_output_bytes=args.max_output_bytes,
+            rag_mode=args.rag_mode,
+        )
+        result = run_socket_asset_discovery(
+            args.root,
+            device_serial=args.device_serial,
+            hdc_path=args.hdc_path,
+            binding=binding,
+            llm_config_name=getattr(args, "llm_config", None),
+            config=config,
+            guide_path=args.guide_path,
+            resume_run_id=getattr(args, "resume_run", None),
+            run_id=getattr(args, "run_id", None),
+            task_goal=getattr(args, "task_goal", None),
+            event_callback=lambda stage, summary, details: print_chinese_log(summary, category=f"设备资产/{stage}"),
+        )
+        payload = dict(result)
+        payload.pop("trace", None)
+        payload.pop("commands", None)
+        payload["artifacts"] = {str(name): str(name) for name in result.get("artifacts", {})}
+        _output_json(success(payload))
+        return 0 if result.get("status") in {"complete", "partial"} else 2
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_device_socket_inventory_status(args):
+    from core.schemas import error, success
+
+    try:
+        payload = _device_socket_inventory_store(args).load(args.device_serial)
+        payload = dict(payload)
+        payload["artifacts"] = {str(name): str(name) for name in (payload.get("artifacts") or {})}
+        _output_json(success(payload))
+        return 0
+    except Exception as exc:
+        _output_json(error(str(exc)))
+        return 2
+
+
+def cmd_device_socket_inventory_list(args):
+    from core.schemas import error, success
+
+    try:
+        store = _device_socket_inventory_store(args)
+        _output_json(success({"root": str(store.root), "devices": store.list_devices()}))
         return 0
     except Exception as exc:
         _output_json(error(str(exc)))
@@ -2360,6 +2547,18 @@ def build_parser() -> argparse.ArgumentParser:
              "meaningful with --llm-reachability.",
     )
     scan_p.add_argument(
+        "--stop-after",
+        choices=["effective-call-graph", "llm-reachability", "openharmony-gap-tasks"],
+        default=None,
+        help=(
+            "Stop cleanly after the selected stage. Currently only "
+            "'effective-call-graph', 'llm-reachability' and "
+            "'openharmony-gap-tasks' are supported. The latter two stop before "
+            "the downstream enhancement/Stage 1 analysis unless the selected "
+            "stage has already completed."
+        ),
+    )
+    scan_p.add_argument(
         "--llm-call-graph-recovery",
         action="store_true",
         dest="llm_call_graph_recovery",
@@ -2414,6 +2613,117 @@ def build_parser() -> argparse.ArgumentParser:
             "enum/macro/constexpr source definitions. Writes an independent "
             "openharmony_dispatch_code_evidence.json artifact without "
             "modifying the call graph. Off by default."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-semantic",
+        action="store_true",
+        dest="clang_semantic",
+        help=(
+            "Run the bounded Clang AST fact extractor. The scanner first "
+            "reuses compile_commands.json or ninja -t compdb, then may "
+            "reconstruct candidate commands from BUILD.gn; validated facts "
+            "refresh the effective call graph and provenance is recorded."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-compile-commands",
+        default=None,
+        dest="clang_compile_commands",
+        help="Optional path to compile_commands.json for --clang-semantic.",
+    )
+    scan_p.add_argument(
+        "--clang-build-status",
+        choices=[
+            "compile_database",
+            "complete",
+            "manual_rebuild",
+            "reconstructed_candidate",
+            "unknown",
+        ],
+        default="compile_database",
+        dest="clang_build_status",
+        help=(
+            "Build-context provenance for Clang facts. compile_database/complete "
+            "can enter the concrete analysis graph; manual_rebuild, "
+            "reconstructed_candidate, and unknown stay candidate facts."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-max-files",
+        type=int,
+        default=128,
+        dest="clang_max_files",
+        help="Maximum translation units processed by --clang-semantic (default: 128).",
+    )
+    scan_p.add_argument(
+        "--clang-timeout-seconds",
+        type=int,
+        default=30,
+        dest="clang_timeout_seconds",
+        help="Per-translation-unit Clang timeout (default: 30).",
+    )
+    scan_p.add_argument(
+        "--clang-batch-size",
+        type=int,
+        default=16,
+        dest="clang_batch_size",
+        help=(
+            "Number of translation units per resumable Clang batch; progress "
+            "is checkpointed after each unit (default: 16)."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-force-recompute",
+        action="store_true",
+        dest="clang_force_recompute",
+        help="Ignore an existing clang_batch_checkpoint.json and rerun selected units.",
+    )
+    scan_p.add_argument(
+        "--clang-dependency-retries",
+        type=int,
+        default=1,
+        dest="clang_dependency_retry_attempts",
+        help=(
+            "Bounded retries for missing-header failures using locally found "
+            "candidate dependency include roots (default: 1)."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-dependency-retry-low-trust",
+        action="store_true",
+        dest="clang_dependency_retry_low_trust",
+        help=(
+            "Allow candidate include roots under test/mock directories; "
+            "facts remain candidate-only."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-definition-load-max-files",
+        type=int,
+        default=16,
+        dest="clang_definition_load_max_files",
+        help=(
+            "Maximum extra translation units loaded for unique declaration-to-"
+            "definition candidates (default: 16; 0 disables)."
+        ),
+    )
+    scan_p.add_argument(
+        "--clang-no-auto-context",
+        action="store_false",
+        dest="clang_auto_context",
+        help=(
+            "Disable automatic context discovery and BUILD.gn candidate "
+            "reconstruction; use only --clang-compile-commands."
+        ),
+    )
+    scan_p.add_argument(
+        "--scope-manifest",
+        default=None,
+        help=(
+            "Use a user-confirmed socket scan_scope.json. The selected scan_root "
+            "must be inside the repository; without this option the full repository "
+            "is preserved as the baseline."
         ),
     )
     scan_p.set_defaults(func=cmd_scan)
@@ -2758,6 +3068,35 @@ def build_parser() -> argparse.ArgumentParser:
         "source-locator",
         help="管理 OpenHarmony 源码定位 session（每次调用只执行一个状态操作）",
     )
+
+    # ---------------------------------------------------------------
+    # socket-scope — agentic socket-guided scan scope discovery
+    # ---------------------------------------------------------------
+    ss_p = subparsers.add_parser(
+        "socket-scope",
+        help="根据 Unix/TCP/UDP socket 源码证据发现并确认普通扫描范围",
+    )
+    ss_sub = ss_p.add_subparsers(dest="socket_scope_command", required=True)
+    ss_discover = ss_sub.add_parser("discover", help="发现候选服务目录和入口证据")
+    ss_discover.add_argument("--repo", required=True, help="本地源码仓库")
+    ss_discover.add_argument("--target", required=True, help="Unix socket 或 TCP/UDP endpoint")
+    ss_discover.add_argument("--output", "-o", required=True, help="写入 scan_scope.json")
+    ss_discover.add_argument("--select", default=None, help="可选：发现后直接确认 candidate_id")
+    # This flag was part of the previous deterministic-plus-ranking design.
+    # Accept it silently for old scripts, but it no longer toggles behaviour.
+    ss_discover.add_argument("--llm-rank", action="store_true", help=argparse.SUPPRESS)
+    ss_discover.add_argument("--llm-config", default=None, help="Socket 范围 agent 使用的 llm-config 名称")
+    ss_discover.add_argument("--max-candidates", type=int, default=8)
+    ss_discover.add_argument("--max-files", type=int, default=100000)
+    ss_discover.add_argument("--max-file-bytes", type=int, default=2 * 1024 * 1024)
+    ss_discover.set_defaults(func=cmd_socket_scope_discover)
+
+    ss_select = ss_sub.add_parser("select", help="确认已有 manifest 中的候选范围")
+    ss_select.add_argument("manifest", help="scan_scope.json")
+    ss_select.add_argument("--candidate-id", required=True)
+    ss_select.add_argument("--output", default=None, help="输出新 manifest；默认原地更新")
+    ss_select.set_defaults(func=cmd_socket_scope_select)
+
     sl_sub = sl_p.add_subparsers(dest="source_locator_command", required=True)
 
     sl_create = sl_sub.add_parser("create", help="创建源码定位 session")
@@ -3031,6 +3370,41 @@ def build_parser() -> argparse.ArgumentParser:
     es_delete.add_argument("session_id")
     es_delete.add_argument("--root", required=True)
     es_delete.set_defaults(func=cmd_exposure_surface_delete)
+
+    # ---------------------------------------------------------------
+    # device-socket-inventory — device-scoped Agentic asset database
+    # ---------------------------------------------------------------
+    dsi_p = subparsers.add_parser(
+        "device-socket-inventory",
+        help="由 Agent 动态侦查并维护每块开发板的 Socket 暴露面资产快照",
+    )
+    dsi_sub = dsi_p.add_subparsers(dest="device_socket_inventory_command", required=True)
+
+    dsi_scan = dsi_sub.add_parser("scan", help="运行一轮设备级 Agentic Socket 资产发现")
+    dsi_scan.add_argument("--root", required=True, help="设备资产数据库根目录")
+    dsi_scan.add_argument("--device-serial", default=None, help="可选 HDC serial；未提供时要求唯一在线设备")
+    dsi_scan.add_argument("--hdc-path", default=None, help=argparse.SUPPRESS)
+    dsi_scan.add_argument("--llm-config", default=None, help="设备资产 Agent 使用的模型配置名")
+    dsi_scan.add_argument("--guide-path", default=None, help="可选的单文件 OpenHarmony 命令指南")
+    dsi_scan.add_argument("--task-goal", default=None, help="用户自定义开发板只读侦查任务；留空为扫描所有 Socket 暴露面")
+    dsi_scan.add_argument("--resume-run", default=None, help="从同一设备的未完成 run 恢复任务树和证据")
+    dsi_scan.add_argument("--run-id", default=None, help="由调用方预先分配的安全 run ID，便于订阅实时进度")
+    dsi_scan.add_argument("--rag-mode", choices=("off", "local"), default="local")
+    dsi_scan.add_argument("--max-rounds", type=int, default=24)
+    dsi_scan.add_argument("--max-commands", type=int, default=96)
+    dsi_scan.add_argument("--max-wall-seconds", type=int, default=20 * 60)
+    dsi_scan.add_argument("--command-timeout-seconds", type=int, default=30)
+    dsi_scan.add_argument("--max-output-bytes", type=int, default=1 << 20)
+    dsi_scan.set_defaults(func=cmd_device_socket_inventory_scan)
+
+    dsi_status = dsi_sub.add_parser("status", help="读取一块设备的最新 Socket 资产快照")
+    dsi_status.add_argument("--root", required=True)
+    dsi_status.add_argument("--device-serial", required=True)
+    dsi_status.set_defaults(func=cmd_device_socket_inventory_status)
+
+    dsi_list = dsi_sub.add_parser("list", help="列出资产数据库中的设备快照")
+    dsi_list.add_argument("--root", required=True)
+    dsi_list.set_defaults(func=cmd_device_socket_inventory_list)
 
     return parser
 

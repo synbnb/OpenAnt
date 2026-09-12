@@ -41,6 +41,7 @@ var (
 	scanLevel                       string
 	scanVerify                      bool
 	scanNoContext                   bool
+	scanScopeManifest               string
 	scanNoEnhance                   bool
 	scanEnhanceMode                 string
 	scanNoReport                    bool
@@ -62,6 +63,14 @@ var (
 	scanLLMCallGraphIterative       bool
 	scanLLMCallGraphCandidateReview bool
 	scanLLMCallGraphProjection      bool
+	scanClangSemantic               bool
+	scanClangCompileCommands        string
+	scanClangBuildStatus            string
+	scanClangMaxFiles               int
+	scanClangTimeoutSeconds         int
+	scanClangBatchSize              int
+	scanClangDependencyRetries      int
+	scanClangDefinitionLoadMaxFiles int
 	scanLibraryMode                 bool
 )
 
@@ -79,6 +88,7 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&scanLevel, "level", "reachable", "Processing level: all, reachable, codeql, exploitable")
 	cmd.Flags().BoolVar(&scanVerify, "verify", false, "Enable Stage 2 attacker simulation")
 	cmd.Flags().BoolVar(&scanNoContext, "no-context", false, "Skip application context generation")
+	cmd.Flags().StringVar(&scanScopeManifest, "scope-manifest", "", "Use a user-confirmed socket scan_scope.json to narrow a local repository scan")
 	cmd.Flags().BoolVar(&scanNoEnhance, "no-enhance", false, "Skip context enhancement step")
 	cmd.Flags().StringVar(&scanEnhanceMode, "enhance-mode", "agentic", "Enhancement mode: agentic (thorough) or single-shot (fast)")
 	cmd.Flags().BoolVar(&scanNoReport, "no-report", false, "Skip report generation")
@@ -100,6 +110,14 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&scanLLMCallGraphIterative, "llm-call-graph-iterative-recovery", false, "Enable the entry-driven, bounded multi-round OpenHarmony indirect-call recovery. Writes llm_call_graph_recovery_rounds.json without modifying the native call graph.")
 	cmd.Flags().BoolVar(&scanLLMCallGraphCandidateReview, "llm-call-graph-candidate-review", false, "Enable the advisory OpenHarmony candidate-edge review. Writes llm_call_graph_candidate_review.json without modifying the native call graph.")
 	cmd.Flags().BoolVar(&scanLLMCallGraphProjection, "llm-call-graph-projection", false, "Project validated high-confidence OpenHarmony recovery decisions into llm_call_graph_overlay.json and, for reachable scans, use it in a promote-only BFS re-filter. The native call graph is never rewritten.")
+	cmd.Flags().BoolVar(&scanClangSemantic, "clang-semantic", false, "Enable bounded Clang semantic extraction for OpenHarmony C/C++ call facts.")
+	cmd.Flags().StringVar(&scanClangCompileCommands, "clang-compile-commands", "", "Optional compile_commands.json path for --clang-semantic.")
+	cmd.Flags().StringVar(&scanClangBuildStatus, "clang-build-status", "compile_database", "Clang build-context provenance: compile_database, complete, manual_rebuild, reconstructed_candidate, or unknown.")
+	cmd.Flags().IntVar(&scanClangMaxFiles, "clang-max-files", 128, "Maximum translation units processed by Clang.")
+	cmd.Flags().IntVar(&scanClangTimeoutSeconds, "clang-timeout-seconds", 30, "Per-translation-unit Clang timeout in seconds.")
+	cmd.Flags().IntVar(&scanClangBatchSize, "clang-batch-size", 16, "Number of translation units per resumable Clang batch.")
+	cmd.Flags().IntVar(&scanClangDependencyRetries, "clang-dependency-retries", 1, "Bounded retries for missing-header dependency discovery.")
+	cmd.Flags().IntVar(&scanClangDefinitionLoadMaxFiles, "clang-definition-load-max-files", 16, "Maximum extra translation units loaded for declaration-to-definition candidates.")
 	cmd.Flags().BoolVar(&scanLibraryMode, "library-mode", false, "Seed the exported public API as reachability entry points, for a library whose public API is being dropped by the structural filter. Blunt: keeps most units — prefer letting fuzz/bin/route entry points seed reachability first.")
 }
 
@@ -218,6 +236,9 @@ func runScan(cmd *cobra.Command, args []string) {
 	if scanNoContext {
 		pyArgs = append(pyArgs, "--no-context")
 	}
+	if scanScopeManifest != "" {
+		pyArgs = append(pyArgs, "--scope-manifest", scanScopeManifest)
+	}
 	if scanNoEnhance {
 		pyArgs = append(pyArgs, "--no-enhance")
 	}
@@ -258,6 +279,7 @@ func runScan(cmd *cobra.Command, args []string) {
 		pyArgs = append(pyArgs, "--llm-reachability-max-code-bytes", fmt.Sprintf("%d", scanLLMReachabilityMaxCodeBytes))
 	}
 	pyArgs = appendScanLLMCallGraphPyArgs(pyArgs)
+	pyArgs = appendScanClangPyArgs(pyArgs)
 
 	// Pass repository metadata from project context so reports don't show
 	// [NOT PROVIDED] placeholders.
@@ -320,6 +342,38 @@ func appendScanLLMCallGraphPyArgs(pyArgs []string) []string {
 	}
 	if scanLLMCallGraphProjection {
 		pyArgs = append(pyArgs, "--llm-call-graph-projection")
+	}
+	return pyArgs
+}
+
+// appendScanClangPyArgs forwards the bounded Clang options to the Python
+// scanner. Clang remains opt-in so existing CLI scans keep their historical
+// cost and semantics.
+func appendScanClangPyArgs(pyArgs []string) []string {
+	if !scanClangSemantic {
+		return pyArgs
+	}
+	pyArgs = append(pyArgs, "--clang-semantic")
+	if scanClangCompileCommands != "" {
+		pyArgs = append(pyArgs, "--clang-compile-commands", scanClangCompileCommands)
+	}
+	if scanClangBuildStatus != "" && scanClangBuildStatus != "compile_database" {
+		pyArgs = append(pyArgs, "--clang-build-status", scanClangBuildStatus)
+	}
+	if scanClangMaxFiles != 128 {
+		pyArgs = append(pyArgs, "--clang-max-files", fmt.Sprintf("%d", scanClangMaxFiles))
+	}
+	if scanClangTimeoutSeconds != 30 {
+		pyArgs = append(pyArgs, "--clang-timeout-seconds", fmt.Sprintf("%d", scanClangTimeoutSeconds))
+	}
+	if scanClangBatchSize != 16 {
+		pyArgs = append(pyArgs, "--clang-batch-size", fmt.Sprintf("%d", scanClangBatchSize))
+	}
+	if scanClangDependencyRetries != 1 {
+		pyArgs = append(pyArgs, "--clang-dependency-retries", fmt.Sprintf("%d", scanClangDependencyRetries))
+	}
+	if scanClangDefinitionLoadMaxFiles != 16 {
+		pyArgs = append(pyArgs, "--clang-definition-load-max-files", fmt.Sprintf("%d", scanClangDefinitionLoadMaxFiles))
 	}
 	return pyArgs
 }

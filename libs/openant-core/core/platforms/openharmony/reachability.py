@@ -30,6 +30,10 @@ SEMANTIC_REACHABILITY_EDGE_KINDS = frozenset(
         # projection boundary checks caller/target membership, confidence,
         # and source-backed evidence before this edge can reach BFS.
         "llm_confirmed_indirect_call",
+        # Produced only by the explicit Clang semantic sidecar validator.  It
+        # is kept distinct from native Tree-sitter edges so reports can show
+        # which resolver supplied the relation.
+        "clang_direct_call",
     }
 )
 
@@ -93,7 +97,11 @@ def build_semantic_reachability_overlay(
         if _function_id(node_id) in known
     }
 
-    adjacency: Dict[str, list[Tuple[str, str]]] = {}
+    # Keep edge attributes alongside the endpoint/kind.  The previous
+    # projection only retained the path kind, which made it impossible for
+    # the caller to distinguish a source-supported strict edge from a
+    # reference-only LLM candidate after the path was collapsed.
+    adjacency: Dict[str, list[Tuple[str, str, Mapping[str, Any]]]] = {}
     used_kinds: Set[str] = set()
     for edge in semantic_graph.get("edges", []) or []:
         if not isinstance(edge, Mapping):
@@ -113,7 +121,12 @@ def build_semantic_reachability_overlay(
         ):
             result["invalid_endpoint_count"] += 1
             continue
-        adjacency.setdefault(source_id, []).append((target_id, kind))
+        attributes = edge.get("attributes", {})
+        if not isinstance(attributes, Mapping):
+            attributes = {}
+        adjacency.setdefault(source_id, []).append(
+            (target_id, kind, dict(attributes))
+        )
         used_kinds.add(kind)
 
     if not strict_nodes:
@@ -124,7 +137,7 @@ def build_semantic_reachability_overlay(
         function_nodes = {
             endpoint
             for source_id, targets in adjacency.items()
-            for endpoint in [source_id, *(target for target, _ in targets)]
+            for endpoint in [source_id, *(target for target, _, _ in targets)]
             if _function_id(endpoint) in known
         }
 
@@ -144,12 +157,12 @@ def build_semantic_reachability_overlay(
         transaction_nodes.update(
             endpoint
             for source_id, targets in adjacency.items()
-            for endpoint in [source_id, *(target for target, _ in targets)]
+            for endpoint in [source_id, *(target for target, _, _ in targets)]
             if isinstance(endpoint, str) and endpoint.startswith("idl:transaction:")
         )
     external_entry_points: Set[str] = set()
     for transaction_id in sorted(transaction_nodes):
-        for target, kind in adjacency.get(transaction_id, []):
+        for target, kind, _attributes in adjacency.get(transaction_id, []):
             if kind != "transaction_to_handler":
                 continue
             target_id = _function_id(target)
@@ -159,7 +172,10 @@ def build_semantic_reachability_overlay(
 
     # Keep the chosen path deterministic when a resolver emits duplicate or
     # competing evidence for the same pair.
-    selected: Dict[Tuple[str, str], Tuple[int, Tuple[str, ...]]] = {}
+    selected: Dict[
+        Tuple[str, str],
+        Tuple[int, Tuple[str, ...], dict[str, Any]],
+    ] = {}
     for source_node in sorted(function_nodes):
         source_id = _function_id(source_node)
         if source_id is None:
@@ -170,7 +186,10 @@ def build_semantic_reachability_overlay(
             current, path_kinds = queue.popleft()
             if len(path_kinds) >= max_depth:
                 continue
-            for target, kind in sorted(adjacency.get(current, [])):
+            for target, kind, attributes in sorted(
+                adjacency.get(current, []),
+                key=lambda item: (item[0], item[1], repr(sorted(item[2].items()))),
+            ):
                 next_kinds = path_kinds + (kind,)
                 state = (target, next_kinds)
                 if state in visited:
@@ -179,23 +198,29 @@ def build_semantic_reachability_overlay(
                 target_id = _function_id(target)
                 if target_id in known and target_id != source_id:
                     pair = (source_id, target_id)
-                    candidate = (len(next_kinds), next_kinds)
+                    candidate = (len(next_kinds), next_kinds, dict(attributes))
                     previous = selected.get(pair)
-                    if previous is None or candidate < previous:
+                    if previous is None or (candidate[0], candidate[1]) < (
+                        previous[0], previous[1]
+                    ):
                         selected[pair] = candidate
                     # A function endpoint is a native boundary.  Do not walk
                     # through it to invent longer, transitive semantic calls.
                     continue
                 queue.append((target, next_kinds))
 
-    overlay_edges = [
-        {
+    overlay_edges = []
+    for (source_id, target_id), (_, path_kinds, attributes) in sorted(
+        selected.items()
+    ):
+        edge = {
             "source_id": source_id,
             "target_id": target_id,
             "edge_kinds": list(path_kinds),
         }
-        for (source_id, target_id), (_, path_kinds) in sorted(selected.items())
-    ]
+        if attributes:
+            edge["attributes"] = dict(attributes)
+        overlay_edges.append(edge)
     result["edges"] = overlay_edges
     result["candidate_edges"] = len(overlay_edges)
     result["edge_kinds"] = sorted(used_kinds)

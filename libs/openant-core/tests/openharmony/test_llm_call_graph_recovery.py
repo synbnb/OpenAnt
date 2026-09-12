@@ -17,6 +17,7 @@ from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     build_recovery_prompt,
     build_recovery_worklist,
     classify_recovery_site,
+    _diagnostics_for_batch,
     parse_recovery_response,
     run_recovery_review,
     validate_recovery_proposals,
@@ -156,6 +157,111 @@ def test_worklist_focuses_on_candidate_less_sites_and_prioritizes_boundaries():
     )
     assert len(filtered) == 1
     assert filtered[0]["source"] == "native"
+
+
+def test_callsite_ledger_is_reviewed_even_when_parser_residuals_are_empty():
+    diagnostics = {
+        "unresolved_call_sites": [],
+        "callsite_ledger": {
+            "total_call_sites": 1,
+            "graph_edge_missing": 1,
+        },
+        "call_sites": [
+            {
+                "site_id": "callsite:member-get-result",
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line_start": 12,
+                "expression": "controlCallCmd.GetResult(vec)",
+                "call_kind": "member",
+                "binding_status": "resolved",
+                "dispatch_status": "not_applicable",
+                "scope_status": "in_scope",
+                "build_status": "complete",
+                "parse_status": "complete",
+                "candidate_target_ids": [HANDLER],
+                "linked_target_ids": [],
+                "graph_status": "edge_missing",
+            }
+        ],
+    }
+
+    worklist = build_recovery_worklist(
+        diagnostics,
+        _functions(),
+        max_sites=-1,
+        include_candidate_sites=False,
+    )
+
+    assert len(worklist) == 1
+    assert worklist[0]["site_id"] == "callsite:member-get-result"
+    assert worklist[0]["source_records"] == ["callsite_ledger"]
+    assert worklist[0]["callsite_ledger_status"]["graph_status"] == "edge_missing"
+    assert worklist[0]["candidate_completeness"] == "unknown"
+
+
+def test_ledger_and_residual_observations_for_one_site_are_merged():
+    site_id = "callsite:shared"
+    diagnostics = {
+        "unresolved_call_sites": [
+            {
+                "site_id": site_id,
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line": 12,
+                "expression": "controlCallCmd.GetResult(vec)",
+                "candidate_target_ids": [],
+                "reason": "parser residual",
+            }
+        ],
+        "call_sites": [
+            {
+                "site_id": site_id,
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line_start": 12,
+                "expression": "controlCallCmd.GetResult(vec)",
+                "candidate_target_ids": [HANDLER],
+                "linked_target_ids": [],
+                "binding_status": "resolved",
+                "dispatch_status": "not_applicable",
+                "graph_status": "edge_missing",
+            }
+        ],
+    }
+
+    worklist = build_recovery_worklist(
+        diagnostics, _functions(), max_sites=-1, include_candidate_sites=False
+    )
+
+    assert len(worklist) == 1
+    assert worklist[0]["duplicate_count"] == 2
+    assert worklist[0]["source_records"] == ["callsite_ledger"]
+    assert worklist[0]["candidate_target_ids"] == [HANDLER]
+
+
+def test_batch_selection_keeps_site_id_backed_residual_source_context():
+    site_id = "callsite:stable-residual"
+    diagnostics = {
+        "unresolved_call_sites": [
+            {
+                "site_id": site_id,
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line": 12,
+                "expression": "return dispatchHandler(data);",
+                "candidate_target_ids": [],
+            }
+        ]
+    }
+    worklist = build_recovery_worklist(
+        diagnostics, _functions(), max_sites=-1
+    )
+    assert len(worklist) == 1
+
+    selected = _diagnostics_for_batch(diagnostics, worklist)
+    assert selected["unresolved_call_sites"]
+    assert selected["unresolved_call_sites"][0]["site_id"] == site_id
 
 
 def test_prompt_uses_length_aware_fence_for_untrusted_residual_text():

@@ -387,7 +387,10 @@ class TestApplySignals:
     def test_high_confidence_entry_point_promotes(self):
         dataset = {"units": [_make_unit("a:f", is_entry_point=False)]}
         sigs = [
-            ReachabilitySignal("a:f", "entry_point", "high", "framework hook")
+            ReachabilitySignal(
+                "a:f", "entry_point", "high", "framework hook",
+                boundary="queue", evidence_excerpt="registered framework hook",
+            )
         ]
         summary = apply_signals(dataset, sigs)
         assert dataset["units"][0]["is_entry_point"] is True
@@ -447,7 +450,7 @@ class TestApplySignals:
         assert summary["semantic_retain_only_ids"] == ["a:f"]
         assert summary["retained_only"] == 1
 
-    def test_medium_cross_process_is_retained_without_bfs_seed(self):
+    def test_medium_cross_process_is_candidate_bfs_seed(self):
         dataset = {"units": [_make_unit("a:f")]}
         signal = ReachabilitySignal(
             "a:f", "cross_process", "medium", "maybe receives a queue message",
@@ -461,8 +464,9 @@ class TestApplySignals:
         assert summary["semantic_retain_only_ids"] == ["a:f"]
         assert summary["retained_only_counts"]["cross_process"] == 1
         assert unit["llm_reachability_signals"][0]["seed_status"] == "reachable_only"
+        assert unit["semantic_reachability_candidate_seed"] is True
 
-    def test_medium_entry_point_is_retained_without_bfs_seed(self):
+    def test_medium_entry_point_is_candidate_bfs_seed_without_promotion(self):
         dataset = {"units": [_make_unit("a:f", is_entry_point=False)]}
         summary = apply_signals(dataset, [
             ReachabilitySignal("a:f", "entry_point", "medium", "possible hook")
@@ -474,6 +478,7 @@ class TestApplySignals:
         assert summary["reachable_only_ids"] == ["a:f"]
         assert summary["semantic_retain_only_ids"] == []
         assert unit["llm_reachability_signals"][0]["seed_status"] == "reachable_only"
+        assert unit["semantic_reachability_candidate_seed"] is True
 
     def test_multiple_signals_accumulate_on_same_unit(self):
         dataset = {"units": [_make_unit("a:f")]}
@@ -518,7 +523,7 @@ class TestApplySignals:
         assert unit["llm_reachability_signals"][0]["evidence_status"] == "provided"
         assert unit["llm_reachability_signals"][0]["seed_status"] == "accepted_seed"
 
-    def test_high_external_input_without_source_evidence_becomes_semantic_seed(self):
+    def test_high_external_input_without_source_evidence_is_review_only(self):
         dataset = {"units": [_make_unit("a:f", code="void f(int input) {}") ]}
         sigs = [ReachabilitySignal(
             "a:f", "external_input", "high", "parameter named input",
@@ -526,10 +531,10 @@ class TestApplySignals:
         )]
         summary = apply_signals(dataset, sigs)
         unit = dataset["units"][0]
-        assert unit["semantic_reachability_seed"] is True
-        assert summary["semantic_seed_ids"] == ["a:f"]
+        assert "semantic_reachability_seed" not in unit
+        assert summary["semantic_seed_ids"] == []
         record = unit["llm_reachability_signals"][0]
-        assert record["seed_status"] == "accepted_seed"
+        assert record["seed_status"] == "review_only"
         assert record["evidence_status"] == "missing"
 
     def test_high_external_input_with_model_only_excerpt_becomes_semantic_seed(self):
@@ -547,7 +552,7 @@ class TestApplySignals:
         assert record["seed_status"] == "accepted_seed"
         assert record["evidence_status"] == "provided"
 
-    def test_high_cross_process_with_any_direction_becomes_seed(self):
+    def test_high_cross_process_requires_inbound_direction(self):
         code = "void f() { MessageParcel data; data.ReadInt32(); }"
         receive = ReachabilitySignal(
             "a:receive", "cross_process", "high", "binder receive",
@@ -566,13 +571,13 @@ class TestApplySignals:
             ]
         }
         summary = apply_signals(dataset, [receive, send])
-        assert summary["semantic_seed_ids"] == ["a:receive", "a:send"]
-        assert summary["seed_counts"]["cross_process"] == 2
+        assert summary["semantic_seed_ids"] == ["a:receive"]
+        assert summary["seed_counts"]["cross_process"] == 1
         assert summary["seed_counts"]["cross_process_receive"] == 1
         assert dataset["units"][0]["semantic_reachability_seed"] is True
-        assert dataset["units"][1]["semantic_reachability_seed"] is True
+        assert dataset["units"][1]["llm_reachability_signals"][0]["seed_status"] == "review_only"
 
-    def test_high_cross_process_unknown_direction_with_verified_evidence_becomes_seed(self):
+    def test_high_cross_process_unknown_direction_is_review_only(self):
         code = "void f() { auto *pipe = popen(cmd.c_str(), \"r\"); fgets(buf, n, pipe); }"
         signal = ReachabilitySignal(
             "a:f", "cross_process", "high", "child-process pipe",
@@ -581,10 +586,10 @@ class TestApplySignals:
         )
         dataset = {"units": [_make_unit("a:f", code=code)]}
         summary = apply_signals(dataset, [signal])
-        assert summary["semantic_seed_ids"] == ["a:f"]
+        assert summary["semantic_seed_ids"] == []
         record = dataset["units"][0]["llm_reachability_signals"][0]
-        assert record["seed_status"] == "accepted_seed"
-        assert record["seed_reason"] == "high-confidence semantic signal"
+        assert record["seed_status"] == "review_only"
+        assert record["seed_reason"] == "cross-process signal is not confirmed as inbound"
 
     def test_duplicate_signals_keep_stronger_confidence(self):
         dataset = {"units": [_make_unit(

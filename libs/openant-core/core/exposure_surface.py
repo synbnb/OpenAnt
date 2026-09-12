@@ -369,8 +369,9 @@ def _default_runner(argv: list[str], timeout: int) -> tuple[int, str, str]:
 class HDCClient:
     """受限的 HDC 调用器。
 
-    ``runner`` 只用于离线测试；生产环境使用参数数组调用 subprocess，且不
-    允许调用者传入任意命令。
+    ``runner`` 只用于离线测试；固定目标探测使用本模块的受限参数数组，设备
+    Socket Agent 则通过 ``run_agent`` 接收模型选择的单条远端观测命令。两条
+    路径都在主机侧使用 ``shell=False``，并统一执行超时、输出和控制字符检查。
     """
 
     def __init__(
@@ -495,6 +496,27 @@ def _parse_socket_stat(text: str, path: str) -> dict[str, str] | None:
             "group": parts[3] if len(parts) > 3 else "未知",
         }
     return None
+
+
+def _format_dac_permissions(stat_info: Mapping[str, Any] | None) -> str:
+    """以完整、可读且可追溯的形式展示 Unix socket 的 DAC 权限。
+
+    ``ls -l`` 的第一列同时包含文件类型和九位权限，例如
+    ``srw-rw-rw-``。此前摘要只显示由该字段换算出的 ``0666``，丢失了
+    设备实际返回的符号表示。这里保留两种表示，并将属主和属组放在同一
+    字段中，格式与暴露面示例保持一致。
+    """
+
+    if not isinstance(stat_info, Mapping):
+        return "未知"
+    mode_octal = str(stat_info.get("mode_octal") or "未知").strip()
+    mode_symbolic = str(stat_info.get("mode_symbolic") or "").strip()
+    owner = str(stat_info.get("owner") or "未知").strip()
+    group = str(stat_info.get("group") or "未知").strip()
+    if mode_octal in {"", "未知", "UNKNOWN", "待评估"}:
+        return "未知"
+    symbolic_part = f" ({mode_symbolic})" if mode_symbolic else ""
+    return f"{mode_octal}{symbolic_part}，属主:{owner}，属组:{group}"
 
 
 def _parse_selinux(text: str, path: str) -> str | None:
@@ -2816,11 +2838,7 @@ class ExposureCollector:
                     "套接字路径": path,
                     "套接字类型": socket_type,
                     "权限配置": {
-                        "DAC权限": (
-                            f"{mode_octal}（属主:{owner}，属组:{group}）"
-                            if mode_octal != "未知"
-                            else "未知"
-                        ),
+                        "DAC权限": _format_dac_permissions(stat_info),
                         "SELinux标签": selinux_value,
                     },
                     "通信协议": "AF_UNIX",
@@ -3315,7 +3333,7 @@ class ExposureSessionStore:
         shutil.rmtree(directory)
 
 
-def _resolve_exposure_llm_binding() -> Any:
+def _resolve_exposure_llm_binding(llm_config_name: str | None = None) -> Any:
     """复用项目的 app_context 模型配置，不新增一套供应商配置。
 
     暴露面阶段的输出提取是单次文本调用，不需要工具循环，因此使用已有
@@ -3328,7 +3346,7 @@ def _resolve_exposure_llm_binding() -> Any:
     config_file = load_config_file()
     registry = build_phase_registry(
         config_file,
-        resolve_llm_config(config_file, None),
+        resolve_llm_config(config_file, llm_config_name),
     )
     return registry.get("app_context")
 

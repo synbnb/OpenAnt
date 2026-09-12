@@ -9,7 +9,8 @@ and decide, in a later stage, whether to merge it into an in-memory overlay.
 
 The extra checks in this module are intentionally independent of the model
 response parser.  A future caller may load a hand-edited or old recovery
-artifact, so projection must re-check endpoint IDs, candidate membership,
+artifact, so projection must re-check endpoint IDs and candidate membership
+(only when the parser proved the candidate set complete),
 confidence, source spans, and evidence before emitting an edge.
 """
 
@@ -48,6 +49,24 @@ _GENERIC_TOKENS = {
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def _candidate_completeness(value: Any) -> str:
+    """Normalize parser candidate-set completeness.
+
+    A residual parser shortlist is usually incomplete for virtual calls,
+    callbacks, factories, and generated dispatch tables.  Projection may use
+    it as a hard exclusion constraint only when the producer explicitly
+    marked it exhaustive.
+    """
+    return "complete" if _text(value).lower() in {"complete", "exhaustive"} else "unknown"
+
+
+def _candidate_set_is_complete(site: Mapping[str, Any]) -> bool:
+    return _candidate_completeness(
+        site.get("candidate_completeness")
+        or site.get("candidate_set_completeness")
+    ) == "complete"
 
 
 def _line(value: Any, default: int = 1) -> int:
@@ -234,6 +253,19 @@ def _target_evidence_valid(
     target_leaf = _leaf(target_name)
     if not target_leaf:
         return False
+    if kind == "type":
+        # A type quote is useful only when it identifies the same callable
+        # owner as the proposed target.  Merely mentioning a method leaf can
+        # come from an unrelated class or a second registration table.  For a
+        # free function there is no owner token to require, so the method leaf
+        # remains the available identity evidence.
+        owner = _owner(target)
+        text_lower = evidence_text.lower()
+        if target_leaf.lower() not in text_lower:
+            return False
+        if owner and owner.lower() not in text_lower:
+            return False
+        return True
     return target_leaf.lower() in evidence_text.lower()
 
 
@@ -270,6 +302,70 @@ def _valid_evidence(
     if not has_target:
         return False, "target_or_registration_evidence_not_source_backed"
     return True, ""
+
+
+def _evidence_quality(
+    evidence: Any,
+    *,
+    site: Mapping[str, Any],
+    target_id: str,
+    target: Mapping[str, Any],
+) -> str:
+    """Classify what the source evidence actually proves.
+
+    The local checks prove that quoted files/lines contain the referenced
+    text.  They do not, by themselves, prove that a dispatch registration or
+    receiver type binds the call site to the target.  Keep those two claims
+    separate so strict reachability can consume only relation-supported
+    edges, while reference-only decisions remain useful candidate evidence.
+    """
+    if not isinstance(evidence, list):
+        return "model_inferred"
+    target_name = _function_name(target_id, target)
+    target_leaf = _leaf(target_name).lower()
+    for entry in evidence:
+        if not isinstance(entry, Mapping):
+            continue
+        kind = _text(entry.get("kind"))
+        text = _normalize_ws(entry.get("text")).lower()
+        if kind == "registration":
+            registrations = site.get("candidate_registrations", [])
+            if isinstance(registrations, list):
+                for registration in registrations:
+                    if not isinstance(registration, Mapping):
+                        continue
+                    if _text(registration.get("target_id")) != target_id:
+                        continue
+                    source = registration.get("registration_evidence")
+                    if not isinstance(source, Mapping):
+                        continue
+                    source_text = _normalize_ws(source.get("text")).lower()
+                    if (
+                        source_text
+                        and text
+                        and (text in source_text or source_text in text)
+                    ):
+                        return "relation_supported"
+            # A registration quote not tied to a parser candidate is still a
+            # source reference, but its relationship remains model-inferred.
+            continue
+        if kind == "type" and target_leaf and target_leaf in text:
+            # Type/receiver evidence is stronger than a target definition
+            # quote only when it also names the target's owning class.  This
+            # prevents an unrelated class or dispatch table that happens to
+            # mention the same method leaf from becoming a strict edge.
+            owner = _owner(target).lower()
+            if not owner or owner in text:
+                return "type_supported"
+    # An exact target/function-id quote validates the reference, not the edge.
+    if any(
+        isinstance(entry, Mapping)
+        and _text(entry.get("kind")) == "target"
+        and _text(entry.get("function_id")) == target_id
+        for entry in evidence
+    ):
+        return "reference_validated"
+    return "model_inferred"
 
 
 def _orphan(
@@ -342,6 +438,9 @@ def project_recovery_overlay(
         "projected_edges": 0,
         "rejected": 0,
         "duplicate_edges": 0,
+        "strict_edges": 0,
+        "candidate_edges": 0,
+        "evidence_quality_counts": {},
         "edge_limit": edge_limit,
         "minimum_confidence": minimum_confidence,
     }
@@ -381,6 +480,7 @@ def project_recovery_overlay(
         target = index.get(target_id)
         reason = ""
         confidence = _text(proposal.get("confidence"))
+        evidence_quality = "model_inferred"
 
         if _text(proposal.get("decision")) != "add_edge":
             reason = "decision_is_not_add_edge"
@@ -411,7 +511,11 @@ def project_recovery_overlay(
             # is the only permitted target universe.  Keeping the two cases
             # distinct lets iterative recovery promote a source-backed target
             # without allowing the model to invent a function ID.
-            if candidate_ids and target_id not in candidate_ids:
+            if (
+                _candidate_set_is_complete(site)
+                and candidate_ids
+                and target_id not in candidate_ids
+            ):
                 reason = "target_not_in_site_candidates"
             elif target_id not in retrieval_ids:
                 reason = "target_not_in_retrieval_candidates"
@@ -425,16 +529,84 @@ def project_recovery_overlay(
                 )
                 if not valid:
                     reason = evidence_reason
+                else:
+                    evidence_quality = _evidence_quality(
+                        proposal.get("evidence"),
+                        site=site,
+                        target_id=target_id,
+                        target=target,
+                    )
 
         if reason:
             summary["rejected"] += 1
             rejected.append(_orphan(proposal=proposal, site=site, reason=reason))
             continue
 
+        # ``evidence_quality`` is intentionally persisted on every projected
+        # edge.  Older reports may not have it; their edges retain the legacy
+        # strict behaviour in the reachability adapter, while newly projected
+        # reference-only edges are explicitly candidate-tier.
+        reachability_tier = (
+            "strict"
+            if evidence_quality in {"relation_supported", "type_supported"}
+            else "candidate"
+        )
+
         pair = (caller_id, target_id)
         if pair in seen_edges:
             summary["duplicate_edges"] += 1
             summary["rejected"] += 1
+            # Function-level BFS deliberately de-duplicates the pair, but an
+            # audit must not lose a second call site, selector, or build
+            # condition that led to the same pair.  Merge the duplicate into
+            # the already projected SemanticGraph edge and retain the normal
+            # rejection record as an explicit decision trace.
+            edge_key = (
+                f"function:{caller_id}",
+                f"function:{target_id}",
+                EDGE_KIND,
+            )
+            existing_edge = graph.edges.get(edge_key)
+            if existing_edge is not None:
+                merged_attributes = dict(existing_edge.attributes)
+                site_ids = merged_attributes.get("site_ids", [])
+                if not isinstance(site_ids, list):
+                    site_ids = [site_ids] if site_ids else []
+                if site_id and site_id not in site_ids:
+                    site_ids.append(site_id)
+                merged_attributes["site_ids"] = site_ids
+                site_evidence = merged_attributes.get("site_evidence", [])
+                if not isinstance(site_evidence, list):
+                    site_evidence = []
+                if not any(
+                    isinstance(item, Mapping)
+                    and _text(item.get("site_id")) == site_id
+                    for item in site_evidence
+                ):
+                    site_evidence.append(
+                        {
+                            "site_id": site_id,
+                            "file": _text(site.get("file")),
+                            "line": _line(site.get("line")),
+                            "expression": _text(site.get("expression")),
+                            "evidence": copy.deepcopy(proposal.get("evidence", [])),
+                            "evidence_quality": evidence_quality,
+                            "model_confidence": confidence,
+                        }
+                    )
+                merged_attributes["site_evidence"] = site_evidence
+                graph.add_edge(
+                    {
+                        "schema_version": PROJECTION_SCHEMA_VERSION,
+                        "source_id": edge_key[0],
+                        "target_id": edge_key[1],
+                        "kind": edge_key[2],
+                        "evidence": copy.deepcopy(proposal.get("evidence", [])),
+                        "confidence": 0.95,
+                        "resolver_version": RESOLVER_VERSION,
+                        "attributes": merged_attributes,
+                    }
+                )
             rejected.append(_orphan(proposal=proposal, site=site, reason="duplicate_edge"))
             continue
         if summary["projected_edges"] >= edge_limit:
@@ -471,8 +643,34 @@ def project_recovery_overlay(
                 "resolver_version": RESOLVER_VERSION,
                 "attributes": {
                     "site_id": site_id,
+                    "site_ids": [site_id],
+                    "site_evidence": [
+                        {
+                            "site_id": site_id,
+                            "file": _text(site.get("file")),
+                            "line": _line(site.get("line")),
+                            "expression": _text(site.get("expression")),
+                            "evidence": copy.deepcopy(proposal.get("evidence", [])),
+                            "evidence_quality": evidence_quality,
+                            "model_confidence": confidence,
+                        }
+                    ],
                     "source": "llm_recovery",
                     "model_confidence": confidence,
+                    "evidence_quality": evidence_quality,
+                    "evidence_status": "source_references_verified",
+                    "reachability_tier": reachability_tier,
+                    "validation_record": {
+                        "id": (
+                            "llm-projection:"
+                            + (site_id or f"{caller_id}->{target_id}")
+                        ),
+                        "status": "accepted",
+                        "validator": "openharmony_llm_call_graph_projection",
+                    },
+                    "candidate_completeness": _candidate_completeness(
+                        site.get("candidate_completeness")
+                    ),
                     "reason": _text(proposal.get("reason"))[:500],
                     "call_site": {
                         "file": _text(site.get("file")),
@@ -483,6 +681,12 @@ def project_recovery_overlay(
             }
         )
         summary["projected_edges"] += 1
+        if reachability_tier == "strict":
+            summary["strict_edges"] += 1
+        else:
+            summary["candidate_edges"] += 1
+        quality_counts = summary["evidence_quality_counts"]
+        quality_counts[evidence_quality] = quality_counts.get(evidence_quality, 0) + 1
 
     payload = graph.to_dict()
     status = "complete" if summary["projected_edges"] or not summary["accepted_input"] else "partial"

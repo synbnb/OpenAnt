@@ -102,6 +102,68 @@ func TestRecoverJobsHardening(t *testing.T) {
 	}
 }
 
+// A completed Python pipeline remains a completed scan when the Web-owned HTML
+// rendering step was interrupted.  The aggregate scan report and Markdown
+// artifacts are sufficient to restore the session and keep its results visible.
+func TestRecoverJobsUsesAggregateReportWithoutHTML(t *testing.T) {
+	dir := t.TempDir()
+	jobID := "0123456789abcdef"
+	jobDir := filepath.Join(dir, jobID)
+	if err := os.MkdirAll(filepath.Join(jobDir, "report", "disclosures"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "scan.report.json"), []byte(`{"status":"success"}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"), []byte("# summary"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "report", "disclosures", "DISCLOSURE_01.md"), []byte("# finding"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{outDir: dir, mgr: newManager(dir)}
+	s.recoverJobs()
+	job, ok := s.mgr.get(jobID)
+	if !ok {
+		t.Fatalf("job %s was not recovered", jobID)
+	}
+	if job.Status != StatusDone {
+		t.Fatalf("status = %q, want %q", job.Status, StatusDone)
+	}
+	if job.ReportPath != "" {
+		t.Fatalf("missing HTML should leave ReportPath empty, got %q", job.ReportPath)
+	}
+	if job.SummaryPath == "" || len(job.DisclosurePaths) != 1 {
+		t.Fatalf("recovered artifacts = summary %q disclosures %v", job.SummaryPath, job.DisclosurePaths)
+	}
+}
+
+// A recently updated in-progress checkpoint represents an active scan even if
+// the process was started outside the current Web instance and has not written
+// its final aggregate report yet.
+func TestRecoverJobsRecognizesRecentCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	jobID := "fedcba9876543210"
+	jobDir := filepath.Join(dir, jobID, "analyze_checkpoints")
+	if err := os.MkdirAll(jobDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "_summary.json"), []byte(`{"phase":"in_progress"}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{outDir: dir, mgr: newManager(dir)}
+	s.recoverJobs()
+	job, ok := s.mgr.get(jobID)
+	if !ok {
+		t.Fatalf("job %s was not recovered", jobID)
+	}
+	if job.Status != StatusRunning {
+		t.Fatalf("status = %q, want %q", job.Status, StatusRunning)
+	}
+}
+
 // handleDeleteScan must wait for the runner (done) to stop before RemoveAll, so
 // a late write can't resurrect the deleted job. A recovered job (done==nil)
 // deletes immediately.

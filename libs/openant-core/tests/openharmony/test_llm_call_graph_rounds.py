@@ -310,3 +310,35 @@ def test_missing_entry_points_never_invokes_model():
     assert report["status"] == "no_entry_points"
     assert report["summary"]["termination_reason"] == "no_entry_points"
     assert calls == []
+
+
+def test_medium_candidate_seed_can_schedule_recovery_without_strict_root():
+    functions = _functions()
+    for function in functions.values():
+        function.pop("is_entry_point", None)
+    diagnostics = {
+        "unresolved_call_sites": [
+            {
+                "caller_id": HANDLER,
+                "file": SOURCE,
+                "line": 22,
+                "expression": "return finishHandler(data);",
+                "reason": "unknown_function_pointer",
+                "candidate_target_ids": [],
+            }
+        ]
+    }
+    report = run_iterative_recovery_review(
+        diagnostics,
+        functions,
+        candidate_seed_ids=[HANDLER],
+        completion=_completion_for(functions, diagnostics),
+        max_rounds=2,
+        retry_backoff_seconds=0,
+    )
+
+    assert report["status"] == "complete"
+    assert report["entry_point_ids"] == []
+    assert report["candidate_seed_ids"] == [HANDLER]
+    assert report["rounds"][0]["frontier_function_ids"] == [HANDLER]
+    assert report["summary"]["sites_scheduled"] == 1

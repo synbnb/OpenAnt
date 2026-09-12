@@ -76,16 +76,43 @@
   .intro { padding: 6px 4px 24px; }
   .intro h2 { margin: 0; max-width: 12ch; font-size: clamp(1.65rem, 3vw, 2.35rem); line-height: 1.08; letter-spacing: -0.045em; }
   .intro p { margin: 14px 0 0; color: var(--ink-soft); font-size: 0.9rem; line-height: 1.65; }
-  .workflow { border-top: 1px solid var(--line-strong); padding-top: 18px; }
-  .workflow h3 { margin: 0 0 14px; font-size: 0.86rem; }
-  .workflow-list { display: grid; gap: 12px; }
-  .workflow-item { display: grid; grid-template-columns: 26px 1fr; gap: 9px; }
-  .workflow-index {
-    width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
-    background: var(--surface-muted); color: var(--accent); font: 700 0.72rem var(--mono);
+  .stage-nav { border-top: 1px solid var(--line-strong); padding-top: 18px; }
+  .stage-nav-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .stage-nav-header h3 { margin: 0; font-size: 0.86rem; }
+  .stage-nav-header p { margin: 4px 0 0; color: var(--ink-faint); font-size: 0.72rem; line-height: 1.45; }
+  .stage-nav-toggle {
+    flex: 0 0 auto; padding: 5px 7px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--surface-strong); color: var(--accent); font-size: 0.7rem; cursor: pointer; white-space: nowrap;
   }
-  .workflow-item strong { display: block; font-size: 0.82rem; }
-  .workflow-item span { display: block; margin-top: 2px; color: var(--ink-faint); font-size: 0.76rem; line-height: 1.45; }
+  .stage-nav-toggle:hover { background: var(--accent-soft); border-color: #9fc4ce; }
+  .stage-nav-groups { display: grid; gap: 8px; }
+  .stage-nav-group {
+    overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong);
+  }
+  .stage-nav-group summary {
+    display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 9px 10px;
+    color: var(--ink); font-size: 0.78rem; font-weight: 750; cursor: pointer; list-style: none;
+  }
+  .stage-nav-group summary::-webkit-details-marker { display: none; }
+  .stage-nav-group summary:hover { background: var(--surface-muted); }
+  .stage-nav-number {
+    width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center; flex: 0 0 auto;
+    background: var(--accent-soft); color: var(--accent); font: 700 0.68rem var(--mono);
+  }
+  .stage-nav-chevron { margin-left: auto; color: var(--ink-faint); font-size: 1rem; line-height: 1; transition: transform 150ms ease; }
+  .stage-nav-group[open] .stage-nav-chevron { transform: rotate(90deg); }
+  .stage-nav-links { border-top: 1px solid var(--line); padding: 3px 0; }
+  .stage-nav-link {
+    display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 6px 11px 6px 17px;
+    color: var(--ink-soft); font-size: 0.75rem; line-height: 1.35; text-decoration: none;
+  }
+  .stage-nav-link:hover { background: var(--accent-soft); color: var(--accent-hover); }
+  .stage-nav-link:focus-visible { position: relative; z-index: 1; }
+  .stage-nav-link-dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; background: var(--line-strong); }
+  .stage-nav-link-label { min-width: 0; }
+  .stage-nav-link-hint { margin-left: auto; color: var(--ink-faint); font-size: 0.68rem; white-space: nowrap; }
+  .stage-nav-group[data-stage="static"] .stage-nav-number { background: #e8e9f8; color: #4f4b87; }
+  .stage-nav-group[data-stage="analysis"] .stage-nav-number { background: var(--warning-soft); color: var(--warning); }
   .privacy-note {
     margin-top: 18px; padding: 12px; border-radius: var(--radius);
     background: var(--accent-soft); color: #315866; font-size: 0.76rem; line-height: 1.5;
@@ -165,6 +192,7 @@
     display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start;
     min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
   }
+  .option-toggle > div { min-width: 0; }
   .option-toggle input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
   .option-toggle label { margin: 0; color: #33444f; font-size: 0.76rem; line-height: 1.45; cursor: pointer; }
   .option-toggle small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: 0.7rem; line-height: 1.45; }
@@ -250,17 +278,16 @@
     .workspace { grid-template-columns: 1fr; }
     .sidebar { position: static; }
     .intro h2 { max-width: none; }
-    .workflow-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .privacy-note { display: none; }
     .language-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .option-grid, .option-toggle-grid { grid-template-columns: 1fr; }
+    .reachability-control { margin-left: 0; grid-template-columns: minmax(0, 1fr) 120px; }
     .panel-header, .panel-body { padding-left: 18px; padding-right: 18px; }
     .scan-row { grid-template-columns: 1fr auto; padding: 14px 18px; }
     .scan-actions { grid-column: 1 / -1; justify-content: flex-start; }
   }
   @media (max-width: 420px) {
     .page { padding-left: 12px; padding-right: 12px; }
-    .workflow-list { grid-template-columns: 1fr; }
     .form-actions { justify-content: stretch; }
     .btn-primary { width: 100%; }
     .language-field label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -269,6 +296,8 @@
     *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
   }
 </style>
+<link rel="stylesheet" href="/assets/openant-theme.css">
+<script src="/assets/openant-navigation.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -280,8 +309,7 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <a class="locator-link" href="/source-locator" data-i18n="header.locator">OpenHarmony 源码定位</a>
-    <a class="locator-link exposure-link" href="/exposure-surface" data-i18n="header.exposure">设备暴露面识别</a>
+    <openant-workspace-nav current="home"></openant-workspace-nav>
     <span class="local-note" data-i18n="header.local" title="服务只监听本机回环地址，不会暴露到局域网。">仅本机访问</span>
     <div class="language-field">
       <label for="language-select" data-i18n="language.label">语言</label>
@@ -295,20 +323,67 @@
 
 <main class="page">
   <div class="workspace">
-    <aside class="sidebar" aria-labelledby="workflow-title">
+    <aside class="sidebar" aria-labelledby="stage-nav-title">
       <div class="intro">
         <p data-i18n="intro.body">选择仓库和扫描范围。vulnfounder 会解析函数、构建上下文、调用模型分析，并保存每个阶段的可审阅产物。</p>
       </div>
-      <section class="workflow" aria-labelledby="workflow-title">
-        <h3 id="workflow-title" data-i18n="workflow.title">扫描流程</h3>
-        <div class="workflow-list">
-          <div class="workflow-item"><span class="workflow-index">01</span><div><strong data-i18n="workflow.parse.title">解析源码</strong><span data-i18n="workflow.parse.body">提取函数和调用关系</span></div></div>
-          <div class="workflow-item"><span class="workflow-index">02</span><div><strong data-i18n="workflow.context.title">补充上下文</strong><span data-i18n="workflow.context.body">识别平台边界与安全语义</span></div></div>
-          <div class="workflow-item"><span class="workflow-index">03</span><div><strong data-i18n="workflow.analyze.title">分析验证</strong><span data-i18n="workflow.analyze.body">检测风险并降低误报</span></div></div>
-          <div class="workflow-item"><span class="workflow-index">04</span><div><strong data-i18n="workflow.report.title">生成报告</strong><span data-i18n="workflow.report.body">汇总证据和修复建议</span></div></div>
+      <nav class="stage-nav" aria-labelledby="stage-nav-title">
+        <div class="stage-nav-header">
+          <div>
+            <h3 id="stage-nav-title" data-i18n="nav.title">工作台导航</h3>
+            <p data-i18n="nav.subtitle">按阶段进入设备侦查、源码定位和扫描结果。</p>
+          </div>
+          <button type="button" class="stage-nav-toggle" id="stage-nav-toggle" aria-expanded="true" aria-controls="stage-nav-groups" data-i18n="nav.collapse">收起全部</button>
         </div>
-        <div class="privacy-note" data-i18n="workflow.notice">安全提示：扫描过程中，选中的源码片段会发送给当前配置的大模型服务商。</div>
-      </section>
+        <div class="stage-nav-groups" id="stage-nav-groups">
+          <details class="stage-nav-group" data-stage="exposure" open>
+            <summary>
+              <span class="stage-nav-number">01</span>
+              <span class="stage-nav-group-title" data-i18n="nav.exposure.title">阶段 1 · 设备暴露面</span>
+              <span class="stage-nav-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="stage-nav-links">
+              <a class="stage-nav-link" href="/device-socket-assets"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.exposure.assets">设备 Socket 资产</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/exposure-locator"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.exposure.locator">暴露面识别与源码定位</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+            </div>
+          </details>
+          <details class="stage-nav-group" data-stage="source" open>
+            <summary>
+              <span class="stage-nav-number">02</span>
+              <span class="stage-nav-group-title" data-i18n="nav.source.title">阶段 2 · OpenHarmony 源码定位</span>
+              <span class="stage-nav-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="stage-nav-links">
+              <a class="stage-nav-link" href="/source-locator"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.source.locator">源码定位会话</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/socket-scope"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.source.scope">Socket 引导扫描</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+            </div>
+          </details>
+          <details class="stage-nav-group" data-stage="static" open>
+            <summary>
+              <span class="stage-nav-number">03</span>
+              <span class="stage-nav-group-title" data-i18n="nav.static.title">阶段 3 · 静态扫描</span>
+              <span class="stage-nav-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="stage-nav-links">
+              <a class="stage-nav-link" href="#new-scan-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.static.new">新建扫描</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
+              <a class="stage-nav-link" href="#recent-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.static.history">最近扫描</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
+            </div>
+          </details>
+          <details class="stage-nav-group" data-stage="analysis" open>
+            <summary>
+              <span class="stage-nav-number">04</span>
+              <span class="stage-nav-group-title" data-i18n="nav.analysis.title">阶段 4 · 验证与报告</span>
+              <span class="stage-nav-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="stage-nav-links">
+              <a class="stage-nav-link" href="#recent-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.results">扫描结果与阶段产物</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
+              <a class="stage-nav-link" href="/device-socket-assets#asset-history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.assets">设备 Socket 资产历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/exposure-locator?view=history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.history">联合会话历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+            </div>
+          </details>
+        </div>
+      </nav>
+      <div class="privacy-note" data-i18n="workflow.notice">安全提示：扫描过程中，选中的源码片段会发送给当前配置的大模型服务商。</div>
     </aside>
 
     <div class="content">
@@ -336,6 +411,11 @@
                 <input type="hidden" id="repo_id" name="repo_id">
                 <input type="text" id="repo" name="repo" autofocus placeholder="https://github.com/org/repo  or  /path/to/project">
                 <div class="hint" data-i18n="scan.repoPathHint">选择已保存仓库后，此输入框会自动停用。</div>
+              </div>
+              <div class="field field-wide">
+                <label for="scope_manifest" data-i18n="scan.scopeManifest">已确认的 Socket 范围 manifest（可选）</label>
+                <input type="text" id="scope_manifest" name="scope_manifest" placeholder="/path/to/scan_scope.json">
+                <div class="hint" data-i18n="scan.scopeManifestHint">先在“Socket 引导扫描”中确认服务目录，再把 manifest 带入这里；不填写时保持全仓扫描。</div>
               </div>
               <div class="field field-wide">
                 <span class="field-label" id="languages-label" data-i18n="scan.languages">扫描语言</span>
@@ -542,6 +622,35 @@
                         <input type="checkbox" id="openharmony_dispatch_code_evidence" name="openharmony_dispatch_code_evidence">
                         <div><label for="openharmony_dispatch_code_evidence" data-i18n="scan.dispatchCodeEvidence">OpenHarmony 分派码证据（--openharmony-dispatch-code-evidence）</label><small data-i18n="scan.dispatchCodeEvidenceHint">提取 IPC/SA 分派整数值，辅助动态验证和调用链审计。</small></div>
                       </div>
+                      <div class="option-toggle option-toggle-wide">
+                        <input type="checkbox" id="clang_semantic" name="clang_semantic">
+                        <div>
+                          <label for="clang_semantic">Clang 语义辅助调用图（--clang-semantic）</label>
+                          <small>自动尝试复用 compile_commands.json、Ninja 编译数据库或 BUILD.gn 重建命令；重建得到的候选事实会保留其证据等级。</small>
+                          <div class="option-grid option-inline-grid">
+                            <div class="option-field">
+                              <label for="clang_max_files">最多翻译单元</label>
+                              <input type="number" id="clang_max_files" name="clang_max_files" value="128" min="1" max="10000" step="1">
+                            </div>
+                            <div class="option-field">
+                              <label for="clang_timeout_seconds">单文件超时（秒）</label>
+                              <input type="number" id="clang_timeout_seconds" name="clang_timeout_seconds" value="30" min="1" max="600" step="1">
+                            </div>
+                            <div class="option-field">
+                              <label for="clang_batch_size">批大小</label>
+                              <input type="number" id="clang_batch_size" name="clang_batch_size" value="16" min="1" max="256" step="1">
+                            </div>
+                            <div class="option-field">
+                              <label for="clang_dependency_retries">依赖重试次数</label>
+                              <input type="number" id="clang_dependency_retries" name="clang_dependency_retries" value="1" min="0" max="5" step="1">
+                            </div>
+                            <div class="option-field">
+                              <label for="clang_definition_load_max_files">定义加载上限</label>
+                              <input type="number" id="clang_definition_load_max_files" name="clang_definition_load_max_files" value="16" min="0" max="256" step="1">
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </section>
 
@@ -615,10 +724,29 @@ const translations = {
     'brand.subtitle': '源码安全扫描工作台',
     'header.local': '仅本机访问',
     'header.localTitle': '服务只监听本机回环地址，不会暴露到局域网。',
-    'header.locator': 'OpenHarmony 源码定位',
-    'header.exposure': '设备暴露面识别',
+    'header.exposureLocator': '暴露面识别与定位',
+    'header.socketScope': 'Socket 引导扫描',
     'language.label': '语言',
     'intro.body': '选择仓库和扫描范围。vulnfounder 会解析函数、构建上下文、调用模型分析，并保存每个阶段的可审阅产物。',
+    'nav.title': '工作台导航',
+    'nav.subtitle': '按阶段进入设备侦查、源码定位和扫描结果。',
+    'nav.collapse': '收起全部',
+    'nav.expand': '展开全部',
+    'nav.exposure.title': '阶段 1 · 设备暴露面',
+    'nav.exposure.assets': '设备 Socket 资产',
+    'nav.exposure.locator': '暴露面识别与源码定位',
+    'nav.source.title': '阶段 2 · OpenHarmony 源码定位',
+    'nav.source.locator': '源码定位会话',
+    'nav.source.scope': 'Socket 引导扫描',
+    'nav.static.title': '阶段 3 · 静态扫描',
+    'nav.static.new': '新建扫描',
+    'nav.static.history': '最近扫描',
+    'nav.analysis.title': '阶段 4 · 验证与报告',
+    'nav.analysis.results': '扫描结果与阶段产物',
+    'nav.analysis.assets': '设备 Socket 资产历史',
+    'nav.analysis.history': '联合会话历史',
+    'nav.open': '进入',
+    'nav.jump': '跳转',
     'workflow.title': '扫描流程',
     'workflow.parse.title': '解析源码',
     'workflow.parse.body': '提取函数和调用关系',
@@ -636,6 +764,8 @@ const translations = {
     'scan.savedRepoHint': '可选择项目内 source_code_base 的仓库、已初始化项目或最近使用的仓库。',
     'scan.repoPath': '仓库 URL 或本地路径',
     'scan.repoPathHint': '选择已保存仓库后，此输入框会自动停用。',
+    'scan.scopeManifest': '已确认的 Socket 范围 manifest（可选）',
+    'scan.scopeManifestHint': '先在“Socket 引导扫描”中确认服务目录，再把 manifest 带入这里；不填写时保持全仓扫描。',
     'scan.languages': '扫描语言',
     'scan.languagesHint': '全部不选时扫描检测到的所有有效语言。主动限制语言可减少运行时间和模型费用。',
     'scan.platform': '目标平台',
@@ -747,10 +877,29 @@ const translations = {
     'brand.subtitle': 'Source security scanning workspace',
     'header.local': 'Local access only',
     'header.localTitle': 'The server listens on loopback only and is not exposed to your local network.',
-    'header.locator': 'OpenHarmony source locator',
-    'header.exposure': 'Device exposure surface',
+    'header.exposureLocator': 'Exposure and source location',
+    'header.socketScope': 'Socket-guided scan',
     'language.label': 'Language',
     'intro.body': 'Select a repository and scan scope. vulnfounder parses functions, builds context, runs model analysis, and preserves reviewable output for every stage.',
+    'nav.title': 'Workspace navigation',
+    'nav.subtitle': 'Move through device inspection, source location, and scan results by stage.',
+    'nav.collapse': 'Collapse all',
+    'nav.expand': 'Expand all',
+    'nav.exposure.title': 'Stage 1 · Device exposure',
+    'nav.exposure.assets': 'Device Socket assets',
+    'nav.exposure.locator': 'Exposure and source location',
+    'nav.source.title': 'Stage 2 · OpenHarmony source location',
+    'nav.source.locator': 'Source locator sessions',
+    'nav.source.scope': 'Socket-guided scan',
+    'nav.static.title': 'Stage 3 · Static scanning',
+    'nav.static.new': 'New scan',
+    'nav.static.history': 'Recent scans',
+    'nav.analysis.title': 'Stage 4 · Verification and reports',
+    'nav.analysis.results': 'Scan results and stage artifacts',
+    'nav.analysis.assets': 'Device Socket asset history',
+    'nav.analysis.history': 'Combined session history',
+    'nav.open': 'Open',
+    'nav.jump': 'Jump',
     'workflow.title': 'Scan workflow',
     'workflow.parse.title': 'Parse source',
     'workflow.parse.body': 'Extract functions and call relationships',
@@ -768,6 +917,8 @@ const translations = {
     'scan.savedRepoHint': 'Choose a repository from source_code_base, an initialized project, or a recent repository.',
     'scan.repoPath': 'Repository URL or local path',
     'scan.repoPathHint': 'This field is disabled after a saved repository is selected.',
+    'scan.scopeManifest': 'Confirmed Socket scope manifest (optional)',
+    'scan.scopeManifestHint': 'Confirm a service directory in Socket-guided scan first, then bring its manifest here; leaving it empty keeps the full-repository baseline.',
     'scan.languages': 'Languages to scan',
     'scan.languagesHint': 'Leave all unchecked to scan every eligible detected language. Limiting languages reduces time and model cost.',
     'scan.platform': 'Target platform',
@@ -889,9 +1040,59 @@ const enhanceMode = document.getElementById('enhance_mode');
 const allLanguagesCheckbox = document.getElementById('all_languages');
 const multiLanguageCheckbox = document.getElementById('multi_language');
 let currentLanguage = 'zh-CN';
+const stageNavToggle = document.getElementById('stage-nav-toggle');
+const stageNavGroups = Array.from(document.querySelectorAll('.stage-nav-group'));
+const stageNavStorageKey = 'openant.stage-nav.groups';
 
 function t(key) {
   return (translations[currentLanguage] && translations[currentLanguage][key]) || translations['zh-CN'][key] || key;
+}
+
+function stageNavAllExpanded() {
+  return stageNavGroups.length > 0 && stageNavGroups.every(function(group) { return group.open; });
+}
+
+function updateStageNavToggle() {
+  if (!stageNavToggle) return;
+  const allExpanded = stageNavAllExpanded();
+  stageNavToggle.setAttribute('aria-expanded', String(allExpanded));
+  stageNavToggle.textContent = t(allExpanded ? 'nav.collapse' : 'nav.expand');
+}
+
+function persistStageNavState() {
+  try {
+    const state = {};
+    stageNavGroups.forEach(function(group) {
+      if (group.dataset.stage) state[group.dataset.stage] = group.open;
+    });
+    localStorage.setItem(stageNavStorageKey, JSON.stringify(state));
+  } catch (_) {}
+}
+
+function initStageNav() {
+  if (!stageNavGroups.length) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(stageNavStorageKey) || '{}');
+    stageNavGroups.forEach(function(group) {
+      const key = group.dataset.stage;
+      if (key && typeof saved[key] === 'boolean') group.open = saved[key];
+    });
+  } catch (_) {}
+  stageNavGroups.forEach(function(group) {
+    group.addEventListener('toggle', function() {
+      persistStageNavState();
+      updateStageNavToggle();
+    });
+  });
+  if (stageNavToggle) {
+    stageNavToggle.addEventListener('click', function() {
+      const expand = stageNavGroups.some(function(group) { return !group.open; });
+      stageNavGroups.forEach(function(group) { group.open = expand; });
+      persistStageNavState();
+      updateStageNavToggle();
+    });
+  }
+  updateStageNavToggle();
 }
 
 function translateCredentials() {
@@ -928,6 +1129,7 @@ function applyLanguage(language) {
   if (localNote) localNote.title = t('header.localTitle');
   translateCredentials();
   translateJobStatuses();
+  updateStageNavToggle();
   syncRepositoryChoice();
 }
 
@@ -947,13 +1149,19 @@ function prefillSourceLocatorHandoff() {
   if (!repoChoice || !repoInput || !repoIDInput) return;
   const params = new URLSearchParams(window.location.search);
   const handoffRepo = params.get('source_locator_repo');
-  if (!handoffRepo || handoffRepo.length > 4096) return;
-  repoChoice.value = '';
-  repoIDInput.value = '';
-  repoInput.disabled = false;
-  repoInput.required = true;
-  repoInput.value = handoffRepo;
-  repoInput.focus();
+  const scopeRepo = params.get('repo');
+  const scopeManifest = params.get('scope_manifest');
+  const selectedRepo = (handoffRepo || scopeRepo || '').trim();
+  if (selectedRepo && selectedRepo.length <= 4096) {
+    repoChoice.value = '';
+    repoIDInput.value = '';
+    repoInput.disabled = false;
+    repoInput.required = true;
+    repoInput.value = selectedRepo;
+    repoInput.focus();
+  }
+  const scopeInput = document.getElementById('scope_manifest');
+  if (scopeInput && scopeManifest && scopeManifest.length <= 4096) scopeInput.value = scopeManifest;
 }
 
 if (languageSelect) {
@@ -1034,6 +1242,7 @@ function deleteScan(id) {
 let preferredLanguage = 'zh-CN';
 try { preferredLanguage = localStorage.getItem('openant.ui.language') || 'zh-CN'; } catch (_) {}
 applyLanguage(preferredLanguage);
+initStageNav();
 syncDynamicTestMode();
 syncLLMReachability();
 syncEnhanceMode();

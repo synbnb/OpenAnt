@@ -9,6 +9,21 @@
 
 OpenAnt uses a two-stage approach for vulnerability analysis. Stage 1 detects potential issues with simple, direct prompts. Stage 2 verifies each finding using Opus with tool access to explore the codebase.
 
+### 阶段职责边界（当前实现）
+
+可达性筛选和上下文构建发生在 Stage 1 之前，只负责把结构证据交给分析器：
+入口类型、函数身份、调用边、候选路径和已知的注册/分派关系。它不要求提前完成
+参数级 source-to-sink 数据流，也不会因为数据流尚未追踪就把单元排除。
+
+Stage 1 仍然是漏洞检测阶段，负责判断目标函数中的缺陷、局部危险操作、校验和
+可能影响；如果结论依赖尚未找到的下游或输入传播证据，应保留为
+`inconclusive`，而不是默认 `safe`/`protected`。
+
+Stage 2 负责定向验证参数 source-to-sink、共享状态读写顺序、异步载荷、分派条件、
+权限支配关系和最终 sink 可触发性。Stage 1 结果现在携带 `stage_context`，其中
+`stage1` 保存结构路径状态，`stage2` 保存待验证的数据流状态；Stage 2 会读取该
+交接信息并在 `assessment.parameter_dataflow_status` 中记录验证结果。
+
 ---
 
 ## Key Insight: Simple Prompts Work Better

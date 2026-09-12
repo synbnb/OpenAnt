@@ -50,6 +50,7 @@ type jobMeta struct {
 	Languages                   []string  `json:"languages,omitempty"`
 	Level                       string    `json:"level,omitempty"`
 	NoContext                   bool      `json:"no_context,omitempty"`
+	ScopeManifest               string    `json:"scope_manifest,omitempty"`
 	NoEnhance                   bool      `json:"no_enhance,omitempty"`
 	EnhanceMode                 string    `json:"enhance_mode,omitempty"`
 	NoReport                    bool      `json:"no_report,omitempty"`
@@ -72,6 +73,13 @@ type jobMeta struct {
 	LLMCallGraphCandidateReview bool      `json:"llm_call_graph_candidate_review,omitempty"`
 	LLMCallGraphProjection      bool      `json:"llm_call_graph_projection,omitempty"`
 	DispatchCodeEvidence        bool      `json:"openharmony_dispatch_code_evidence,omitempty"`
+	ClangSemantic               bool      `json:"clang_semantic,omitempty"`
+	ClangBuildStatus            string    `json:"clang_build_status,omitempty"`
+	ClangMaxFiles               int       `json:"clang_max_files,omitempty"`
+	ClangTimeoutSeconds         int       `json:"clang_timeout_seconds,omitempty"`
+	ClangBatchSize              int       `json:"clang_batch_size,omitempty"`
+	ClangDependencyRetries      int       `json:"clang_dependency_retries,omitempty"`
+	ClangDefinitionLoadMaxFiles int       `json:"clang_definition_load_max_files,omitempty"`
 	DynamicTest                 bool      `json:"dynamic_test,omitempty"`
 	DynamicTestMode             string    `json:"dynamic_test_mode,omitempty"`
 	TaskWorkspace               string    `json:"task_workspace,omitempty"`
@@ -105,6 +113,7 @@ type Job struct {
 	platform                    string
 	level                       string
 	noContext                   bool
+	scopeManifest               string
 	noEnhance                   bool
 	enhanceMode                 string
 	noReport                    bool
@@ -127,6 +136,13 @@ type Job struct {
 	llmCallGraphCandidateReview bool
 	llmCallGraphProjection      bool
 	dispatchCodeEvidence        bool
+	clangSemantic               bool
+	clangBuildStatus            string
+	clangMaxFiles               int
+	clangTimeoutSeconds         int
+	clangBatchSize              int
+	clangDependencyRetries      int
+	clangDefinitionLoadMaxFiles int
 	dynamicTest                 bool
 	dynamicTestMode             string
 	claudeTask                  *claudeTaskInfo
@@ -233,24 +249,29 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
-	pythonPath          string
-	outDir              string
-	mgr                 *manager
-	tmplIndex           *template.Template
-	tmplScan            *template.Template
-	tmplArtifact        *template.Template
-	tmplSum             *template.Template
-	tmplDisclosure      *template.Template
-	tmplSourceLocator   *template.Template
-	tmplExposureSurface *template.Template
-	sem                 chan struct{}
-	csrfToken           string
-	sourceLocatorMu     sync.Mutex     // serializes Web source-locator mutations, including deletion
-	exposureSurfaceMu   sync.Mutex     // serializes Web exposure-surface mutations, including deletion
-	wg                  sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
-	shutdownDone        chan struct{}  // closed once cancel+drain completes
-	drainMu             sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
-	draining            bool           // set at shutdown so no new job is added after Wait starts
+	pythonPath             string
+	outDir                 string
+	mgr                    *manager
+	tmplIndex              *template.Template
+	tmplScan               *template.Template
+	tmplArtifact           *template.Template
+	tmplSum                *template.Template
+	tmplDisclosure         *template.Template
+	tmplSourceLocator      *template.Template
+	tmplExposureSurface    *template.Template
+	tmplExposureLocator    *template.Template
+	tmplDeviceSocketAssets *template.Template
+	tmplSocketScope        *template.Template
+	sem                    chan struct{}
+	csrfToken              string
+	sourceLocatorMu        sync.Mutex     // serializes Web source-locator mutations, including deletion
+	exposureSurfaceMu      sync.Mutex     // serializes Web exposure-surface mutations, including deletion
+	wg                     sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
+	shutdownDone           chan struct{}  // closed once cancel+drain completes
+	drainMu                sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
+	draining               bool           // set at shutdown so no new job is added after Wait starts
+	deviceSocketJobsMu     sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
+	deviceSocketJobs       map[string]*deviceSocketAssetJob
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
@@ -284,6 +305,18 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse exposure-surface.html: %w", err)
 	}
+	tmplExposureLocator, err := template.ParseFS(uifiles.FS, "exposure-locator.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse exposure-locator.html: %w", err)
+	}
+	tmplDeviceSocketAssets, err := template.ParseFS(uifiles.FS, "device-socket-assets.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse device-socket-assets.html: %w", err)
+	}
+	tmplSocketScope, err := template.ParseFS(uifiles.FS, "socket-scope.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse socket-scope.html: %w", err)
+	}
 
 	// Per-instance CSRF synchronizer token: 32 hex chars from crypto/rand,
 	// stable for the server's lifetime and embedded in served pages.
@@ -293,19 +326,23 @@ func New(pythonPath, outDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		pythonPath:          pythonPath,
-		outDir:              outDir,
-		mgr:                 newManager(outDir),
-		tmplIndex:           tmplIndex,
-		tmplScan:            tmplScan,
-		tmplArtifact:        tmplArtifact,
-		tmplSum:             tmplSum,
-		tmplDisclosure:      tmplDisclosure,
-		tmplSourceLocator:   tmplSourceLocator,
-		tmplExposureSurface: tmplExposureSurface,
-		sem:                 make(chan struct{}, 4),
-		csrfToken:           hex.EncodeToString(tokBytes),
-		shutdownDone:        make(chan struct{}),
+		pythonPath:             pythonPath,
+		outDir:                 outDir,
+		mgr:                    newManager(outDir),
+		tmplIndex:              tmplIndex,
+		tmplScan:               tmplScan,
+		tmplArtifact:           tmplArtifact,
+		tmplSum:                tmplSum,
+		tmplDisclosure:         tmplDisclosure,
+		tmplSourceLocator:      tmplSourceLocator,
+		tmplExposureSurface:    tmplExposureSurface,
+		tmplExposureLocator:    tmplExposureLocator,
+		tmplDeviceSocketAssets: tmplDeviceSocketAssets,
+		tmplSocketScope:        tmplSocketScope,
+		sem:                    make(chan struct{}, 4),
+		csrfToken:              hex.EncodeToString(tokBytes),
+		shutdownDone:           make(chan struct{}),
+		deviceSocketJobs:       make(map[string]*deviceSocketAssetJob),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -344,6 +381,7 @@ func (s *Server) recoverJobs() {
 					job.level = defaultScanLevel
 				}
 				job.noContext = m.NoContext
+				job.scopeManifest = m.ScopeManifest
 				job.noEnhance = m.NoEnhance
 				job.enhanceMode = m.EnhanceMode
 				if job.enhanceMode == "" {
@@ -384,6 +422,31 @@ func (s *Server) recoverJobs() {
 				job.llmCallGraphCandidateReview = m.LLMCallGraphCandidateReview
 				job.llmCallGraphProjection = m.LLMCallGraphProjection
 				job.dispatchCodeEvidence = m.DispatchCodeEvidence
+				job.clangSemantic = m.ClangSemantic
+				job.clangBuildStatus = m.ClangBuildStatus
+				if job.clangBuildStatus == "" {
+					job.clangBuildStatus = defaultClangBuildStatus
+				}
+				job.clangMaxFiles = m.ClangMaxFiles
+				if job.clangMaxFiles == 0 {
+					job.clangMaxFiles = defaultClangMaxFiles
+				}
+				job.clangTimeoutSeconds = m.ClangTimeoutSeconds
+				if job.clangTimeoutSeconds == 0 {
+					job.clangTimeoutSeconds = defaultClangTimeoutSeconds
+				}
+				job.clangBatchSize = m.ClangBatchSize
+				if job.clangBatchSize == 0 {
+					job.clangBatchSize = defaultClangBatchSize
+				}
+				job.clangDependencyRetries = m.ClangDependencyRetries
+				if job.clangDependencyRetries == 0 {
+					job.clangDependencyRetries = defaultClangDependencyRetries
+				}
+				job.clangDefinitionLoadMaxFiles = m.ClangDefinitionLoadMaxFiles
+				if job.clangDefinitionLoadMaxFiles == 0 {
+					job.clangDefinitionLoadMaxFiles = defaultClangDefinitionLoadMaxFiles
+				}
 				job.dynamicTest = m.DynamicTest
 				job.dynamicTestMode = m.DynamicTestMode
 				if job.dynamicTestMode == "" && job.dynamicTest {
@@ -413,39 +476,14 @@ func (s *Server) recoverJobs() {
 			}
 		}
 
-		// Determine status from presence of the stable English report path.
-		reportPath := filepath.Join(jobDir, "report.html")
-		if _, err := os.Stat(reportPath); err == nil {
-			job.Status = StatusDone
-			job.ReportPath = reportPath
-			zhReportPath := filepath.Join(jobDir, "report.zh-CN.html")
-			if isRegularNoSymlink(jobDir, zhReportPath) {
-				job.ReportPathZH = zhReportPath
-			}
-			// Look for summary.
-			for _, sp := range []string{
-				filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"),
-				filepath.Join(jobDir, "SUMMARY_REPORT.md"),
-			} {
-				if isRegularNoSymlink(jobDir, sp) {
-					job.SummaryPath = sp
-					break
-				}
-			}
-			for _, sp := range []string{
-				filepath.Join(jobDir, "report", "SUMMARY_REPORT.zh-CN.md"),
-				filepath.Join(jobDir, "SUMMARY_REPORT.zh-CN.md"),
-			} {
-				if isRegularNoSymlink(jobDir, sp) {
-					job.SummaryPathZH = sp
-					break
-				}
-			}
-			// Look for disclosure reports.
-			job.DisclosurePaths = findDisclosures(jobDir)
-		} else {
-			job.Status = StatusError
-		}
+		// A scan can finish its Python pipeline successfully while the Web
+		// post-processing step that renders report.html is interrupted (for
+		// example, when the Web process is restarted).  Do not turn that
+		// completed scan into a failure merely because the optional HTML wrapper
+		// is absent.  Prefer the aggregate scan report, then the final report
+		// stage, and finally recent checkpoint activity for an in-flight run.
+		job.Status = recoveredJobStatus(jobDir)
+		populateRecoveredArtifacts(job, jobDir)
 
 		// Load persisted logs if available. Sanitize each line the same way
 		// addLog does (a repo can write logs.txt during --dynamic-test) so a bare
@@ -465,6 +503,162 @@ func (s *Server) recoverJobs() {
 
 		s.mgr.add(job)
 	}
+}
+
+// recoveredJobStatus determines the status of a job restored after the Web
+// process was restarted.  The old implementation used report.html as the
+// sole completion marker, but HTML is a Web-owned post-processing artifact and
+// is not written by every direct/previous scan invocation.
+func recoveredJobStatus(jobDir string) string {
+	if isRegularNoSymlink(jobDir, filepath.Join(jobDir, "report.html")) {
+		return StatusDone
+	}
+
+	// scan.report.json is the authoritative aggregate result when present.
+	for _, name := range []string{"scan.report.json", "report.report.json"} {
+		status, ok := readPersistedStatus(jobDir, name)
+		if !ok {
+			continue
+		}
+		switch status {
+		case "success":
+			return StatusDone
+		case "error":
+			return StatusError
+		case "running", "pending", "partial":
+			// A partial stage report is not a failed scan.  If it is the
+			// latest evidence and the output is still being updated, expose
+			// the job as running until an aggregate result is written.
+			if recoveredJobActive(jobDir) {
+				return StatusRunning
+			}
+		}
+	}
+
+	if recoveredJobActive(jobDir) {
+		return StatusRunning
+	}
+	return StatusError
+}
+
+// readPersistedStatus reads only a small, server-owned stage envelope.  It
+// deliberately ignores malformed or symlinked files so a damaged output
+// directory cannot make the Web server trust arbitrary data.
+func readPersistedStatus(jobDir, name string) (string, bool) {
+	path := filepath.Join(jobDir, name)
+	f, _, err := openRegularInRoot(jobDir, path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	var envelope struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(io.LimitReader(f, maxPipelineReportBytes)).Decode(&envelope); err != nil {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(envelope.Status)), envelope.Status != ""
+}
+
+// recoveredJobActive recognizes a scan that is still producing artifacts.
+// The time bound prevents an abandoned in_progress checkpoint from being
+// displayed forever after a process crash, while allowing a just-restarted
+// direct Python scan to be shown as running before its next stage report is
+// written.
+func recoveredJobActive(jobDir string) bool {
+	const activityWindow = 15 * time.Minute
+	cutoff := time.Now().Add(-activityWindow)
+	var latest time.Time
+	var latestStatus string
+
+	entries, err := os.ReadDir(jobDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".report.json") {
+				continue
+			}
+			path := filepath.Join(jobDir, entry.Name())
+			info, err := os.Stat(path)
+			if err != nil || info.ModTime().Before(latest) {
+				continue
+			}
+			latest = info.ModTime()
+			if status, ok := readPersistedStatus(jobDir, entry.Name()); ok {
+				latestStatus = status
+			}
+		}
+	}
+
+	for _, path := range []string{
+		filepath.Join(jobDir, "analyze_checkpoints", "_summary.json"),
+		filepath.Join(jobDir, "enhance_checkpoints", "_summary.json"),
+		filepath.Join(jobDir, "logs.txt"),
+	} {
+		info, err := os.Stat(path)
+		if err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
+			latestStatus = "in_progress"
+		}
+	}
+
+	if latest.IsZero() || latest.Before(cutoff) {
+		return false
+	}
+	return latestStatus != "error"
+}
+
+// populateRecoveredArtifacts restores all available report links even when
+// report.html itself is missing.  This keeps completed summaries and
+// disclosure documents visible in the Web UI after a restart.
+func populateRecoveredArtifacts(job *Job, jobDir string) {
+	reportPath := filepath.Join(jobDir, "report.html")
+	if isRegularNoSymlink(jobDir, reportPath) {
+		job.ReportPath = reportPath
+	}
+	zhReportPath := filepath.Join(jobDir, "report.zh-CN.html")
+	if isRegularNoSymlink(jobDir, zhReportPath) {
+		job.ReportPathZH = zhReportPath
+	}
+	for _, sp := range []string{
+		filepath.Join(jobDir, "report", "SUMMARY_REPORT.md"),
+		filepath.Join(jobDir, "SUMMARY_REPORT.md"),
+	} {
+		if isRegularNoSymlink(jobDir, sp) {
+			job.SummaryPath = sp
+			break
+		}
+	}
+	for _, sp := range []string{
+		filepath.Join(jobDir, "report", "SUMMARY_REPORT.zh-CN.md"),
+		filepath.Join(jobDir, "SUMMARY_REPORT.zh-CN.md"),
+	} {
+		if isRegularNoSymlink(jobDir, sp) {
+			job.SummaryPathZH = sp
+			break
+		}
+	}
+	job.DisclosurePaths = findDisclosures(jobDir)
+}
+
+// refreshRecoveredJob synchronizes a job restored from disk with artifacts
+// written after the Web server started.  This matters for scans launched by a
+// previous Web process (or directly from the CLI): their Python process cannot
+// call Job.setDone, so the first aggregate report is the transition observed
+// by the current Web instance.
+func (s *Server) refreshRecoveredJob(job *Job) {
+	job.mu.Lock()
+	recovered := job.done == nil
+	job.mu.Unlock()
+	if !recovered {
+		return
+	}
+
+	jobDir := filepath.Join(s.outDir, job.ID)
+	status := recoveredJobStatus(jobDir)
+	job.mu.Lock()
+	job.Status = status
+	job.mu.Unlock()
+	populateRecoveredArtifacts(job, jobDir)
 }
 
 // inferRepoURL tries to read the origin remote URL from repo/.git/config.
@@ -522,6 +716,22 @@ func (s *Server) Handler() http.Handler {
 	// security headers with scan jobs; no second port or cross-origin bridge is
 	// introduced.
 	mux.HandleFunc("GET /source-locator", s.handleSourceLocatorIndex)
+	// Unified OpenHarmony workflow: device exposure inspection is stage 1 and
+	// source location is stage 2. The underlying APIs remain separate so old
+	// sessions and clients stay compatible.
+	mux.HandleFunc("GET /exposure-locator", s.handleExposureLocatorIndex)
+	// Device-level Socket inventory is a separate, read-only discovery stage.
+	// It maintains a latest snapshot per board and does not replace the
+	// target-specific exposure-surface session APIs.
+	mux.HandleFunc("GET /device-socket-assets", s.handleDeviceSocketAssetIndex)
+	mux.HandleFunc("GET /device-socket-assets/snapshots", s.handleDeviceSocketAssetSnapshots)
+	mux.HandleFunc("POST /device-socket-assets/scan", s.handleDeviceSocketAssetScan)
+	mux.HandleFunc("GET /device-socket-assets/runs", s.handleDeviceSocketAssetRuns)
+	mux.HandleFunc("GET /device-socket-assets/runs/{run_id}/events", s.handleDeviceSocketAssetRunEvents)
+	mux.HandleFunc("GET /device-socket-assets/runs/{run_id}/artifact/{name}", s.handleDeviceSocketAssetRunArtifact)
+	mux.HandleFunc("GET /device-socket-assets/runs/{run_id}", s.handleDeviceSocketAssetRun)
+	mux.HandleFunc("GET /device-socket-assets/snapshots/{serial}", s.handleDeviceSocketAssetSnapshot)
+	mux.HandleFunc("GET /device-socket-assets/snapshots/{serial}/artifact/{name}", s.handleDeviceSocketAssetArtifact)
 	mux.HandleFunc("GET /source-locator/sessions", s.handleSourceLocatorSessions)
 	mux.HandleFunc("POST /source-locator/sessions", s.handleSourceLocatorCreate)
 	mux.HandleFunc("GET /source-locator/sessions/{id}", s.handleSourceLocatorStatus)
@@ -552,6 +762,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /exposure-surface/sessions/{id}/events", s.handleExposureSurfaceEvents)
 	mux.HandleFunc("DELETE /exposure-surface/sessions/{id}", s.handleExposureSurfaceDelete)
 	mux.HandleFunc("GET /exposure-surface/sessions/{id}/artifact/{name}", s.handleExposureSurfaceArtifact)
+	// Socket-guided scan scope discovery is separate from the ordinary scan
+	// form: discovery proposes evidence-backed directories and the selected
+	// manifest is applied only after explicit user confirmation.
+	mux.HandleFunc("GET /socket-scope", s.handleSocketScopeIndex)
+	mux.HandleFunc("POST /socket-scope/discover", s.handleSocketScopeDiscover)
+	mux.HandleFunc("POST /socket-scope/select", s.handleSocketScopeSelect)
 	return securityHeaders(mux)
 }
 
@@ -606,6 +822,17 @@ const (
 	defaultLLMReachabilityMaxCodeBytes = 1500
 	minLLMReachabilityMaxCodeBytes     = 256
 	maxLLMReachabilityMaxCodeBytes     = 32768
+	defaultClangBuildStatus            = "compile_database"
+	defaultClangMaxFiles               = 128
+	defaultClangTimeoutSeconds         = 30
+	defaultClangBatchSize              = 16
+	defaultClangDependencyRetries      = 1
+	defaultClangDefinitionLoadMaxFiles = 16
+	maxClangMaxFiles                   = 10000
+	maxClangTimeoutSeconds             = 600
+	maxClangBatchSize                  = 256
+	maxClangDependencyRetries          = 5
+	maxClangDefinitionLoadMaxFiles     = 256
 )
 
 var supportedScanLevels = map[string]bool{
@@ -939,7 +1166,8 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 		s.draining = true
 		s.drainMu.Unlock()
 		s.mgr.cancelAll() // cancel job ctxs -> killer goroutines SIGKILL process groups
-		_ = srv.Close()   // stop listening + drop conns immediately (an open SSE stream
+		s.cancelDeviceSocketAssetJobs()
+		_ = srv.Close() // stop listening + drop conns immediately (an open SSE stream
 		//                   would make graceful Shutdown block forever)
 		// Wait for in-flight runJob goroutines to finish their kill+cleanup, bounded
 		// so a wedged job cannot hang process exit.
@@ -1183,7 +1411,7 @@ func requestedPipelineStep(id string, opts pipelineRequestOptions) bool {
 
 func normalizePipelineStatus(status string) string {
 	switch status {
-	case "success", "skipped", "error", "running", "pending":
+	case "success", "skipped", "error", "running", "pending", "partial":
 		return status
 	default:
 		return "error"
@@ -1348,6 +1576,7 @@ func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.refreshRecoveredJob(job)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(s.pipelineView(job))
 }
@@ -1399,6 +1628,7 @@ var scanArtifactSpecs = []artifactSpec{
 	{Name: "dynamic_test_results.md", Label: "Dynamic-test report", Category: "dynamic-test", Stage: "dynamic-test", Description: "Human-readable account of dynamic-test setup, execution, observations, and limitations."},
 	{Name: "pipeline_results.json", Label: "Pipeline stage results", Category: "results", Stage: "build-output", Description: "Intermediate pipeline result containing stage success and stage-level outputs."},
 	{Name: "scan_results.json", Label: "Raw scan results", Category: "results", Stage: "parse", Description: "Raw scan result containing scanned files, scope, counters, and scan time."},
+	{Name: "scan_scope_applied.json", Label: "Applied socket scan scope", Category: "scope", Stage: "parse", Description: "The confirmed socket target, repository identity, selected scan root, and the evidence manifest used for this scan."},
 	{Name: "pipeline_output.json", Label: "Pipeline output", Category: "results", Stage: "build-output", Description: "Stable normalized finding set consumed by dynamic testing and final report generation."},
 }
 
@@ -2507,6 +2737,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	jobs := s.mgr.all()
 	views := make([]*jobView, 0, len(jobs))
 	for _, j := range jobs {
+		s.refreshRecoveredJob(j)
 		j.mu.Lock()
 		v := &jobView{
 			ID:           j.ID,
@@ -2591,18 +2822,39 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	switch name {
 	case "marked.min.js", "purify.min.js":
+		data, err := uifiles.FS.ReadFile("vendor/" + name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(data)
+		return
+	case "openant-theme.css":
+		data, err := uifiles.FS.ReadFile(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(data)
+		return
+	case "openant-navigation.js":
+		data, err := uifiles.FS.ReadFile(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(data)
+		return
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	data, err := uifiles.FS.ReadFile("vendor/" + name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(data)
 }
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
@@ -2633,6 +2885,18 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if repo == "" {
 		http.Error(w, "repository selection or repo path is required", http.StatusBadRequest)
+		return
+	}
+	scopeManifest := strings.TrimSpace(r.FormValue("scope_manifest"))
+	if len(scopeManifest) > 4096 {
+		http.Error(w, "scope manifest path is too long", http.StatusBadRequest)
+		return
+	}
+	// A manifest records an absolute repository identity and cannot safely
+	// follow a URL clone into the per-job temporary directory. Require a local
+	// repository for this opt-in narrowing.
+	if scopeManifest != "" && (strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "git@")) {
+		http.Error(w, "socket scope manifest requires a local repository path", http.StatusBadRequest)
 		return
 	}
 	if strings.HasPrefix(repo, "-") {
@@ -2755,6 +3019,32 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	llmCallGraphCandidateReview := r.FormValue("llm_call_graph_candidate_review") == "on"
 	llmCallGraphProjection := r.FormValue("llm_call_graph_projection") == "on"
 	dispatchCodeEvidence := r.FormValue("openharmony_dispatch_code_evidence") == "on"
+	clangSemantic := r.FormValue("clang_semantic") == "on"
+	clangMaxFiles, ok := normalizeBoundedInt(r.FormValue("clang_max_files"), defaultClangMaxFiles, 1, maxClangMaxFiles)
+	if !ok {
+		http.Error(w, fmt.Sprintf("clang max files must be between 1 and %d", maxClangMaxFiles), http.StatusBadRequest)
+		return
+	}
+	clangTimeoutSeconds, ok := normalizeBoundedInt(r.FormValue("clang_timeout_seconds"), defaultClangTimeoutSeconds, 1, maxClangTimeoutSeconds)
+	if !ok {
+		http.Error(w, fmt.Sprintf("clang timeout must be between 1 and %d seconds", maxClangTimeoutSeconds), http.StatusBadRequest)
+		return
+	}
+	clangBatchSize, ok := normalizeBoundedInt(r.FormValue("clang_batch_size"), defaultClangBatchSize, 1, maxClangBatchSize)
+	if !ok {
+		http.Error(w, fmt.Sprintf("clang batch size must be between 1 and %d", maxClangBatchSize), http.StatusBadRequest)
+		return
+	}
+	clangDependencyRetries, ok := normalizeBoundedInt(r.FormValue("clang_dependency_retries"), defaultClangDependencyRetries, 0, maxClangDependencyRetries)
+	if !ok {
+		http.Error(w, fmt.Sprintf("clang dependency retries must be between 0 and %d", maxClangDependencyRetries), http.StatusBadRequest)
+		return
+	}
+	clangDefinitionLoadMaxFiles, ok := normalizeBoundedInt(r.FormValue("clang_definition_load_max_files"), defaultClangDefinitionLoadMaxFiles, 0, maxClangDefinitionLoadMaxFiles)
+	if !ok {
+		http.Error(w, fmt.Sprintf("clang definition load max files must be between 0 and %d", maxClangDefinitionLoadMaxFiles), http.StatusBadRequest)
+		return
+	}
 
 	// Gate new work at shutdown BEFORE creating any disk/manager state, and
 	// register with the WaitGroup under drainMu so wg.Add can never race the
@@ -2788,7 +3078,8 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	meta := jobMeta{
 		ID: id, Repo: repo, StartedAt: time.Now().UTC(), Platform: platform,
 		Level: level, NoContext: noContext, NoEnhance: noEnhance, EnhanceMode: enhanceMode,
-		NoReport: noReport, NoSkipTests: noSkipTests, AllLanguages: allLanguages,
+		ScopeManifest: scopeManifest,
+		NoReport:      noReport, NoSkipTests: noSkipTests, AllLanguages: allLanguages,
 		MultiLanguage: multiLanguage, MinLanguageFiles: minLanguageFiles,
 		MinLanguageShare: minLanguageShare, StrictLanguages: strictLanguages, Limit: limit,
 		Languages: languages, Verify: verify, LibraryMode: libraryMode,
@@ -2796,7 +3087,11 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		LLMCallGraphRecovery: llmCallGraphRecovery, LLMCallGraphIterative: llmCallGraphIterative,
 		LLMCallGraphCandidateReview: llmCallGraphCandidateReview,
 		LLMCallGraphProjection:      llmCallGraphProjection, DispatchCodeEvidence: dispatchCodeEvidence,
-		DynamicTest: dynamicTest, DynamicTestMode: dynamicTestMode,
+		ClangSemantic: clangSemantic, ClangBuildStatus: defaultClangBuildStatus,
+		ClangMaxFiles: clangMaxFiles, ClangTimeoutSeconds: clangTimeoutSeconds,
+		ClangBatchSize: clangBatchSize, ClangDependencyRetries: clangDependencyRetries,
+		ClangDefinitionLoadMaxFiles: clangDefinitionLoadMaxFiles,
+		DynamicTest:                 dynamicTest, DynamicTestMode: dynamicTestMode,
 	}
 	if llmReachability {
 		meta.LLMReachability = true
@@ -2819,6 +3114,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		platform:                    platform,
 		level:                       level,
 		noContext:                   noContext,
+		scopeManifest:               scopeManifest,
 		noEnhance:                   noEnhance,
 		enhanceMode:                 enhanceMode,
 		noReport:                    noReport,
@@ -2841,6 +3137,13 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		llmCallGraphCandidateReview: llmCallGraphCandidateReview,
 		llmCallGraphProjection:      llmCallGraphProjection,
 		dispatchCodeEvidence:        dispatchCodeEvidence,
+		clangSemantic:               clangSemantic,
+		clangBuildStatus:            defaultClangBuildStatus,
+		clangMaxFiles:               clangMaxFiles,
+		clangTimeoutSeconds:         clangTimeoutSeconds,
+		clangBatchSize:              clangBatchSize,
+		clangDependencyRetries:      clangDependencyRetries,
+		clangDefinitionLoadMaxFiles: clangDefinitionLoadMaxFiles,
 		dynamicTest:                 dynamicTest,
 		dynamicTestMode:             dynamicTestMode,
 		done:                        make(chan struct{}),
@@ -2967,6 +3270,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.refreshRecoveredJob(job)
 	job.mu.Lock()
 	rp := job.ReportPath
 	if r.URL.Query().Get("lang") == "zh-CN" {
@@ -2998,6 +3302,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.refreshRecoveredJob(job)
 	job.mu.Lock()
 	sp := job.SummaryPath
 	if r.URL.Query().Get("lang") == "zh-CN" {
@@ -3795,6 +4100,9 @@ func buildScanArgs(job *Job, outDir, localPath string, isURL bool) []string {
 	if job.noContext {
 		args = append(args, "--no-context")
 	}
+	if job.scopeManifest != "" {
+		args = append(args, "--scope-manifest", job.scopeManifest)
+	}
 	if job.noEnhance {
 		args = append(args, "--no-enhance")
 	} else if job.enhanceMode != "" && job.enhanceMode != defaultEnhanceMode {
@@ -3860,6 +4168,35 @@ func buildScanArgs(job *Job, outDir, localPath string, isURL bool) []string {
 	}
 	if job.dispatchCodeEvidence {
 		args = append(args, "--openharmony-dispatch-code-evidence")
+	}
+	if job.clangSemantic {
+		args = append(args, "--clang-semantic")
+		buildStatus := job.clangBuildStatus
+		if buildStatus == "" {
+			buildStatus = defaultClangBuildStatus
+		}
+		maxFiles := job.clangMaxFiles
+		if maxFiles == 0 {
+			maxFiles = defaultClangMaxFiles
+		}
+		timeoutSeconds := job.clangTimeoutSeconds
+		if timeoutSeconds == 0 {
+			timeoutSeconds = defaultClangTimeoutSeconds
+		}
+		batchSize := job.clangBatchSize
+		if batchSize == 0 {
+			batchSize = defaultClangBatchSize
+		}
+		dependencyRetries := job.clangDependencyRetries
+		definitionLoadMaxFiles := job.clangDefinitionLoadMaxFiles
+		args = append(args,
+			"--clang-build-status", buildStatus,
+			"--clang-max-files", strconv.Itoa(maxFiles),
+			"--clang-timeout-seconds", strconv.Itoa(timeoutSeconds),
+			"--clang-batch-size", strconv.Itoa(batchSize),
+			"--clang-dependency-retries", strconv.Itoa(dependencyRetries),
+			"--clang-definition-load-max-files", strconv.Itoa(definitionLoadMaxFiles),
+		)
 	}
 	if job.dynamicTest {
 		if job.dynamicTestMode == "claude-code" {

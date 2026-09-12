@@ -48,10 +48,22 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from repository_scanner import RepositoryScanner
-from function_extractor import FunctionExtractor
-from call_graph_builder import CallGraphBuilder
-from unit_generator import UnitGenerator
+# Prefer package-qualified imports when the parser is called in-process.  The
+# C/C++ parser is also loaded by a few diagnostics and historically registers
+# its own top-level ``repository_scanner`` module; unqualified imports here
+# could then silently bind the Python parser to the C scanner and report zero
+# Python files.  Keep the fallback so ``python parse_repository.py ...``
+# remains a supported direct-script entry point.
+try:
+    from .repository_scanner import RepositoryScanner
+    from .function_extractor import FunctionExtractor
+    from .call_graph_builder import CallGraphBuilder
+    from .unit_generator import UnitGenerator
+except ImportError:  # pragma: no cover - exercised by direct CLI execution
+    from repository_scanner import RepositoryScanner
+    from function_extractor import FunctionExtractor
+    from call_graph_builder import CallGraphBuilder
+    from unit_generator import UnitGenerator
 from utilities.file_io import read_json, write_json, open_utf8
 
 

@@ -530,8 +530,6 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
             "检索目标地址族初始化",
             file_types=network_file_types,
         )
-        add("full", "socket", "检索网络服务端 socket 创建 API", file_types=network_file_types)
-        add("full", "bind", "检索网络服务端绑定 API", file_types=network_file_types)
         add(
             "full",
             "recvfrom" if target.transport == "UDP" else "accept",
@@ -540,8 +538,8 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
         )
         if target.process_hint:
             add("full", target.process_hint, "全文检索关联进程、服务类和线程实现", file_types=network_file_types)
-        add("full", "BUILD.gn", "检索 BUILD.gn 中的可执行目标归属", file_types=("all",))
-        add("full", "bundle.json", "检索 bundle 元数据中的组件归属", file_types=("all",))
+        add("path", "BUILD.gn", "按文件名检索 BUILD.gn 中的可执行目标归属", file_types=("all",))
+        add("path", "bundle.json", "按文件名检索 bundle 元数据中的组件归属", file_types=("all",))
         # SmartPerf and similar OpenHarmony daemons commonly hide the POSIX
         # calls behind ``SpServerSocket``/``SpThreadSocket`` wrappers.  These
         # are bounded semantic probes (not ownership facts by themselves),
@@ -589,7 +587,17 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
         add("full", target.socket_path, "优先检索完整 Unix socket 路径及其配置/宏引用")
         add("full", target.socket_path, "以不限制文件类型的方式补充检索完整路径配置", file_types=("all",))
         add("path", target.basename, "按 socket basename 检索配置、源码和构建元数据", file_types=("all",))
-        add("full", target.basename, "检索 init 配置 socket.name 和短名称监听/连接实现", file_types=("all",))
+        # Punctuation-bearing init names (notably ``faultloggerd.server``)
+        # can trigger an expensive OpenGrok parser path when sent as an
+        # unquoted full-text term.  Quote the exact service token so the
+        # search remains selective while still matching cfg/JSON/source
+        # literals.  Plain identifiers retain the historical query form.
+        basename_query = (
+            f'"{target.basename}"'
+            if re.search(r"[^A-Za-z0-9_]", target.basename)
+            else target.basename
+        )
+        add("full", basename_query, "检索 init 配置 socket.name 和短名称监听/连接实现", file_types=("all",))
         # Init configuration is the strongest ownership anchor for a named
         # socket.  Place the exact ``socket.name`` form before broad API
         # probes so the default bounded plan can establish the module context
@@ -600,26 +608,19 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
             "精确检索 init 配置中的 socket.name 声明（兼容 OpenHarmony 常见空格格式）",
             file_types=("all",),
         )
-        add(
-            "full",
-            "socket.name",
-            "检索 init 配置字段 socket.name，连接短名称到所属 service",
-            file_types=("all",),
-        )
+        # The exact ``name`` query above is sufficient for init configs.  A
+        # repository-wide ``socket.name`` term is intentionally omitted: it
+        # is a high-volume metadata query that can exhaust OpenGrok without
+        # improving target binding.
         # The following bounded probes recover the common OpenHarmony chain:
-        # config name -> GetControlSocket/socket/bind/listen/recv -> BUILD.gn.
+        # config name -> descriptor wrapper -> BUILD.gn.  Repository-wide
+        # ``bind``/``listen``/``recv`` searches are intentionally omitted;
+        # they are not target-specific and can exhaust a large OpenGrok heap.
         # They are recall probes; worker-side context gating prevents generic
         # API hits from becoming ownership evidence for unrelated modules.
         add("full", "GetControlSocket", "追踪 init 创建 descriptor 的服务端获取接口", file_types=("all",))
-        add("full", "bind", "追踪服务端绑定接口", file_types=("all",))
-        add("full", "listen", "追踪 TCP/Unix 服务端监听接口", file_types=("all",))
-        add("full", "recv", "追踪服务端接收和消息处理接口", file_types=("all",))
         add("full", "ohos_executable", "追踪 BUILD.gn 中的可执行目标归属", file_types=("all",))
-        add("full", "bundle.json", "追踪组件 bundle 元数据归属", file_types=("all",))
-        # Keep broad ``socket`` recall after the high-value config,
-        # descriptor, consumer and build anchors so the default 12-query
-        # window still contains an ownership mapping after ``socket.name``.
-        add("full", "socket", "追踪服务端 socket 创建接口", file_types=("all",))
+        add("path", "bundle.json", "按文件名追踪组件 bundle 元数据归属", file_types=("all",))
         add("full", "GetServerSocket", "追踪服务端 descriptor 获取封装", file_types=("all",))
         add("full", "SocketDevice", "追踪设备式 Unix socket 注册/打开封装", file_types=("all",))
     else:
@@ -636,14 +637,23 @@ def build_initial_queries(target: TargetSpec, *, max_queries: int = 12) -> tuple
         # Keep a bounded basename full-text query in both C and C++ so that
         # server implementations are reachable even when the path is only in
         # a client header.
-        add("full", target.basename, "按 socket basename 全文检索短名称监听/连接实现", file_types=("all",))
+        macro_basename_query = (
+            f'"{target.basename}"'
+            if re.search(r"[^A-Za-z0-9_]", target.basename)
+            else target.basename
+        )
+        add("full", macro_basename_query, "按 socket basename 全文检索短名称监听/连接实现", file_types=("all",))
         add("full", "GetControlSocket", "追踪 init 创建 descriptor 的服务端获取接口", file_types=("all",))
-        add("full", "socket", "追踪服务端 socket 创建接口", file_types=("all",))
-        add("full", "bind", "追踪服务端绑定接口", file_types=("all",))
-        add("full", "listen", "追踪 TCP/Unix 服务端监听接口", file_types=("all",))
+        add("full", "GetServerSocket", "追踪服务端 descriptor 获取封装", file_types=("all",))
+        add("full", "SocketDevice", "追踪设备式 Unix socket 注册/打开封装", file_types=("all",))
     elif target.service_hint:
         add("path", target.service_hint, "按服务名检索可能的实现文件")
-        add("full", target.service_hint, "全文检索服务名作为兜底召回")
+        service_query = (
+            f'"{target.service_hint}"'
+            if re.search(r"[^A-Za-z0-9_]", target.service_hint)
+            else target.service_hint
+        )
+        add("full", service_query, "全文检索服务名作为兜底召回")
 
     queries: list[LocatorQuery] = []
     for index, (kind, value, file_type, reason) in enumerate(candidates[:max_queries], start=1):

@@ -85,7 +85,12 @@ def _proposal(target_id: str = TARGET, *, confidence: str = "high", evidence=Non
     }
 
 
-def _report(*proposals: dict, retrieval_ids=None, candidate_ids=None) -> dict:
+def _report(
+    *proposals: dict,
+    retrieval_ids=None,
+    candidate_ids=None,
+    candidate_completeness="complete",
+) -> dict:
     if retrieval_ids is None:
         retrieval_ids = [TARGET]
     if candidate_ids is None:
@@ -102,6 +107,7 @@ def _report(*proposals: dict, retrieval_ids=None, candidate_ids=None) -> dict:
                 "line": 12,
                 "expression": "(this->*requestFunc)(data, reply)",
                 "candidate_target_ids": candidate_ids,
+                "candidate_completeness": candidate_completeness,
                 "retrieval_candidates": [
                     {"function_id": item} for item in retrieval_ids
                 ],
@@ -125,6 +131,9 @@ def test_projects_only_source_backed_high_confidence_edge_and_does_not_mutate_in
         "projected_edges": 1,
         "rejected": 0,
         "duplicate_edges": 0,
+        "strict_edges": 0,
+        "candidate_edges": 1,
+        "evidence_quality_counts": {"reference_validated": 1},
         "edge_limit": 1000,
         "minimum_confidence": "high",
     }
@@ -132,6 +141,7 @@ def test_projects_only_source_backed_high_confidence_edge_and_does_not_mutate_in
     assert overlay["edges"][0]["target_id"] == f"function:{TARGET}"
     assert overlay["edges"][0]["kind"] == EDGE_KIND
     assert overlay["edges"][0]["attributes"]["site_id"] == SITE
+    assert overlay["edges"][0]["attributes"]["reachability_tier"] == "candidate"
 
     # Extra envelope fields must not make the semantic graph unreadable.
     graph = SemanticGraph.from_dict(overlay)
@@ -151,6 +161,23 @@ def test_candidate_less_residual_can_project_bounded_retrieval_target():
 
     assert overlay["summary"]["projected_edges"] == 1
     assert overlay["edges"][0]["target_id"] == f"function:{TARGET}"
+
+
+def test_incomplete_parser_candidates_are_hints_not_a_hard_whitelist():
+    evidence = _proposal(target_id=OTHER)["evidence"]
+    evidence[1]["function_id"] = OTHER
+    evidence[1]["text"] = "NetStub::OtherRequest(MessageParcel &data)"
+    report = _report(
+        _proposal(target_id=OTHER, evidence=evidence),
+        retrieval_ids=[TARGET, OTHER],
+        candidate_ids=[TARGET],
+        candidate_completeness="unknown",
+    )
+
+    overlay = project_recovery_overlay(report, _functions())
+
+    assert overlay["summary"]["projected_edges"] == 1
+    assert overlay["edges"][0]["target_id"] == f"function:{OTHER}"
 
 
 def test_projects_wrapped_parser_registration_when_model_quotes_first_line():
@@ -189,6 +216,52 @@ def test_projects_wrapped_parser_registration_when_model_quotes_first_line():
 
     assert overlay["summary"]["projected_edges"] == 1
     assert overlay["summary"]["rejected"] == 0
+    assert overlay["summary"]["strict_edges"] == 1
+    assert overlay["summary"]["candidate_edges"] == 0
+    assert overlay["edges"][0]["attributes"]["evidence_quality"] == (
+        "relation_supported"
+    )
+    assert overlay["edges"][0]["attributes"]["reachability_tier"] == "strict"
+
+
+def test_type_evidence_requires_target_owner_before_strict_admission():
+    evidence = _proposal()["evidence"]
+    evidence[1] = {
+        "kind": "type",
+        "file": SOURCE,
+        "start_line": 30,
+        "end_line": 35,
+        "text": "OtherStub::HandleRequest handler",
+    }
+    overlay = project_recovery_overlay(
+        _report(_proposal(evidence=evidence)), _functions()
+    )
+
+    assert overlay["summary"]["projected_edges"] == 0
+    assert overlay["summary"]["rejected"] == 1
+    assert overlay["rejected"][0]["reason"] == (
+        "target_or_registration_evidence_not_source_backed"
+    )
+
+
+def test_type_evidence_with_target_owner_is_strict():
+    evidence = _proposal()["evidence"]
+    evidence[1] = {
+        "kind": "type",
+        "file": SOURCE,
+        "start_line": 30,
+        "end_line": 35,
+        "text": "NetStub::HandleRequest handler",
+    }
+    overlay = project_recovery_overlay(
+        _report(_proposal(evidence=evidence)), _functions()
+    )
+
+    assert overlay["summary"]["projected_edges"] == 1
+    assert overlay["summary"]["strict_edges"] == 1
+    assert overlay["edges"][0]["attributes"]["evidence_quality"] == (
+        "type_supported"
+    )
 
 
 def test_rejects_low_confidence_unknown_candidate_and_unbacked_evidence():
@@ -243,6 +316,8 @@ def test_duplicate_pair_is_projected_once_and_is_reported():
     assert overlay["summary"]["duplicate_edges"] == 1
     assert overlay["summary"]["rejected"] == 1
     assert overlay["rejected"][0]["reason"] == "duplicate_edge"
+    assert overlay["edges"][0]["attributes"]["site_ids"] == [SITE]
+    assert len(overlay["edges"][0]["attributes"]["site_evidence"]) == 1
 
 
 def test_missing_validation_block_is_invalid_and_emits_no_edges():

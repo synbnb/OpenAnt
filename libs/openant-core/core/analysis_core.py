@@ -25,6 +25,18 @@ from prompts.vulnerability_analysis import get_system_prompt as get_stage1_syste
 from utilities.context_reviewer import ContextReviewer
 from utilities.json_corrector import JSONCorrector
 from utilities.llm import PhaseBinding, simple_text
+from core.file_boundary import split_on_boundary
+from core.attack_chain_context import (
+    context_from_unit,
+    normalize_attack_chain_context,
+    stage_context_from_unit,
+)
+from core.finding_records import (
+    VALID_FINDINGS,
+    ensure_primary_record,
+    normalize_findings,
+    primary_record,
+)
 
 if TYPE_CHECKING:  # avoids a runtime cycle: context/ imports utilities/ which
     # imports prompts/ which imports core/. The annotation is a string either way.
@@ -66,6 +78,33 @@ def _normalize_result(result: dict) -> dict:
     if "cwe_name" not in result:
         result["cwe_name"] = None
 
+    # Preserve an additive inventory of independent issues.  The historical
+    # top-level ``finding`` remains the target/primary verdict; a context risk
+    # must never silently replace it.  Legacy one-finding responses receive a
+    # synthesized primary record so downstream consumers can adopt the new
+    # collection incrementally.
+    primary_finding = result.get("finding")
+    if not isinstance(primary_finding, str):
+        primary_finding = result.get("verdict")
+    records = normalize_findings(
+        result.get("findings"),
+        primary_finding=primary_finding,
+        synthesize_primary=(
+            isinstance(primary_finding, str)
+            and primary_finding.strip().lower() in VALID_FINDINGS
+        ),
+    )
+    records = ensure_primary_record(records, primary_finding)
+    if records:
+        result["findings"] = records
+        primary = primary_record(records, primary_finding)
+        if primary:
+            if str(result.get("finding", "")).strip().lower() not in VALID_FINDINGS:
+                result["finding"] = primary["finding"]
+                result["verdict"] = primary["finding"].upper()
+            result["primary_finding_id"] = primary["finding_id"]
+            result["finding_scope"] = primary.get("scope", "target")
+
     return result
 
 
@@ -81,6 +120,49 @@ def _unit_language(unit: dict) -> str:
     aliases = {"c++": "cpp", "cc": "cpp", "cxx": "cpp"}
     normalized = language.strip().lower()
     return aliases.get(normalized, normalized)
+
+
+def _project_source_bundle(raw_bundle: object) -> dict | None:
+    """Project one reachability source bundle into a prompt-safe shape.
+
+    The bundle is generated from the effective graph, but it is still data
+    supplied by a scan artifact.  Keep the schema bounded and preserve full
+    function bodies for the selected path; the prompt renderer puts those
+    bodies in safe code fences rather than interpolating them as instructions.
+    """
+    if not isinstance(raw_bundle, dict):
+        return None
+    projected: dict = {}
+    for key in (
+        "schema_version", "kind", "order", "source_complete", "node_count",
+        "edge_count", "omitted_node_count",
+    ):
+        if key in raw_bundle:
+            projected[key] = raw_bundle[key]
+    nodes = raw_bundle.get("nodes")
+    if isinstance(nodes, list):
+        projected_nodes = []
+        for raw_node in nodes[:24]:
+            if not isinstance(raw_node, dict):
+                continue
+            node = {}
+            for key in (
+                "order", "id", "name", "file", "line_start", "line_end",
+                "unit_type", "source", "source_length", "source_complete",
+                "source_excerpt",
+            ):
+                value = raw_node.get(key)
+                if value not in (None, "", []):
+                    node[key] = value
+            if node:
+                projected_nodes.append(node)
+        projected["nodes"] = projected_nodes
+    edges = raw_bundle.get("edges")
+    if isinstance(edges, list):
+        projected["edges"] = [
+            dict(edge) for edge in edges[:24] if isinstance(edge, dict)
+        ]
+    return projected
 
 
 def _reachability_context_for_unit(unit: dict) -> dict | None:
@@ -132,8 +214,12 @@ def _reachability_context_for_unit(unit: dict) -> dict | None:
     else:
         retain_sources = []
     if not compact and not semantic_seed and not semantic_retain_only and not sources:
-        return None
-    return {
+        # A unit may have no LLM signal but still have a valuable, deterministic
+        # entry-path context produced from effective_call_graph.json.
+        lineage = unit.get("reachability_context")
+        if not isinstance(lineage, dict):
+            return None
+    payload = {
         "semantic_reachability_seed": semantic_seed,
         "semantic_reachability_retain_only": semantic_retain_only,
         "reachability_retain_only": semantic_retain_only,
@@ -141,6 +227,192 @@ def _reachability_context_for_unit(unit: dict) -> dict | None:
         "reachability_retain_only_source": retain_sources,
         "signals": compact,
     }
+    lineage = unit.get("reachability_context")
+    if isinstance(lineage, dict):
+        # Keep the prompt bounded and retain source-backed node identity/lines;
+        # the model still has to re-check the actual target and sink.
+        attack_chain = lineage.get("attack_chain_context")
+        if not isinstance(attack_chain, dict):
+            attack_chain = normalize_attack_chain_context()
+        else:
+            attack_chain = normalize_attack_chain_context(attack_chain)
+        # The reachability context is built before enhancement.  Re-read the
+        # unit here so a later single-shot ``llm_context.data_flow`` or a
+        # structured callsite record is visible to Stage 1 without mutating
+        # the original graph-derived artifact.  Merge observations conservatively.
+        unit_attack_chain = context_from_unit(unit)
+        if unit_attack_chain.get("status") != "not_evaluated":
+            merged_callsites = list(attack_chain.get("callsite_contexts", []) or [])
+            for candidate in unit_attack_chain.get("callsite_contexts", []) or []:
+                if candidate not in merged_callsites:
+                    merged_callsites.append(candidate)
+            merged_missing = list(attack_chain.get("missing_evidence", []) or [])
+            for missing in unit_attack_chain.get("missing_evidence", []) or []:
+                if missing not in merged_missing:
+                    merged_missing.append(missing)
+            attack_chain = normalize_attack_chain_context({
+                "status": "incomplete" if (
+                    attack_chain.get("status") == "incomplete"
+                    or unit_attack_chain.get("status") == "incomplete"
+                ) else unit_attack_chain.get("status"),
+                "complete": (
+                    True if attack_chain.get("complete") is True
+                    and unit_attack_chain.get("complete") is True else False
+                ),
+                "callsite_contexts": merged_callsites[:24],
+                "missing_evidence": merged_missing[:32],
+                "evidence": (
+                    list(attack_chain.get("evidence", []) or [])
+                    + list(unit_attack_chain.get("evidence", []) or [])
+                )[:24],
+                "provenance": "+".join(dict.fromkeys(filter(None, (
+                    attack_chain.get("provenance"),
+                    unit_attack_chain.get("provenance"),
+                )))) or "not_provided",
+            })
+        legacy_stage1_status = lineage.get("stage1_context_status")
+        if not legacy_stage1_status:
+            legacy_stage1_status = (
+                "strict" if lineage.get("entry_path_ids")
+                or lineage.get("status") == "path_found" else
+                "candidate" if lineage.get("candidate_entry_path_ids")
+                or lineage.get("status") == "candidate_path_found" else
+                "root" if lineage.get("status") == "root" else "unknown"
+            )
+        payload["entry_context"] = {
+            "status": lineage.get("status"),
+            "stage1_context_status": legacy_stage1_status,
+            "stage1_context_analysis_allowed": lineage.get(
+                "stage1_context_analysis_allowed", True
+            ),
+            "parameter_dataflow_is_stage1_gate": False,
+            "stage1_context_missing_evidence": list(
+                lineage.get("stage1_context_missing_evidence", []) or []
+            )[:8],
+            # Use the merged callsite context so post-enhancement Stage-2
+            # observations are not hidden behind a stale pre-enhancement field.
+            "stage2_dataflow_status": attack_chain.get("status"),
+            "stage2_dataflow_complete": attack_chain.get("complete"),
+            "stage2_dataflow_missing_evidence": list(
+                attack_chain.get("missing_evidence", []) or []
+            )[:12],
+            "generic_entry_path_found": lineage.get(
+                "generic_entry_path_found", bool(lineage.get("entry_path_ids"))
+            ),
+            "generic_entry_path_source_complete": lineage.get(
+                "generic_entry_path_source_complete"
+            ),
+            "upstream_boundary_signals": [
+                dict(signal) for signal in (lineage.get("upstream_boundary_signals", []) or [])[:16]
+                if isinstance(signal, dict)
+            ],
+            "graph_versions": list(lineage.get("graph_versions", []) or [])[:4],
+            "top_level_entry": lineage.get("top_level_entry"),
+            "root_entry_points": list(lineage.get("root_entry_points", []) or [])[:4],
+            "entry_path_ids": [
+                list(path)[:24]
+                for path in (lineage.get("entry_path_ids", []) or [])[:3]
+                if isinstance(path, list)
+            ],
+            "entry_paths": [
+                [
+                    {
+                        key: node.get(key)
+                        for key in (
+                            "id", "name", "file", "line_start", "line_end",
+                            "unit_type", "source_excerpt",
+                        )
+                        if node.get(key) not in (None, "")
+                    }
+                    for node in path[:24]
+                    if isinstance(node, dict)
+                ]
+                for path in (lineage.get("entry_paths", []) or [])[:3]
+                if isinstance(path, list)
+            ],
+            # Keep the display-selected route separate from the strict and
+            # candidate collections.  Stage 1 can see the most relevant
+            # source-backed route while the provenance label remains explicit;
+            # a candidate route is never silently promoted here.
+            "primary_entry_path_kind": lineage.get("primary_entry_path_kind", "none"),
+            "primary_entry_path_ids": [
+                list(path)[:24]
+                for path in (lineage.get("primary_entry_path_ids", []) or [])[:1]
+                if isinstance(path, list)
+            ],
+            "primary_entry_path": [
+                {
+                    key: node.get(key)
+                    for key in (
+                        "id", "name", "file", "line_start", "line_end",
+                        "unit_type", "source_excerpt",
+                    )
+                    if node.get(key) not in (None, "")
+                }
+                for node in (lineage.get("primary_entry_path", []) or [])[:24]
+                if isinstance(node, dict)
+            ],
+            "primary_entry_path_edge_statuses": list(
+                lineage.get("primary_entry_path_edge_statuses", []) or []
+            )[:24],
+            "primary_top_level_entry": lineage.get("primary_top_level_entry"),
+            "primary_entry_path_source_complete": lineage.get(
+                "primary_entry_path_source_complete"
+            ),
+            "primary_entry_path_full_source_complete": lineage.get(
+                "primary_entry_path_full_source_complete"
+            ),
+            "primary_path_source_bundle": _project_source_bundle(
+                lineage.get("primary_path_source_bundle")
+            ),
+            "supporting_context_bundle": _project_source_bundle(
+                lineage.get("supporting_context_bundle")
+            ),
+            "primary_entry_path_validation": dict(
+                lineage.get("primary_entry_path_validation", {})
+            ) if isinstance(lineage.get("primary_entry_path_validation"), dict) else {},
+            "candidate_entry_path_ids": [
+                list(path)[:24]
+                for path in (lineage.get("candidate_entry_path_ids", []) or [])[:3]
+                if isinstance(path, list)
+            ],
+            "candidate_entry_paths": [
+                [
+                    {
+                        key: node.get(key)
+                        for key in (
+                            "id", "name", "file", "line_start", "line_end",
+                            "unit_type", "source_excerpt",
+                        )
+                        if node.get(key) not in (None, "")
+                    }
+                    for node in path[:24]
+                    if isinstance(node, dict)
+                ]
+                for path in (lineage.get("candidate_entry_paths", []) or [])[:3]
+                if isinstance(path, list)
+            ],
+            "candidate_entry_path_edge_statuses": [
+                list(statuses)[:24]
+                for statuses in (lineage.get("candidate_entry_path_edge_statuses", []) or [])[:3]
+                if isinstance(statuses, list)
+            ],
+            "candidate_entry_path_edges": [
+                [dict(edge) for edge in edges[:24] if isinstance(edge, dict)]
+                for edges in (lineage.get("candidate_entry_path_edges", []) or [])[:3]
+                if isinstance(edges, list)
+            ],
+            "candidate_path_count": lineage.get("candidate_path_count", 0),
+            "candidate_missing_evidence": list(
+                lineage.get("candidate_missing_evidence", []) or []
+            )[:8],
+            "upstream_complete": lineage.get("upstream_complete"),
+            "missing_upstream_evidence": list(
+                lineage.get("missing_upstream_evidence", []) or []
+            )[:8],
+            "attack_chain_context": attack_chain,
+        }
+    return payload
 
 
 def parse_response(response: str) -> dict:
@@ -339,9 +611,31 @@ def analyze_unit(
             context_enhanced = True
             print(f"      Added {len(additional_files_added)} files via LLM review")
 
+    # When the deterministic reachability stage supplied an ordered full-source
+    # bundle, present only the target function in the primary code slot.  The
+    # ordered entry-to-target bundle is rendered separately by the prompt
+    # formatter, preventing the legacy breadth/depth dependency concatenation
+    # from obscuring or reordering the actual route.  Keep ``code`` untouched
+    # for result metadata, Stage 2, and legacy datasets without a bundle.
+    code_for_prompt = code
+    entry_context = (
+        reachability_context.get("entry_context")
+        if isinstance(reachability_context, dict)
+        else None
+    )
+    source_bundle = (
+        entry_context.get("primary_path_source_bundle")
+        if isinstance(entry_context, dict)
+        else None
+    )
+    if isinstance(source_bundle, dict) and source_bundle.get("nodes"):
+        code_parts = split_on_boundary(code)
+        if code_parts:
+            code_for_prompt = code_parts[0].strip()
+
     # Generate prompt - single unified prompt for all cases
     prompt = get_analysis_prompt(
-        code=code,
+        code=code_for_prompt,
         language=language,
         route=route_key,
         files_included=files_included,
@@ -361,6 +655,11 @@ def analyze_unit(
     # Parse response
     result = parse_response(response)
 
+    # Derive the phase boundary before parsing correction.  It is attached
+    # below, after a possible JSON-correction replacement, so malformed model
+    # output cannot discard the Stage-1/Stage-2 handoff metadata.
+    phase_context = stage_context_from_unit(unit)
+
     # If parsing failed or verdict is missing, try JSON correction
     if result.get("verdict") in ("ERROR", None):
         # Create JSONCorrector internally if not provided (same pattern as other components).
@@ -372,6 +671,17 @@ def analyze_unit(
         corrected = _normalize_result(corrected)
         if corrected.get("verdict") not in ("ERROR", None):
             result = corrected
+
+    # Persist the phase boundary alongside the model result.  Stage 1 remains
+    # the vulnerability detector; the nested Stage-2 view only records which
+    # parameter/data-flow facts still require tool-assisted verification.
+    result["stage_context"] = phase_context
+    result["stage1_context"] = phase_context.get("stage1", {})
+    result["stage2_context"] = phase_context.get("stage2", {})
+    result["stage1_context_status"] = result["stage1_context"].get("status", "unknown")
+    result["stage2_dataflow_status"] = result["stage2_context"].get(
+        "parameter_dataflow_status", "not_evaluated"
+    )
 
     result["route_key"] = route_key
     result["elapsed_seconds"] = elapsed

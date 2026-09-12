@@ -22,6 +22,7 @@ from core.exposure_surface import (
     _parse_network_observations,
     run_exposure_session,
     start_exposure_service,
+    _format_dac_permissions,
     _parse_proc_unix_line,
     _parse_unix_netstat_line,
 )
@@ -326,7 +327,20 @@ def test_collector_builds_example_compatible_surface_and_evidence(tmp_path: Path
             encoding="utf-8"
         )
     )
-    assert payload["surfaces"][0]["权限配置"]["DAC权限"].startswith("0600")
+    assert payload["surfaces"][0]["权限配置"]["DAC权限"] == (
+        "0600 (srw-------)，属主:hiprofiler，属组:shell"
+    )
+
+
+def test_dac_permission_display_keeps_socket_symbolic_mode():
+    assert _format_dac_permissions(
+        {
+            "mode_symbolic": "srw-rw-rw-",
+            "mode_octal": "0666",
+            "owner": "root",
+            "group": "root",
+        }
+    ) == "0666 (srw-rw-rw-)，属主:root，属组:root"
 
 
 def test_collector_builds_udp_surface_from_network_endpoint(tmp_path: Path):

@@ -226,4 +226,38 @@ class SemanticGraph:
         return graph
 
 
-__all__ = ["SCHEMA_VERSION", "SemanticGraph"]
+def merge_semantic_graphs(*graphs: Any) -> SemanticGraph | None:
+    """Merge validated semantic overlays without importing language parsers.
+
+    Projection and reporting only need the graph container; they must remain
+    usable when an optional Tree-sitter grammar package is not installed.  The
+    OpenHarmony native-dispatch resolver re-exports the same operation for
+    compatibility, while this dependency-light location is the canonical
+    implementation for scan orchestration.
+    """
+    merged = SemanticGraph()
+    present = False
+    for payload in graphs:
+        if payload is None:
+            continue
+        graph = (
+            payload
+            if isinstance(payload, SemanticGraph)
+            else SemanticGraph.from_dict(payload)
+        )
+        present = True
+        for node in graph.nodes.values():
+            merged.add_node(node)
+        for edge in graph.edges.values():
+            merged.add_edge(edge)
+        for orphan in graph.orphans:
+            merged.add_orphan(
+                kind=orphan["kind"],
+                reason=orphan["reason"],
+                evidence=orphan.get("evidence", []),
+                attributes=orphan.get("attributes", {}),
+            )
+    return merged if present else None
+
+
+__all__ = ["SCHEMA_VERSION", "SemanticGraph", "merge_semantic_graphs"]

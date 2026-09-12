@@ -703,6 +703,18 @@ def _accepted_projection_report():
                 "line": 2,
                 "expression": "callback()",
                 "candidate_target_ids": ["entry.cpp:target"],
+                "candidate_completeness": "complete",
+                "candidate_registrations": [
+                    {
+                        "target_id": "entry.cpp:target",
+                        "registration_evidence": {
+                            "file": "entry.cpp",
+                            "start_line": 1,
+                            "end_line": 2,
+                            "text": "callback() = &target",
+                        },
+                    }
+                ],
                 "retrieval_candidates": [
                     {"function_id": "entry.cpp:target"},
                 ],
@@ -725,12 +737,11 @@ def _accepted_projection_report():
                             "text": "callback()",
                         },
                         {
-                            "kind": "target",
-                            "function_id": "entry.cpp:target",
+                            "kind": "registration",
                             "file": "entry.cpp",
-                            "start_line": 10,
-                            "end_line": 14,
-                            "text": "target()",
+                            "start_line": 1,
+                            "end_line": 2,
+                            "text": "callback() = &target",
                         },
                     ],
                 },

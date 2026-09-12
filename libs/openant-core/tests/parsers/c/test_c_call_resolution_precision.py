@@ -29,6 +29,7 @@ if str(CORE) not in sys.path:
 pytest.importorskip("tree_sitter_c")  # CallGraphBuilder builds a tree-sitter C Parser at init
 
 from parsers.c.call_graph_builder import CallGraphBuilder  # noqa: E402
+from parsers.c.function_extractor import FunctionExtractor  # noqa: E402
 
 
 # --- regex fallback must not match comment/string content ----------------
@@ -84,6 +85,79 @@ def test_direct_free_call_still_resolves():
     b = CallGraphBuilder(eo)
     edges = b._extract_calls_from_code("void caller(void){ helper(); }", "main.c:caller")
     assert "main.c:helper" in edges, f"direct call regressed: {sorted(edges)}"
+
+
+def test_smart_pointer_factory_resolves_constructor_edge():
+    """make_shared<T> must retain the edge to T's constructor.
+
+    The factory itself is a C++ standard-library function and is intentionally
+    filtered from the graph.  Its template type, however, identifies the
+    concrete constructor that executes during allocation.
+    """
+    eo = {
+        "functions": {
+            "main.cpp:caller": {
+                "name": "caller",
+                "file_path": "main.cpp",
+                "code": "void caller(void){ auto p = std::make_shared<Widget>(1); }",
+            },
+            "widget.cpp:Widget::Widget": {
+                "name": "Widget::Widget",
+                "class_name": "Widget",
+                "unit_type": "constructor",
+                "file_path": "widget.cpp",
+                "parameters": ["int value"],
+                "code": "Widget::Widget(int value) {}",
+                "is_static": False,
+            },
+        }
+    }
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(
+        "void caller(void){ auto p = std::make_shared<Widget>(1); }",
+        "main.cpp:caller",
+    )
+    assert "widget.cpp:Widget::Widget" in edges, (
+        f"smart-pointer construction dropped the constructor edge: {sorted(edges)}"
+    )
+
+
+def test_make_unique_constructor_overload_uses_argument_count():
+    """A factory call should prefer the constructor matching its arity."""
+    eo = {
+        "functions": {
+            "main.cpp:caller": {
+                "name": "caller",
+                "file_path": "main.cpp",
+                "code": "void caller(void){ auto p = std::make_unique<Widget>(1, 2); }",
+            },
+            "widget.cpp:Widget::Widget": {
+                "name": "Widget::Widget",
+                "class_name": "Widget",
+                "unit_type": "constructor",
+                "file_path": "widget.cpp",
+                "parameters": ["int value"],
+                "code": "Widget::Widget(int value) {}",
+                "is_static": False,
+            },
+            "widget.cpp:Widget::Widget(int,int)": {
+                "name": "Widget::Widget",
+                "class_name": "Widget",
+                "unit_type": "constructor",
+                "file_path": "widget.cpp",
+                "parameters": ["int left", "int right"],
+                "code": "Widget::Widget(int left, int right) {}",
+                "is_static": False,
+            },
+        }
+    }
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(
+        "void caller(void){ auto p = std::make_unique<Widget>(1, 2); }",
+        "main.cpp:caller",
+    )
+    assert "widget.cpp:Widget::Widget(int,int)" in edges
+    assert "widget.cpp:Widget::Widget" not in edges
 
 
 # --- callback function passed by name as an argument -------------------
@@ -178,3 +252,113 @@ def test_non_static_unique_name_still_resolves_cross_file():
     }
     b = CallGraphBuilder(eo)
     assert b._resolve_call("shared", "a.c") == "b.c:shared", "extern unique-name resolution regressed"
+
+
+# --- qualified C++ receiver types and class-field dispatch -----------------
+
+def _cpp_member_evidence(*, caller_code, caller_id="caller.cpp:Caller",
+                         caller_class=None, class_fields=None,
+                         target_id="target.cpp:ControlCallCmd::GetResult",
+                         target_name="GetResult", target_class="ControlCallCmd",
+                         target_parameters=None):
+    caller = {
+        "name": caller_class or "Caller",
+        "file_path": "caller.cpp",
+        "code": caller_code,
+        "class_name": caller_class,
+    }
+    target = {
+        "name": f"{target_class}::{target_name}",
+        "file_path": "target.cpp",
+        "code": "void target() {}",
+        "class_name": target_class,
+        "parameters": target_parameters if target_parameters is not None else ["int value"],
+        "is_static": False,
+    }
+    return {
+        "functions": {caller_id: caller, target_id: target},
+        "class_fields": class_fields or {},
+    }
+
+
+def test_qualified_local_type_resolves_unique_cross_file_member_call():
+    """A qualified local declaration must bind a typed member across TUs.
+
+    This is the direct shape used by ``controlCallCmd.GetResult(vec)`` after
+    the C++ declaration is normalized from ``OHOS::SmartPerf::...``.
+    """
+    eo = _cpp_member_evidence(
+        caller_code=(
+            "void caller(){ OHOS::SmartPerf::ControlCallCmd controlCallCmd; "
+            "controlCallCmd.GetResult(value); }"
+        ),
+        target_parameters=["int value"],
+    )
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(eo["functions"]["caller.cpp:Caller"]["code"], "caller.cpp:Caller")
+    assert "target.cpp:ControlCallCmd::GetResult" in edges
+
+
+def test_constructor_style_qualified_local_type_resolves_member_call():
+    """The ``Type object(args)`` declaration uses a function_declarator node."""
+    eo = _cpp_member_evidence(
+        caller_code=(
+            "void caller(){ OHOS::SmartPerf::ControlCallCmd controlCallCmd(value); "
+            "controlCallCmd.GetResult(value); }"
+        ),
+        target_parameters=["int value"],
+    )
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(eo["functions"]["caller.cpp:Caller"]["code"], "caller.cpp:Caller")
+    assert "target.cpp:ControlCallCmd::GetResult" in edges
+
+
+def test_class_field_type_resolves_member_call():
+    """A method using a typed class field must not depend on field-name guesses."""
+    eo = _cpp_member_evidence(
+        caller_code="void caller(){ taskMgr_.InitDataCsv(); }",
+        caller_class="SmartPerfCommand",
+        class_fields={"SmartPerfCommand": {"taskMgr_": "TaskManager"}},
+        target_id="task.cpp:TaskManager::InitDataCsv",
+        target_name="InitDataCsv",
+        target_class="TaskManager",
+        target_parameters=[],
+    )
+    eo["functions"]["caller.cpp:Caller"]["class_name"] = "SmartPerfCommand"
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(eo["functions"]["caller.cpp:Caller"]["code"], "caller.cpp:Caller")
+    assert "task.cpp:TaskManager::InitDataCsv" in edges
+
+
+def test_unknown_or_ambiguous_typed_member_does_not_fabricate_cross_file_edge():
+    """Typed dispatch remains conservative when two overloads are ambiguous."""
+    eo = _cpp_member_evidence(
+        caller_code=(
+            "void caller(){ OHOS::SmartPerf::ControlCallCmd c; "
+            "c.GetResult(value); }"
+        ),
+        target_parameters=["int left"],
+    )
+    eo["functions"]["target.cpp:ControlCallCmd::GetResult2"] = {
+        **eo["functions"]["target.cpp:ControlCallCmd::GetResult"],
+        "name": "ControlCallCmd::GetResult",
+        "parameters": ["int right"],
+    }
+    b = CallGraphBuilder(eo)
+    edges = b._extract_calls_from_code(eo["functions"]["caller.cpp:Caller"]["code"], "caller.cpp:Caller")
+    assert not ({
+        "target.cpp:ControlCallCmd::GetResult",
+        "target.cpp:ControlCallCmd::GetResult2",
+    } & edges)
+
+
+def test_extractor_indexes_fields_but_not_method_declarations(tmp_path):
+    header = tmp_path / "owner.h"
+    header.write_text(
+        "class Owner { public: void Run(); TaskManager taskMgr_; };\n",
+        encoding="utf-8",
+    )
+    extracted = FunctionExtractor(str(tmp_path)).extract_all()
+    fields = extracted["class_fields"].get("Owner", {})
+    assert fields.get("taskMgr_") == "TaskManager"
+    assert "Run" not in fields

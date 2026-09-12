@@ -60,6 +60,21 @@ func TestPlatformArgs(t *testing.T) {
 	}
 }
 
+func TestBuildScanArgsCarriesConfirmedSocketScope(t *testing.T) {
+	job := &Job{scopeManifest: "/tmp/socket-scope/scan_scope.json"}
+	args := buildScanArgs(job, "/tmp/out", "/tmp/repo", false)
+	found := false
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--scope-manifest" && args[i+1] == job.scopeManifest {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("buildScanArgs did not forward scope manifest: %v", args)
+	}
+}
+
 func TestNormalizeLLMReachabilityMaxCodeBytes(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -141,6 +156,9 @@ func TestBuildScanArgsForAllWebOptions(t *testing.T) {
 		llmReachabilityMaxCodeBytes: 4096, llmCallGraphRecovery: true,
 		llmCallGraphIterative: true, llmCallGraphCandidateReview: true,
 		llmCallGraphProjection: true, dispatchCodeEvidence: true,
+		clangSemantic: true, clangBuildStatus: "compile_database",
+		clangMaxFiles: 64, clangTimeoutSeconds: 45, clangBatchSize: 8,
+		clangDependencyRetries: 2, clangDefinitionLoadMaxFiles: 12,
 		dynamicTest: true, dynamicTestMode: "docker", libraryMode: true,
 	}
 	got := buildScanArgs(job, "/tmp/out", "/tmp/repo", false)
@@ -152,7 +170,10 @@ func TestBuildScanArgsForAllWebOptions(t *testing.T) {
 		"--backoff", "0", "--verify", "--llm-reachability", "--llm-reachability-max-code-bytes", "4096",
 		"--llm-call-graph-recovery", "--llm-call-graph-iterative-recovery",
 		"--llm-call-graph-candidate-review", "--llm-call-graph-projection",
-		"--openharmony-dispatch-code-evidence", "--dynamic-test", "--library-mode", "--", "/tmp/repo",
+		"--openharmony-dispatch-code-evidence", "--dynamic-test", "--library-mode",
+		"--clang-semantic", "--clang-max-files", "64", "--clang-timeout-seconds", "45",
+		"--clang-batch-size", "8", "--clang-dependency-retries", "2",
+		"--clang-definition-load-max-files", "12", "--", "/tmp/repo",
 	} {
 		found := false
 		for _, arg := range got {

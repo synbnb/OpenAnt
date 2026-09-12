@@ -116,6 +116,9 @@ class CallGraphBuilder:
         # predates base-class extraction, so resolution degrades to the [51]
         # same-type behavior rather than erroring.
         self.class_bases: Dict[str, List[str]] = extractor_output.get('class_bases', {})
+        self.class_fields: Dict[str, Dict[str, str]] = extractor_output.get(
+            'class_fields', {}
+        )
         self.repo_path = extractor_output.get('repository', '')
 
         self.max_depth = options.get('max_depth', 3)
@@ -223,6 +226,13 @@ class CallGraphBuilder:
         # used to resolve member calls (w.compute() / w->compute()) to the
         # method on the receiver's known type.
         local_var_types = self._extract_local_var_types(tree.root_node, code_bytes)
+        # Member fields are not declared inside the function body.  Use the
+        # extractor's conservative class-field index as a second source, never
+        # as a name-only guess.  This covers patterns such as
+        # ``taskMgr_.InitDataCsv()`` while preserving the existing precision
+        # rule for unknown field types.
+        class_name = func_data.get('class_name')
+        member_field_types = self.class_fields.get(class_name, {}) if class_name else {}
 
         stack = [tree.root_node]
         while stack:
@@ -230,14 +240,28 @@ class CallGraphBuilder:
             if node.type == 'call_expression':
                 func_node = node.child_by_field_name('function')
                 if func_node:
+                    # Smart-pointer factories are semantic constructor calls;
+                    # the normal resolver intentionally ignores stdlib names.
+                    # Preserve the edge to the concrete ``T::T`` constructor
+                    # so object creation does not become a silent graph sink.
+                    calls.update(
+                        self._extract_factory_constructor_calls(
+                            func_node, node, code_bytes, caller_file
+                        )
+                    )
                     call_name, receiver = self._extract_call_name_and_receiver(
                         func_node, code_bytes
                     )
                     if call_name:
-                        receiver_type = local_var_types.get(receiver) if receiver else None
+                        receiver_type = None
+                        if receiver:
+                            receiver_type = local_var_types.get(receiver)
+                            if receiver_type is None:
+                                receiver_type = member_field_types.get(receiver)
                         resolved = self._resolve_call(call_name, caller_file,
                                                       receiver_type=receiver_type,
-                                                      is_member=func_node.type == 'field_expression')
+                                                      is_member=func_node.type == 'field_expression',
+                                                      argument_count=self._argument_count(node))
                         if resolved:
                             calls.add(resolved)
                 # A function passed by name as an argument (e.g.
@@ -246,8 +270,127 @@ class CallGraphBuilder:
                 # name a known function; non-function identifiers (variables) do not
                 # resolve and so do not create edges.
                 calls.update(self._extract_callback_args(node, code_bytes, caller_file))
+            elif node.type == 'new_expression':
+                # Direct ``new T(args...)`` has the same constructor edge.
+                calls.update(
+                    self._extract_new_constructor_calls(
+                        node, code_bytes, caller_file
+                    )
+                )
             stack.extend(reversed(node.children))
         return calls
+
+    @staticmethod
+    def _template_type_name(function_node, source: bytes) -> Optional[str]:
+        """Return the first type argument of a smart-pointer factory."""
+        if function_node is None:
+            return None
+        template_function = function_node
+        if function_node.type == 'qualified_identifier':
+            template_function = function_node.child_by_field_name('name')
+        if template_function is None or template_function.type != 'template_function':
+            return None
+        name_node = template_function.child_by_field_name('name')
+        if name_node is None:
+            return None
+        factory_name = source[name_node.start_byte:name_node.end_byte].decode(
+            'utf-8', errors='replace'
+        )
+        if factory_name not in {'make_shared', 'make_unique', 'allocate_shared'}:
+            return None
+        arguments = template_function.child_by_field_name('arguments')
+        if arguments is None:
+            return None
+        for child in arguments.children:
+            if child.type != 'type_descriptor':
+                continue
+            type_node = child.child_by_field_name('type')
+            if type_node is None or type_node.type not in {
+                'type_identifier', 'qualified_identifier'
+            }:
+                return None
+            return source[type_node.start_byte:type_node.end_byte].decode(
+                'utf-8', errors='replace'
+            )
+        return None
+
+    @staticmethod
+    def _argument_count(call_node) -> Optional[int]:
+        """Count call arguments, excluding punctuation nodes."""
+        arguments = call_node.child_by_field_name('arguments')
+        if arguments is None:
+            return 0
+        return sum(
+            1
+            for child in arguments.children
+            if child.type not in {'(', ')', ','}
+        )
+
+    def _resolve_constructor_targets(
+        self,
+        type_name: str,
+        caller_file: str,
+        argument_count: Optional[int],
+    ) -> Set[str]:
+        """Resolve visible ``Class::Class`` definitions for an allocation.
+
+        Prefer an exact parameter-count match. If defaults or incomplete AST
+        information prevent an exact match, retain all visible overloads as
+        possible static targets rather than dropping the construction edge.
+        """
+        if not type_name:
+            return set()
+        class_name = type_name.split('::')[-1]
+        candidates = list(
+            self.methods_by_class.get(type_name, {}).get(class_name, [])
+        )
+        if not candidates and class_name != type_name:
+            candidates = list(
+                self.methods_by_class.get(class_name, {}).get(class_name, [])
+            )
+        candidates = [
+            func_id
+            for func_id in candidates
+            if self._is_visible_from(func_id, caller_file)
+        ]
+        if not candidates or argument_count is None:
+            return set(candidates)
+        exact = []
+        for func_id in candidates:
+            parameters = self.functions.get(func_id, {}).get('parameters', [])
+            if isinstance(parameters, list) and len(parameters) == argument_count:
+                exact.append(func_id)
+        return set(exact or candidates)
+
+    def _extract_factory_constructor_calls(
+        self,
+        function_node,
+        call_node,
+        source: bytes,
+        caller_file: str,
+    ) -> Set[str]:
+        type_name = self._template_type_name(function_node, source)
+        return self._resolve_constructor_targets(
+            type_name or '', caller_file, self._argument_count(call_node)
+        )
+
+    def _extract_new_constructor_calls(
+        self,
+        new_node,
+        source: bytes,
+        caller_file: str,
+    ) -> Set[str]:
+        type_node = new_node.child_by_field_name('type')
+        if type_node is None or type_node.type not in {
+            'type_identifier', 'qualified_identifier'
+        }:
+            return set()
+        type_name = source[type_node.start_byte:type_node.end_byte].decode(
+            'utf-8', errors='replace'
+        )
+        return self._resolve_constructor_targets(
+            type_name, caller_file, self._argument_count(new_node)
+        )
 
     def _extract_callback_args(self, call_node, source: bytes, caller_file: str) -> Set[str]:
         """Resolve function-name arguments passed to a call (higher-order/callback)."""
@@ -300,12 +443,11 @@ class CallGraphBuilder:
     def _extract_local_var_types(self, root, source: bytes) -> Dict[str, str]:
         """Map local variable name -> declared type name within a function body.
 
-        Walks `declaration` nodes and records the (type_identifier, variable)
-        pairs for both plain declarations (`Widget w;`) and pointer declarations
-        (`Widget* w = ...;`). Only simple type_identifier types are recorded;
-        anything else (templates, qualified types, multiple declarators we can't
-        cleanly attribute) is skipped so callers fall back to base-name
-        resolution rather than risk a wrong-type edge.
+        Walks `declaration` nodes and records the (type, variable) pairs for
+        plain, pointer/reference, qualified, and constructor-style declarations
+        (for example ``OHOS::Foo::Bar b(args)``).  The type is normalized to its
+        lexical class leaf; unknown/compound forms are skipped so callers fall
+        back to the existing conservative member-resolution behaviour.
         """
         var_types: Dict[str, str] = {}
         stack = [root]
@@ -313,9 +455,8 @@ class CallGraphBuilder:
             node = stack.pop()
             if node.type == 'declaration':
                 type_node = node.child_by_field_name('type')
-                if type_node is not None and type_node.type == 'type_identifier':
-                    type_name = source[type_node.start_byte:type_node.end_byte] \
-                        .decode('utf-8', errors='replace')
+                type_name = self._receiver_type_from_node(type_node, source)
+                if type_name:
                     # A declaration can hold several declarators (Widget a, b;);
                     # attribute the type to every variable name we extract.
                     for child in node.children:
@@ -324,6 +465,33 @@ class CallGraphBuilder:
                             var_types[var_name] = type_name
             stack.extend(reversed(node.children))
         return var_types
+
+    @staticmethod
+    def _receiver_type_from_node(type_node, source: bytes) -> Optional[str]:
+        """Normalize a simple C++ declaration type to its class leaf."""
+        if type_node is None:
+            return None
+        text = source[type_node.start_byte:type_node.end_byte].decode(
+            'utf-8', errors='replace'
+        ).strip()
+        if not text:
+            return None
+        text = re.sub(
+            r"^(?:(?:const|volatile|mutable|typename|class|struct)\s+)+",
+            '',
+            text,
+        )
+        match = re.search(
+            r"(?:shared_ptr|unique_ptr|weak_ptr)\s*<\s*(?:const\s+)?"
+            r"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)",
+            text,
+        )
+        if match:
+            text = match.group(1)
+        text = re.sub(r"\s*[&*]+\s*$", '', text).strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*", text):
+            return None
+        return text.split('::')[-1]
 
     def _declared_var_name(self, node, source: bytes) -> Optional[str]:
         """Extract the declared variable identifier from a declarator subtree.
@@ -343,6 +511,10 @@ class CallGraphBuilder:
                 name = self._declared_var_name(child, source)
                 if name:
                     return name
+        if node.type == 'function_declarator':
+            inner = node.child_by_field_name('declarator')
+            if inner is not None:
+                return self._declared_var_name(inner, source)
         return None
 
     def _extract_call_name(self, node, source: bytes) -> Optional[str]:
@@ -452,24 +624,44 @@ class CallGraphBuilder:
         return None
 
     def _resolve_method_on_class(self, class_name: str, call_name: str,
-                                 caller_file: str) -> Optional[str]:
-        """Resolve call_name to a method DIRECTLY declared on class_name (same file).
+                                 caller_file: str,
+                                 argument_count: Optional[int] = None) -> Optional[str]:
+        """Resolve a typed member call to a method declared on ``class_name``.
 
-        Returns the func_id of a method named call_name declared on class_name and
-        defined in caller_file, else None. No inheritance — this is the single-hop
-        lookup the walk in _resolve_member_call composes over the base chain.
+        Same-file definitions remain preferred.  If the receiver type is known
+        and there is exactly one externally visible cross-file method (or one
+        overload matching the call arity), accept that deterministic binding.
+        This is the missing middle ground between the old same-file-only rule
+        and unsafe name-only cross-file matching.
         """
         by_method = self.methods_by_class.get(class_name)
         if not by_method:
             return None
-        for func_id in by_method.get(call_name, []):
+        candidates = list(by_method.get(call_name, []))
+        for func_id in candidates:
             func_data = self.functions.get(func_id, {})
             if func_data.get('file_path', '') == caller_file:
                 return func_id
+        visible = [
+            func_id for func_id in candidates
+            if self._is_visible_from(func_id, caller_file)
+        ]
+        if argument_count is not None:
+            exact = []
+            for func_id in visible:
+                parameters = self.functions.get(func_id, {}).get('parameters', [])
+                if isinstance(parameters, list) and len(parameters) == argument_count:
+                    exact.append(func_id)
+            if len(exact) == 1:
+                return exact[0]
+            if exact:
+                return None
+        return visible[0] if len(visible) == 1 else None
         return None
 
     def _resolve_member_call(self, call_name: str, caller_file: str,
-                             receiver_type: str) -> Optional[str]:
+                             receiver_type: str,
+                             argument_count: Optional[int] = None) -> Optional[str]:
         """Resolve a member call to the method on the receiver's STATIC type,
         walking UP the base-class chain to the first ancestor that defines it.
 
@@ -495,7 +687,9 @@ class CallGraphBuilder:
                 continue
             visited.add(cls)
             # First definer on the chain wins (own type before ancestors).
-            match = self._resolve_method_on_class(cls, call_name, caller_file)
+            match = self._resolve_method_on_class(
+                cls, call_name, caller_file, argument_count
+            )
             if match:
                 return match
             for base in self.class_bases.get(cls, []):
@@ -506,6 +700,7 @@ class CallGraphBuilder:
     def _resolve_call(self, call_name: str, caller_file: str,
                       receiver_type: Optional[str] = None,
                       is_member: bool = False,
+                      argument_count: Optional[int] = None,
                       _alias_chain: Optional[Set[str]] = None) -> Optional[str]:
         """Resolve a function call name to a function ID.
 
@@ -515,7 +710,8 @@ class CallGraphBuilder:
         """
         if receiver_type:
             member_match = self._resolve_member_call(call_name, caller_file,
-                                                     receiver_type)
+                                                     receiver_type,
+                                                     argument_count)
             if member_match:
                 return member_match
 

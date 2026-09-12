@@ -207,6 +207,31 @@ class ScanResult:
     # contains per-round review/projection records and is kept separate from
     # the legacy one-shot recovery report for backwards compatibility.
     llm_call_graph_rounds_path: str | None = None
+    # Optional fixed-input four-way reachability ablation produced alongside
+    # the semantic overlay. It compares native/recovered graphs with and
+    # without medium candidate propagation; it never changes scan semantics.
+    llm_call_graph_ablation_path: str | None = None
+    # Derived audited graph views consumed by reachability and enhancement.
+    # The native call_graph.json files remain immutable.
+    effective_call_graph_paths: list[str] = field(default_factory=list)
+    # P1 diagnostic aggregation of unresolved call sites. This report counts
+    # one site once even when the parser produced many candidate targets.
+    call_graph_gap_report_path: str | None = None
+    # P3 deterministic task queue derived from the gap report. Tasks are
+    # grouped by call site and never promote candidate edges by themselves.
+    call_graph_gap_tasks_path: str | None = None
+    # P3 feedback facts emitted after enhancement/Stage 1/Stage 2. These are
+    # auditable observations and candidate evidence; they never mutate the
+    # effective graph implicitly.
+    analysis_feedback_path: str | None = None
+    # Optional Clang batch overlays, one per language graph directory.
+    clang_semantic_overlay_paths: list[str] = field(default_factory=list)
+    # Correlates a Clang batch with the immutable pre-Clang unresolved-site
+    # snapshot. This is diagnostic only and never changes graph admission.
+    clang_p1_acceptance_report_path: str | None = None
+    # Per-language definition-loading plans/results produced by the Clang
+    # semantic batch.
+    clang_definition_loading_report_paths: list[str] = field(default_factory=list)
     # Optional deterministic OpenHarmony selector/value evidence artifact.
     # It is source-backed metadata for later dynamic-test payloads and does
     # not mutate the call graph.
@@ -261,6 +286,10 @@ class ScanResult:
     # Requested platform mode. This is distinct from platform_profile, which
     # appears only after a platform adapter has built a real profile.
     platform_selection: str | None = None
+    # Optional user-confirmed socket-guided scan scope.  The native repository
+    # scan remains the baseline when this is absent.
+    scope_manifest_path: str | None = None
+    scope_root: str | None = None
 
     @property
     def degraded(self) -> bool:
@@ -289,6 +318,14 @@ class ScanResult:
             ),
             "llm_call_graph_overlay_path": self.llm_call_graph_overlay_path,
             "llm_call_graph_rounds_path": self.llm_call_graph_rounds_path,
+            "llm_call_graph_ablation_path": self.llm_call_graph_ablation_path,
+            "effective_call_graph_paths": self.effective_call_graph_paths,
+            "call_graph_gap_report_path": self.call_graph_gap_report_path,
+            "call_graph_gap_tasks_path": self.call_graph_gap_tasks_path,
+            "analysis_feedback_path": self.analysis_feedback_path,
+            "clang_semantic_overlay_paths": self.clang_semantic_overlay_paths,
+            "clang_p1_acceptance_report_path": self.clang_p1_acceptance_report_path,
+            "clang_definition_loading_report_paths": self.clang_definition_loading_report_paths,
             "openharmony_dispatch_code_evidence_path": (
                 self.openharmony_dispatch_code_evidence_path
             ),
@@ -315,6 +352,10 @@ class ScanResult:
             result["platform_coverage"] = self.platform_coverage
         if self.platform_selection is not None:
             result["platform_selection"] = self.platform_selection
+        if self.scope_manifest_path is not None:
+            result["scope_manifest_path"] = self.scope_manifest_path
+        if self.scope_root is not None:
+            result["scope_root"] = self.scope_root
         if self.application_context_provenance:
             result["application_context_provenance"] = self.application_context_provenance
         return result

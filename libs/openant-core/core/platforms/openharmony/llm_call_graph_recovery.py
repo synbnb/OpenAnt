@@ -55,6 +55,7 @@ _VALID_DECISIONS = {"add_edge", "keep_unresolved"}
 _VALID_CONFIDENCES = {"high", "medium", "low"}
 _VALID_EVIDENCE_KINDS = {"call_site", "registration", "target", "type"}
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+_CANDIDATE_COMPLETENESS = {"unknown", "complete"}
 _CLASSIFICATION_RANK = {
     "unknown_indirect": 0,
     "local_dispatch": 1,
@@ -129,6 +130,24 @@ _COMMON_IDENTIFIER_TOKENS = {
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def _candidate_completeness(value: Any) -> str:
+    """Normalize whether a parser candidate list is exhaustive.
+
+    Parser candidates are normally retrieval hints, not a proof that every
+    dynamic target was found.  Only an explicit ``complete`` declaration may
+    be used as an exclusion boundary during validation.
+    """
+    normalized = _text(value).lower()
+    return "complete" if normalized in {"complete", "exhaustive"} else "unknown"
+
+
+def _candidate_set_is_complete(site: Mapping[str, Any]) -> bool:
+    return _candidate_completeness(
+        site.get("candidate_completeness")
+        or site.get("candidate_set_completeness")
+    ) == "complete"
 
 
 def _function_code(function: Mapping[str, Any]) -> str:
@@ -570,6 +589,16 @@ def _graph_context(
 
 
 def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
+    """Yield residual and ledger-backed call sites for review.
+
+    ``unresolved_call_sites`` is a parser-specific residual list.  It can be
+    empty even when the syntax tree contains calls that were not connected to
+    the native graph (for example a uniquely named member call whose edge was
+    dropped during graph construction).  The independent call-site ledger is
+    therefore a second input to recovery.  Ledger records are only promoted
+    to review items when their binding/dispatch/graph status shows a gap; a
+    linked, fully resolved call is not sent to the model again.
+    """
     sites = diagnostics.get("unresolved_call_sites", [])
     if isinstance(sites, list):
         for site in sites:
@@ -586,18 +615,93 @@ def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[st
             if isinstance(site, Mapping):
                 yield "lambda", site
 
+    # ``callsite_ledger`` is deliberately a summary object in the diagnostics
+    # schema, while the actual records remain in the top-level ``call_sites``
+    # list.  Some older producers embedded the list under the summary object,
+    # so support both layouts without treating a summary-only object as an
+    # empty ledger.  This is important because residuals may be zero even when
+    # the independent ledger contains graph gaps.
+    ledger = diagnostics.get("callsite_ledger")
+    if isinstance(ledger, Mapping) and isinstance(ledger.get("call_sites"), list):
+        ledger_sites = ledger.get("call_sites", [])
+    else:
+        ledger_sites = diagnostics.get("call_sites", [])
+    if not isinstance(ledger_sites, list):
+        return
+    for site in ledger_sites:
+        if not isinstance(site, Mapping):
+            continue
+        graph_status = _text(site.get("graph_status"))
+        binding_status = _text(site.get("binding_status"))
+        dispatch_status = _text(site.get("dispatch_status"))
+        needs_review = (
+            graph_status in {"edge_missing", "candidate_or_dynamic", "not_linked"}
+            or binding_status in {"partial", "unresolved"}
+            or dispatch_status in {"partial", "unknown"}
+        )
+        if not needs_review:
+            continue
+        copied = dict(site)
+        # The residual worklist contract uses ``line`` and
+        # ``candidate_target_ids``.  Keep the original ledger fields too so
+        # the prompt and persisted report retain the orthogonal status model.
+        copied["line"] = copied.get("line", copied.get("line_start", 1))
+        linked = copied.get("linked_target_ids", [])
+        candidates = copied.get("candidate_target_ids", [])
+        if not isinstance(linked, list):
+            linked = []
+        if not isinstance(candidates, list):
+            candidates = []
+        copied["candidate_target_ids"] = sorted(
+            {
+                _text(target)
+                for target in [*candidates, *linked]
+                if _text(target)
+            }
+        )
+        copied["candidate_completeness"] = _candidate_completeness(
+            copied.get("candidate_completeness")
+            or copied.get("candidate_set_completeness")
+        )
+        copied["reason"] = (
+            _text(copied.get("reason"))
+            or f"callsite ledger: graph={graph_status or 'unknown'}, "
+            f"binding={binding_status or 'unknown'}, "
+            f"dispatch={dispatch_status or 'unknown'}"
+        )
+        copied["callsite_ledger_status"] = {
+            key: copied.get(key)
+            for key in (
+                "site_id", "binding_status", "dispatch_status", "scope_status",
+                "build_status", "parse_status", "graph_status",
+                "candidate_target_ids", "linked_target_ids",
+            )
+            if key in copied
+        }
+        # Use the native worklist path so downstream validation and candidate
+        # partitioning remain unchanged.  The ledger marker lets the audit
+        # report explain why a site was scheduled even when residuals=0.
+        copied["source_record"] = "callsite_ledger"
+        yield "native", copied
+
 
 def _raw_site_key(
     source: str,
     site: Mapping[str, Any],
     caller: Mapping[str, Any],
 ) -> tuple[str, str, int, str]:
-    """Return the stable source-span key used to collapse parser duplicates."""
+    """Return the stable key used to collapse parser/ledger duplicates.
+
+    A call-site ledger record can also appear in the parser residual list.  A
+    stable ``site_id`` is stronger than the producer label in that case, so
+    merge the two observations while retaining both ``source_records`` and
+    their orthogonal status fields in the work item.
+    """
     file_path = _text(site.get("file")) or _text(
         caller.get("file_path") or caller.get("filePath")
     )
     return (
-        source,
+        _text(site.get("site_id")) or source,
         file_path,
         _line(site.get("line")),
         _text(site.get("expression")),
@@ -663,8 +767,12 @@ def build_recovery_worklist(
     """Build a bounded, prioritized list of residual sites for an LLM.
 
     By default only sites without deterministic candidates are included.  A
-    caller can opt into candidate-bearing sites for a later verification pass,
-    but that is intentionally not the first-stage behavior.  The optional
+    caller can opt into candidate-bearing sites for a later verification pass;
+    however, a candidate-bearing call-site ledger record with an explicit
+    ``edge_missing``/``not_linked`` gap is also scheduled by default.  In
+    addition to parser residuals, the independent call-site ledger contributes
+    calls whose binding/dispatch/graph status shows a gap; this prevents
+    ``residuals=0`` from being mistaken for a complete call graph.  The optional
     ``security_relevant_only`` mode keeps only sites with a known entry-point
     or a conservative IPC/network/command boundary signal for cost control;
     sites already classified as external boundaries are retained as metadata
@@ -680,7 +788,13 @@ def build_recovery_worklist(
         candidate_ids = raw_site.get("candidate_target_ids", [])
         if not isinstance(candidate_ids, list):
             candidate_ids = []
-        if candidate_ids and not include_candidate_sites:
+        ledger_candidate_gap = (
+            _text(raw_site.get("source_record")) == "callsite_ledger"
+            and _text(raw_site.get("graph_status")) in {
+                "edge_missing", "candidate_or_dynamic", "not_linked"
+            }
+        )
+        if candidate_ids and not include_candidate_sites and not ledger_candidate_gap:
             continue
         caller_id = _text(raw_site.get("caller_id"))
         caller = index.get(caller_id)
@@ -720,6 +834,14 @@ def build_recovery_worklist(
                 "classification": classification,
                 "duplicate_count": 0,
                 "candidate_records": {},
+                "candidate_completeness": _candidate_completeness(
+                    raw_site.get("candidate_completeness")
+                    or raw_site.get("candidate_set_completeness")
+                ),
+                "callsite_ledger_status": {},
+                "source_records": [],
+                "site_ids": [],
+                "ledger_site_ids": [],
                 "_raw_site": dict(raw_site),
                 "_priority_rank": _CONFIDENCE_RANK.get(priority, 0),
             }
@@ -731,6 +853,36 @@ def build_recovery_worklist(
         if not item["reason"] and reason:
             item["reason"] = reason
         item["symbols"] = _merge_symbols(item["symbols"], symbols)
+        # A single unknown/partial source makes the combined candidate set a
+        # hint rather than an exclusion boundary.  This prevents an incomplete
+        # parser shortlist from rejecting a source-backed target found by the
+        # recovery model.
+        if _candidate_completeness(
+            raw_site.get("candidate_completeness")
+            or raw_site.get("candidate_set_completeness")
+        ) != "complete":
+            item["candidate_completeness"] = "unknown"
+        ledger_status = raw_site.get("callsite_ledger_status")
+        if isinstance(ledger_status, Mapping):
+            item["callsite_ledger_status"].update(
+                {
+                    str(key): value
+                    for key, value in ledger_status.items()
+                    if _text(key)
+                }
+            )
+        source_record = _text(raw_site.get("source_record"))
+        if source_record and source_record not in item["source_records"]:
+            item["source_records"].append(source_record)
+        ledger_site_id = _text(raw_site.get("site_id"))
+        if ledger_site_id and ledger_site_id not in item["site_ids"]:
+            item["site_ids"].append(ledger_site_id)
+        if (
+            source_record == "callsite_ledger"
+            and ledger_site_id
+            and ledger_site_id not in item["ledger_site_ids"]
+        ):
+            item["ledger_site_ids"].append(ledger_site_id)
         for target_id in candidate_ids:
             target_id = _text(target_id)
             if target_id and target_id not in item["candidate_target_ids"]:
@@ -782,12 +934,18 @@ def build_recovery_worklist(
         raw_site["symbols"] = item["symbols"]
         raw_site["candidate_target_ids"] = item["candidate_target_ids"]
         work_item = {
-            "site_id": _site_id(
-                item["source"],
-                caller_id,
-                item["line"],
-                item["expression"],
-                file_path=item["file"],
+            "site_id": (
+                sorted(item["ledger_site_ids"])[0]
+                if item["ledger_site_ids"]
+                else sorted(item["site_ids"])[0]
+                if item["site_ids"]
+                else _site_id(
+                    item["source"],
+                    caller_id,
+                    item["line"],
+                    item["expression"],
+                    file_path=item["file"],
+                )
             ),
             "source": item["source"],
             "caller_id": caller_id,
@@ -803,12 +961,16 @@ def build_recovery_worklist(
             "symbols": item["symbols"],
             "candidate_target_ids": sorted(item["candidate_target_ids"]),
             "candidate_count": len(item["candidate_target_ids"]),
+            "candidate_completeness": item["candidate_completeness"],
             "priority": item["priority"],
             "security_relevant": item["security_relevant"],
             "priority_reason": item["priority_reason"],
             "classification": classification,
             "analysis_route": classification["analysis_route"],
             "llm_eligible": classification["llm_eligible"],
+            "source_records": sorted(item["source_records"]),
+            "site_ids": sorted(item["site_ids"]),
+            "callsite_ledger_status": dict(item["callsite_ledger_status"]),
             "review_scope": (
                 "candidate_edges"
                 if item["candidate_target_ids"]
@@ -835,12 +997,12 @@ def build_recovery_worklist(
                 max_code_bytes=max_code_bytes,
                 required_function_ids=(
                     item["candidate_target_ids"]
-                    if include_candidate_sites
+                    if item["candidate_target_ids"]
                     else ()
                 ),
                 allow_same_file_cross_owner=not bool(
                     item["candidate_target_ids"]
-                ),
+                ) or item["candidate_completeness"] != "complete",
             ),
         }
         if include_registration_context:
@@ -877,7 +1039,9 @@ def build_recovery_prompt(
         "schema_version": RECOVERY_SCHEMA_VERSION,
         "task": RECOVERY_TASK,
         "rules": [
-            "Only propose a target_id that appears in retrieval_candidates.",
+            "Only propose a target_id that appears in retrieval_candidates. "
+            "candidate_target_ids are exclusion constraints only when "
+            "candidate_completeness=complete; otherwise they are parser hints.",
             "A proposal needs both call_site and target/registration evidence.",
             "Use registration_context source excerpts to verify table writes, initialization, and parameter flow; do not treat a file path or a name alone as registration evidence.",
             "registration_context.snippets may include line_numbered_text; use those numbers for evidence spans, but keep evidence.text as source code without the '<line> |' prefix.",
@@ -900,8 +1064,10 @@ def build_recovery_prompt(
 - add_edge：只有调用点、目标函数和注册/类型证据都明确时使用；
 - keep_unresolved：证据不足、来源有歧义或目标不在候选列表时使用。
 
-对 candidate-bearing site，add_edge 的 target_id 必须同时出现在
-candidate_target_ids 和 retrieval_candidates；不要因为名称相似而补充其他函数。
+对 candidate-bearing site，如果 candidate_completeness=complete，add_edge 的 target_id
+必须同时出现在 candidate_target_ids 和 retrieval_candidates；如果是 unknown，候选列表
+只是检索线索，只要目标在 retrieval_candidates 且有完整源码关系证据，也可以补充新的目标。
+不要因为名称相似而补充函数。
 candidate_registrations 中的 registration_evidence 是解析器从源码注册语句提取的证据；
 当它与当前调用点的表/选择码一致时，可以直接作为 registration evidence 使用。一个
 分派表可以对应多个不同 selector 的 handler，应逐条输出 add_edge，而不是只选一个。
@@ -1317,7 +1483,15 @@ def validate_recovery_proposals(
             for candidate_id in site.get("candidate_target_ids", [])
             if _text(candidate_id)
         }
-        if candidate_ids and target_id not in candidate_ids:
+        # Parser candidates are a hard exclusion boundary only when the
+        # producer explicitly proved that the set is exhaustive.  In the
+        # normal/unknown case they are retrieval hints; otherwise an omitted
+        # dynamic target could never be recovered by the LLM stage.
+        if (
+            _candidate_set_is_complete(site)
+            and candidate_ids
+            and target_id not in candidate_ids
+        ):
             item["rejection_reason"] = "target_not_in_candidate_targets"
             rejected.append(item)
             continue
@@ -1359,6 +1533,64 @@ def validate_recovery_proposals(
             item["rejection_reason"] = "insufficient_source_evidence"
             rejected.append(item)
             continue
+        evidence_quality = "model_inferred"
+        for entry in evidence:
+            if not isinstance(entry, Mapping):
+                continue
+            kind = _text(entry.get("kind"))
+            text = _text(entry.get("text")).lower()
+            if kind == "registration":
+                registrations = site.get("candidate_registrations", [])
+                if isinstance(registrations, list):
+                    for registration in registrations:
+                        if not isinstance(registration, Mapping):
+                            continue
+                        if _text(registration.get("target_id")) != target_id:
+                            continue
+                        source = registration.get("registration_evidence")
+                        source_text = (
+                            _text(source.get("text")).lower()
+                            if isinstance(source, Mapping)
+                            else ""
+                        )
+                        if source_text and (
+                            text in source_text or source_text in text
+                        ):
+                            evidence_quality = "relation_supported"
+                            break
+            elif kind == "type":
+                target_name = _text(target.get("name"))
+                target_leaf = target_name.rsplit("::", 1)[-1].lower()
+                target_parts = [part for part in target_name.split("::") if part]
+                target_owner = (
+                    target_parts[-2].lower()
+                    if len(target_parts) >= 2
+                    else _text(
+                        target.get("class_name") or target.get("className")
+                    ).rsplit("::", 1)[-1].lower()
+                )
+                if (
+                    target_leaf
+                    and target_leaf in text
+                    and (not target_owner or target_owner in text)
+                ):
+                    evidence_quality = "type_supported"
+            if evidence_quality in {"relation_supported", "type_supported"}:
+                break
+        if evidence_quality == "model_inferred" and any(
+            isinstance(entry, Mapping)
+            and _text(entry.get("kind")) == "target"
+            and _text(entry.get("function_id")) == target_id
+            for entry in evidence
+        ):
+            evidence_quality = "reference_validated"
+        item["evidence_status"] = "source_references_verified"
+        item["evidence_quality"] = evidence_quality
+        item["reachability_tier"] = (
+            "strict"
+            if evidence_quality in {"relation_supported", "type_supported"}
+            else "candidate"
+        )
         item["validation"] = "accepted_for_review"
         accepted.append(item)
     return {
@@ -1374,7 +1606,7 @@ def _diagnostics_for_batch(
 ) -> dict[str, Any]:
     """Copy only the raw residual sites represented by one request batch."""
     selected: dict[tuple[str, str, int, str], Mapping[str, Any]] = {}
-    wanted = {
+    wanted_spans = {
         (
             _text(item.get("source")),
             _text(item.get("file")),
@@ -1383,10 +1615,30 @@ def _diagnostics_for_batch(
         ): item
         for item in batch
     }
+    wanted_site_ids = {
+        _text(item.get("site_id"))
+        for item in batch
+        if _text(item.get("site_id"))
+    }
     for source, raw_site in _raw_sites(diagnostics):
-        key = _raw_site_key(source, raw_site, {})
-        item = wanted.get(key)
-        if item is None:
+        raw_span = (
+            source,
+            _text(raw_site.get("file")),
+            _line(raw_site.get("line")),
+            _text(raw_site.get("expression")),
+        )
+        raw_site_id = _text(raw_site.get("site_id"))
+        item = wanted_spans.get(raw_span)
+        if item is None and raw_site_id:
+            item = next(
+                (
+                    candidate
+                    for candidate in batch
+                    if _text(candidate.get("site_id")) == raw_site_id
+                ),
+                None,
+            )
+        if item is None and raw_site_id not in wanted_site_ids:
             continue
         raw_copy = dict(raw_site)
         raw_copy["candidate_target_ids"] = list(
@@ -1404,7 +1656,7 @@ def _diagnostics_for_batch(
         raw_copy["caller_id"] = _text(item.get("caller_id")) or _text(
             raw_site.get("caller_id")
         )
-        selected[key] = raw_copy
+        selected[raw_span] = raw_copy
 
     native_sites = [
         raw for (source, _file, _line_no, _expr), raw in selected.items()

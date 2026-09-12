@@ -587,6 +587,11 @@ def run_experiment(
                             else result.get("platform_context")
                         ),
                         route=route_key,
+                        stage1_context=result.get("stage_context") or {
+                            "stage1": result.get("stage1_context", {}),
+                            "stage2": result.get("stage2_context", {}),
+                        },
+                        stage1_findings=result.get("findings"),
                     )
 
                     # Update result with verification

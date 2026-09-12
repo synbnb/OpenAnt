@@ -29,6 +29,15 @@ class Finding:
     # ``from_dict`` keeps those artifacts backwards compatible.
     review_status: Optional[str] = None
     verification_assessment: Optional[dict] = None
+    # Phase ownership is explicit: Stage 1 receives structural context, while
+    # Stage 2 records parameter source-to-sink verification separately.
+    stage_context: Optional[dict] = None
+    stage1_context_status: Optional[str] = None
+    stage2_dataflow_status: Optional[str] = None
+    # Independent target/context issue inventory.  These are additive and do
+    # not change the legacy one-finding disclosure verdict.
+    independent_findings: Optional[list] = None
+    context_findings: Optional[list] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Finding":
@@ -52,6 +61,11 @@ class Finding:
             rejection_reason=data.get("rejection_reason"),
             review_status=data.get("review_status"),
             verification_assessment=data.get("verification_assessment"),
+            stage_context=data.get("stage_context"),
+            stage1_context_status=data.get("stage1_context_status"),
+            stage2_dataflow_status=data.get("stage2_dataflow_status"),
+            independent_findings=data.get("independent_findings"),
+            context_findings=data.get("context_findings"),
         )
 
 

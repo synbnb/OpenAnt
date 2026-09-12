@@ -24,6 +24,7 @@ from core.schemas import ReportResult
 from core.language_registry import fence_for_path
 from core.report_context import build_disclosure_context, load_report_context_index
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
+from core.finding_records import ensure_primary_record, normalize_findings
 from utilities.file_io import normalize_results, open_utf8, read_json, write_json
 
 # Root of openant-core
@@ -173,19 +174,31 @@ def _load_code_by_route(results_path: str, experiment: Mapping) -> dict[str, str
     missing optional evidence; report generation should still produce a
     disclosure with an explicit "source unavailable" note.
     """
-    # Do not stop at a partial map.  A resumed/partially written scan can have
-    # some routes in the selected artifact and the remaining routes in the
-    # sibling Stage-1 or call-graph artifact; merge them without replacing the
-    # selected file's values.
-    merged = _extract_code_by_route(experiment)
-
     scan_dir = Path(results_path).resolve().parent
     candidates = []
     selected = Path(results_path).name
+    # Effective graph is the audited relation view used by reachability and
+    # enhancement.  Keep the immutable native graph as a compatibility
+    # fallback for scans produced before the facts stage.
+    candidates.append(scan_dir / "effective_call_graph.json")
+    candidates.append(scan_dir / "call_graph.json")
+    # A sibling Stage-1 results file can fill routes missing from the graph,
+    # but it is deliberately consulted after graph-backed exact source. Its
+    # ``code_by_route`` may be the expanded model context bundle rather than a
+    # single function body.
     if selected != "results.json":
         candidates.append(scan_dir / "results.json")
-    candidates.append(scan_dir / "call_graph.json")
 
+    # ``results.json.code_by_route`` is often the model-facing context bundle.
+    # For Stage 1 it may intentionally contain the target plus neighbouring
+    # functions separated by ``File Boundary`` markers.  That is useful as
+    # analysis context, but it is not the exact vulnerable-function source.
+    # Prefer the audited/effective graph's function record, whose ``code`` is
+    # bounded by the function's own start/end range.  The selected result map
+    # remains a fallback for old scans whose graph artifacts did not preserve
+    # source.  This keeps the trigger snippet separate from the ordered call
+    # chain source bundle and prevents cross-function source duplication.
+    merged: dict[str, str] = {}
     for candidate in candidates:
         try:
             if not candidate.is_file():
@@ -195,6 +208,13 @@ def _load_code_by_route(results_path: str, experiment: Mapping) -> dict[str, str
             continue
         for route, code in recovered.items():
             merged.setdefault(route, code)
+
+    # Do not stop at a partial map.  A resumed/partially written scan can have
+    # some routes in the selected artifact and the remaining routes in the
+    # sibling Stage-1 or call-graph artifact; merge them without replacing the
+    # exact graph-backed values above.
+    for route, code in _extract_code_by_route(experiment).items():
+        merged.setdefault(route, code)
     return merged
 
 
@@ -444,8 +464,12 @@ def build_pipeline_output(
     # vector. The call graph records A→B edges; if B is only reachable
     # through A and both have the same attack_vector, keep only A.
     # ---------------------------------------------------------------
-    call_graph_path = os.path.join(
-        os.path.dirname(os.path.abspath(results_path)), "call_graph.json"
+    scan_dir = os.path.dirname(os.path.abspath(results_path))
+    effective_graph_path = os.path.join(scan_dir, "effective_call_graph.json")
+    call_graph_path = (
+        effective_graph_path
+        if os.path.isfile(effective_graph_path)
+        else os.path.join(scan_dir, "call_graph.json")
     )
     # Deduplicate only the strict findings.  An unresolved Stage-2 candidate
     # is a separate review record and must not disappear merely because it
@@ -693,6 +717,23 @@ def build_pipeline_output(
             )
         if not isinstance(assessment, dict):
             assessment = {}
+        primary_for_inventory = finding.get("finding") or finding.get("verdict")
+        if verification.get("correct_finding"):
+            primary_for_inventory = verification.get("correct_finding")
+        independent_findings = normalize_findings(
+            verification.get("findings")
+            or full_result.get("findings")
+            or finding.get("findings"),
+            primary_finding=primary_for_inventory,
+            synthesize_primary=True,
+        )
+        independent_findings = ensure_primary_record(
+            independent_findings, primary_for_inventory
+        )
+        context_findings = [
+            item for item in independent_findings
+            if item.get("scope") == "context" or item.get("target_match") is False
+        ]
         if stage2_verdict in ("unverified", "inconclusive"):
             review_status = "needs_review"
         elif stage2_verdict in ("confirmed", "agreed", "vulnerable", "bypassable"):
@@ -729,12 +770,60 @@ def build_pipeline_output(
             "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "Unknown"),
             "stage1_verdict": finding.get("verdict", finding.get("finding", "vulnerable")),
             "stage2_verdict": stage2_verdict,
+            # Keep phase ownership visible in the disclosure artifact.  The
+            # structural Stage-1 context is not a proof of source-to-sink
+            # control; parameter data-flow status belongs to Stage 2.
+            "stage_context": full_result.get("stage_context") or finding.get("stage_context") or {},
+            "stage1_context_status": full_result.get(
+                "stage1_context_status", finding.get("stage1_context_status", "unknown")
+            ),
+            "stage2_dataflow_status": (
+                assessment.get("parameter_dataflow_status")
+                or full_result.get("stage2_dataflow_status")
+                or finding.get("stage2_dataflow_status", "not_evaluated")
+            ),
             # Additive status fields make a Stage-2 downgrade explainable in
             # the UI/report.  They do not change the strict dynamic-testing
             # filter or the confirmed_findings artifact.
             "review_status": review_status,
             "verification_assessment": assessment,
+            # Preserve independent target/context issues without turning a
+            # neighboring context risk into a second disclosure automatically.
+            # Consumers can inspect this inventory or run a separate policy;
+            # the legacy finding remains the primary target record.
+            "independent_findings": independent_findings,
+            "context_findings": context_findings,
             "description": description,
+            # Preserve the structured Stage-1 claims needed by the reviewer-
+            # first disclosure block.  These additive fields keep the raw
+            # reasoning/guards/attack preconditions available without making
+            # the report generator reconstruct them from prose.
+            "reasoning": finding.get("reasoning") or full_result.get("reasoning"),
+            "root_cause": (
+                vuln.get("root_cause")
+                or finding.get("root_cause")
+                or full_result.get("root_cause")
+            ),
+            "guard_analysis": (
+                vuln.get("guard_analysis")
+                or finding.get("guard_analysis")
+                or full_result.get("guard_analysis")
+            ),
+            "attack_scenario": (
+                vuln.get("attack_scenario")
+                or finding.get("attack_scenario")
+                or full_result.get("attack_scenario")
+            ),
+            "attack_vector": finding.get("attack_vector") or full_result.get("attack_vector"),
+            "preconditions": finding.get("preconditions") or full_result.get("preconditions"),
+            "vulnerability_categories": (
+                vuln.get("vulnerability_categories")
+                or finding.get("vulnerability_categories")
+                or full_result.get("vulnerability_categories")
+                or []
+            ),
+            "counterevidence": finding.get("counterevidence") or full_result.get("counterevidence") or [],
+            "missing_evidence": finding.get("missing_evidence") or full_result.get("missing_evidence") or [],
             "vulnerable_code": vulnerable_code,
             "vulnerable_code_section": vulnerable_code_section,
             "impact": impact,
@@ -776,6 +865,26 @@ def build_pipeline_output(
         {"step": s, "reason": _skip_reasons.get(s, "")}
         for s in (skipped_steps or [])
     ]
+
+    # Count the additive independent-issue inventory separately from the
+    # legacy one-finding result count.  This makes alternate/context risks
+    # measurable without promoting them to disclosure records or changing the
+    # vulnerable/safe bucket semantics.
+    independent_issue_count = 0
+    target_issue_count = 0
+    context_issue_count = 0
+    for item in findings_data:
+        inventory = item.get("independent_findings") or []
+        if not isinstance(inventory, list):
+            continue
+        independent_issue_count += len(inventory)
+        for record in inventory:
+            if not isinstance(record, dict):
+                continue
+            if record.get("scope") == "context" or record.get("target_match") is False:
+                context_issue_count += 1
+            else:
+                target_issue_count += 1
 
     total_units = metrics.get("total", len(all_results))
 
@@ -860,6 +969,9 @@ def build_pipeline_output(
             "reachability_reduction_percentage": reachability_reduction_percentage,
             "reachability_warnings": reachability_warnings,
             "units_analyzed": total_units - metrics.get("errors", 0),
+            "independent_issue_count": independent_issue_count,
+            "target_issue_count": target_issue_count,
+            "context_issue_count": context_issue_count,
             "processing_level": processing_level,
             "costs": costs,
             "durations": durations,

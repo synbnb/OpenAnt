@@ -143,9 +143,22 @@ class ExplorationBudget:
 class RepoExplorer:
     """Executes the read-only tools against one repository root."""
 
-    def __init__(self, repo_path: Path, budget: ExplorationBudget):
+    def __init__(
+        self,
+        repo_path: Path,
+        budget: ExplorationBudget,
+        *,
+        max_file_bytes: int = MAX_FILE_BYTES,
+        max_total_bytes: int = MAX_TOTAL_BYTES,
+        max_list_entries: int = MAX_LIST_ENTRIES,
+        max_search_hits: int = MAX_SEARCH_HITS,
+    ):
         self.root = Path(repo_path).resolve()
         self.budget = budget
+        self.max_file_bytes = max_file_bytes
+        self.max_total_bytes = max_total_bytes
+        self.max_list_entries = max_list_entries
+        self.max_search_hits = max_search_hits
 
     def _resolve(self, rel: str) -> Path:
         """Resolve a model-supplied path, refusing anything outside the root.
@@ -175,6 +188,11 @@ class RepoExplorer:
             # Reported, not raised: one unreadable path should cost the model a
             # turn, not abort a survey that is otherwise going fine.
             return {"error": f"could not access: {exc}"}
+        except UnicodeDecodeError as exc:
+            # Repositories commonly contain binaries, generated blobs, or files
+            # in a non-UTF-8 encoding.  They are not source evidence; skip them
+            # as a tool-level read error instead of aborting the whole agent loop.
+            return {"error": f"file is not UTF-8 text: {exc}"}
 
     def _list_dir(self, rel: str) -> dict:
         target = self._resolve(rel)
@@ -182,8 +200,8 @@ class RepoExplorer:
             return {"error": f"not a directory: {rel!r}"}
         entries = []
         all_children = sorted(target.iterdir(), key=lambda p: p.name)
-        truncated = len(all_children) > MAX_LIST_ENTRIES
-        for child in all_children[:MAX_LIST_ENTRIES]:
+        truncated = len(all_children) > self.max_list_entries
+        for child in all_children[:self.max_list_entries]:
             if child.name in _SKIP_DIRS:
                 continue
             if child.is_symlink():
@@ -198,17 +216,17 @@ class RepoExplorer:
         return {"path": rel or ".", "entries": entries, "truncated": truncated}
 
     def _read_file(self, rel: str) -> dict:
-        if self.budget.bytes_read >= MAX_TOTAL_BYTES:
+        if self.budget.bytes_read >= self.max_total_bytes:
             self.budget.exhausted = True
             return {"error": "total read budget exhausted; summarize what you have"}
         target = self._resolve(rel)
-        content = read_repo_file(target, max_bytes=MAX_FILE_BYTES,
+        content = read_repo_file(target, max_bytes=self.max_file_bytes,
                                  oversize="truncate")
         if content is None:
             return {"error": f"no such file: {rel!r}"}
         self.budget.bytes_read += len(content)
         self.budget.files_read.append(rel)
-        truncated = len(content) >= MAX_FILE_BYTES
+        truncated = len(content) >= self.max_file_bytes
         if truncated:
             self.budget.truncated.append(rel)
         return {"path": rel, "content": content, "truncated": truncated}
@@ -222,7 +240,7 @@ class RepoExplorer:
                            if d not in _SKIP_DIRS
                            and not os.path.islink(os.path.join(dirpath, d))]
             for fname in sorted(filenames):
-                if len(hits) >= MAX_SEARCH_HITS:
+                if len(hits) >= self.max_search_hits:
                     return {"hits": hits, "truncated": True}
                 full = Path(dirpath) / fname
                 rel = str(full.relative_to(self.root))
@@ -230,9 +248,9 @@ class RepoExplorer:
                     continue
                 if contains:
                     try:
-                        text = read_repo_file(full, max_bytes=MAX_FILE_BYTES,
+                        text = read_repo_file(full, max_bytes=self.max_file_bytes,
                                               oversize="truncate")
-                    except (UnsafeRepoFile, OSError):
+                    except (UnsafeRepoFile, OSError, UnicodeDecodeError):
                         continue
                     if text is None or contains not in text:
                         continue
@@ -246,6 +264,12 @@ def explore_repository(
     system_prompt: str,
     task_prompt: str,
     finish_tool: ToolDef,
+    max_turns: int = MAX_TURNS,
+    max_file_bytes: int = MAX_FILE_BYTES,
+    max_total_bytes: int = MAX_TOTAL_BYTES,
+    max_list_entries: int = MAX_LIST_ENTRIES,
+    max_search_hits: int = MAX_SEARCH_HITS,
+    max_tokens_per_turn: int = MAX_TOKENS_PER_TURN,
 ) -> tuple[dict, ExplorationBudget]:
     """Let the model survey ``repo_path``, returning its ``finish`` payload.
 
@@ -270,20 +294,30 @@ def explore_repository(
             threat model on disk that no human asked for and every later scan
             would trust.
     """
+    if max_turns < 1 or max_file_bytes < 1 or max_total_bytes < 1 or max_list_entries < 1 \
+            or max_search_hits < 1 or max_tokens_per_turn < 1:
+        raise ValueError("repository exploration budgets must be positive")
     budget = ExplorationBudget()
-    explorer = RepoExplorer(repo_path, budget)
+    explorer = RepoExplorer(
+        repo_path,
+        budget,
+        max_file_bytes=max_file_bytes,
+        max_total_bytes=max_total_bytes,
+        max_list_entries=max_list_entries,
+        max_search_hits=max_search_hits,
+    )
     tools = [*EXPLORATION_TOOLS, finish_tool]
     messages = [Message(role="user", content=(TextBlock(text=task_prompt),))]
 
     consecutive_empty = 0
-    while budget.turns < MAX_TURNS:
+    while budget.turns < max_turns:
         budget.turns += 1
         try:
             response = binding.adapter.complete(
                 model=binding.model,
                 system=system_prompt,
                 messages=messages,
-                max_tokens=MAX_TOKENS_PER_TURN,
+                max_tokens=max_tokens_per_turn,
                 tools=tools,
             )
         except LLMRefusalError:
@@ -352,13 +386,13 @@ def explore_repository(
             # killed the survey on the first chatty response. It never fired only
             # because this whole loop path had no test.
             messages.append(Message(role="user", content=(TextBlock(
-                text=f"You called no tool. {MAX_TURNS - budget.turns} turns remain "
+                text=f"You called no tool. {max_turns - budget.turns} turns remain "
                      "— use list_dir/read_file/search, or call finish with your "
                      "best current answer."),)))
 
     budget.exhausted = True
     raise RuntimeError(
-        f"repository exploration used all {MAX_TURNS} turns without calling "
+        f"repository exploration used all {max_turns} turns without calling "
         f"{finish_tool.name!r}; read {budget.bytes_read} bytes across "
         f"{len(budget.files_read)} file(s)"
     )

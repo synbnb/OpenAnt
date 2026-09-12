@@ -90,6 +90,19 @@ def _finding() -> dict:
                 "ordered_steps": ["IPC 输入进入目标函数", "目标函数调用 delegate"],
                 "sink_reached": True,
             },
+            "phase_context": {
+                "stage1": {
+                    "entry_path_ids": [[
+                        "services/audio.cpp:AudioStub::OnRemoteRequest",
+                        "services/audio.cpp:AudioService::Enable",
+                    ]],
+                    "candidate_entry_path_ids": [[
+                        "services/audio.cpp:AudioStub::OnRemoteRequest",
+                        "services/audio.cpp:AudioService::Dispatch",
+                        "services/audio.cpp:AudioService::Enable",
+                    ]],
+                },
+            },
             "call_chain": {"nodes": []},
             "call_graph": {"native_edges": []},
             "provenance": {"artifacts": ["dataset_enhanced.json"]},
@@ -120,6 +133,9 @@ def test_chinese_disclosure_localizes_contract_and_keeps_evidence():
     assert "# 安全漏洞披露：unchecked descriptor" in disclosure
     for heading in ("## 摘要", "## 漏洞代码", "## 复现步骤", "## 影响", "## 建议修复", "## 证据上下文"):
         assert heading in disclosure
+    assert "### 调用链总览" in disclosure
+    assert "严格调用链（1 条）" in disclosure
+    assert "候选调用链（1 条）" in disclosure
     assert "**产品：** audio" in disclosure
     assert "**类型：** CWE-400" in disclosure
     assert "services/audio.cpp" in disclosure

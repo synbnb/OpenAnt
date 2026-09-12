@@ -500,15 +500,20 @@
     *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
   }
 </style>
+<link rel="stylesheet" href="/assets/openant-theme.css">
+<script src="/assets/openant-navigation.js" defer></script>
 </head>
 <body>
 <header class="topbar">
-  <a class="home-link" href="/" data-i18n="header.home">返回首页</a>
-  <div class="scan-heading">
-    <h1 data-i18n="header.title">扫描详情</h1>
-    <p title="{{.Repo}}">{{.Repo}}</p>
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">VF</div>
+    <div class="scan-heading">
+      <h1 data-i18n="header.title">扫描详情</h1>
+      <p title="{{.Repo}}">{{.Repo}}</p>
+    </div>
   </div>
   <div class="topbar-actions">
+    <openant-workspace-nav current="home"></openant-workspace-nav>
     <div class="language-field">
       <label for="language-select" data-i18n="language.label">语言</label>
       <select id="language-select" aria-label="界面语言">
@@ -927,6 +932,7 @@ const translations = {
     'disclosures.affected': '受影响版本',
     'disclosures.repair': '修复状态',
     'disclosures.repair.generated': '已生成修复代码',
+    'disclosures.repair.reference': '已生成修复参考模板（需适配）',
     'disclosures.repair.provided': '已有修复建议',
     'disclosures.repair.unavailable': '证据不足，待人工修复',
     'disclosures.repair.unknown': '未记录',
@@ -1138,6 +1144,7 @@ const translations = {
     'disclosures.affected': 'Affected version',
     'disclosures.repair': 'Repair status',
     'disclosures.repair.generated': 'Repair code generated',
+    'disclosures.repair.reference': 'Reference repair template generated',
     'disclosures.repair.provided': 'Repair guidance available',
     'disclosures.repair.unavailable': 'Insufficient evidence; manual fix',
     'disclosures.repair.unknown': 'Not recorded',
@@ -3996,6 +4003,7 @@ function appendLine(rawLine) {
 
 function disclosureRepairLabel(value) {
   const status = String(value || '').toLowerCase();
+  if (status === 'reference_generated' || status === 'generated_reference') return t('disclosures.repair.reference');
   if (status === 'generated' || status === 'code_generated') return t('disclosures.repair.generated');
   if (status === 'provided' || status === 'available') return t('disclosures.repair.provided');
   if (status === 'unavailable' || status === 'manual_review' || status === 'manual') return t('disclosures.repair.unavailable');

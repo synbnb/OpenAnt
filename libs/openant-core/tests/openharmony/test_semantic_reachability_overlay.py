@@ -399,6 +399,143 @@ def test_parser_adapter_accepts_llm_overlay_as_additive_bfs_input(tmp_path):
     )
 
 
+def test_parser_adapter_keeps_reference_only_llm_edge_as_candidate_path(tmp_path):
+    parser_adapter = _load_parser_adapter()
+    entry = "adapter.cpp:main"
+    bridge = "adapter.cpp:bridge"
+    handler = "adapter.cpp:llm_handle"
+    functions = {
+        entry: {"name": "main", "unit_type": "main", "code": "bridge();"},
+        bridge: {"name": "bridge", "unit_type": "function", "code": ""},
+        handler: {"name": "llm_handle", "unit_type": "function", "code": ""},
+    }
+    (tmp_path / "call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": functions,
+                "call_graph": {entry: [bridge]},
+                "reverse_call_graph": {bridge: [entry]},
+            }
+        )
+    )
+    (tmp_path / "semantic_graph.json").write_text(
+        json.dumps({"schema_version": 1, "nodes": [], "edges": []})
+    )
+    dataset = {
+        "units": [
+            {"id": entry, "is_entry_point": True},
+            {"id": bridge, "semantic_reachability_candidate_seed": True},
+            {"id": handler},
+        ],
+        "metadata": {},
+    }
+    llm_overlay = {
+        "schema_version": 1,
+        "nodes": [
+            {"id": f"function:{bridge}", "kind": "function"},
+            {"id": f"function:{handler}", "kind": "function"},
+        ],
+        "edges": [
+            {
+                "source_id": f"function:{bridge}",
+                "target_id": f"function:{handler}",
+                "kind": "llm_confirmed_indirect_call",
+                "attributes": {
+                    "evidence_quality": "reference_validated",
+                    "reachability_tier": "candidate",
+                },
+            },
+        ],
+        "orphans": [],
+    }
+
+    filtered = parser_adapter.apply_reachability_filter(
+        dataset,
+        str(tmp_path),
+        "reachable",
+        platform="openharmony",
+        semantic_graph_overlay=llm_overlay,
+    )
+
+    by_id = {unit["id"]: unit for unit in filtered["units"]}
+    assert by_id[handler]["reachability_status"] == "candidate_reachable"
+    metadata = filtered["metadata"]["reachability_filter"]["semantic_overlay"]
+    assert metadata["candidate_only_edges"] == 1
+    assert metadata["strict_edges"] == 0
+
+
+def test_effective_graph_candidate_facts_expand_candidate_frontier_only(tmp_path):
+    parser_adapter = _load_parser_adapter()
+    entry = "adapter.cpp:main"
+    bridge = "adapter.cpp:bridge"
+    handler = "adapter.cpp:clang_candidate"
+    dead = "adapter.cpp:dead"
+    functions = {
+        entry: {"name": "main", "unit_type": "function", "code": ""},
+        bridge: {"name": "bridge", "unit_type": "function", "code": ""},
+        handler: {
+            "name": "clang_candidate",
+            "unit_type": "function",
+            "code": "",
+        },
+        dead: {"name": "dead", "unit_type": "function", "code": ""},
+    }
+    # The effective graph contains only strict edges in its adjacency.  The
+    # reconstructed Clang relationship stays in candidate_facts and must be
+    # visible only to the lower-trust candidate frontier.
+    (tmp_path / "call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": functions,
+                "call_graph": {entry: [bridge]},
+                "reverse_call_graph": {bridge: [entry]},
+            }
+        )
+    )
+    (tmp_path / "effective_call_graph.json").write_text(
+        json.dumps(
+            {
+                "functions": functions,
+                "call_graph": {entry: [bridge]},
+                "reverse_call_graph": {bridge: [entry]},
+                "candidate_facts": [
+                    {
+                        "caller_id": bridge,
+                        "callee_id": handler,
+                        "status": "candidate",
+                        "resolver": "clang",
+                    }
+                ],
+            }
+        )
+    )
+    dataset = {
+        "units": [
+            {"id": entry},
+            {"id": bridge, "semantic_reachability_candidate_seed": True},
+            {"id": handler},
+            {"id": dead},
+        ],
+        "metadata": {},
+    }
+
+    filtered = parser_adapter.apply_reachability_filter(
+        dataset,
+        str(tmp_path),
+        "reachable",
+        platform="openharmony",
+        extra_entry_points={entry},
+    )
+
+    by_id = {unit["id"]: unit for unit in filtered["units"]}
+    assert set(by_id) == {entry, bridge, handler}
+    assert by_id[handler]["reachability_status"] == "candidate_reachable"
+    metadata = filtered["metadata"]["reachability_filter"]
+    assert metadata["candidate_fact_records"] == 1
+    assert metadata["candidate_fact_edges"] == 1
+    assert metadata["candidate_path_coverage_ids"] == [handler]
+
+
 def test_parser_adapter_seeds_handler_from_transaction_contract(tmp_path):
     parser_adapter = _load_parser_adapter()
     entry = "adapter.cpp:main"

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+import hashlib
 from typing import Any, Iterable, Mapping
 
 import tree_sitter_c as tsc
@@ -29,6 +30,9 @@ SCHEMA_VERSION = 1
 CPP_EXTENSIONS = {".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".hh"}
 C_LANGUAGE = Language(tsc.language())
 CPP_LANGUAGE = Language(tscpp.language())
+_FACTORY_CONSTRUCTOR_RE = re.compile(
+    r"(?:^|::)(?:make_shared|make_unique|allocate_shared)\s*<\s*([^>]+?)\s*>"
+)
 
 
 def _node_text(node: Any, source: bytes) -> str:
@@ -50,6 +54,170 @@ def _source_line(function: Mapping[str, Any], node: Any) -> int:
     if not isinstance(start, int) or start < 1:
         start = 1
     return start + node.start_point[0]
+
+
+def _callsite_shape(node: Any, source: bytes) -> dict[str, Any]:
+    """Describe a call expression without claiming a runtime target.
+
+    This deliberately stays syntax-oriented.  It is the first layer of the
+    call-site ledger; type binding and dynamic dispatch are recorded as
+    separate dimensions rather than inferred from the expression alone.
+    """
+    called = node.child_by_field_name("function")
+    expression = _node_text(node, source).strip()
+    callee = ""
+    receiver = ""
+    call_kind = "unknown"
+    if called is not None:
+        if called.type == "field_expression":
+            field = called.child_by_field_name("field")
+            argument = called.child_by_field_name("argument")
+            callee = _node_text(field, source).strip() if field is not None else ""
+            receiver = (
+                _node_text(argument, source).strip()
+                if argument is not None
+                else ""
+            )
+            call_kind = "member"
+        elif called.type in {
+            "identifier", "qualified_identifier", "scoped_identifier",
+            "template_function",
+        }:
+            callee = _node_text(called, source).strip()
+            call_kind = "direct"
+        elif called.type in {"parenthesized_expression", "pointer_expression"}:
+            callee = _node_text(called, source).strip()
+            call_kind = "indirect"
+        else:
+            callee = _node_text(called, source).strip()
+
+    arguments = node.child_by_field_name("arguments")
+    argument_count = None
+    if arguments is not None:
+        argument_count = sum(1 for child in arguments.children if child.is_named)
+    return {
+        "expression": expression,
+        "callee_spelling": callee,
+        "receiver_expression": receiver,
+        "call_kind": call_kind,
+        "argument_count": argument_count,
+        "ast_type": getattr(called, "type", "") if called is not None else "",
+    }
+
+
+def _callsite_candidate_ids(
+    shape: Mapping[str, Any],
+    function: Mapping[str, Any],
+    functions: Mapping[str, Any],
+    name_index: Mapping[str, list[str]],
+    leaf_index: Mapping[str, list[str]],
+) -> list[str]:
+    """Return bounded name/arity candidates for a direct or member call."""
+    if shape.get("call_kind") not in {"direct", "member"}:
+        return []
+    spelling = str(shape.get("callee_spelling") or "").strip()
+    if not spelling:
+        return []
+    names = [spelling]
+    owner = str(function.get("class_name") or "").strip().rsplit("::", 1)[-1]
+    if owner and "::" not in spelling:
+        names.insert(0, f"{owner}::{spelling}")
+    leaf = _leaf(spelling)
+    if leaf and leaf not in names:
+        names.append(leaf)
+    candidates: set[str] = set()
+    arity = shape.get("argument_count")
+    for name in names:
+        matches = list(name_index.get(name, []))
+        if not matches and name == leaf:
+            matches = list(leaf_index.get(name, []))
+        if isinstance(arity, int):
+            arity_matches = [
+                target
+                for target in matches
+                if isinstance(functions.get(target), Mapping)
+                and isinstance(functions[target].get("parameters"), list)
+                and len(functions[target]["parameters"]) == arity
+            ]
+            if arity_matches:
+                matches = arity_matches
+        candidates.update(matches)
+    return sorted(candidates)
+
+
+def _factory_constructor_candidate_ids(
+    shape: Mapping[str, Any],
+    functions: Mapping[str, Any],
+) -> list[str]:
+    """Resolve a smart-pointer factory to indexed constructor units.
+
+    ``make_shared<T>(...)`` and ``make_unique<T>(...)`` are represented by
+    tree-sitter as calls to the standard-library factory, not as calls to
+    ``T::T``.  The native graph builder already adds the concrete constructor
+    edge; the ledger must expose the same target so a linked edge is not
+    misreported as an unresolved call site.  This remains a bounded,
+    syntax/type-name-based observation and does not claim dynamic dispatch.
+    """
+    spelling = str(shape.get("callee_spelling") or "").strip()
+    match = _FACTORY_CONSTRUCTOR_RE.search(spelling)
+    if not match:
+        return []
+    type_name = match.group(1).strip()
+    class_name = type_name.rsplit("::", 1)[-1].strip()
+    if not class_name:
+        return []
+    candidates: list[str] = []
+    for function_id, function in functions.items():
+        if not isinstance(function_id, str) or not isinstance(function, Mapping):
+            continue
+        function_name = str(function.get("name") or "")
+        declared_class = str(function.get("class_name") or "").rsplit("::", 1)[-1]
+        is_constructor = function.get("unit_type") == "constructor"
+        if not is_constructor and not function_name.endswith(
+            f"::{class_name}"
+        ):
+            continue
+        if declared_class and declared_class != class_name:
+            continue
+        if not function_name.endswith(f"::{class_name}"):
+            continue
+        candidates.append(function_id)
+    arity = shape.get("argument_count")
+    if isinstance(arity, int):
+        exact = [
+            target
+            for target in candidates
+            if isinstance(functions.get(target), Mapping)
+            and isinstance(functions[target].get("parameters"), list)
+            and len(functions[target]["parameters"]) == arity
+        ]
+        if exact:
+            candidates = exact
+    return sorted(set(candidates))
+
+
+def _callsite_id(
+    repository: str,
+    revision: str,
+    function_id: str,
+    file_path: str,
+    node: Any,
+    expression: str,
+) -> str:
+    """Build a stable identity that survives line-only collisions."""
+    identity = "|".join(
+        [
+            repository,
+            revision,
+            function_id,
+            file_path,
+            str(node.start_byte),
+            str(node.end_byte),
+            expression,
+        ]
+    )
+    digest = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()[:20]
+    return f"callsite:{digest}"
 
 
 def _mask_preserving_lines(code: str) -> str:
@@ -1960,9 +2128,24 @@ def build_call_graph_diagnostics(
         for key in index:
             index[key].sort()
 
+    graph_call_map = {}
+    if isinstance(call_graph_result, Mapping):
+        raw_graph = call_graph_result.get("call_graph", {})
+        if isinstance(raw_graph, Mapping):
+            graph_call_map = raw_graph
+    repository = str(extract_result.get("repository") or "")
+    revision = str(
+        extract_result.get("revision")
+        or extract_result.get("commit_sha")
+        or extract_result.get("source_revision")
+        or ""
+    )
+
     c_parser = Parser(C_LANGUAGE)
     cpp_parser = Parser(CPP_LANGUAGE)
     parsed: dict[str, tuple[Any, bytes, Mapping[str, Any]]] = {}
+    call_sites: list[dict[str, Any]] = []
+    parse_error_functions: list[str] = []
     assignments: list[dict[str, Any]] = []
     lambda_assignments: list[dict[str, Any]] = []
 
@@ -1977,6 +2160,135 @@ def build_call_graph_diagnostics(
         parser = cpp_parser if suffix in CPP_EXTENSIONS else c_parser
         root = parser.parse(source).root_node
         parsed[function_id] = (root, source, function)
+        syntax_error = bool(getattr(root, "has_error", False))
+        if syntax_error:
+            parse_error_functions.append(function_id)
+        for node in _walk(root):
+            if node.type != "call_expression":
+                continue
+            shape = _callsite_shape(node, source)
+            candidates = _callsite_candidate_ids(
+                shape, function, functions, name_index, leaf_index
+            )
+            factory_candidates = _factory_constructor_candidate_ids(
+                shape, functions
+            )
+            if factory_candidates:
+                candidates = sorted(set(candidates) | set(factory_candidates))
+            caller_graph_targets = graph_call_map.get(function_id, [])
+            if not isinstance(caller_graph_targets, (list, tuple, set)):
+                caller_graph_targets = []
+            caller_graph_targets = [
+                str(target) for target in caller_graph_targets if isinstance(target, str)
+            ]
+            linked_targets = sorted(set(candidates) & set(caller_graph_targets))
+            if shape["call_kind"] == "indirect":
+                binding_status = "unresolved"
+                dispatch_status = "unknown"
+                scope_status = "unknown"
+            elif len(candidates) == 1:
+                binding_status = "resolved"
+                dispatch_status = "not_applicable" if shape["call_kind"] == "direct" else "partial"
+                scope_status = "in_scope"
+            elif len(candidates) > 1:
+                binding_status = "partial"
+                dispatch_status = "partial" if shape["call_kind"] == "member" else "not_applicable"
+                scope_status = "in_scope"
+            else:
+                binding_status = "unresolved"
+                dispatch_status = "unknown" if shape["call_kind"] == "member" else "not_applicable"
+                scope_status = "unknown"
+            if linked_targets:
+                graph_status = "linked"
+            elif candidates and shape["call_kind"] in {"direct", "member"}:
+                graph_status = "edge_missing"
+            elif shape["call_kind"] == "indirect":
+                graph_status = "candidate_or_dynamic"
+            else:
+                graph_status = "not_linked"
+            # A syntax-only name/arity match is not automatically a complete
+            # binding.  Only a qualified direct call with an exact arity match
+            # is closed-world enough for the effective graph; member calls
+            # still need type/declaration evidence from Clang or another
+            # trusted resolver.  Persist the rule so the graph builder can
+            # audit why a resolved site was promoted instead of relying on
+            # ``len(candidates) == 1``.
+            binding_basis = ""
+            candidate_completeness = "unknown"
+            binding_evidence: dict[str, Any] = {}
+            if len(candidates) == 1 and shape["call_kind"] == "direct":
+                spelling = str(shape.get("callee_spelling") or "")
+                if "::" in spelling and isinstance(shape.get("argument_count"), int):
+                    candidate = functions.get(candidates[0])
+                    parameters = (
+                        candidate.get("parameters")
+                        if isinstance(candidate, Mapping)
+                        else None
+                    )
+                    if isinstance(parameters, list) and len(parameters) == shape["argument_count"]:
+                        binding_basis = "qualified_name_and_arity"
+                        candidate_completeness = "complete"
+                        binding_evidence = {
+                            "binding_rule": binding_basis,
+                            "qualified_callee": spelling,
+                            "argument_count": shape["argument_count"],
+                            "target_id": candidates[0],
+                            "signature_match": True,
+                        }
+                if not binding_basis:
+                    binding_basis = "direct_name_and_arity"
+            elif len(candidates) == 1 and shape["call_kind"] == "member":
+                binding_basis = "member_name_and_arity"
+            elif candidates:
+                binding_basis = "bounded_name_or_dispatch_candidates"
+            line_start = _source_line(function, node)
+            line_end = _source_line(function, node) + max(
+                0, node.end_point[0] - node.start_point[0]
+            )
+            file_path = str(function.get("file_path") or "")
+            call_sites.append(
+                {
+                    "site_id": _callsite_id(
+                        repository,
+                        revision,
+                        function_id,
+                        file_path,
+                        node,
+                        shape["expression"],
+                    ),
+                    "repository": repository,
+                    "revision": revision,
+                    "translation_unit": file_path,
+                    "caller_id": function_id,
+                    "file": file_path,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                    "byte_start": node.start_byte,
+                    "byte_end": node.end_byte,
+                    "expression": shape["expression"],
+                    "callee_spelling": shape["callee_spelling"],
+                    "receiver_expression": shape["receiver_expression"],
+                    "call_kind": shape["call_kind"],
+                    "ast_type": shape["ast_type"],
+                    "argument_count": shape["argument_count"],
+                    "binding_status": binding_status,
+                    "dispatch_status": dispatch_status,
+                    "scope_status": scope_status,
+                    "build_status": str(
+                        extract_result.get("build_status")
+                        or extract_result.get("build_context_status")
+                        or "unknown"
+                    ),
+                    "parse_status": "syntax_error" if syntax_error else "complete",
+                    "candidate_target_ids": candidates,
+                    "linked_target_ids": linked_targets,
+                    "candidate_completeness": candidate_completeness,
+                    "binding_basis": binding_basis,
+                    "binding_evidence": binding_evidence,
+                    "graph_status": graph_status,
+                    "graph_target_ids_for_caller": caller_graph_targets[:64],
+                }
+            )
         for node in _walk(root):
             item = _dispatch_assignment(
                 node, source, function_id, function, functions
@@ -2388,6 +2700,49 @@ def build_call_graph_diagnostics(
         if not item["target_id"]
     ]
 
+    # Candidate lists come from bounded parser heuristics and are not
+    # exhaustive by default.  Persist that fact explicitly so recovery and
+    # projection do not accidentally treat a partial shortlist as a whitelist.
+    for record in call_sites:
+        record.setdefault("candidate_completeness", "unknown")
+    for record in sites:
+        record.setdefault("candidate_completeness", "unknown")
+    for record in lambda_sites:
+        record.setdefault("candidate_completeness", "unknown")
+
+    call_sites.sort(
+        key=lambda item: (
+            str(item.get("file", "")),
+            int(item.get("line_start", 0) or 0),
+            str(item.get("caller_id", "")),
+            int(item.get("byte_start", 0) or 0),
+        )
+    )
+    callsite_summary = {
+        "total_call_sites": len(call_sites),
+        "functions_scanned": len(parsed),
+        "parse_error_functions": len(parse_error_functions),
+        "direct": sum(item.get("call_kind") == "direct" for item in call_sites),
+        "member": sum(item.get("call_kind") == "member" for item in call_sites),
+        "indirect": sum(item.get("call_kind") == "indirect" for item in call_sites),
+        "unresolved_bindings": sum(
+            item.get("binding_status") == "unresolved" for item in call_sites
+        ),
+        "partial_bindings": sum(
+            item.get("binding_status") == "partial" for item in call_sites
+        ),
+        "resolved_bindings": sum(
+            item.get("binding_status") == "resolved" for item in call_sites
+        ),
+        "graph_edge_missing": sum(
+            item.get("graph_status") == "edge_missing" for item in call_sites
+        ),
+        "dynamic_or_candidate_sites": sum(
+            item.get("graph_status") == "candidate_or_dynamic" for item in call_sites
+        ),
+        "parse_error_function_ids": sorted(parse_error_functions),
+    }
+
     summary = {
         "unresolved_call_sites": len(sites),
         "dispatch_assignments": len(assignments),
@@ -2421,6 +2776,12 @@ def build_call_graph_diagnostics(
         "status": "complete",
         "repository": extract_result.get("repository", ""),
         "summary": summary,
+        "call_sites": call_sites,
+        "callsite_ledger": {
+            **callsite_summary,
+            "repository": repository,
+            "revision": revision,
+        },
         "unresolved_call_sites": sites,
         "dispatch_assignments": assignments,
         "orphans": orphans,

@@ -289,6 +289,81 @@ def test_stage2_prompt_exposes_route_and_non_binder_recovery_tools():
     assert "assessment.missing_evidence" in prompt
 
 
+def test_stage2_prompt_requires_boundary_specific_route_evidence_for_socket_cli_and_events():
+    """Stage 2 must distinguish an inbound route from a generic API mention."""
+    prompt = get_verification_prompt(
+        code="int handle(int argc, char **argv) { return dispatch(argv[1]); }",
+        finding="inconclusive",
+        attack_vector="command or socket input",
+        reasoning="The original context omitted the receiver details.",
+        route="src/handler.cpp:Service::handle",
+    )
+
+    assert "boundary_type" in prompt
+    assert "direction" in prompt
+    assert "registration/listener" in prompt
+    assert "source-backed" in prompt
+    assert "CLI" in prompt or "argc/argv" in prompt
+    assert "event callback" in prompt or "callback" in prompt
+    assert "outbound" in prompt
+
+
+def test_stage2_parser_normalizes_boundary_route_evidence_aliases():
+    """Aliases from different models must converge on auditable route fields."""
+    from utilities.finding_verifier import FindingVerifier
+
+    verifier = FindingVerifier.__new__(FindingVerifier)
+    parsed = verifier._parse_finish_result({
+        "agree": False,
+        "correct_finding": "vulnerable",
+        "assessment": {
+            "defect_status": "confirmed",
+            "reachability_status": "conditional",
+            "impact_status": "plausible",
+            "evidence_completeness": "partial",
+            "boundary_type": "event callback",
+            "direction": "receive",
+            "source_evidence_status": "source-backed",
+            "registration_evidence": ["RegisterCallback at event.cpp:12"],
+            "input_relation": "confirmed",
+            "missing_evidence": ["deployment ACL"],
+        },
+        "exploit_path": {
+            "entry_point": "event.cpp:RegisterCallback",
+            "data_flow": ["event -> callback -> sink"],
+            "sink_reached": True,
+            "attacker_control_at_sink": "partial",
+        },
+        "explanation": "The callback route is source-backed but deployment is conditional.",
+    }, "inconclusive", 1, 2)
+
+    assert parsed.assessment["boundary_type"] == "callback"
+    assert parsed.assessment["direction"] == "inbound"
+    assert parsed.assessment["source_evidence_status"] == "confirmed"
+    assert parsed.assessment["input_relation"] == "confirmed"
+    assert parsed.assessment["registration_evidence"] == ["RegisterCallback at event.cpp:12"]
+
+
+def test_stage2_parser_normalizes_composite_socket_and_event_labels():
+    from utilities.finding_verifier import FindingVerifier
+
+    verifier = FindingVerifier.__new__(FindingVerifier)
+    for raw, expected in (
+        ("local Unix SOCK_SEQPACKET service socket", "unix_socket"),
+        ("tcp/udp_loopback_socket", "tcp_udp_socket"),
+        ("tcp/udp", "tcp_udp_socket"),
+        ("event callback / device-facing event ingestion", "callback"),
+        ("local inbound socket / IPC message boundary", "socket"),
+    ):
+        parsed = verifier._parse_finish_result({
+            "agree": True,
+            "correct_finding": "inconclusive",
+            "assessment": {"boundary_type": raw},
+            "explanation": "route label only",
+        }, "inconclusive", 1, 1)
+        assert parsed.assessment["boundary_type"] == expected
+
+
 def test_stage2_parser_accepts_flattened_assessment_and_bounds_finish_data():
     from utilities.agentic_enhancer.repository_index import RepositoryIndex
     from utilities.finding_verifier import FindingVerifier

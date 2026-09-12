@@ -32,6 +32,7 @@ from core.source_locator import (  # noqa: E402
     LLMRoleAttributor,
     LLMRoleAttributionResult,
     LLMRoleDecision,
+    LLMEntrypointAttributor,
     LLMCandidateReviewer,
     load_manifest,
     runtime_from_config,
@@ -43,12 +44,15 @@ from core.source_locator.worker import (  # noqa: E402
     _client_kind,
     _compact_repository_mappings_payload,
     _infer_related_macros,
+    _component_source_queries,
     _line_kind,
     _line_has_target_identity,
     _named_socket_path_has_conflict,
     _network_operation_matches_target,
     _network_path_priority,
     _path_contains_target_identity,
+    _path_has_target_component_affinity,
+    _target_component_tokens,
     _path_shares_target_context,
     _path_role_adjustment,
     _evidence_symbol_for_line,
@@ -59,10 +63,682 @@ from core.source_locator.worker import (  # noqa: E402
     _mapping_role_score,
     _search_hit_is_target_evidence,
     _scope_llm_role_result_to_mapping,
+    _extract_enclosing_function,
+    _build_socket_entrypoint_sources,
+    _network_function_matches_target,
+    _target_local_entrypoint_lines,
+    _compact_attribution_payload,
+)
+from core.source_locator.service_attributor import (  # noqa: E402
+    AttributionCandidate,
+    ServerAttributionResult,
+    SourceLocation,
 )
 
 
 TARGET_PATH = "/openharmony/base/startup/init/services/param/param_service.c"
+
+
+def test_extract_enclosing_socket_entry_function_returns_complete_source() -> None:
+    source = """#include <sys/socket.h>\n\nstatic void Handle(int fd) {\n    char buf[16];\n    recv(fd, buf, sizeof(buf), 0);\n    dispatch(buf);\n}\n"""
+    document = SourceDocument(
+        path="/openharmony/base/test/socket.c",
+        content=source,
+        source="test",
+    )
+
+    result = _extract_enclosing_function(document, 5)
+
+    assert result is not None
+    assert result["function"] == "Handle"
+    assert result["line_start"] == 3
+    assert result["line_end"] == 7
+    assert "recv(fd, buf" in result["source"]
+    assert result["complete"] is True
+
+
+def test_extract_enclosing_socket_entry_function_keeps_qualified_name_with_callback_parameter() -> None:
+    source = """#include <sys/socket.h>
+void UnixSocketServer::UnixSocketAccept(void (*callback)(int)) {
+    callback(accept(fd, nullptr, nullptr));
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/test/unix_socket_server.cpp",
+        content=source,
+        source="test",
+    )
+
+    result = _extract_enclosing_function(document, 3)
+
+    assert result is not None
+    assert result["function"] == "UnixSocketServer::UnixSocketAccept"
+
+
+def test_extract_enclosing_socket_entry_function_rejects_header_type_body() -> None:
+    """类声明中的 Recv/Accept 原型不能被当成入口函数源码。"""
+
+    document = SourceDocument(
+        path="/openharmony/base/test/sp_server_socket.h",
+        content="""class SpServerSocket {
+public:
+    int Recvfrom();
+    int Accept();
+};
+""",
+        source="fixture",
+    )
+
+    assert _extract_enclosing_function(document, 3) is None
+
+
+def test_network_function_transport_filter_keeps_only_matching_methods() -> None:
+    udp = normalize_target("SP_daemon UDP 127.0.0.1:8283")
+    tcp = normalize_target("SP_daemon TCP 127.0.0.1:8284")
+
+    assert _network_function_matches_target("SpServerSocket::Recvfrom", "recvfrom(fd, b, n, 0);", udp)
+    assert not _network_function_matches_target("SpServerSocket::Accept", "accept(fd, nullptr, nullptr);", udp)
+    assert not _network_function_matches_target("SpServerSocket::Recv", "recv(fd, b, n, 0);", udp)
+    assert _network_function_matches_target("SpThreadSocket::TypeTcp", "spSocket.Accept();", tcp)
+    assert _network_function_matches_target("SpThreadSocket::Process", "spSocket.Recvfrom();", tcp)
+    assert not _network_function_matches_target("SpServerSocket::Recvfrom", "recvfrom(fd, b, n, 0);", tcp)
+
+
+def test_socket_entrypoint_artifact_groups_source_and_keeps_evidence_ids() -> None:
+    source = """#include <sys/socket.h>\nvoid Handle(int fd) {\n    char buffer[8];\n    recv(fd, buffer, sizeof(buffer), 0);\n}\n"""
+    document = SourceDocument(
+        path="/openharmony/base/test/socket.c",
+        content=source,
+        source="test",
+    )
+    store = EvidenceStore()
+    evidence = store.add_source_excerpt(document, line_start=4, kind="socket_accept_read")
+    candidate = AttributionCandidate(
+        role="server_consumer",
+        subject="Handle",
+        source_locations=(SourceLocation(document.path, 4, 4),),
+        evidence_ids=(evidence.evidence_id,),
+        score=25,
+    )
+    server = ServerAttributionResult(
+        status="PARTIAL",
+        confirmed=False,
+        score=50,
+        predicates={"server_consumer": True},
+        candidates=(candidate,),
+        evidence_ids=(evidence.evidence_id,),
+    )
+    fake_client = type("FakeOpenGrok", (), {"read_source": lambda self, path, max_bytes=None: document})()
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/test"),
+        store,
+        server,
+        fake_client,
+        max_source_bytes=1024,
+    )
+
+    assert payload["status"] == "complete"
+    assert payload["entrypoint_count"] == 1
+    assert payload["entries"][0]["function"] == "Handle"
+    assert payload["entries"][0]["evidence_ids"] == [evidence.evidence_id]
+    assert "recv(fd, buffer" in payload["entries"][0]["source"]
+
+
+def test_socket_entrypoint_artifact_uses_llm_to_reject_setup_candidate() -> None:
+    """规则只收窄候选，模型负责区分接收函数和同文件初始化函数。"""
+
+    source = """#include <sys/socket.h>
+void Init(int fd) {
+    bind(fd, nullptr, 0);
+    listen(fd, 8);
+}
+void Receive(int fd) {
+    char buffer[8];
+    recvfrom(fd, buffer, sizeof(buffer), 0, nullptr, nullptr);
+    dispatch(buffer);
+}
+void SetMark(int fd, int mark) {
+    switch (mark) { case 1: break; default: break; }
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/test/example/socket.cpp",
+        content=source,
+        source="fixture",
+    )
+    store = EvidenceStore()
+    setup = store.add_source_excerpt(document, line_start=3, kind="socket_server_registration")
+    receive = store.add_source_excerpt(document, line_start=8, kind="socket_accept_read")
+    dispatch = store.add_source_excerpt(document, line_start=12, kind="protocol_dispatch")
+    candidate = AttributionCandidate(
+        role="server_consumer",
+        subject="example socket service",
+        source_locations=(
+            SourceLocation(document.path, setup.line_start, setup.line_end),
+            SourceLocation(document.path, receive.line_start, receive.line_end),
+            SourceLocation(document.path, dispatch.line_start, dispatch.line_end),
+        ),
+        evidence_ids=(setup.evidence_id, receive.evidence_id, dispatch.evidence_id),
+        score=40,
+    )
+    server = ServerAttributionResult(
+        status="HIGH",
+        confirmed=True,
+        score=80,
+        predicates={"server_consumer": True},
+        candidates=(candidate,),
+        evidence_ids=(setup.evidence_id, receive.evidence_id, dispatch.evidence_id),
+    )
+    target = normalize_target("/dev/unix/socket/example")
+    fake_client = type("FakeOpenGrok", (), {"read_source": lambda self, path, max_bytes=None: document})()
+
+    def model(prompt: str):
+        payload = json.loads(prompt)
+        decisions = []
+        for row in payload["candidates"]:
+            if row["function"] == "Receive":
+                decisions.append(
+                    {
+                        "candidate_id": row["candidate_id"],
+                        "role": "inbound_receive",
+                        "status": "accepted",
+                        "confidence": "high",
+                        "evidence_ids": row["evidence_ids"],
+                        "reason": "直接调用 recvfrom 接收外部数据并进入协议处理",
+                    }
+                )
+            else:
+                decisions.append(
+                    {
+                        "candidate_id": row["candidate_id"],
+                        "role": "setup_only" if row["function"] == "Init" else "unrelated",
+                        "status": "rejected",
+                        "confidence": "high",
+                        "evidence_ids": row["evidence_ids"],
+                        "reason": "该函数不是外部消息接收入口",
+                    }
+                )
+        return {"decisions": decisions}
+
+    result = _build_socket_entrypoint_sources(
+        target,
+        store,
+        server,
+        fake_client,
+        max_source_bytes=64 * 1024,
+        llm_entrypoint_attributor=LLMEntrypointAttributor(model_call=model),
+    )
+
+    assert result["decision_source"] == "llm"
+    # The registration line is an anchor used to discover local receivers;
+    # only the derived Receive and protocol-dispatch candidates are submitted
+    # as function candidates.
+    assert result["candidate_count"] == 2
+    assert [item["function"] for item in result["entries"]] == ["Receive"]
+    assert result["entries"][0]["llm_decision"]["eligible"] is True
+    assert result["llm_review"]["accepted_candidate_ids"]
+
+
+def test_socket_entrypoint_artifact_expands_target_bound_registration_file() -> None:
+    """A registration row also lets the artifact recover its receiver."""
+
+    source = """#include <sys/socket.h>
+void Register(void)
+{
+    AddDev(std::make_shared<SocketDevice>(\"hisysevent\", 0));
+}
+int ReceiveMsg(int fd)
+{
+    char buffer[8] = {};
+    return recv(fd, buffer, sizeof(buffer), 0);
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp",
+        content=source,
+        source="test",
+    )
+    store = EvidenceStore()
+    evidence = store.add_source_excerpt(
+        document,
+        line_start=4,
+        kind="socket_server_registration",
+    )
+    candidate = AttributionCandidate(
+        role="service_owner",
+        subject="hisysevent",
+        source_locations=(SourceLocation(document.path, 4, 4),),
+        evidence_ids=(evidence.evidence_id,),
+        score=30,
+    )
+    server = ServerAttributionResult(
+        status="PARTIAL",
+        confirmed=False,
+        score=30,
+        predicates={"socket_server_registration": True},
+        candidates=(candidate,),
+        evidence_ids=(evidence.evidence_id,),
+    )
+    fake_client = type("FakeOpenGrok", (), {"read_source": lambda self, path, max_bytes=None: document})()
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/hisysevent"),
+        store,
+        server,
+        fake_client,
+        max_source_bytes=1024,
+    )
+
+    assert payload["status"] == "complete"
+    assert payload["entrypoint_count"] == 1
+    assert payload["entries"][0]["function"] == "ReceiveMsg"
+    assert "recv(fd, buffer" in payload["entries"][0]["source"]
+
+
+def test_socket_entrypoint_artifact_bridges_config_identity_to_server_file() -> None:
+    """A cfg-only identity must not hide a separately indexed server receiver."""
+
+    source = """#include <sys/socket.h>
+int AcceptFaultLogger(int listenFd)
+{
+    int clientFd = accept(listenFd, nullptr, nullptr);
+    return recv(clientFd, buffer, sizeof(buffer), 0);
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/hiviewdfx/faultloggerd/services/fault_logger_server.cpp",
+        content=source,
+        source="fixture",
+    )
+    config = SourceDocument(
+        path="/openharmony/base/hiviewdfx/faultloggerd/services/config/faultloggerd.cfg",
+        content='{"name":"faultloggerd.server"}',
+        source="fixture",
+    )
+    store = EvidenceStore()
+    identity = store.add_source_excerpt(config, line_start=1, kind="service_config")
+    receive = store.add_source_excerpt(document, line_start=4, kind="socket_accept_read")
+    candidate = AttributionCandidate(
+        role="server_consumer",
+        subject="faultloggerd server receiver",
+        source_locations=(SourceLocation(document.path, 4, 4),),
+        evidence_ids=(receive.evidence_id,),
+        score=25,
+    )
+    server = ServerAttributionResult(
+        status="PARTIAL",
+        confirmed=False,
+        score=40,
+        predicates={"socket_identity": True, "server_consumer": True},
+        candidates=(candidate,),
+        evidence_ids=(identity.evidence_id, receive.evidence_id),
+    )
+
+    class FakeOpenGrok:
+        def read_source(self, path, max_bytes=None):
+            return document if path == document.path else config
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/faultloggerd.server"),
+        store,
+        server,
+        FakeOpenGrok(),
+        max_source_bytes=1024,
+    )
+
+    assert payload["status"] == "complete"
+    assert [item["function"] for item in payload["entries"]] == ["AcceptFaultLogger"]
+    assert payload["selection"]["server_candidate_paths"] == [document.path]
+    assert payload["entries"][0]["entry_scope"] == "transport_receive"
+
+
+def test_socket_entrypoint_artifact_scans_verified_setup_when_role_review_keeps_sibling_receiver() -> None:
+    """角色复核遗漏业务回调时，目标注册证据仍能恢复同文件入口。"""
+
+    service_source = """int Register(void)
+{
+    return GetControlSocket(\"paramservice\");
+}
+int ProcessMessage(const Message *msg)
+{
+    switch (msg->type) {
+        case MSG_SET_PARAM: return 0;
+        default: return -1;
+    }
+}
+"""
+    sibling_source = """int GenericReceiver(int recvFd)
+{
+    return read(recvFd, buffer, sizeof(buffer));
+}
+"""
+    service = SourceDocument(
+        path="/openharmony/base/startup/init/services/param/linux/param_service.c",
+        content=service_source,
+        source="fixture",
+    )
+    sibling = SourceDocument(
+        path="/openharmony/base/startup/init/services/modules/init_context/init_context.c",
+        content=sibling_source,
+        source="fixture",
+    )
+    store = EvidenceStore()
+    setup = store.add_source_excerpt(service, line_start=3, kind="socket_server_registration")
+    sibling_receive = store.add_source_excerpt(sibling, line_start=3, kind="socket_accept_read")
+    server = ServerAttributionResult(
+        status="HIGH",
+        confirmed=True,
+        score=100,
+        predicates={"socket_identity": True, "socket_acquire_or_bind": True, "server_consumer": True},
+        candidates=(
+            AttributionCandidate(
+                role="server_consumer",
+                subject="generic init receiver",
+                source_locations=(SourceLocation(sibling.path, 3, 3),),
+                evidence_ids=(sibling_receive.evidence_id,),
+                score=25,
+            ),
+        ),
+        # The setup fact is target-scoped but intentionally absent from the
+        # reviewed role candidate, reproducing a semantic-review compaction.
+        evidence_ids=(sibling_receive.evidence_id, setup.evidence_id),
+    )
+
+    class FakeOpenGrok:
+        def read_source(self, path, max_bytes=None):
+            return service if path == service.path else sibling
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/paramservice"),
+        store,
+        server,
+        FakeOpenGrok(),
+        max_source_bytes=4096,
+    )
+
+    assert payload["status"] == "complete"
+    assert any(item["function"] == "ProcessMessage" for item in payload["entries"])
+    assert service.path not in payload["selection"]["excluded_target_mismatch_paths"]
+
+
+def test_socket_entrypoint_artifact_reports_cfg_only_gap_explicitly() -> None:
+    """A config identity without implementation evidence is a gap, not empty proof."""
+
+    document = SourceDocument(
+        path="/openharmony/base/example/services/example.cfg",
+        content='{"name":"example"}',
+        source="fixture",
+    )
+    store = EvidenceStore()
+    identity = store.add_source_excerpt(document, line_start=1, kind="service_config")
+    candidate = AttributionCandidate(
+        role="socket_creator",
+        subject="example",
+        source_locations=(SourceLocation(document.path, 1, 1),),
+        evidence_ids=(identity.evidence_id,),
+        score=15,
+    )
+    server = ServerAttributionResult(
+        status="PARTIAL",
+        confirmed=False,
+        score=15,
+        predicates={"socket_identity": True},
+        candidates=(candidate,),
+        evidence_ids=(identity.evidence_id,),
+    )
+    fake_client = type("FakeOpenGrok", (), {"read_source": lambda self, path, max_bytes=None: document})()
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/example"),
+        store,
+        server,
+        fake_client,
+        max_source_bytes=1024,
+    )
+
+    assert payload["status"] == "unavailable"
+    assert payload["entrypoint_count"] == 0
+    assert payload["selection"]["needs_source_entry_evidence"] is True
+    assert "补充服务实现源码" in payload["errors"][0]
+
+
+def test_target_component_affinity_does_not_bridge_unrelated_vpn_receiver() -> None:
+    """同一 netmanager 模块内的 VPN 接收器不能冒充 dnsproxyd 服务端。"""
+
+    assert _path_has_target_component_affinity(
+        "/openharmony/foundation/communication/netmanager_base/services/netmanagernative/src/netsys/dns_resolv_listen.cpp",
+        normalize_target("/dev/unix/socket/dnsproxyd"),
+    )
+    assert not _path_has_target_component_affinity(
+        "/openharmony/foundation/communication/netmanager_base/services/netmanagernative/src/manager/vpn_manager.cpp",
+        normalize_target("/dev/unix/socket/dnsproxyd"),
+    )
+    assert not _path_has_target_component_affinity(
+        "/openharmony/foundation/communication/netmanager_base/services/netmanagernative/src/manager/vpn_manager.cpp",
+        normalize_target("/dev/unix/socket/multivpnfd"),
+    )
+
+
+def test_socket_entrypoint_artifact_rejects_generic_cross_file_sibling() -> None:
+    """目标只有 DNS 配置时，VPN 的通用 accept 行不能被跨文件提升。"""
+
+    source = """#include <sys/socket.h>
+int StartUnixSocketListen()
+{
+    int clientFd = accept(serverfd, nullptr, nullptr);
+    return clientFd;
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/foundation/communication/netmanager_base/services/netmanagernative/src/manager/vpn_manager.cpp",
+        content=source,
+        source="fixture",
+    )
+    config = SourceDocument(
+        path="/openharmony/foundation/communication/netmanager_base/services/etc/init/netsysnative.cfg",
+        content='{"name":"dnsproxyd"}',
+        source="fixture",
+    )
+    store = EvidenceStore()
+    identity = store.add_source_excerpt(config, line_start=1, kind="service_config")
+    receive = store.add_source_excerpt(document, line_start=4, kind="socket_accept_read")
+    candidate = AttributionCandidate(
+        role="server_consumer",
+        subject="VPN receiver",
+        source_locations=(SourceLocation(document.path, 4, 4),),
+        evidence_ids=(receive.evidence_id,),
+        score=25,
+    )
+    server = ServerAttributionResult(
+        status="PARTIAL",
+        confirmed=False,
+        score=40,
+        predicates={"socket_identity": True, "server_consumer": True},
+        candidates=(candidate,),
+        evidence_ids=(identity.evidence_id, receive.evidence_id),
+    )
+
+    class FakeOpenGrok:
+        def read_source(self, path, max_bytes=None):
+            return document if path == document.path else config
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/dnsproxyd"),
+        store,
+        server,
+        FakeOpenGrok(),
+        max_source_bytes=1024,
+    )
+
+    assert payload["status"] == "unavailable"
+    assert payload["entrypoint_count"] == 0
+    assert payload["selection"]["needs_source_entry_evidence"] is True
+
+
+def test_socket_entrypoint_predicate_accepts_epoll_protocol_callback() -> None:
+    """Epoll 框架把 recv 隐藏在 runner 时，协议回调仍是入口。"""
+
+    from core.source_locator.worker import _function_source_is_socket_entrypoint
+
+    source = """ReceiverRunner ProcCommand()
+{
+    return [this](FileDescriptor fd, const std::string &data) -> FixedLengthReceiverState {
+        switch (info->command) {
+            case GET_CONFIG:
+                server_->AddReceiver(fd);
+                return FixedLengthReceiverState::DATA_ENOUGH;
+            default:
+                return FixedLengthReceiverState::ONERROR;
+        }
+    };
+}
+"""
+    assert _function_source_is_socket_entrypoint("ProcCommand", source)
+
+
+def test_compact_attribution_payload_keeps_server_roles() -> None:
+    """Role-balanced compaction must retain consumers behind noisy creators."""
+
+    raw = [
+        {
+            "role": "socket_creator",
+            "subject": f"creator-{index}",
+            "source_locations": [],
+            "evidence_ids": [],
+            "reasons": [],
+        }
+        for index in range(40)
+    ]
+    raw.append(
+        {
+            "role": "server_consumer",
+            "subject": "real-receiver",
+            "source_locations": [],
+            "evidence_ids": [],
+            "reasons": [],
+        }
+    )
+    compact = _compact_attribution_payload({"candidates": raw})
+    assert len(compact["candidates"]) == 32
+    assert any(item["role"] == "server_consumer" for item in compact["candidates"])
+
+
+def test_local_entrypoint_scan_recovers_recvmsg_for_init_created_service() -> None:
+    source = """#include <sys/socket.h>
+static void ProcessRecvMsg(void *connection) {}
+static int ProcessPreFork(int parentToChildFd)
+{
+    char buffer[8] = {};
+    return read(parentToChildFd, buffer, sizeof(buffer));
+}
+static int CreateServer(const char *name)
+{
+    int fd = GetControlSocket(name);
+    struct msghdr msg = {};
+    return recvmsg(fd, &msg, 0);
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/startup/appspawn/standard/appspawn_service.c",
+        content=source,
+        source="test",
+    )
+
+    result = _target_local_entrypoint_lines(
+        document.path,
+        document,
+        normalize_target("/dev/unix/socket/CJAppSpawn"),
+        ("/openharmony/base/startup/appspawn",),
+    )
+
+    assert (12, "socket_accept_read") in result
+    assert not any(kind == "socket_accept_read" and line == 6 for line, kind in result)
+    assert any(kind == "protocol_dispatch" for _, kind in result)
+
+
+def test_local_entrypoint_scan_excludes_client_readback_helper() -> None:
+    source = """static int GetClientSocket(void)
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    ConnectServer(fd, CLIENT_PIPE_NAME);
+    return recv(fd, buffer, sizeof(buffer), 0);
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/base/startup/init/services/param/linux/param_request.c",
+        content=source,
+        source="test",
+    )
+
+    result = _target_local_entrypoint_lines(
+        document.path,
+        document,
+        normalize_target("/dev/unix/socket/paramservice"),
+        ("/openharmony/base/startup/init/services/param",),
+    )
+
+    assert result == ()
+
+
+def test_component_source_probe_normalizes_cjappspawn_to_appspawn_service() -> None:
+    target = normalize_target(
+        "/dev/unix/socket/CJAppSpawn",
+        target_revision="OpenHarmony-6.1-LTS",
+    )
+    executions = (
+        {
+            "status": "ok",
+            "response": {
+                "results": {
+                    "/openharmony/base/startup/appspawn/cjappspawn.cfg": [
+                        {"line": "...", "line_number": ""}
+                    ]
+                }
+            }
+        },
+    )
+
+    queries = _component_source_queries(
+        executions,
+        target,
+        max_queries=1,
+        start_index=2,
+    )
+
+    assert len(queries) == 1
+    assert queries[0].kind == "path"
+    assert queries[0].value == "appspawn_service.c"
+
+
+def test_component_source_probe_normalizes_native_spawn_to_appspawn_service() -> None:
+    target = normalize_target(
+        "/dev/unix/socket/NativeSpawn",
+        target_revision="OpenHarmony-6.1-LTS",
+    )
+    executions = (
+        {
+            "status": "ok",
+            "response": {
+                "results": {
+                    "/openharmony/base/startup/appspawn/nativespawn.cfg": [
+                        {"line": '"name" : "NativeSpawn"', "line_number": "14"}
+                    ]
+                }
+            },
+        },
+    )
+
+    queries = _component_source_queries(
+        executions,
+        target,
+        max_queries=1,
+        start_index=2,
+    )
+
+    assert len(queries) == 1
+    assert queries[0].kind == "path"
+    assert queries[0].value == "appspawn_service.c"
 
 
 def test_candidate_metadata_paths_cover_split_src_implementation_layout() -> None:
@@ -878,6 +1554,57 @@ def test_repository_mapping_ranking_prefers_server_roles_over_noisy_text_hits() 
     assert startup_score > noisy_score
 
 
+def test_repository_mapping_ranking_prefers_target_bound_consumer_source_over_isolated_bind() -> None:
+    """The actual endpoint consumer must beat an unrelated generic bind hit."""
+
+    from core.source_locator import EvidenceStore
+
+    target = normalize_target("/dev/unix/socket/fd_holder")
+    store = EvidenceStore()
+    consumer = store.add_evidence(
+        kind="socket_accept_read",
+        source_path=(
+            "/openharmony/base/startup/init/interfaces/innerkits/fd_holder/"
+            "fd_holder_internal.c"
+        ),
+        line_start=137,
+        excerpt="ssize_t rc = TEMP_FAILURE_RETRY(recvmsg(sock, &msghdr, flags));",
+        tool_name="fixture",
+    )
+    generic_bind = store.add_evidence(
+        kind="socket_bind_listen",
+        source_path=(
+            "/openharmony/foundation/communication/netmanager_base/"
+            "services/netmanagernative/src/manager/vpn_manager.cpp"
+        ),
+        line_start=200,
+        excerpt="bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr));",
+        tool_name="fixture",
+    )
+    startup = RepositoryMapping(
+        project_name="startup_init",
+        source_root="base/startup/init",
+        repo_url="https://gitcode.com/openharmony/startup_init",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=consumer.source_path,
+        evidence_ids=(consumer.evidence_id,),
+    )
+    netmanager = RepositoryMapping(
+        project_name="communication_netmanager_base",
+        source_root="foundation/communication/netmanager_base",
+        repo_url="https://gitcode.com/openharmony/communication_netmanager_base",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=generic_bind.source_path,
+        evidence_ids=(generic_bind.evidence_id,),
+    )
+
+    startup_score, startup_counts = _mapping_role_score(startup, store, target=target)
+    netmanager_score, _ = _mapping_role_score(netmanager, store, target=target)
+
+    assert startup_score > netmanager_score
+    assert startup_counts["target_server_source_anchor"] == 1
+
+
 def test_repository_mapping_ranking_prefers_confirmed_semantic_server_owner() -> None:
     """A model-confirmed registration must beat telemetry API basename hits."""
 
@@ -932,6 +1659,143 @@ def test_repository_mapping_ranking_prefers_confirmed_semantic_server_owner() ->
     assert owner_score > noisy_score
     assert owner_counts["llm_server_owner_anchor"] == 1
     assert "llm_server_owner_anchor" not in noisy_counts
+
+
+def test_repository_mapping_ranking_preserves_case_sensitive_socket_identity() -> None:
+    """LowerCamel socket names must remain ownership anchors during ranking."""
+
+    from core.source_locator import EvidenceStore
+
+    target = normalize_target("/dev/unix/socket/hilogControl")
+    store = EvidenceStore()
+    owner_rows = [
+        store.add_evidence(
+            kind="service_config",
+            source_path="/openharmony/base/hiviewdfx/hilog/services/hilogd/etc/hilogd.cfg",
+            line_start=47,
+            excerpt='"name" : "hilogControl",',
+            tool_name="fixture",
+        ),
+        store.add_evidence(
+            kind="socket_accept_read",
+            source_path="/openharmony/base/hiviewdfx/hilog/frameworks/libhilog/socket/socket_server.cpp",
+            line_start=75,
+            excerpt="return TEMP_FAILURE_RETRY(recv(socketHandler, buffer, bufferLen, flags));",
+            tool_name="fixture",
+        ),
+    ]
+    generic = store.add_evidence(
+        kind="socket_bind_listen",
+        source_path="/openharmony/foundation/communication/netmanager_base/services/netmanagernative/src/manager/vpn_manager.cpp",
+        line_start=200,
+        excerpt="bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr));",
+        tool_name="fixture",
+    )
+    owner = RepositoryMapping(
+        project_name="hiviewdfx_hilog",
+        source_root="base/hiviewdfx/hilog",
+        repo_url="https://gitcode.com/openharmony/hiviewdfx_hilog",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=owner_rows[1].source_path,
+        evidence_ids=tuple(item.evidence_id for item in owner_rows),
+    )
+    noisy = RepositoryMapping(
+        project_name="communication_netmanager_base",
+        source_root="foundation/communication/netmanager_base",
+        repo_url="https://gitcode.com/openharmony/communication_netmanager_base",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=generic.source_path,
+        evidence_ids=(generic.evidence_id,),
+    )
+
+    owner_score, owner_counts = _mapping_role_score(owner, store, target=target)
+    generic_score, _ = _mapping_role_score(noisy, store, target=target)
+
+    assert owner_counts["target_identity_anchor"] == 1
+    assert owner_score > generic_score
+
+
+def test_repository_mapping_ranking_prefers_target_bound_registration_over_client_api_use() -> None:
+    """A named service registration must beat a client-side socket writer."""
+
+    from core.source_locator import EvidenceStore
+
+    target = normalize_target("/dev/unix/socket/hisysevent")
+    store = EvidenceStore()
+    registration = store.add_evidence(
+        kind="socket_server_registration",
+        source_path="/openharmony/base/hiviewdfx/hiview/plugins/sysevent_source/event_server.cpp",
+        line_start=313,
+        excerpt='AddDev(std::make_shared<SocketDevice>("hisysevent", eventCountPerCycle));',
+        tool_name="fixture",
+    )
+    client_rows = [
+        store.add_evidence(
+            kind="service_config",
+            source_path="/openharmony/base/hiviewdfx/hisysevent/interfaces/native/innerkits/hisysevent/event_socket_factory.cpp",
+            line_start=38,
+            excerpt='.sun_path = "/dev/unix/socket/hisysevent",',
+            tool_name="fixture",
+        ),
+        store.add_evidence(
+            kind="socket_acquire",
+            source_path="/openharmony/base/hiviewdfx/hisysevent/interfaces/native/innerkits/hisysevent_easy/easy_socket_writer.c",
+            line_start=67,
+            excerpt="int socketId = TEMP_FAILURE_RETRY(socket(AF_UNIX, SOCK_DGRAM, 0));",
+            tool_name="fixture",
+        ),
+    ]
+    owner = RepositoryMapping(
+        project_name="hiviewdfx_hiview",
+        source_root="base/hiviewdfx/hiview",
+        repo_url="https://gitcode.com/openharmony/hiviewdfx_hiview",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=registration.source_path,
+        evidence_ids=(registration.evidence_id,),
+    )
+    client = RepositoryMapping(
+        project_name="hiviewdfx_hisysevent",
+        source_root="base/hiviewdfx/hisysevent",
+        repo_url="https://gitcode.com/openharmony/hiviewdfx_hisysevent",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=client_rows[0].source_path,
+        evidence_ids=tuple(item.evidence_id for item in client_rows),
+    )
+
+    owner_score, owner_counts = _mapping_role_score(owner, store, target=target)
+    client_score, _ = _mapping_role_score(client, store, target=target)
+
+    assert owner_counts["target_server_source_anchor"] == 1
+    assert owner_score > client_score
+
+
+def test_mapping_identity_ranking_does_not_treat_hisysevent_api_name_as_socket_owner() -> None:
+    """The HiSysEvent API class is not the named hisysevent socket."""
+
+    from core.source_locator import EvidenceStore
+
+    target = normalize_target("/dev/unix/socket/hisysevent")
+    store = EvidenceStore()
+    api = store.add_evidence(
+        kind="service_config",
+        source_path="/openharmony/foundation/multimodalinput/input/service/dfx/src/dfx_hisysevent.cpp",
+        line_start=93,
+        excerpt="if (type == OHOS::HiviewDFX::HiSysEvent::EventType::BEHAVIOR) {",
+        tool_name="fixture",
+    )
+    mapping = RepositoryMapping(
+        project_name="multimodalinput_input",
+        source_root="foundation/multimodalinput/input",
+        repo_url="https://gitcode.com/openharmony/multimodalinput_input",
+        revision="OpenHarmony-6.1-LTS",
+        source_path=api.source_path,
+        evidence_ids=(api.evidence_id,),
+    )
+
+    score, counts = _mapping_role_score(mapping, store, target=target)
+
+    assert counts["target_identity_anchor"] == 0
+    assert score <= 180
 
 
 def test_llm_search_default_budget_is_forty_rounds_and_hard_capped() -> None:

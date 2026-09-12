@@ -67,6 +67,7 @@ def _diagnostics() -> dict:
                 "reason": "parenthesized_member_function_pointer",
                 "symbols": {"target_variable": "memberFunc"},
                 "candidate_target_ids": HANDLERS,
+                "candidate_completeness": "complete",
             }
         ]
     }
@@ -181,6 +182,14 @@ def test_candidate_review_accepts_multiple_edges_and_rejects_non_candidate_targe
     assert len(parsed) == 3
     validated = validate_recovery_proposals(parsed, worklist, functions)
     assert [item["target_id"] for item in validated["accepted"]] == HANDLERS[:2]
+    assert all(
+        item["evidence_status"] == "source_references_verified"
+        for item in validated["accepted"]
+    )
+    assert all(
+        item["reachability_tier"] == "candidate"
+        for item in validated["accepted"]
+    )
     assert len(validated["rejected"]) == 1
     assert validated["rejected"][0]["rejection_reason"] == (
         "target_not_in_candidate_targets"

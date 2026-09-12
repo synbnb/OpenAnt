@@ -32,7 +32,7 @@ import tree_sitter_c as tsc
 import tree_sitter_cpp as tscpp
 from tree_sitter import Language, Parser
 
-from core.platforms.graph import SemanticGraph
+from core.platforms.graph import SemanticGraph, merge_semantic_graphs
 
 
 RESOLVER_VERSION = 1
@@ -1100,29 +1100,6 @@ def build_native_dispatch_graph(
     if not graph.nodes and not graph.edges and not graph.orphans:
         return None
     return graph
-
-
-def merge_semantic_graphs(*graphs: Any) -> SemanticGraph | None:
-    """Merge validated semantic graphs while preserving all evidence."""
-    merged = SemanticGraph()
-    present = False
-    for payload in graphs:
-        if payload is None:
-            continue
-        graph = payload if isinstance(payload, SemanticGraph) else SemanticGraph.from_dict(payload)
-        present = True
-        for node in graph.nodes.values():
-            merged.add_node(node)
-        for edge in graph.edges.values():
-            merged.add_edge(edge)
-        for orphan in graph.orphans:
-            merged.add_orphan(
-                kind=orphan["kind"],
-                reason=orphan["reason"],
-                evidence=orphan.get("evidence", []),
-                attributes=orphan.get("attributes", {}),
-            )
-    return merged if present else None
 
 
 __all__ = [

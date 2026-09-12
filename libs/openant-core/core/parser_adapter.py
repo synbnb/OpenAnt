@@ -437,6 +437,7 @@ def apply_reachability_filter(
     semantic_graph_overlay: Mapping | None = None,
     extra_reachability_seeds: "set[str] | None" = None,
     extra_retain_only_units: "set[str] | None" = None,
+    extra_candidate_reachability_seeds: "set[str] | None" = None,
 ) -> dict:
     """Filter dataset units to only those reachable from entry points.
 
@@ -448,10 +449,13 @@ def apply_reachability_filter(
     keeps the ``is_entry_point`` label. ``extra_reachability_seeds`` supplements
     the BFS without changing that label; use it for high-confidence semantic
     input signals. ``extra_retain_only_units`` adds units to the final
-    reachable set *after* BFS and never seeds or expands the traversal; use it
-    for medium-confidence signals. The two BFS seed inputs are additive and
-    allow traversal to propagate from units the structural heuristics missed;
-    the retain-only input is deliberately outside that frontier.
+    reachable set *after* BFS and never seeds or expands the traversal; this is
+    retained for compatibility with older medium-signal metadata. The two strict BFS seed inputs are additive
+    and allow traversal to propagate from units the structural heuristics
+    missed; the retain-only input is deliberately outside that frontier.
+    ``extra_candidate_reachability_seeds`` starts a separate, lower-trust BFS
+    over the same accepted graph. Its descendants are retained and marked
+    ``candidate_reachable`` rather than strict reachable.
     Any unit that already has
     ``is_entry_point=True`` in the dataset (e.g. set by the LLM reachability
     stage) keeps that flag — this function never demotes it.
@@ -473,6 +477,10 @@ def apply_reachability_filter(
         extra_retain_only_units: Additional unit IDs to retain in the final
             reachable dataset without using them as BFS roots (e.g. a
             medium-confidence external-input or cross-process signal).
+        extra_candidate_reachability_seeds: Additional unit IDs that start a
+            candidate-only BFS over accepted graph edges. These units and
+            their descendants are retained for recall-first analysis without
+            becoming strict entry points.
         platform: Platform-specific entry-point mode. Defaults to generic for
             backward compatibility; ``openharmony`` enables native hooks.
         semantic_graph_overlay: Optional additive semantic-graph payload (for
@@ -506,11 +514,22 @@ def apply_reachability_filter(
     real_entry_point_ids = _epd.real_entry_point_ids
     ReachabilityAnalyzer = _ra.ReachabilityAnalyzer
 
-    call_graph_path = os.path.join(output_dir, "call_graph.json")
+    # Prefer the audited effective graph when the graph-facts stage has run.
+    # The native parser graph remains the fallback for legacy outputs and for
+    # direct parser tests.  This keeps graph repair additive and avoids making
+    # a missing derived artifact look like a missing call graph.
+    effective_call_graph_path = os.path.join(output_dir, "effective_call_graph.json")
+    native_call_graph_path = os.path.join(output_dir, "call_graph.json")
+    call_graph_path = (
+        effective_call_graph_path
+        if os.path.exists(effective_call_graph_path)
+        else native_call_graph_path
+    )
 
     if not os.path.exists(call_graph_path):
         print(
-            "  [Warning] call_graph.json not found — skipping reachability filter",
+            "  [Warning] call_graph.json/effective_call_graph.json not found — "
+            "skipping reachability filter",
             file=sys.stderr,
         )
         return dataset
@@ -518,9 +537,27 @@ def apply_reachability_filter(
     print(f"\n[Reachability Filter] Filtering to {processing_level} units...", file=sys.stderr)
 
     call_graph_data = read_json(call_graph_path)
+    graph_source = os.path.basename(call_graph_path)
     functions = call_graph_data.get("functions", {})
     call_graph = call_graph_data.get("call_graph", {})
     reverse_call_graph = call_graph_data.get("reverse_call_graph", {})
+
+    # Keep a separate native baseline when the effective graph is selected.
+    # The final traversal uses the effective graph, while coverage metadata
+    # and projection ablations still answer the important question: what did
+    # the original parser graph reach before repairs/overlays?
+    native_graph_data = call_graph_data
+    if graph_source == "effective_call_graph.json":
+        native_path = os.path.join(output_dir, "call_graph.json")
+        if os.path.exists(native_path):
+            try:
+                candidate_native = read_json(native_path)
+                if isinstance(candidate_native, Mapping):
+                    native_graph_data = candidate_native
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                native_graph_data = call_graph_data
+    native_call_graph = native_graph_data.get("call_graph", {})
+    native_reverse_call_graph = native_graph_data.get("reverse_call_graph", {})
 
     # Detect entry points structurally, then add caller-provided BFS seeds.
     # ``extra_entry_points`` keeps the entry-point label; semantic seeds
@@ -534,7 +571,18 @@ def apply_reachability_filter(
         else None,
     )
     structural_entry_points = detector.detect_entry_points()
+    native_detector = EntryPointDetector(
+        functions,
+        native_call_graph,
+        platform=platform,
+        file_evidence=native_graph_data.get("openharmony_file_evidence", {})
+        if platform == "openharmony"
+        else None,
+    )
+    native_structural_entry_points = native_detector.detect_entry_points()
     known_function_ids = set(functions)
+    units = dataset.get("units", [])
+    units = units if isinstance(units, list) else []
     llm_entry_points = {
         str(unit_id)
         for unit_id in (extra_entry_points or set())
@@ -545,6 +593,23 @@ def apply_reachability_filter(
         for unit_id in (extra_reachability_seeds or set())
         if isinstance(unit_id, str) and unit_id in known_function_ids
     }
+    # Replays and post-processing tools often pass the LLM decision as a
+    # per-unit marker rather than rebuilding the scanner's explicit seed
+    # argument.  Treat the marker as the same high-confidence semantic seed;
+    # otherwise a frozen dataset silently loses the very entry evidence that
+    # produced it.  The marker does not make the unit an ``is_entry_point``
+    # label -- it only participates in the strict BFS exactly as the scanner
+    # supplied seed does.
+    semantic_seed_points.update(
+        str(unit.get("id"))
+        for unit in units
+        if isinstance(unit, Mapping)
+        and unit.get("id")
+        and (
+            unit.get("semantic_reachability_seed") is True
+            or unit.get("reachability_seed") is True
+        )
+    )
     entry_points = structural_entry_points | llm_entry_points | semantic_seed_points
     # Library-mode (opt-in): the public API is the entry surface. Union-only —
     # never demotes a structurally-detected app entry point, so an app scan with
@@ -555,12 +620,18 @@ def apply_reachability_filter(
     else:
         library_entries = set()
 
+    native_entry_points = (
+        native_structural_entry_points
+        | llm_entry_points
+        | semantic_seed_points
+        | library_entries
+    )
+
     # Only structural, explicit LLM-entry, and library seeds are rendered as
     # entry points. Semantic seeds are intentionally BFS roots without that
     # identity label.
     entry_point_labels = structural_entry_points | llm_entry_points | library_entries
 
-    units = dataset.get("units", [])
     original_count = len(units)
     unit_ids = {
         str(unit.get("id"))
@@ -587,16 +658,130 @@ def apply_reachability_filter(
         )
     )
 
-    # Compute the native result first.  OpenHarmony semantic IPC edges are an
-    # additive, in-memory overlay; the persisted native call graph remains the
-    # source of truth for ordinary call-graph consumers.
+    # Candidate seeds are intentionally separate from strict semantic roots.
+    # They are normally medium-confidence model signals: useful for recall and
+    # later security analysis, but not strong enough to alter the strict
+    # entry-point graph.
+    semantic_candidate_seed_points = {
+        str(unit_id)
+        for unit_id in (extra_candidate_reachability_seeds or set())
+        if isinstance(unit_id, str) and unit_id in unit_ids
+    }
+    semantic_candidate_seed_points.update(
+        str(unit.get("id"))
+        for unit in units
+        if isinstance(unit, Mapping)
+        and unit.get("id")
+        and (
+            unit.get("semantic_reachability_candidate_seed") is True
+            or unit.get("reachability_candidate_seed") is True
+        )
+    )
+
+    # Compute the parser-native baseline first. OpenHarmony semantic IPC edges
+    # and effective graph repairs are additive; this baseline is retained for
+    # coverage accounting while the final BFS below uses the effective graph.
     native_reachability = ReachabilityAnalyzer(
         functions=functions,
-        reverse_call_graph=reverse_call_graph,
-        entry_points=entry_points,
+        reverse_call_graph=native_reverse_call_graph,
+        entry_points=native_entry_points,
     )
     native_reachable_ids = native_reachability.get_all_reachable()
     reachability_reverse_call_graph = reverse_call_graph
+    candidate_reachability_reverse_call_graph = reverse_call_graph
+    # ``effective_call_graph.json`` keeps unresolved/partially-bound facts in
+    # ``candidate_facts``.  They are intentionally not part of the strict
+    # graph, but they are still useful for recall-first analysis when a
+    # semantic candidate seed is present.  Project only endpoint pairs whose
+    # two symbols are in the current function index; declaration-only or
+    # outside-scope symbols remain auditable facts and are counted below
+    # rather than being silently invented as dataset units.
+    candidate_fact_records = 0
+    candidate_fact_edges = 0
+    candidate_fact_invalid = 0
+    candidate_fact_pairs: set[tuple[str, str]] = set()
+    source_backed_candidate_fact_pairs: set[tuple[str, str]] = set()
+    raw_candidate_facts = call_graph_data.get("candidate_facts", [])
+    if isinstance(raw_candidate_facts, list):
+        candidate_fact_records = sum(
+            1 for item in raw_candidate_facts if isinstance(item, Mapping)
+        )
+        for fact in raw_candidate_facts:
+            if not isinstance(fact, Mapping):
+                continue
+            if str(fact.get("status") or "candidate").lower() != "candidate":
+                continue
+            # Candidate traversal from a strict root is allowed only for a
+            # concrete, source-backed callsite.  The broader candidate set is
+            # still retained for an explicitly supplied medium seed for
+            # backward compatibility; it remains candidate-only and is never
+            # upgraded to strict reachability.
+            source_kind = str(fact.get("source_kind") or "").strip().lower()
+            evidence = fact.get("evidence")
+            evidence_file = ""
+            evidence_line = None
+            evidence_expression = ""
+            if isinstance(evidence, Mapping):
+                evidence_file = str(
+                    evidence.get("file") or evidence.get("path") or ""
+                ).strip()
+                evidence_line = evidence.get(
+                    "line_start",
+                    evidence.get("start_line", evidence.get("line")),
+                )
+                evidence_expression = str(evidence.get("expression") or "").strip()
+            caller_id = fact.get("caller_id")
+            callee_id = fact.get("callee_id")
+            if (
+                not isinstance(caller_id, str)
+                or not isinstance(callee_id, str)
+                or caller_id not in known_function_ids
+                or callee_id not in known_function_ids
+                or caller_id == callee_id
+            ):
+                candidate_fact_invalid += 1
+                continue
+            candidate_fact_pairs.add((caller_id, callee_id))
+            if (
+                source_kind in {
+                    "candidate_callsite",
+                    "callsite_ledger",
+                    "clang_candidate",
+                    # Object-flow facts are not strict bindings, but a fact
+                    # with a concrete source expression is still a useful
+                    # candidate edge for recall-first Stage 1 context.  It is
+                    # kept out of the strict graph and remains visibly
+                    # candidate all the way through validation.
+                    "unvalidated_semantic_overlay",
+                    "object_flow",
+                }
+                and evidence_file
+                and evidence_line is not None
+                and evidence_expression
+            ):
+                source_backed_candidate_fact_pairs.add((caller_id, callee_id))
+    if candidate_fact_pairs:
+        candidate_fact_reverse_call_graph = {
+            str(target): list(callers)
+            for target, callers in candidate_reachability_reverse_call_graph.items()
+        }
+        for caller_id, callee_id in sorted(candidate_fact_pairs):
+            callers = candidate_fact_reverse_call_graph.setdefault(callee_id, [])
+            if caller_id not in callers:
+                callers.append(caller_id)
+                candidate_fact_edges += 1
+        candidate_reachability_reverse_call_graph = candidate_fact_reverse_call_graph
+    # This graph is used only for the new strict-root -> candidate frontier.
+    # It intentionally excludes object-flow-only facts and legacy records
+    # without a concrete source expression.
+    source_backed_candidate_reverse_call_graph = {
+        str(target): list(callers)
+        for target, callers in reverse_call_graph.items()
+    }
+    for caller_id, callee_id in sorted(source_backed_candidate_fact_pairs):
+        callers = source_backed_candidate_reverse_call_graph.setdefault(callee_id, [])
+        if caller_id not in callers:
+            callers.append(caller_id)
     semantic_overlay_metadata = None
 
     if platform == "openharmony":
@@ -645,11 +830,21 @@ def apply_reachability_filter(
 
             merged_call_graph = call_graph
             merged_reverse_call_graph = reverse_call_graph
+            # Candidate traversal receives every projected semantic edge. A
+            # candidate-tier edge is deliberately kept out of strict
+            # traversal, but it may bridge the lower-trust candidate frontier
+            # so recall-first analysis can expose the path for later review.
+            # Legacy overlays without a tier retain their historical strict
+            # behaviour for compatibility.
+            candidate_merged_call_graph = call_graph
+            candidate_merged_reverse_call_graph = reverse_call_graph
             source_metadata: list[dict] = []
             edge_kinds: set[str] = set()
             candidate_edges = 0
             ignored_edge_count = 0
             invalid_endpoint_count = 0
+            strict_edge_count = 0
+            candidate_only_edge_count = 0
             semantic_entry_points: set[str] = set()
             existing_entry_points = set(entry_points)
             for source_name, semantic_graph in semantic_graph_inputs:
@@ -658,13 +853,49 @@ def apply_reachability_filter(
                         semantic_graph,
                         functions.keys(),
                     )
+                    strict_overlay = overlay
+                    if source_name == "llm_call_graph_overlay.json":
+                        strict_edges = []
+                        candidate_only_edges = []
+                        for edge in overlay.get("edges", []) or []:
+                            if not isinstance(edge, Mapping):
+                                continue
+                            attributes = edge.get("attributes", {})
+                            if not isinstance(attributes, Mapping):
+                                attributes = {}
+                            tier = attributes.get("reachability_tier")
+                            # A projected edge always carries a tier.  A
+                            # hand-authored/legacy overlay without one keeps
+                            # the old behaviour rather than silently changing
+                            # existing scans.
+                            if tier is None or str(tier).strip().lower() == "strict":
+                                strict_edges.append(edge)
+                            else:
+                                candidate_only_edges.append(edge)
+                        strict_overlay = dict(overlay)
+                        strict_overlay["edges"] = strict_edges
+                        strict_overlay["candidate_edges"] = len(strict_edges)
+                        strict_overlay["candidate_only_edges"] = len(
+                            candidate_only_edges
+                        )
                     merged_call_graph, merged_reverse_call_graph = (
                         merge_reachability_graph(
                             merged_call_graph,
                             merged_reverse_call_graph,
+                            strict_overlay,
+                        )
+                    )
+                    candidate_merged_call_graph, candidate_merged_reverse_call_graph = (
+                        merge_reachability_graph(
+                            candidate_merged_call_graph,
+                            candidate_merged_reverse_call_graph,
                             overlay,
                         )
                     )
+                    strict_edge_count += len(strict_overlay.get("edges", []) or [])
+                    candidate_only_edge_count += len(
+                        overlay.get("edges", []) or []
+                    ) - len(strict_overlay.get("edges", []) or [])
                     candidate_edges += int(overlay.get("candidate_edges", 0) or 0)
                     ignored_edge_count += int(
                         overlay.get("ignored_edge_count", 0) or 0
@@ -693,6 +924,10 @@ def apply_reachability_filter(
                         "invalid_endpoint_count": overlay.get(
                             "invalid_endpoint_count", 0
                         ),
+                        "strict_edges": len(strict_overlay.get("edges", []) or []),
+                        "candidate_only_edges": len(
+                            overlay.get("edges", []) or []
+                        ) - len(strict_overlay.get("edges", []) or []),
                     })
                 except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
                     print(
@@ -713,9 +948,10 @@ def apply_reachability_filter(
             semantic_entry_points_added = semantic_entry_points - existing_entry_points
 
             reachability_reverse_call_graph = merged_reverse_call_graph
+            candidate_reachability_reverse_call_graph = candidate_merged_reverse_call_graph
             native_pairs = {
                 (caller, callee)
-                for callee, callers in reverse_call_graph.items()
+                for callee, callers in native_reverse_call_graph.items()
                 for caller in callers
             }
             combined_pairs = {
@@ -735,6 +971,8 @@ def apply_reachability_filter(
                     "edge_kinds": sorted(edge_kinds),
                     "ignored_edge_count": ignored_edge_count,
                     "invalid_endpoint_count": invalid_endpoint_count,
+                    "strict_edges": strict_edge_count,
+                    "candidate_only_edges": candidate_only_edge_count,
                     "sources": source_metadata,
                 }
             )
@@ -753,6 +991,39 @@ def apply_reachability_filter(
             "Use --library-mode to seed the exported public API surface."
         )
         print(f"  [Warning] {warning}", file=sys.stderr)
+        # A medium semantic signal may still provide a useful candidate
+        # frontier even when no strict structural/high-confidence seed exists.
+        # Keep the safety-net behaviour (all units remain available), but
+        # compute and label this independent frontier instead of silently
+        # reporting zero candidate expansion.
+        candidate_reachability = ReachabilityAnalyzer(
+            functions=functions,
+            reverse_call_graph=candidate_reachability_reverse_call_graph,
+            entry_points=semantic_candidate_seed_points,
+        )
+        candidate_reachable_ids = candidate_reachability.get_all_reachable()
+        candidate_unit_ids = {
+            str(unit.get("id"))
+            for unit in units
+            if isinstance(unit, Mapping) and unit.get("id")
+        }
+        for unit in units:
+            if not isinstance(unit, Mapping):
+                continue
+            unit_id = str(unit.get("id") or "")
+            unit["reachable"] = True
+            if unit_id in candidate_reachable_ids:
+                unit["reachability_status"] = "candidate_reachable"
+                unit["analysis_arrangement"] = "candidate_recall_first"
+                unit["reachability_evidence"] = "medium_seed_path"
+                unit.setdefault(
+                    "reachability_reason",
+                    "medium semantic seed propagated over accepted graph edges",
+                )
+            else:
+                unit["reachability_status"] = "unfiltered_no_strict_seed"
+                unit["analysis_arrangement"] = "unfiltered_fallback"
+                unit["reachability_evidence"] = "no_strict_seed"
         filter_metadata = {
             "original_units": original_count,
             "entry_points": len(entry_points),
@@ -761,6 +1032,30 @@ def apply_reachability_filter(
             "semantic_seed_ids": sorted(semantic_seed_points),
             "semantic_retain_only_count": len(semantic_retain_only_points),
             "semantic_retain_only_ids": sorted(semantic_retain_only_points),
+            "semantic_candidate_seed_count": len(semantic_candidate_seed_points),
+            "semantic_candidate_seed_ids": sorted(semantic_candidate_seed_points),
+            "candidate_reachable_units": len(candidate_reachable_ids & candidate_unit_ids),
+            "candidate_reachable_added": len(candidate_reachable_ids & candidate_unit_ids),
+            "candidate_reachable_ids": sorted(candidate_reachable_ids & candidate_unit_ids),
+            "candidate_fact_records": candidate_fact_records,
+            "candidate_fact_edges": candidate_fact_edges,
+            "candidate_fact_invalid": candidate_fact_invalid,
+            "strict_path_coverage_count": len(native_reachable_ids & candidate_unit_ids),
+            "strict_path_coverage_ids": sorted(native_reachable_ids & candidate_unit_ids),
+            "candidate_path_coverage_count": len(
+                (candidate_reachable_ids & candidate_unit_ids) - native_reachable_ids
+            ),
+            "candidate_path_coverage_ids": sorted(
+                (candidate_reachable_ids & candidate_unit_ids) - native_reachable_ids
+            ),
+            "fallback_only_count": original_count - len(
+                (native_reachable_ids | candidate_reachable_ids) & candidate_unit_ids
+            ),
+            "fallback_only_ids": sorted(
+                candidate_unit_ids - native_reachable_ids - candidate_reachable_ids
+            ),
+            "final_analysis_count": original_count,
+            "reachability_evidence": "insufficient_seed_evidence",
             "reachable_only_count": len(semantic_retain_only_points),
             "reachable_only_ids": sorted(semantic_retain_only_points),
             "reachable_units": original_count,
@@ -789,10 +1084,34 @@ def apply_reachability_filter(
         # Defensive fallback: a semantic resolver must never cause native units
         # to disappear, even if a future graph adapter changes the BFS input.
         reachable_ids |= native_reachable_ids
-    # Retain medium-confidence semantic units after the BFS.  Deliberately do
-    # not add these IDs to ``entry_points``: their outgoing edges must not
-    # expand the reachable frontier solely because of a medium signal.
+
+    # Medium-confidence semantic signals and source-backed unresolved callsites
+    # get a separate candidate frontier. Starting this lower-trust traversal
+    # from strict roots is intentional: a socket/IPC handler can have a
+    # source-observed virtual/factory edge whose target is unsafe for the
+    # strict graph but still must be inspected by Stage 1. These descendants
+    # are explicitly marked candidate_reachable; they never become strict.
+    candidate_frontier_seed_points = set(semantic_candidate_seed_points)
+    candidate_frontier_seed_points.update(entry_points)
+    candidate_reachability = ReachabilityAnalyzer(
+        functions=functions,
+        reverse_call_graph=candidate_reachability_reverse_call_graph,
+        entry_points=semantic_candidate_seed_points,
+    )
+    candidate_reachable_ids = candidate_reachability.get_all_reachable()
+    # Source-backed callsite facts are also expanded from strict roots.  This
+    # is a separate lower-trust frontier, so a candidate virtual target can be
+    # retained for Stage 1 without being mislabeled as a strict edge.
+    strict_root_candidate_reachability = ReachabilityAnalyzer(
+        functions=functions,
+        reverse_call_graph=source_backed_candidate_reverse_call_graph,
+        entry_points=entry_points,
+    )
+    candidate_reachable_ids |= strict_root_candidate_reachability.get_all_reachable()
+    # Retain explicit medium targets and their candidate descendants after the
+    # strict BFS. Deliberately do not add these IDs to ``entry_points``.
     reachable_ids |= semantic_retain_only_points
+    reachable_ids |= candidate_reachable_ids
     if semantic_overlay_metadata is not None:
         semantic_overlay_metadata["monotonicity_violation"] = monotonicity_violation
 
@@ -802,6 +1121,34 @@ def apply_reachability_filter(
         unit_id = u.get("id", "")
         if unit_id in reachable_ids:
             u["reachable"] = True
+            if unit_id in native_reachable_ids:
+                u["reachability_status"] = "strict_reachable"
+                u["analysis_arrangement"] = "strict"
+                u["reachability_evidence"] = "accepted_entry_path"
+            elif unit_id in candidate_reachable_ids:
+                u["reachability_status"] = "candidate_reachable"
+                u["analysis_arrangement"] = "candidate_recall_first"
+                u["reachability_evidence"] = (
+                    "medium_seed_path"
+                    if unit_id in semantic_candidate_seed_points
+                    else "source_backed_candidate_callsite_path"
+                )
+                u.setdefault(
+                    "reachability_reason",
+                    "source-backed candidate callsite propagated from a strict or medium frontier",
+                )
+            elif unit_id in semantic_retain_only_points:
+                u["reachability_status"] = "candidate_reachable"
+                u["analysis_arrangement"] = "candidate_recall_first"
+                u["reachability_evidence"] = "medium_seed_path"
+                u.setdefault(
+                    "reachability_reason",
+                    "medium semantic signal retained without downstream expansion",
+                )
+            else:
+                u["reachability_status"] = "strict_reachable"
+                u["analysis_arrangement"] = "strict"
+                u["reachability_evidence"] = "accepted_entry_path"
             # Preserve any is_entry_point=True already set (e.g. by LLM stage).
             u["is_entry_point"] = (
                 unit_id in entry_point_labels or u.get("is_entry_point", False)
@@ -826,6 +1173,36 @@ def apply_reachability_filter(
         "semantic_seed_ids": sorted(semantic_seed_points),
         "semantic_retain_only_count": len(semantic_retain_only_points),
         "semantic_retain_only_ids": sorted(semantic_retain_only_points),
+        "semantic_candidate_seed_count": len(semantic_candidate_seed_points),
+        "semantic_candidate_seed_ids": sorted(semantic_candidate_seed_points),
+        "candidate_frontier_seed_count": len(candidate_frontier_seed_points),
+        "candidate_frontier_seed_ids": sorted(candidate_frontier_seed_points),
+        "candidate_reachable_units": len(candidate_reachable_ids),
+        "candidate_reachable_added": len(
+            (candidate_reachable_ids | semantic_retain_only_points)
+            - native_reachable_ids
+        ),
+        "candidate_reachable_ids": sorted(
+            (candidate_reachable_ids | semantic_retain_only_points)
+            - native_reachable_ids
+        ),
+        "candidate_fact_records": candidate_fact_records,
+        "candidate_fact_edges": candidate_fact_edges,
+        "candidate_fact_invalid": candidate_fact_invalid,
+        "strict_path_coverage_count": len(native_reachable_ids & unit_ids),
+        "strict_path_coverage_ids": sorted(native_reachable_ids & unit_ids),
+        "candidate_path_coverage_count": len(
+            ((candidate_reachable_ids | semantic_retain_only_points) & unit_ids)
+            - native_reachable_ids
+        ),
+        "candidate_path_coverage_ids": sorted(
+            ((candidate_reachable_ids | semantic_retain_only_points) & unit_ids)
+            - native_reachable_ids
+        ),
+        "fallback_only_count": 0,
+        "fallback_only_ids": [],
+        "final_analysis_count": len(filtered_units),
+        "reachability_evidence": "accepted_or_candidate_path",
         "reachable_only_count": len(semantic_retain_only_points),
         "reachable_only_ids": sorted(semantic_retain_only_points),
         "reachable_units": len(filtered_units),
@@ -841,6 +1218,8 @@ def apply_reachability_filter(
             combined_unit_ids - native_unit_ids
         )
         filter_metadata["semantic_overlay"] = semantic_overlay_metadata
+    filter_metadata["call_graph_source"] = graph_source
+    filter_metadata["effective_call_graph_used"] = graph_source == "effective_call_graph.json"
     dataset.setdefault("metadata", {})["reachability_filter"] = filter_metadata
 
     print(f"  Entry points detected: {len(entry_points)}", file=sys.stderr)

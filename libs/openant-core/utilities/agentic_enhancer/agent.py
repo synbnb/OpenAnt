@@ -207,6 +207,7 @@ class ContextAgent:
         static_callers: list[str],
         language: Optional[str] = None,
         platform_context: Optional[dict] = None,
+        reachability_context: Optional[dict] = None,
     ) -> AgentResult:
         """
         Analyze a code unit to gather context.
@@ -250,6 +251,7 @@ class ContextAgent:
             reaching_entry_point=reaching_entry_point,
             language=language,
             platform_context=platform_context,
+            reachability_context=reachability_context,
         )
 
         messages: list[Message] = [
@@ -554,6 +556,7 @@ def enhance_unit_with_agent(
     platform_context = unit.get("platform_context")
     if platform_context is None:
         platform_context = unit.get("platformContext")
+    reachability_context = unit.get("reachability_context")
 
     # Run agent
     result = agent.analyze_unit(
@@ -564,6 +567,7 @@ def enhance_unit_with_agent(
         static_callers=static_callers,
         language=language,
         platform_context=platform_context,
+        reachability_context=reachability_context,
     )
 
     # Add result to unit

@@ -75,7 +75,7 @@ class RepositoryIndex:
                 existing = self.call_graph.setdefault(source, [])
                 for target in targets:
                     normalized = self._normalize_graph_id(target)
-                    if normalized and normalized not in existing and len(existing) < 100:
+                    if normalized and normalized not in existing:
                         existing.append(normalized)
 
         reverse_graphs = [
@@ -91,7 +91,7 @@ class RepositoryIndex:
                 existing = self.reverse_call_graph.setdefault(target, [])
                 for caller in callers:
                     normalized = self._normalize_graph_id(caller)
-                    if normalized and normalized not in existing and len(existing) < 100:
+                    if normalized and normalized not in existing:
                         existing.append(normalized)
 
         for func_id, func_data in functions.items():
@@ -438,5 +438,56 @@ def load_index_from_file(analyzer_output_path: str, repo_path: str = None) -> Re
         RepositoryIndex instance
     """
     analyzer_output = read_json(analyzer_output_path)
+    # Enhancement and Stage 2 consume the same effective graph as
+    # reachability.  The derived artifact is optional for old scans; when it
+    # exists, merge its complete function universe and replace only the graph
+    # relations.  Native analyzer output remains available as a fallback for
+    # fields that are not graph facts.
+    try:
+        output_path = Path(analyzer_output_path)
+        effective_paths = [output_path.with_name("effective_call_graph.json")]
+        call_graphs_index = output_path.with_name("call_graphs.json")
+        if call_graphs_index.is_file():
+            index_payload = read_json(call_graphs_index)
+            if isinstance(index_payload, dict):
+                for relative in index_payload.values():
+                    if isinstance(relative, str):
+                        effective_paths.append(output_path.parent / relative)
+        effective_payloads = []
+        for candidate in effective_paths:
+            candidate = candidate if candidate.name == "effective_call_graph.json" else candidate.parent / "effective_call_graph.json"
+            if candidate.is_file():
+                payload = read_json(candidate)
+                if isinstance(payload, dict):
+                    effective_payloads.append(payload)
+        if effective_payloads:
+            merged = dict(analyzer_output) if isinstance(analyzer_output, dict) else {}
+            merged_functions = dict(merged.get("functions", {}) or {})
+            merged_forward = dict(merged.get("call_graph", {}) or {})
+            merged_reverse = dict(merged.get("reverse_call_graph", {}) or {})
+            for payload in effective_payloads:
+                if isinstance(payload.get("functions"), dict):
+                    merged_functions.update(payload["functions"])
+                if isinstance(payload.get("call_graph"), dict):
+                    for source, targets in payload["call_graph"].items():
+                        existing = set(merged_forward.get(source, []) or [])
+                        existing.update(targets if isinstance(targets, list) else [])
+                        merged_forward[source] = sorted(existing)
+                if isinstance(payload.get("reverse_call_graph"), dict):
+                    for target, callers in payload["reverse_call_graph"].items():
+                        existing = set(merged_reverse.get(target, []) or [])
+                        existing.update(callers if isinstance(callers, list) else [])
+                        merged_reverse[target] = sorted(existing)
+            merged["functions"] = merged_functions
+            merged["call_graph"] = merged_forward
+            merged["reverse_call_graph"] = merged_reverse
+            merged["effective_call_graph_sources"] = [
+                str(path) for path in effective_paths if path.is_file()
+            ]
+            analyzer_output = merged
+    except (OSError, ValueError, TypeError):
+        # A stale or malformed derived artifact must not make enhancement
+        # unavailable; parser output remains the conservative fallback.
+        pass
 
     return RepositoryIndex(analyzer_output, repo_path)

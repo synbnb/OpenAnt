@@ -156,6 +156,35 @@ def test_context_builder_is_optional_when_scan_artifacts_are_missing(tmp_path: P
     assert context["provenance"]["artifacts"] == []
 
 
+def test_context_uses_stage1_structural_path_when_stage2_is_disabled(tmp_path: Path):
+    from core.report_context import build_disclosure_context, load_report_context_index
+
+    entry = "socket.cpp:SocketHandler::Recv"
+    target = "socket.cpp:SocketHandler::Handle"
+    (tmp_path / "call_graph.json").write_text(json.dumps({
+        "functions": {
+            entry: _function(entry, "void Recv() { Handle(); }", 10, 12),
+            target: _function(target, "void Handle() { popen(cmd, \"r\"); }", 40, 45),
+        },
+        "call_graph": {entry: [target]},
+        "reverse_call_graph": {target: [entry]},
+    }), encoding="utf-8")
+    context = build_disclosure_context(
+        load_report_context_index(tmp_path),
+        target,
+        finding={"stage_context": {"stage1": {
+            "status": "strict",
+            "entry_path_ids": [[entry, target]],
+        }}},
+        full_result={},
+        source_code="void Handle() { popen(cmd, \"r\"); }",
+    )
+
+    assert context["source_to_sink"]["entry_point"] == f"{entry} -> {target}"
+    assert context["source_to_sink"]["function_route_chain"] == [entry, target]
+    assert [node["route_key"] for node in context["call_chain"]["nodes"]] == [entry, target]
+
+
 def test_historical_pipeline_is_enriched_from_sibling_artifacts(tmp_path: Path):
     from report import generator
 
@@ -279,6 +308,77 @@ def test_repair_response_requires_code_and_rejects_disclosure_document():
     )
     assert rejected["status"] == "unavailable"
     assert rejected["code"] == ""
+
+
+def test_repair_fallback_always_emits_reference_code_without_source():
+    from report import generator
+
+    finding = {
+        "location": {
+            "file": "services/audio.cpp",
+            "function": "AudioService::Enable",
+        },
+        "cwe_id": 78,
+        "cwe_name": "OS Command Injection",
+        "vulnerability_categories": ["COMMAND_INJECTION"],
+        "description": "Caller-controlled text reaches a shell command.",
+    }
+    info, usage = generator._generate_repair_suggestion(finding, None)
+
+    assert info["status"] == "reference_generated"
+    assert info["reference_only"] is True
+    assert "ExecuteWithoutShell" in info["code"]
+    assert "占位" in info["assumptions"]
+    assert usage["total_tokens"] == 0
+
+    rendered = generator._render_repair_section(finding, info, "cpp", locale="zh-CN")
+    assert "修复参考模板" in rendered
+    assert "不是可直接应用的补丁" in rendered
+    assert "当前没有足够证据安全生成可直接应用的修复代码" not in rendered
+    assert "```cpp" in rendered
+
+
+def test_repair_model_manual_review_is_replaced_by_reference_template():
+    from report import generator
+    from utilities.llm import CompletionResult, PhaseBinding, TextBlock
+
+    class ManualReviewAdapter:
+        name = "offline"
+        supports_tools = False
+        pricing = {"repair-model": {"input": 1.0, "output": 1.0}}
+
+        def complete(self, *, model, system, messages, max_tokens, tools=None):
+            del model, system, messages, max_tokens, tools
+            return CompletionResult(
+                content=[TextBlock(json.dumps({
+                    "status": "manual_review",
+                    "patch": "",
+                    "rationale": "缺少真实权限 API。",
+                    "assumptions": "需要维护者确认权限模型。",
+                }))],
+                input_tokens=2,
+                output_tokens=3,
+                stop_reason="end_turn",
+            )
+
+    finding = {
+        "location": {"file": "services/audio.cpp", "function": "AudioService::Enable"},
+        "cwe_id": 862,
+        "cwe_name": "Missing Authorization",
+        "vulnerability_categories": ["AUTHZ_BYPASS"],
+        "description": "A caller reaches a sensitive operation without a permission guard.",
+        "vulnerable_code": "int Enable() { return delegate(); }",
+        "report_context": {"target": {"source_code": "int Enable() { return delegate(); }"}},
+    }
+    binding = PhaseBinding(
+        phase="report", adapter=ManualReviewAdapter(), model="repair-model", provider_name="offline"
+    )
+    info, usage = generator._generate_repair_suggestion(finding, binding)
+
+    assert info["status"] == "reference_generated"
+    assert "HasRequiredPermission" in info["code"]
+    assert "缺少真实权限 API" in info["rationale"]
+    assert usage["total_tokens"] == 5
 
 
 def test_disclosure_uses_model_repair_patch_instead_of_manual_placeholder():

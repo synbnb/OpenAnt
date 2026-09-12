@@ -38,6 +38,44 @@ path. Conversely, a function name or a generic socket mention is not by itself
 proof of attacker control; identify the receiver, registration, direction, and
 parameter propagation.
 
+Use one explicit route record for every candidate entry. In the finish
+``assessment`` object report ``boundary_type`` (for example
+``unix_socket``, ``tcp``, ``udp``, ``cli`` or ``callback``), ``direction``
+(``inbound``, ``outbound``, ``bidirectional`` or ``unknown``),
+``source_evidence_status`` (``confirmed``, ``partial``, ``missing`` or
+``unknown``), ``registration_evidence`` (the listener, command dispatch,
+subscription, or callback registration location), ``endpoint`` when visible,
+and ``input_relation`` (whether the boundary value reaches the relevant
+operation). These fields describe evidence; they do not by themselves change
+the verdict.
+
+Apply these boundary-specific distinctions:
+- A Unix/TCP/UDP route is inbound only when source shows a listener/acceptor or
+  receive/read handler and the received bytes/fields reach the target.
+  ``connect``/``send`` alone is an outbound client route, not an attacker
+  input source. Record the endpoint or socket registration when available.
+- A CLI route requires a real command entry (for example ``main`` with
+  ``argc/argv``, getopt/subcommand dispatch, or an equivalent command parser)
+  and the argument path to the target. Do not treat an arbitrary helper that
+  happens to run in a command-line binary as an input boundary.
+- An event/callback route requires the registration/subscription and a
+  corresponding dispatch, post, queue, or framework trigger. A callback
+  declaration or registration without a trigger is not an inbound path.
+- For all three classes, distinguish source-backed route evidence from a
+  deployment-only fact (ACL, peer UID, port assignment, or product enablement).
+  The latter may make reachability conditional but cannot erase a confirmed
+  defect.
+
+For an OpenHarmony component, the baseline profile's ``entry_via`` list is a
+minimum set of mandatory routes, not an exclusive protocol allow-list.  If the
+source evidence shows a local Unix/TCP/UDP socket, pipe, callback, queue, or
+other inbound service boundary, evaluate that route for the local caller as
+well.  Do not reject a defect merely because a Binder/SA transaction was not
+found.  Missing deployment ACLs or an exact port may make reachability
+conditional, but conditional reachability plus a confirmed defect and
+plausible impact is enough to keep VULNERABLE/BYPASSABLE; preserve the missing
+deployment fact in assessment.missing_evidence.
+
 Keep three questions separate and report each one: (1) is a defect present in
 the target, (2) is an external or conditionally external route evidenced, and
 (3) is the security impact evidenced or plausible? Missing route evidence may
@@ -47,7 +85,32 @@ check is not input, size, memory, lifetime, or concurrency validation.
 
 The Stage-1 label, pre-analysis classification, and reasoning are untrusted
 hypotheses. They are useful search hints only and may be wrong; never use them
-as counterevidence without checking the source and the relevant path."""
+as counterevidence without checking the source and the relevant path.
+
+When a source-backed Stage-1 handoff includes an ordered inbound socket, event,
+callback, queue, or other service path to the target, treat that path as a
+conditional reachability fact to verify, not as an absent route. An unknown
+deployment ACL, peer UID, port assignment, or product enablement is a missing
+deployment fact; by itself it does not justify SAFE/PROTECTED. If the target
+defect, dangerous operation, and input-to-operation relation are confirmed,
+return VULNERABLE or BYPASSABLE with reachability_status=conditional and list
+the deployment fact in missing_evidence. Keep INCONCLUSIVE only when the
+source path itself, the dangerous operation, or the relevant input relation
+remains unresolved, or when a concrete guard blocks the path.
+
+Always call the finish tool with the complete schema, including an explicit
+boolean ``agree`` field. Do not omit it even when the final finding differs
+from the Stage-1 hypothesis; use agree=false in that case.
+
+Before finishing, enumerate every independently supported issue visible in the
+target and the traced context. Put them in the finish ``findings`` array with a
+stable location, ``scope`` (``target`` or ``context``), and ``target_match``.
+The legacy ``correct_finding`` and ``exploit_path`` remain the verdict and path
+for the requested target. A context finding may be real, but it must not be
+used to claim that the target mutation was confirmed. If two issues share one
+function, preserve both records rather than merging them into one explanation;
+if a second issue lacks evidence, keep it as ``inconclusive`` with the missing
+evidence listed."""
 
 
 # Backward-compatible thin alias. The canonical implementation now lives in
@@ -155,6 +218,100 @@ def format_platform_context_for_verification(platform_context: dict | None) -> s
     return PlatformPromptContext.from_mapping(platform_context).render_for_phase("verify")
 
 
+def format_stage1_context_for_verification(stage1_context: dict | None) -> str:
+    """Render the phase boundary supplied by Stage 1 to the verifier.
+
+    This is a bounded, source-derived summary.  Stage 2 still has to use its
+    repository tools to verify every edge and parameter mapping; the summary is
+    not treated as proof and is deliberately kept separate from the Stage-1
+    verdict.
+    """
+    if not isinstance(stage1_context, dict):
+        return ""
+    stage1 = stage1_context.get("stage1")
+    if not isinstance(stage1, dict):
+        stage1 = stage1_context
+    stage2 = stage1_context.get("stage2")
+    if not isinstance(stage2, dict):
+        stage2 = {}
+
+    def _values(value, limit=8):
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [collapse_inline(item) for item in value[:limit] if item not in (None, "")]
+
+    lines = [
+        "## Stage-1 Context Handoff (SOURCE-BACKED HINTS, NOT PROOF)",
+        "Stage 1 performed initial vulnerability detection. Stage-2 owns the",
+        "targeted parameter source-to-sink, shared-state, ordering, and trigger",
+        "condition verification. Re-check all relationships with repository tools;",
+        "this handoff is supporting evidence, not proof.",
+        "Stage-1 structural status: " + collapse_inline(stage1.get("status") or "unknown"),
+        "Stage-1 top-level entry: " + collapse_inline(stage1.get("top_level_entry") or "unknown"),
+        "Stage-1 generic path: " + (
+            "yes" if stage1.get("generic_entry_path_found") is True else "no"
+        ),
+        "Stage-1 candidate path: " + (
+            "yes" if stage1.get("candidate_entry_path_found") is True else "no"
+        ),
+        "Stage-2 parameter data-flow status: " + collapse_inline(
+            stage2.get("parameter_dataflow_status") or "not_evaluated"
+        ),
+    ]
+
+    # Stage 1 stores ordered structural paths separately from the compact
+    # status flags above.  Hiding those paths forced Stage 2 to rediscover an
+    # already established socket/event route with a bounded tool budget, and
+    # made a candidate path look like an unexplained assertion.  Render the
+    # paths as source-backed hints (never as proof); each edge still has to be
+    # checked with repository tools.  Keep the rendering bounded so a large
+    # graph cannot crowd out the target source.
+    def _paths(value, label, max_paths=8, max_nodes=20):
+        if not isinstance(value, (list, tuple)):
+            return
+        rendered = []
+        for path in list(value)[:max_paths]:
+            if not isinstance(path, (list, tuple)):
+                continue
+            nodes = [collapse_inline(node) for node in list(path)[:max_nodes]
+                     if node not in (None, "")]
+            if nodes:
+                rendered.append(" -> ".join(nodes))
+        if rendered:
+            lines.append(label + ":")
+            lines.extend("  - " + item for item in rendered)
+
+    _paths(stage1.get("entry_path_ids"), "Stage-1 source-backed entry paths")
+    _paths(stage1.get("candidate_entry_path_ids"), "Stage-1 source-backed candidate paths")
+
+    # The callsite ledger is especially useful when the target is reached via
+    # a member, callback, or asynchronous wrapper.  Expose only its identity
+    # and binding status here; parameter/value propagation remains a Stage-2
+    # task and must not be inferred from this summary.
+    callsite_context = stage2.get("callsite_context")
+    callsites = callsite_context.get("callsite_contexts") if isinstance(callsite_context, dict) else None
+    if isinstance(callsites, list):
+        rendered_callsites = []
+        for item in callsites[:8]:
+            if not isinstance(item, dict):
+                continue
+            caller = collapse_inline(item.get("caller") or "unknown")
+            callee = collapse_inline(item.get("callee") or "unknown")
+            location = collapse_inline(item.get("location") or "unknown")
+            status = collapse_inline(item.get("status") or item.get("binding_status") or "unknown")
+            rendered_callsites.append(f"{location}: {caller} -> {callee} [{status}]")
+        if rendered_callsites:
+            lines.append("Stage-1 callsite ledger hints (verify each):")
+            lines.extend("  - " + item for item in rendered_callsites)
+    missing = _values(stage1.get("missing_evidence"))
+    if missing:
+        lines.append("Stage-1 structural gaps: " + "; ".join(missing))
+    missing = _values(stage2.get("missing_evidence"), 12)
+    if missing:
+        lines.append("Stage-2 data-flow gaps to investigate: " + "; ".join(missing))
+    return "\n".join(lines) + "\n\n"
+
+
 def get_verification_prompt(
     code: str,
     finding: str,
@@ -164,6 +321,8 @@ def get_verification_prompt(
     app_context: "ApplicationContext" = None,
     platform_context: dict | None = None,
     route: str | None = None,
+    stage1_context: dict | None = None,
+    stage1_findings: list | None = None,
 ) -> str:
     """
     Attacker simulation prompt with optional application context.
@@ -177,6 +336,8 @@ def get_verification_prompt(
         app_context: Optional ApplicationContext for reducing false positives.
         platform_context: Optional bounded OpenHarmony unit metadata.
         route: Optional source/function route key for evidence tracing.
+        stage1_findings: Optional additive inventory of independent Stage-1
+            target/context findings.
 
     Returns:
         The formatted verification prompt.
@@ -190,6 +351,35 @@ def get_verification_prompt(
     rendered_platform_context = format_platform_context_for_verification(platform_context)
     if rendered_platform_context:
         platform_context_section = rendered_platform_context + "\n---\n\n"
+
+    stage1_context_section = format_stage1_context_for_verification(stage1_context)
+    if stage1_context_section:
+        stage1_context_section += "---\n\n"
+
+    stage1_findings_section = ""
+    if isinstance(stage1_findings, (list, tuple)):
+        rendered = []
+        for item in list(stage1_findings)[:16]:
+            if not isinstance(item, dict):
+                continue
+            finding_value = collapse_inline(str(item.get("finding") or "inconclusive"))
+            scope = collapse_inline(str(item.get("scope") or "unknown"))
+            target_match = collapse_inline(str(item.get("target_match")))
+            location = collapse_inline(
+                str(item.get("file") or item.get("function_analyzed") or "unknown")
+            )
+            lines = ""
+            if item.get("line_start") is not None:
+                lines = f":{item.get('line_start')}-{item.get('line_end', item.get('line_start'))}"
+            rendered.append(
+                f"{location}{lines} [{scope}, target_match={target_match}] -> {finding_value}"
+            )
+        if rendered:
+            stage1_findings_section = (
+                "Stage-1 independent finding inventory (untrusted; verify each item):\n"
+                + "\n".join("  - " + item for item in rendered)
+                + "\n\n"
+            )
 
     # Render scan identifiers and the Stage-1 claims as bounded data.  The
     # verifier must see which files were actually available: otherwise it may
@@ -326,7 +516,7 @@ exactly what is still missing in assessment.missing_evidence.
     if evidence_metadata:
         metadata_section = "\n".join(evidence_metadata) + "\n\n"
 
-    return f"""{app_context_section}{platform_context_section}{metadata_section}Stage 1 claims this function is **{finding_label.upper()}**.
+    return f"""{app_context_section}{platform_context_section}{stage1_context_section}{stage1_findings_section}{metadata_section}Stage 1 claims this function is **{finding_label.upper()}**.
 
 Their reasoning:
 {_rf}
@@ -359,6 +549,10 @@ Try to exploit this code using MULTIPLE different approaches. Think about:
 - For a command-injection or memory/DoS claim, identify the concrete sink and
   explain whether attacker-controlled data reaches it; do not require a
   privilege gain when service availability or integrity is harmed.
+- Treat parameter source-to-sink tracing as a primary Stage-2 task. Follow the
+  exact argument, string/container/state transformation, shared-state write/read
+  order, callback/task payload, and final sink. Record the result in
+  `exploit_path.data_flow` and `assessment.parameter_dataflow_status`.
 - Include malformed and degenerate values such as empty containers, null elements,
   boundary values, repeated requests, invalid state, and low-resource conditions.
 - A caller passing authorization may still be an attacker for input validation;
@@ -369,6 +563,23 @@ Try to exploit this code using MULTIPLE different approaches. Think about:
 
 For EACH approach, trace through step by step until you succeed or hit a blocker.
 
+After tracing the approaches, perform an independent-issue inventory before
+calling ``finish``.  Include the requested target issue and any separate issue
+found in the same function or in the traced entry context.  For each item,
+record its exact file/function/lines, ``scope`` (target or context),
+``target_match`` (whether it matches the requested target defect), category,
+impact, evidence, and missing evidence.  Do not replace the target verdict with
+a neighboring context issue; preserve that issue as a separate ``findings``
+item.  This inventory is for recall and attribution auditing, not permission
+to claim a context function is the target.
+
+When the target defect and dangerous sink are directly confirmed and an inbound
+socket/service route is source-backed, do not downgrade solely because the
+route is not Binder/SA or because the exact deployment permission is absent.
+Use ``reachability_status=conditional`` for that situation and retain the
+finding.  Downgrade only when concrete source evidence shows the route cannot
+reach the target or a guard blocks every relevant path.
+
 IMPORTANT:
 - Only conclude PROTECTED if ALL approaches fail and concrete guards cover every
   relevant target and downstream path. Only conclude SAFE when the available
@@ -378,9 +589,14 @@ IMPORTANT:
   missing, conclude INCONCLUSIVE rather than PROTECTED or SAFE.
 - In the finish result, fill the optional assessment object independently:
   defect_status, reachability_status, impact_status, evidence_completeness,
-  boundary_type, and missing_evidence. Use reachability_status=conditional
-  when the route is plausible but a permission or registration fact is not
-  fully visible; do not convert that uncertainty into a SAFE/PROTECTED claim.
+  parameter_dataflow_status, boundary_type, direction,
+  source_evidence_status, registration_evidence, endpoint, input_relation,
+  and missing_evidence. Use reachability_status=conditional when the
+  source-backed route is established but a deployment permission, peer UID,
+  port assignment, or product-enable fact is not fully visible; do not convert
+  that uncertainty into a SAFE/PROTECTED claim. Use unknown or INCONCLUSIVE
+  when the receiver/registration/dispatch or input relation itself is not
+  established.
 - A vulnerability must harm someone OTHER than the attacker.{local_access_rule}"""
 
 

@@ -153,7 +153,7 @@ def _build_openharmony_semantic_graph(
                 extract_result,
                 call_graph=call_graph_result,
             )
-    except (OSError, UnicodeError, TypeError, ValueError):
+    except (ImportError, OSError, UnicodeError, TypeError, ValueError):
         # Semantic enrichment is optional.  A malformed IDL must not prevent
         # the ordinary C/C++ parser pipeline from producing a dataset.
         idl_graph = None
@@ -205,12 +205,80 @@ def _build_openharmony_call_graph_diagnostics(
                 'unresolved_without_candidates': 0,
                 'orphan_assignments': 0,
             },
+            'call_sites': [],
+            'callsite_ledger': {
+                'total_call_sites': 0,
+                'functions_scanned': 0,
+                'parse_error_functions': 0,
+                'direct': 0,
+                'member': 0,
+                'indirect': 0,
+                'unresolved_bindings': 0,
+                'partial_bindings': 0,
+                'resolved_bindings': 0,
+                'graph_edge_missing': 0,
+                'dynamic_or_candidate_sites': 0,
+                'parse_error_function_ids': [],
+            },
             'unresolved_call_sites': [],
             'dispatch_assignments': [],
             'orphans': [],
             'error': {
                 'type': type(exc).__name__,
                 'message': str(exc),
+            },
+        }
+
+
+def _build_openharmony_object_flow_facts(
+    extract_result: Dict[str, Any],
+    call_graph_result: Dict[str, Any],
+    call_graph_diagnostics: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """Build candidate-only object/value-flow facts for OpenHarmony code."""
+    try:
+        from core.platforms.openharmony.object_flow_facts import (
+            build_object_flow_facts,
+        )
+
+        return build_object_flow_facts(
+            extract_result,
+            call_graph_diagnostics,
+            call_graph_result,
+        )
+    except Exception as exc:  # noqa: BLE001 - enrichment must not break parsing
+        return {
+            'schema_version': 1,
+            'report_type': 'openharmony_object_flow_facts',
+            'platform': 'openharmony',
+            'status': 'failed',
+            'repository': extract_result.get('repository', ''),
+            'source_revision': extract_result.get('revision', 'unknown'),
+            'build_status': extract_result.get('build_status', 'unknown'),
+            'facts': [],
+            'candidate_overlay': {
+                'schema_version': 1,
+                'graph_type': 'openharmony_object_flow_candidate_overlay',
+                'status': 'failed',
+                'edges': [],
+            },
+            'summary': {
+                'fact_count': 0,
+                'candidate_edge_count': 0,
+                'facts_by_kind': {},
+                'functions_in_index': len(extract_result.get('functions', {}))
+                if isinstance(extract_result.get('functions', {}), dict)
+                else 0,
+                'call_graph_available': True,
+                'strict_edges_added': 0,
+                'strict_admission': 'never_from_object_flow_candidate_facts',
+                'error': {
+                    'type': type(exc).__name__,
+                    'message': str(exc),
+                },
+            },
+            'provenance': {
+                'resolver': 'openharmony_object_flow_facts_v2',
             },
         }
 
@@ -269,7 +337,10 @@ class CPipelineTest:
         self.dataset_file = None
         self.semantic_graph_file = None
         self.call_graph_residuals_file = None
+        self.callsite_ledger_file = None
         self.dispatch_recovery_diff_file = None
+        self.object_flow_facts_file = None
+        self.object_flow_overlay_file = None
 
         # Reachability data
         self.entry_points: Set[str] = set()
@@ -332,7 +403,10 @@ class CPipelineTest:
         self.analyzer_output_file = os.path.join(self.output_dir, 'analyzer_output.json')
         self.semantic_graph_file = None
         self.call_graph_residuals_file = None
+        self.callsite_ledger_file = None
         self.dispatch_recovery_diff_file = None
+        self.object_flow_facts_file = None
+        self.object_flow_overlay_file = None
 
         print("=" * 60)
         print("STAGE: c_parser_pipeline")
@@ -396,11 +470,54 @@ class CPipelineTest:
                     self.call_graph_residuals_file,
                     call_graph_diagnostics,
                 )
+                self.callsite_ledger_file = os.path.join(
+                    self.output_dir, 'callsite_ledger.json'
+                )
+                write_json(
+                    self.callsite_ledger_file,
+                    {
+                        'schema_version': call_graph_diagnostics.get(
+                            'schema_version', 1
+                        ),
+                        'platform': 'openharmony',
+                        'repository': call_graph_diagnostics.get(
+                            'repository', self.repo_path
+                        ),
+                        'callsite_ledger': call_graph_diagnostics.get(
+                            'callsite_ledger', {}
+                        ),
+                        'call_sites': call_graph_diagnostics.get(
+                            'call_sites', []
+                        ),
+                    },
+                )
                 diagnostic_summary = call_graph_diagnostics.get('summary', {})
                 print(
                     "         Indirect-call diagnostics: "
                     f"{diagnostic_summary.get('unresolved_call_sites', 0)} residuals, "
                     f"{diagnostic_summary.get('candidate_edges', 0)} candidates"
+                )
+                object_flow_facts = _build_openharmony_object_flow_facts(
+                    extract_result,
+                    graph_result,
+                    call_graph_diagnostics,
+                )
+                self.object_flow_facts_file = os.path.join(
+                    self.output_dir, 'object_flow_facts.json'
+                )
+                self.object_flow_overlay_file = os.path.join(
+                    self.output_dir, 'object_flow_candidate_overlay.json'
+                )
+                write_json(self.object_flow_facts_file, object_flow_facts)
+                write_json(
+                    self.object_flow_overlay_file,
+                    object_flow_facts.get('candidate_overlay', {}),
+                )
+                object_flow_summary = object_flow_facts.get('summary', {})
+                print(
+                    "         Object/value-flow facts: "
+                    f"{object_flow_summary.get('fact_count', 0)} facts, "
+                    f"{object_flow_summary.get('candidate_edge_count', 0)} candidate edges"
                 )
 
             # Stage 4: Generate units
@@ -448,6 +565,23 @@ class CPipelineTest:
                         'path': 'call_graph_residuals.json',
                         'status': call_graph_diagnostics.get('status', 'unknown'),
                         **call_graph_diagnostics.get('summary', {}),
+                    }
+                if self.callsite_ledger_file and call_graph_diagnostics:
+                    dataset.setdefault('metadata', {})[
+                        'openharmony_callsite_ledger'
+                    ] = {
+                        'path': 'callsite_ledger.json',
+                        'status': call_graph_diagnostics.get('status', 'unknown'),
+                        **call_graph_diagnostics.get('callsite_ledger', {}),
+                    }
+                if self.object_flow_facts_file and object_flow_facts:
+                    dataset.setdefault('metadata', {})[
+                        'openharmony_object_flow_facts'
+                    ] = {
+                        'path': 'object_flow_facts.json',
+                        'overlay_path': 'object_flow_candidate_overlay.json',
+                        'status': object_flow_facts.get('status', 'unknown'),
+                        **object_flow_facts.get('summary', {}),
                     }
             dispatch_recovery_diff = None
             if self.platform == 'openharmony':
@@ -498,11 +632,24 @@ class CPipelineTest:
                     'status': call_graph_diagnostics.get('status', 'unknown'),
                     **call_graph_diagnostics.get('summary', {}),
                 }
+                summary['callsite_ledger'] = {
+                    'path': 'callsite_ledger.json',
+                    'status': call_graph_diagnostics.get('status', 'unknown'),
+                    **call_graph_diagnostics.get('callsite_ledger', {}),
+                }
             if dispatch_recovery_diff is not None:
                 summary['dispatch_recovery_diff'] = {
                     'path': 'dispatch_recovery_diff.json',
                     'status': dispatch_recovery_diff.get('status', 'unknown'),
                     **dispatch_recovery_diff.get('summary', {}),
+                }
+            if self.object_flow_facts_file:
+                object_flow_summary = object_flow_facts.get('summary', {})
+                summary['object_flow_facts'] = {
+                    'path': 'object_flow_facts.json',
+                    'overlay_path': 'object_flow_candidate_overlay.json',
+                    'status': object_flow_facts.get('status', 'unknown'),
+                    **object_flow_summary,
                 }
 
             result = {

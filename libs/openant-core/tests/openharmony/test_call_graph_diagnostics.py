@@ -158,6 +158,50 @@ def test_direct_switch_calls_are_not_reported_as_unresolved_indirect_calls():
     assert diagnostics["summary"]["candidate_edges"] == 0
 
 
+def test_factory_constructor_site_matches_native_constructor_edge():
+    """The ledger must link make_unique<T> to the same constructor as the graph."""
+    source = "event_logger.cpp"
+    caller_id = f"{source}:EventLogger::WriteInfoToLog"
+    constructor_id = "log_catcher/event_log_task.cpp:EventLogTask::EventLogTask"
+    functions = {
+        caller_id: {
+            "name": "EventLogger::WriteInfoToLog",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "EventLogger",
+            "unit_type": "method",
+            "code": "void EventLogger::WriteInfoToLog() { auto p = std::make_unique<EventLogTask>(fd, jsonFd, event); }",
+        },
+        constructor_id: {
+            "name": "EventLogTask::EventLogTask",
+            "file_path": "log_catcher/event_log_task.cpp",
+            "start_line": 1,
+            "class_name": "EventLogTask",
+            "unit_type": "constructor",
+            "parameters": ["int fd", "int jsonFd", "std::shared_ptr<SysEvent> event"],
+            "code": "EventLogTask::EventLogTask(int fd, int jsonFd, std::shared_ptr<SysEvent> event) {}",
+        },
+    }
+    native_graph = {
+        "functions": functions,
+        "call_graph": {caller_id: [constructor_id]},
+        "reverse_call_graph": {constructor_id: [caller_id]},
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions}, native_graph
+    )
+
+    site = next(
+        item
+        for item in diagnostics["call_sites"]
+        if "make_unique<EventLogTask>" in item["expression"]
+    )
+    assert site["candidate_target_ids"] == [constructor_id]
+    assert site["linked_target_ids"] == [constructor_id]
+    assert site["graph_status"] == "linked"
+
+
 def test_unknown_assignment_target_is_an_orphan_not_a_candidate_edge():
     extract_result = _extract_result()
     constructor = extract_result["functions"][CONSTRUCTOR]

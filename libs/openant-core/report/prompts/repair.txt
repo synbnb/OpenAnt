@@ -22,6 +22,9 @@ Rules:
   degenerate inputs, not only the exact example payload.
 - The patch must be compilable-looking code or a unified diff, not prose such
   as “add validation” or a manual-review placeholder.
-- If the available source is insufficient to write a safe patch, use
-  "status": "manual_review", set "patch" to an empty string, and explain the
-  missing evidence in "rationale". Never fabricate unseen function bodies.
+- Always return a non-empty code snippet or unified diff. If the available
+  source is insufficient to write a repository-specific patch, return a
+  conservative insertion-level reference template instead of an empty patch.
+  Mark the assumptions explicitly and use visibly named placeholders for
+  unknown helpers, types, permissions, and error values. Such a template is
+  advisory only and must not be presented as already compilable or verified.

@@ -170,6 +170,12 @@ func TestPipelineStepFromLogRecognizesSemanticStages(t *testing.T) {
 	}
 }
 
+func TestNormalizePipelineStatusPreservesPartial(t *testing.T) {
+	if got := normalizePipelineStatus("partial"); got != "partial" {
+		t.Fatalf("normalizePipelineStatus(partial) = %q, want partial", got)
+	}
+}
+
 func TestPipelineViewInfersRunningFromLogs(t *testing.T) {
 	outDir := t.TempDir()
 	jobID := "1234567890abcdef"

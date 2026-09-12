@@ -97,12 +97,12 @@ def test_initial_queries_are_stable_bounded_deduplicated_and_use_cxx():
     assert first[0].file_type == "c"
     assert first[1].file_type == "cxx"
     assert any(query.kind == "full" and query.value == "/dev/unix/socket/paramservice" for query in first)
-    assert any(query.kind == "full" and query.value == "socket.name" for query in first)
+    assert any(query.kind == "full" and query.value == '"name" : "paramservice"' for query in first)
     assert all(len(query.value) <= 512 for query in first)
 
 
-def test_unix_query_plan_includes_config_and_server_chain_probes():
-    """命名 Socket 也必须覆盖 cfg、GetControlSocket 和监听/接收链。"""
+def test_unix_query_plan_includes_config_and_bounded_server_probes():
+    """命名 Socket 覆盖 cfg/descriptor 线索，不发送全仓通用 API 词。"""
 
     target = normalize_target("/dev/unix/socket/dnsproxyd")
     queries = build_initial_queries(target)
@@ -111,9 +111,9 @@ def test_unix_query_plan_includes_config_and_server_chain_probes():
     assert ("path", "dnsproxyd", "all") in values
     assert ("full", "dnsproxyd", "all") in values
     assert ("full", "GetControlSocket", "all") in values
-    assert ("full", "bind", "all") in values
-    assert ("full", "listen", "all") in values
-    assert ("full", "recv", "all") in values
+    assert ("full", "GetServerSocket", "all") in values
+    assert ("full", "SocketDevice", "all") in values
+    assert not any(query.kind == "full" and query.value in {"socket", "bind", "listen", "recv"} for query in queries)
     assert any(query.value in {"ohos_executable", "bundle.json"} and query.file_type == "all" for query in queries)
     assert any(query.value == '"name" : "dnsproxyd"' and query.file_type == "all" for query in queries)
     extended_values = [query.value for query in build_initial_queries(target, max_queries=32)]
@@ -181,8 +181,6 @@ def test_network_query_plan_prioritizes_endpoint_port_and_process_without_bare_b
     assert "8283" in values
     assert "htons(8283)" in values
     assert "SP_daemon" in values
-    assert "bind" in values
-    assert "socket" in values
     assert "recvfrom" in values
     assert "SOCK_DGRAM" in values
     # Network probes must see both C/C++ listeners and init/build metadata

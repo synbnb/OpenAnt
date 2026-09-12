@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>Socket 引导扫描范围</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#d9dee8; --panel:#fff; --bg:#f5f7fb; --accent:#315efb; --ok:#147d4d; --warn:#a65b00; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 28px; background:#111827; color:#fff; }
+    .top h1 { margin:0; font-size:18px; }
+    .top a { color:#dbe5ff; text-decoration:none; margin-left:16px; }
+    main { max-width:1180px; margin:28px auto; padding:0 18px 50px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px; margin-bottom:18px; box-shadow:0 3px 14px rgba(16,24,40,.04); }
+    .panel h2 { margin:0 0 6px; font-size:18px; }
+    .hint { color:var(--muted); margin:0 0 18px; }
+    .form { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:12px; align-items:end; }
+    label { display:block; font-weight:600; margin-bottom:5px; }
+    input { width:100%; border:1px solid #bfc7d6; border-radius:7px; padding:10px 11px; font:inherit; background:#fff; }
+    .check { display:flex; align-items:center; gap:8px; color:var(--muted); font-weight:400; margin-top:9px; }
+    .check input { width:auto; }
+    button { border:0; border-radius:7px; padding:10px 15px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
+    button.secondary { background:#eef2ff; color:#2745a5; border:1px solid #cad5ff; }
+    button:disabled { opacity:.55; cursor:wait; }
+    #notice { min-height:24px; margin:12px 0 0; color:var(--muted); }
+    #notice.error { color:#b42318; }
+    #notice.ok { color:var(--ok); }
+    .candidate { border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:12px; }
+    .candidate.selected { border-color:#86a0ff; background:#f7f9ff; }
+    .candidate-head { display:flex; justify-content:space-between; gap:14px; align-items:start; }
+    .candidate h3 { margin:0; font-size:16px; overflow-wrap:anywhere; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; white-space:nowrap; background:#fff1db; color:var(--warn); }
+    .badge.high { background:#e5f8ee; color:var(--ok); }
+    .meta { color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }
+    .predicates { display:flex; flex-wrap:wrap; gap:7px; margin:10px 0; }
+    .predicate { padding:3px 8px; border-radius:6px; background:#f0f2f5; color:#667085; font-size:12px; }
+    .predicate.yes { background:#e5f8ee; color:var(--ok); }
+    .evidence { margin:10px 0 0; padding-left:20px; }
+    .evidence li { margin:4px 0; }
+    .evidence code { color:#334155; overflow-wrap:anywhere; }
+    pre { max-height:260px; overflow:auto; white-space:pre-wrap; background:#101828; color:#e6edf7; border-radius:7px; padding:12px; font-size:12px; }
+    .empty { color:var(--muted); padding:14px 0; }
+    @media (max-width:800px) { .form { grid-template-columns:1fr; } .form button { width:100%; } .top { padding:15px 18px; align-items:flex-start; } }
+  </style>
+  <link rel="stylesheet" href="/assets/openant-theme.css">
+  <script src="/assets/openant-navigation.js" defer></script>
+</head>
+<body class="socket-scope-page">
+  <header class="top"><div class="brand"><div class="mark" aria-hidden="true">VF</div><div><h1>Socket 引导扫描范围</h1><p>从服务端源码证据确定最小扫描目录</p></div></div><div class="top-actions"><openant-workspace-nav current="scope"></openant-workspace-nav></div></header>
+  <main>
+    <section class="panel">
+      <h2>先定位 Socket 服务目录</h2>
+      <p class="hint">输入本地源码仓库和 Unix/TCP/UDP Socket。模型会通过只读工具逐步浏览目录、搜索源码并读取关键文件，给出候选服务目录和证据；确认后，普通扫描才会使用所选子目录。未使用本页确认范围时，普通扫描仍保持全仓模式。</p>
+      <form id="discover-form" class="form">
+        <div><label for="repo">本地源码仓库</label><input id="repo" name="repo" placeholder="/path/to/repository" required></div>
+        <div><label for="target">Socket 目标</label><input id="target" name="target" placeholder="/dev/unix/socket/paramservice 或 SP_daemon UDP 127.0.0.1:8283" required><label for="llm-config" style="margin-top:9px">模型配置名</label><input id="llm-config" name="llm_config" value="openharmony-live-gpt" maxlength="256"></div>
+        <button id="discover" type="submit">发现候选范围</button>
+      </form>
+      <div id="notice" role="status"></div>
+    </section>
+    <section id="result" class="panel" hidden>
+      <h2>候选服务目录</h2>
+      <p class="hint">候选顺序、服务端/客户端区分和跨目录归属由模型根据实际源码判断。系统只校验模型引用的路径、文件和行号；请人工确认正确服务端后再应用。调查结果会保存为 <code>scan_scope.json</code>。</p>
+      <div id="candidates"></div>
+    </section>
+    <section id="selected" class="panel" hidden>
+      <h2>已确认的扫描范围</h2>
+      <p id="selected-text" class="hint"></p>
+      <button id="open-scan" class="secondary" type="button">打开普通扫描并带入 manifest</button>
+    </section>
+  </main>
+  <script>
+    const csrf = document.querySelector('meta[name="csrf"]').content;
+    const $ = id => document.getElementById(id);
+    let manifestPath = '';
+    let scope = null;
+    function showNotice(text, kind) { const n=$('notice'); n.textContent=text||''; n.className=kind||''; }
+    async function post(path, values) {
+      const body = new URLSearchParams(values); body.set('csrf', csrf);
+      const response = await fetch(path, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-Token':csrf}, body});
+      const text = await response.text();
+      let data; try { data=JSON.parse(text); } catch (_) { throw new Error(text || ('请求失败（'+response.status+'）')); }
+      if (!response.ok) throw new Error(data.error || data.errors || text || ('请求失败（'+response.status+'）'));
+      return data;
+    }
+    function addText(parent, tag, text, className) { const el=document.createElement(tag); if(className)el.className=className; el.textContent=text==null?'':String(text); parent.appendChild(el); return el; }
+    function renderCandidates(data) {
+      scope=data.scope||data; manifestPath=data.manifest_path||data.output||''; const list=$('candidates'); list.replaceChildren(); $('result').hidden=false;
+      const candidates=Array.isArray(scope.candidates)?scope.candidates:[];
+      if(!candidates.length){addText(list,'div','没有找到候选服务目录。请检查仓库路径、目标拼写或源码版本。','empty');return;}
+      candidates.forEach(candidate=>{
+        const card=document.createElement('article'); card.className='candidate';
+        const head=document.createElement('div'); head.className='candidate-head'; const title=document.createElement('h3'); title.textContent=candidate.scan_root||'.'; head.appendChild(title);
+        const badge=addText(head,'span',candidate.confidence||'unknown','badge '+(candidate.confidence==='high'?'high':'')); card.appendChild(head);
+        addText(card,'div','候选 ID：'+(candidate.candidate_id||''),'meta'); addText(card,'div','模型排序：第 '+(candidate.model_rank||'—')+' · 角色：'+(Array.isArray(candidate.roles)?candidate.roles.join('、'):'—'),'meta');
+        if(candidate.reason)addText(card,'div','模型理由：'+candidate.reason,'meta');
+        const predicates=document.createElement('div'); predicates.className='predicates'; const p=candidate.predicates||{}; [['socket_identity','Socket 身份'],['socket_server_consumer','服务端收包'],['configuration_or_build_anchor','配置/构建锚点']].forEach(([key,label])=>{const el=addText(predicates,'span',label+'：'+(p[key]?'已找到':'缺失'),'predicate '+(p[key]?'yes':''));}); card.appendChild(predicates);
+        const files=[['服务端入口文件',candidate.server_entry_files],['身份证据文件',candidate.identity_files],['配置文件',candidate.configuration_files],['构建文件',candidate.build_files]];
+        const ul=document.createElement('ul'); ul.className='evidence'; files.forEach(([label,items])=>{if(!Array.isArray(items)||!items.length)return; const li=document.createElement('li'); addText(li,'strong',label+'：'); addText(li,'code',items.join('、')); ul.appendChild(li);}); card.appendChild(ul);
+        const evidence=Array.isArray(candidate.evidence)?candidate.evidence.slice(0,8):[]; if(evidence.length){const details=document.createElement('details'); const summary=addText(details,'summary','查看源码证据（'+evidence.length+' 条）'); evidence.forEach(item=>{const block=document.createElement('pre'); const start=item.start_line||'—'; const end=item.end_line||start; block.textContent=(item.path||'')+':'+start+(end!==start?('-'+end):'')+'\n角色：'+(item.role||'other')+'\n说明：'+(item.why||'')+'\n\n'+(item.text||''); details.appendChild(block);}); card.appendChild(details);}
+        const actions=document.createElement('div'); actions.style.marginTop='12px'; const button=document.createElement('button'); button.type='button'; button.textContent='确认并用于普通扫描'; button.addEventListener('click',()=>selectCandidate(candidate.candidate_id,button)); actions.appendChild(button); card.appendChild(actions); list.appendChild(card);
+      });
+    }
+    async function selectCandidate(candidateID, button) { if(!manifestPath||!candidateID)return; button.disabled=true; showNotice('正在写入用户确认记录……',''); try { const data=await post('/socket-scope/select',{manifest:manifestPath,candidate_id:candidateID}); const selected=data.scope&&data.scope.selection; const root=selected&&selected.scan_root?selected.scan_root:'（未知）'; $('selected').hidden=false; $('selected-text').textContent='已确认：'+root+'。manifest：'+(data.manifest_path||manifestPath); $('open-scan').onclick=()=>{ const params=new URLSearchParams({scope_manifest:data.manifest_path||manifestPath,repo:$('repo').value.trim()}); window.location.href='/?'+params.toString(); }; showNotice('范围已确认。请打开普通扫描页面，并检查 manifest 后开始扫描。','ok'); } catch(e){showNotice(e.message||String(e),'error');} finally {button.disabled=false;} }
+    $('discover-form').addEventListener('submit',async event=>{event.preventDefault(); $('discover').disabled=true; $('selected').hidden=true; showNotice('模型正在逐步读取仓库并追踪 Socket 服务实现……',''); try { const values={repo:$('repo').value.trim(),target:$('target').value.trim(),llm_config:$('llm-config').value.trim()}; const data=await post('/socket-scope/discover',values); renderCandidates(data); showNotice('模型调查完成。请核对源码证据并确认服务端目录。','ok'); } catch(e){showNotice(e.message||String(e),'error');} finally {$('discover').disabled=false;} });
+    const query=new URLSearchParams(window.location.search); if(query.get('repo'))$('repo').value=query.get('repo'); if(query.get('target'))$('target').value=query.get('target');
+  </script>
+</body>
+</html>

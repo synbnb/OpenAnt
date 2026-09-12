@@ -160,6 +160,26 @@ func InvokeExposureSurface(ctx context.Context, pythonPath string, args []string
 	}, nil
 }
 
+// InvokeDeviceSocketInventory invokes the explicit device-level Agentic asset
+// namespace.  It is intentionally separate from exposure-surface sessions:
+// the latter inspect one user target, while this operation maintains a
+// per-device Socket inventory snapshot.
+func InvokeDeviceSocketInventory(ctx context.Context, pythonPath string, args []string, workDir string, onLog func(string)) (*InvokeResult, error) {
+	commandArgs := append([]string{"device-socket-inventory"}, args...)
+	stdout, exitCode, err := InvokeCtxCapture(ctx, pythonPath, commandArgs, workDir, "", onLog)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := DecodeEnvelope(stdout)
+	if err != nil {
+		return nil, err
+	}
+	return &InvokeResult{
+		Envelope: envelope,
+		ExitCode: normalizeExit(exitCode, envelope.Status == "error"),
+	}, nil
+}
+
 func invokeCtxInner(ctx context.Context, pythonPath string, args []string, workDir, apiKey string, onLog func(string), captureStdout bool) (string, int, error) {
 	// -P keeps the process working directory off sys.path so a hostile openant/
 	// package inside the scanned, untrusted repo can't shadow the real module on

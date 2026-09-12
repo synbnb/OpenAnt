@@ -15,11 +15,11 @@ Pipeline ordering (managed by ``core/scanner.py``):
 
 1. Parse with ``processing_level="all"`` so every unit is available.
 2. ``analyze_reachability`` reviews all units and returns signals.
-3. ``apply_signals`` promotes high-confidence ``entry_point`` signals by
-   setting ``is_entry_point=True`` on the target unit and derives semantic
-   BFS seeds from high-confidence ``external_input`` and ``cross_process``
-   signals. Every valid medium-confidence signal is retained as a
-   reachable-only unit, but deliberately does not become a BFS root.
+3. ``apply_signals`` records semantic signals after admission checks and
+   derives strict roots only from high-confidence signals with concrete
+   evidence (and inbound direction for ``cross_process``). Medium-confidence
+   signals become candidate seeds for a separate BFS over accepted edges; they
+   never become strict entry points.
 4. The structural reachability filter re-runs with both LLM-promoted entry
    points and high-confidence semantic signals added as extra BFS seeds,
    yielding a dataset filtered to the user's requested ``processing_level``
@@ -33,13 +33,13 @@ Output:
 - ``analyze_reachability(...)`` returns a list of ``ReachabilitySignal``
   dicts.
 - ``apply_signals(dataset, signals)`` mutates the dataset in place so each
-  unit gains an ``llm_reachability_signals`` field. High-confidence
-  ``entry_point`` signals set ``is_entry_point = True``; high-confidence
-  ``external_input`` and ``cross_process`` signals set
-  ``semantic_reachability_seed = True`` without changing the entry-point flag;
-  medium-confidence signals of every valid kind set
-  ``reachability_retain_only = True`` and are retained without BFS; semantic
-  input signals also set ``semantic_reachability_retain_only = True``.
+  unit gains an ``llm_reachability_signals`` field. Evidence-backed,
+  high-confidence ``entry_point`` signals set ``is_entry_point = True``;
+  evidence-backed, inbound high-confidence ``external_input`` and
+  ``cross_process`` signals set ``semantic_reachability_seed = True`` without
+  changing the entry-point flag; medium-confidence signals of every valid kind set
+  ``semantic_reachability_candidate_seed = True`` and are retained for a
+  candidate frontier; the legacy retain-only markers remain for compatibility.
 
 Usage:
     from core.llm_reachability import analyze_reachability, apply_signals
@@ -99,8 +99,10 @@ class ReachabilitySignal:
     ``confidence`` is one of ``high``, ``medium``, ``low``. ``direction`` is
     used only for ``cross_process``; ``external_input`` is inherently an
     inbound/read signal and does not need a direction value. Evidence fields
-    are model-provided audit claims; semantic-seed admission is intentionally
-    based only on signal kind and high confidence.
+    are model-provided audit claims. Strict semantic-seed admission uses high
+    confidence plus a non-empty concrete evidence claim; it does not rely on a
+    brittle local text matcher. The claim remains model-provided evidence,
+    rather than source-level proof.
     """
 
     unit_id: str
@@ -180,7 +182,10 @@ markdown fences. Do NOT include any prose outside the JSON.
 For ``external_input``, cite the concrete read/receive operation or its
 registration context in ``evidence_excerpt``. For ``cross_process``, cite the
 operation and state whether this unit receives or sends. Evidence is retained
-for audit and explanation; it is not a local source-matching admission gate.
+for audit and explanation. A high-confidence signal without a concrete
+evidence claim is not admitted as a strict seed; it is retained as review-only
+evidence. This is an evidence-presence check, not a local source-matching or
+substring-validation gate.
 A function parameter alone is weaker evidence, but may still be reported when
 the model's confidence is high. Do not invent line numbers; use null when the
 source span is not visible.
@@ -621,9 +626,9 @@ _PROMOTE_ENTRY_POINT_AT = {"high"}
 def _evidence_status_for_signal(signal: ReachabilitySignal) -> str:
     """Classify whether the model supplied any evidence for audit display.
 
-    This deliberately does not inspect repository source.  The reachability
-    seed gate is confidence-only; evidence remains optional explanatory
-    metadata and is never treated as a provenance barrier.
+    This deliberately does not inspect repository source.  Evidence status is
+    an admission/audit field supplied by the model; source-reference and
+    relation validation happen later in call-graph recovery/projection.
     """
     return "provided" if signal.evidence or signal.evidence_excerpt else "missing"
 
@@ -633,33 +638,61 @@ def evaluate_seed_eligibility(
 ) -> Dict[str, str]:
     """Decide how a semantic signal participates in reachability.
 
-    The BFS seed gate intentionally has one semantic requirement: the model
-    must report high confidence for an ``external_input`` or ``cross_process``
-    signal. Medium-confidence semantic signals are admitted as
-    ``reachable_only``: the target unit is retained in the final dataset, but
-    it cannot expand the BFS frontier. This applies to every valid
-    medium-confidence signal kind, including ``entry_point``. Boundary labels,
-    direction, and evidence are retained as audit metadata only. Low-confidence
-    signals remain ``review_only`` evidence.
+    A strict semantic seed requires a known unit, a supported signal kind,
+    ``high`` confidence, and a non-empty model evidence claim. For
+    ``cross_process`` it additionally requires an inbound direction
+    (``receive`` or ``bidirectional``), so a process-originating ``send`` is
+    not mistaken for an external entry. This is deliberately an
+    evidence-presence check rather than a brittle local substring matcher;
+    source-reference and relation-quality validation belongs to call-graph
+    projection. Medium-confidence signals are admitted as
+    ``reachable_only`` candidate seeds, including ``entry_point``. High/low
+    signals that fail the strict evidence gate remain attached as
+    ``review_only`` evidence.
     """
-    del unit  # Kept in the signature for compatibility with existing callers.
+    if not isinstance(unit, dict) or unit.get("id") != signal.unit_id:
+        return {
+            "status": "rejected",
+            "reason": "signal unit identity does not match a known dataset unit",
+        }
     evidence_status = _evidence_status_for_signal(signal)
     signal.evidence_status = evidence_status
-    if signal.kind not in {"external_input", "cross_process"}:
+    if signal.kind not in {"entry_point", "external_input", "cross_process"}:
         return {"status": "review_only", "reason": "not a semantic input signal"}
     if signal.confidence == "medium":
         return {
             "status": "reachable_only",
-            "reason": "medium-confidence semantic signal retained without BFS expansion",
+            "reason": (
+                "medium-confidence semantic signal admitted as a candidate BFS seed; "
+                "not a strict entry point"
+            ),
         }
-    if signal.confidence != "high":
+    if signal.confidence not in _PROMOTE_ENTRY_POINT_AT:
         return {
             "status": "review_only",
             "reason": "confidence is below the high-confidence seed threshold",
         }
+    if not (signal.evidence or signal.evidence_excerpt):
+        return {
+            "status": "review_only",
+            "reason": "high-confidence signal has no concrete evidence claim",
+        }
+    if signal.kind == "cross_process" and signal.direction not in {
+        "receive",
+        "bidirectional",
+    }:
+        return {
+            "status": "review_only",
+            "reason": "cross-process signal is not confirmed as inbound",
+        }
+    if signal.kind == "entry_point":
+        return {
+            "status": "accepted_entry_seed",
+            "reason": "high-confidence entry signal with concrete evidence",
+        }
     return {
         "status": "accepted_seed",
-        "reason": "high-confidence semantic signal",
+        "reason": "high-confidence semantic signal with concrete evidence",
     }
 
 
@@ -718,17 +751,17 @@ def apply_signals(
 
     For each unit referenced by a signal:
       - The signal is appended to a per-unit ``llm_reachability_signals`` list.
-      - If the signal kind is ``entry_point`` AND its confidence is in
-        :data:`_PROMOTE_ENTRY_POINT_AT`, the unit's ``is_entry_point`` field
-        is set to ``True`` (never set back to ``False``).
-      - A high-confidence ``external_input`` or ``cross_process`` signal is
-        marked as a semantic BFS seed. Evidence fields are retained for audit
-        display but do not gate admission.
-      - A medium-confidence signal marks its target as
-        ``reachability_retain_only`` (and semantic input signals additionally
-        use ``semantic_reachability_retain_only``). The target is retained
-        after the structural BFS, but it is not used as a BFS root and
-        therefore cannot pull in neighboring units.
+      - If the signal kind is ``entry_point`` and it passes the evidence
+        admission gate, the unit's ``is_entry_point`` field is set to ``True``
+        (never set back to ``False``).
+      - A high-confidence ``external_input`` or inbound ``cross_process``
+        signal with a concrete evidence claim is marked as a strict semantic
+        BFS seed. Evidence presence is required, but brittle local text
+        matching is not performed here.
+      - A medium-confidence signal marks its target as a candidate seed and
+        retains the legacy ``reachability_retain_only`` markers. The filter
+        may propagate from this target over accepted edges, but the result is
+        explicitly ``candidate_reachable`` rather than strict reachable.
 
     Crucially, this never DEMOTES a unit. ``is_entry_point=True`` set by the
     structural pass remains true regardless of what the LLM said.
@@ -740,6 +773,7 @@ def apply_signals(
             "signals_applied": <n>,
             "entry_points_promoted": <n>,
             "semantic_seed_ids": [...],
+            "semantic_candidate_seed_ids": [...],
             "semantic_retain_only_ids": [...],
             "reachable_only_ids": [...],
             "seed_counts": {...},
@@ -758,6 +792,7 @@ def apply_signals(
     promoted = 0
     touched: set = set()
     semantic_seed_ids: set[str] = set()
+    semantic_candidate_seed_ids: set[str] = set()
     semantic_retain_only_ids: set[str] = set()
     reachable_only_ids: set[str] = set()
     seed_counts = {
@@ -785,14 +820,9 @@ def apply_signals(
             continue
 
         decision = None
-        if sig.kind in {"external_input", "cross_process"}:
+        if sig.kind in {"entry_point", "external_input", "cross_process"}:
             decision = evaluate_seed_eligibility(unit, sig)
             sig.evidence_status = _evidence_status_for_signal(sig)
-        elif sig.kind == "entry_point" and sig.confidence == "medium":
-            decision = {
-                "status": "reachable_only",
-                "reason": "medium-confidence entry-point signal retained without BFS expansion",
-            }
 
         existing = unit.setdefault("llm_reachability_signals", [])
         record = sig.to_dict()
@@ -805,14 +835,19 @@ def apply_signals(
 
         if (
             sig.kind == "entry_point"
-            and sig.confidence in _PROMOTE_ENTRY_POINT_AT
+            and decision is not None
+            and decision.get("status") == "accepted_entry_seed"
             and not unit.get("is_entry_point", False)
         ):
             unit["is_entry_point"] = True
             unit["entry_point_reason"] = f"llm_reachability: {sig.reason}"
             promoted += 1
 
-        if sig.kind == "entry_point" and sig.confidence in _PROMOTE_ENTRY_POINT_AT:
+        if (
+            sig.kind == "entry_point"
+            and decision is not None
+            and decision.get("status") == "accepted_entry_seed"
+        ):
             seed_counts["entry_point"] += 1
 
         if decision is not None:
@@ -849,16 +884,24 @@ def apply_signals(
                 reason = decision["reason"]
                 if reason not in reasons:
                     reasons.append(reason)
+            elif status == "accepted_entry_seed":
+                # LLM entry-point signals use the ordinary structural BFS root
+                # once the semantic evidence gate has passed.  Keep this
+                # status separate from input seeds so reports can distinguish
+                # the two admission paths.
+                pass
             elif status == "review_only":
                 review_only += 1
                 rejected_counts["review_only"] = rejected_counts.get("review_only", 0) + 1
             elif status == "reachable_only":
                 retained_only += 1
                 reachable_only_ids.add(sig.unit_id)
+                semantic_candidate_seed_ids.add(sig.unit_id)
                 if sig.kind in {"external_input", "cross_process"}:
                     semantic_retain_only_ids.add(sig.unit_id)
                 retained_only_counts[sig.kind] += 1
                 unit["reachability_retain_only"] = True
+                unit["semantic_reachability_candidate_seed"] = True
                 if sig.kind in {"external_input", "cross_process"}:
                     unit["semantic_reachability_retain_only"] = True
                 if sig.kind == "entry_point":
@@ -897,6 +940,8 @@ def apply_signals(
         "entry_points_promoted": promoted,
         "units_touched": len(touched),
         "semantic_seed_ids": sorted(semantic_seed_ids),
+        "semantic_candidate_seed_ids": sorted(semantic_candidate_seed_ids),
+        "semantic_candidate_seed_count": len(semantic_candidate_seed_ids),
         "semantic_retain_only_ids": sorted(semantic_retain_only_ids),
         "reachable_only_ids": sorted(reachable_only_ids),
         "seed_counts": seed_counts,

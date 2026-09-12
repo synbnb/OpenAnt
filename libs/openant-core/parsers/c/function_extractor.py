@@ -34,6 +34,7 @@ Output (JSON):
 
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -99,6 +100,13 @@ class FunctionExtractor:
         # walks in member dispatch (bug [30]). Populated from the
         # base_class_clause of each class_specifier/struct_specifier.
         self.class_bases: Dict[str, List[str]] = {}
+        # class/struct name -> member field name -> conservative receiver type.
+        # This is intentionally a small syntactic index (not a C++ type system):
+        # it lets the call-graph builder resolve ``taskMgr_.InitDataCsv()``
+        # without guessing from the field name.  Values are normalized to the
+        # leaf class name (or the innermost template type) so they match the
+        # method index, whose class names are likewise lexical/bare names.
+        self.class_fields: Dict[str, Dict[str, str]] = {}
 
         self.c_parser = Parser(C_LANGUAGE)
         self.cpp_parser = Parser(CPP_LANGUAGE)
@@ -183,6 +191,101 @@ class FunctionExtractor:
     def _node_text(self, node, source: bytes) -> str:
         """Extract text from a tree-sitter node."""
         return source[node.start_byte:node.end_byte].decode('utf-8', errors='replace')
+
+    def _receiver_type_from_node(self, type_node, source: bytes) -> Optional[str]:
+        """Return a conservative receiver type from a declaration node.
+
+        Tree-sitter gives qualified C++ types (``OHOS::Foo::Bar``) and smart
+        pointer types (``std::shared_ptr<Bar>``) as syntax nodes, but it does
+        not perform semantic lookup.  We retain only the class-like leaf so
+        the call-graph resolver can match the lexical class index.  Unknown or
+        compound declarations are deliberately omitted rather than converted
+        into a potentially wrong type.
+        """
+        if type_node is None:
+            return None
+        text = self._node_text(type_node, source).strip()
+        if not text:
+            return None
+        # Remove declaration qualifiers that are not part of the receiver type.
+        text = re.sub(r"^(?:(?:const|volatile|mutable|typename|class|struct)\s+)+", "", text)
+        # For the common owning-pointer forms, use the first concrete type
+        # argument.  This deliberately does not attempt arbitrary templates.
+        match = re.search(
+            r"(?:shared_ptr|unique_ptr|weak_ptr)\s*<\s*(?:const\s+)?"
+            r"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)",
+            text,
+        )
+        if match:
+            text = match.group(1)
+        # Strip simple pointer/reference/array suffixes when a grammar variant
+        # includes them in the type node.
+        text = re.sub(r"\s*[&*]+\s*$", "", text).strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*", text):
+            return None
+        return text.split("::")[-1]
+
+    def _extract_field_name(self, declarator, source: bytes) -> Optional[str]:
+        """Extract a field name from a field declarator subtree."""
+        if declarator is None:
+            return None
+        if declarator.type in {'identifier', 'field_identifier'}:
+            return self._node_text(declarator, source)
+        inner = declarator.child_by_field_name('declarator')
+        if inner is not None:
+            return self._extract_field_name(inner, source)
+        for child in declarator.children:
+            name = self._extract_field_name(child, source)
+            if name:
+                return name
+        return None
+
+    def _extract_class_field_types(self, body_node, source: bytes) -> Dict[str, str]:
+        """Extract direct, non-function field declarations from a class body."""
+        fields: Dict[str, str] = {}
+        if body_node is None:
+            return fields
+        for child in body_node.children:
+            if child.type != 'field_declaration':
+                continue
+            # In a C++ header, ordinary method declarations such as
+            # ``std::string ExecCommand();`` are also represented as a
+            # ``field_declaration`` whose declarator is a
+            # ``function_declarator``.  They are not receiver fields; skip the
+            # whole declaration rather than indexing a method name as a type.
+            if any(
+                descendant.type == 'function_declarator'
+                for descendant in self._walk_nodes(child)
+            ):
+                continue
+            type_name = self._receiver_type_from_node(
+                child.child_by_field_name('type'), source
+            )
+            if not type_name:
+                continue
+            # C++ permits multiple declarators in one field declaration.  Keep
+            # every simple declarator for completeness, while ignoring methods
+            # and function-pointer fields that cannot be safely typed here.
+            for declarator in child.children:
+                if declarator.type in {
+                    'type_identifier', 'qualified_identifier',
+                    'primitive_type', 'storage_class_specifier',
+                    'access_specifier', 'attribute_specifier',
+                }:
+                    continue
+                field_name = self._extract_field_name(declarator, source)
+                if field_name:
+                    fields[field_name] = type_name
+        return fields
+
+    @staticmethod
+    def _walk_nodes(root):
+        """Yield a small syntax subtree without exposing parser internals."""
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(reversed(node.children))
 
     def _get_function_name(self, node, source: bytes) -> Optional[str]:
         """Extract function name from a function_definition node."""
@@ -614,6 +717,10 @@ class FunctionExtractor:
                                 existing.append(base)
                     body_node = node.child_by_field_name('body')
                     if body_node:
+                        field_types = self._extract_class_field_types(body_node, source)
+                        if field_types:
+                            existing_fields = self.class_fields.setdefault(class_name, {})
+                            existing_fields.update(field_types)
                         for child in reversed(body_node.children):
                             if child.type == 'function_definition':
                                 self._process_function_node(
@@ -671,13 +778,27 @@ class FunctionExtractor:
             name, relative_path, is_static, code, is_cpp, class_name
         )
 
+        # C++ does not permit ordinary function definitions to be nested inside
+        # another function.  Tree-sitter can nevertheless attach subsequent
+        # out-of-line member definitions to a preceding function when a large
+        # translation unit contains preprocessor/grammar recovery errors (the
+        # DNS resolver source is a concrete example).  Such a definition has a
+        # qualified member name and must not inherit the enclosing function's
+        # dotted GNU-nested scope; doing so fabricates identities such as
+        # ``ProcSetCacheCommand.DnsResolvListenInternal::ProcCommand`` and
+        # breaks cross-function call-chain matching.  Keep the dotted scope for
+        # genuine C/GNU nested functions and for C++ lambda declarations, which
+        # are handled separately by ``_process_lambda_declaration``.
+        id_enclosing_prefix = enclosing_prefix
+        if is_cpp and ("::" in name or class_context is not None):
+            id_enclosing_prefix = ""
         # enclosing_prefix is empty for top-level/method functions (id stays the
         # plain `path:name` the suite's hardcoded id literals depend on) and the
         # dotted enclosing-function chain for a GNU nested function, so two
         # same-named nested fns in different enclosers stay distinct. The `name`
         # field is left bare (unscoped) so the call-graph builder still resolves
         # the bare nested call.
-        func_id = f"{relative_path}:{enclosing_prefix}{full_name}"
+        func_id = f"{relative_path}:{id_enclosing_prefix}{full_name}"
 
         func_data = {
             'name': full_name,
@@ -879,6 +1000,7 @@ class FunctionExtractor:
             'macro_aliases': self.macro_aliases,
             'prototypes': self.prototypes,
             'class_bases': self.class_bases,
+            'class_fields': self.class_fields,
             'source_files': self.source_files,
             'statistics': self.stats,
         }

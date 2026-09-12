@@ -84,6 +84,22 @@ def test_parser_classifies_test_and_fuzz_targets_without_executing_content():
     assert all(target.sources for target in result.targets)
 
 
+def test_parser_collects_config_include_dirs_and_cflags():
+    result = OpenHarmonyGNParser().parse_text(
+        "core/BUILD.gn",
+        'config("core_config") {\n'
+        '  include_dirs = [ "include" ]\n'
+        '  cflags_cc = [ "-DCORE_ENABLED" ]\n'
+        '}\n',
+    )
+
+    assert len(result.targets) == 1
+    target = result.targets[0]
+    assert target.kind == "config"
+    assert target.include_dirs == ["include"]
+    assert target.cflags_cc == ["-DCORE_ENABLED"]
+
+
 def test_parser_reports_unbalanced_target_and_keeps_safe_result():
     result = OpenHarmonyGNParser().parse_text(
         "broken/BUILD.gn",

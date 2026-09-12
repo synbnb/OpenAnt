@@ -168,6 +168,38 @@ def test_pipeline_output_source_recovery_merges_partial_sibling_maps(tmp_path: P
     assert set(recovered) == {first, second}
 
 
+def test_pipeline_output_prefers_exact_graph_source_over_context_bundle(tmp_path: Path):
+    """The trigger snippet must not include neighbouring File Boundary units."""
+    from core import reporter
+
+    route = "sp_utils.cpp:SPUtils::LoadCmdWithLinkBreak"
+    exact = "bool SPUtils::LoadCmdWithLinkBreak(...) { return popen(cmd, \"r\"); }"
+    context_bundle = exact + "\n\n// ========== File Boundary ==========\n\nvoid Other() {}"
+    (tmp_path / "results.json").write_text(
+        json.dumps({"code_by_route": {route: context_bundle}})
+    )
+    (tmp_path / "effective_call_graph.json").write_text(
+        json.dumps({
+            "functions": {
+                route: {
+                    "file_path": "sp_utils.cpp",
+                    "function_name": "SPUtils::LoadCmdWithLinkBreak",
+                    "start_line": 114,
+                    "end_line": 118,
+                    "code": exact,
+                }
+            }
+        })
+    )
+
+    recovered = reporter._load_code_by_route(
+        str(tmp_path / "results.json"),
+        {"code_by_route": {route: context_bundle}},
+    )
+    assert recovered[route] == exact
+    assert "File Boundary" not in recovered[route]
+
+
 def test_disclosure_prompt_renders_metadata_and_final_output_sections(monkeypatch):
     from report import generator
     from utilities.llm import CompletionResult, PhaseBinding, TextBlock
@@ -302,3 +334,162 @@ A local caller can invoke the operation.
     assert "**Tested:** OpenHarmony, 2026-08-28T12:34:56Z." in output
     assert "[REQUIRES MANUAL INPUT]" not in output
     assert "Add a permission check before the operation." in output
+
+
+def test_disclosure_puts_core_evidence_before_legacy_narrative(monkeypatch):
+    """The reviewer-facing attack chain and source bundle must be first."""
+    from report import generator
+    from utilities.llm import CompletionResult, PhaseBinding, TextBlock
+
+    class FakeAdapter:
+        name = "offline"
+        supports_tools = False
+        pricing = {"report-model": {"input": 1.0, "output": 1.0}}
+
+        def complete(self, *, model, system, messages, max_tokens, tools=None):
+            del model, system, messages, max_tokens, tools
+            return CompletionResult(
+                content=[TextBlock(
+                    "# Security Disclosure: test\n\n"
+                    "**Product:** audio\n"
+                    "**Type:** CWE-78 (Command Injection)\n"
+                    "**Affected:** revision\n\n"
+                    "## Summary\n\nModel narrative.\n\n"
+                    "## Steps to Reproduce\n\nSend the request.\n\n"
+                    "## Impact\n\nCode execution.\n"
+                )],
+                input_tokens=1,
+                output_tokens=1,
+                stop_reason="end_turn",
+            )
+
+        def validate(self, model):
+            del model
+
+    binding = PhaseBinding(
+        phase="report",
+        adapter=FakeAdapter(),
+        model="report-model",
+        provider_name="offline",
+    )
+    target = "services/socket.cpp:SocketHandler::Handle"
+    entry = "services/socket.cpp:SocketHandler::Recv"
+    finding = {
+        "id": "VULN-001",
+        "name": "Command Injection",
+        "location": {"file": "services/socket.cpp", "function": "SocketHandler::Handle", "start_line": 40, "end_line": 45},
+        "cwe_id": 78,
+        "cwe_name": "OS Command Injection",
+        "stage1_verdict": "vulnerable",
+        "stage2_verdict": "unverified",
+        "description": "Untrusted socket text reaches the command wrapper.",
+        "reasoning": "The command is concatenated without validation.",
+        "impact": ["CODE_EXECUTION"],
+        "guard_analysis": "No allowlist dominates the command construction.",
+        "attack_scenario": "Send a socket message containing a shell separator.",
+        "report_context": {
+            "target": {"source_location": {
+                "file": "services/socket.cpp",
+                "function": "SocketHandler::Handle",
+                "start_line": 40,
+                "end_line": 45,
+            }},
+            "source_to_sink": {
+                "entry_point": "SocketHandler::Recv -> SocketHandler::Handle",
+                "function_route_chain": [entry, target],
+                "ordered_steps": ["recvBuf is controlled by the socket peer", "Handle builds cmd and calls popen"],
+                "sink_reached": True,
+                "attack_scenario": "Send a socket message containing a shell separator.",
+            },
+            "phase_context": {
+                "stage1": {
+                    "entry_path_ids": [
+                        [entry, target],
+                        ["services/socket.cpp:SocketHandler::Recv", "services/socket.cpp:SocketHandler::Validate", target],
+                    ],
+                    "candidate_entry_path_ids": [
+                        ["services/socket.cpp:SocketHandler::Recv", "services/socket.cpp:SocketHandler::Dispatch", target],
+                    ],
+                },
+            },
+            "call_chain": {"nodes": [
+                {"order": 1, "function": "SocketHandler::Recv", "file": "services/socket.cpp", "start_line": 10, "end_line": 20, "role": "entry", "source_code": "void Recv() { Handle(); }"},
+                {"order": 2, "function": "SocketHandler::Handle", "file": "services/socket.cpp", "start_line": 40, "end_line": 45, "role": "target", "source_code": "void Handle() { popen(cmd, \"r\"); }"},
+            ]},
+        },
+    }
+    text, _ = generator.generate_disclosure(
+        finding, "audio", binding, pipeline_data={
+            "repository": {"name": "audio", "commit_sha": "abc"},
+            "analysis_date": "2026-09-10T00:00:00Z",
+            "application_type": "openharmony_component",
+        },
+    )
+
+    core_pos = text.index("## Core Vulnerability Evidence")
+    narrative_pos = text.index("## Summary")
+    assert core_pos < narrative_pos
+    assert core_pos < text.index("**Product:**")
+    assert "### Triggering Code" in text
+    assert "services/socket.cpp" in text
+    assert "### Attack Chain" in text
+    assert "SocketHandler::Recv -> SocketHandler::Handle" in text
+    assert "### Call Chain Overview" in text
+    assert "Strict call chains (2)" in text
+    assert "SocketHandler::Validate" in text
+    assert "Candidate call chains (1)" in text
+    assert "SocketHandler::Dispatch" in text
+    assert "### Root Cause" in text
+    assert "### Remediation Key Points" in text
+    assert "### Call Chain Source" in text
+    assert text.index("#### 1. SocketHandler::Recv") < text.index("#### 2. SocketHandler::Handle")
+
+
+def test_chinese_priority_disclosure_uses_chinese_labels(monkeypatch):
+    from report import generator
+    from utilities.llm import CompletionResult, PhaseBinding, TextBlock
+
+    class FakeAdapter:
+        name = "offline"
+        supports_tools = False
+        pricing = {"report-model": {"input": 1.0, "output": 1.0}}
+
+        def complete(self, *, model, system, messages, max_tokens, tools=None):
+            del model, system, messages, max_tokens, tools
+            return CompletionResult(
+                content=[TextBlock("# 安全漏洞披露\n\n## 摘要\n\n模型摘要。")],
+                input_tokens=1,
+                output_tokens=1,
+                stop_reason="end_turn",
+            )
+
+        def validate(self, model):
+            del model
+
+    binding = PhaseBinding(
+        phase="report",
+        adapter=FakeAdapter(),
+        model="report-model",
+        provider_name="offline",
+    )
+    finding = {
+        "name": "输入校验缺失",
+        "location": {"file": "a.cpp", "function": "Handle", "start_line": 3, "end_line": 5},
+        "cwe_id": 20,
+        "cwe_name": "Improper Input Validation",
+        "stage1_verdict": "vulnerable",
+        "stage2_verdict": "unverified",
+        "description": "外部输入未校验。",
+        "report_context": {"call_chain": {"nodes": []}},
+    }
+    text, _ = generator.generate_disclosure(
+        finding, "demo", binding, pipeline_data={
+            "repository": {"name": "demo", "commit_sha": "abc"},
+            "analysis_date": "2026-09-10T00:00:00Z",
+            "application_type": "openharmony_component",
+        }, language="zh-CN",
+    )
+    assert "## 漏洞核心证据" in text
+    assert "### 漏洞触发代码" in text
+    assert "### 攻击链" in text
+    assert text.index("## 漏洞核心证据") < text.index("## 摘要")

@@ -64,6 +64,7 @@ from prompts.verification_prompts import (
     get_consistency_check_prompt
 )
 from core.verdict_taxonomy import DISCLOSURE_DROPPED, FINDING_VERDICT_ORDER
+from core.finding_records import ensure_primary_record, normalize_findings
 
 # Import application context type for type hints
 try:
@@ -88,10 +89,34 @@ _VERIFY_JSON_SCHEMA = """{
         "reachability_status": "confirmed | conditional | unknown | none",
         "impact_status": "confirmed | plausible | unknown | none",
         "evidence_completeness": "complete | partial | missing",
-        "boundary_type": "binder | system_ability | idl | unix_socket | tcp | udp | napi | hdf_hdi | ioctl | file | callback | queue | other",
+        "parameter_dataflow_status": "confirmed | partial | missing | blocked | not_evaluated",
+        "boundary_type": "binder | system_ability | idl | socket | unix_socket | tcp | udp | tcp_udp_socket | napi | hdf_hdi | ioctl | file | callback | queue | cli | other",
+        "direction": "inbound | outbound | bidirectional | unknown",
+        "source_evidence_status": "confirmed | partial | missing | unknown",
+        "registration_evidence": [],
+        "endpoint": null,
+        "input_relation": "confirmed | partial | missing | blocked | unknown",
         "missing_evidence": []
     },
     "exploit_path": {"entry_point": null, "data_flow": [], "sink_reached": false, "attacker_control_at_sink": "none", "path_broken_at": null},
+    "findings": [
+        {
+            "finding_id": "stable issue id",
+            "scope": "target | context",
+            "relation": "primary | secondary | context_risk",
+            "target_match": true,
+            "finding": "safe | protected | bypassable | vulnerable | inconclusive",
+            "function_analyzed": "function containing the issue",
+            "file": "source file",
+            "line_start": 0,
+            "line_end": 0,
+            "vulnerability_categories": [],
+            "impact": [],
+            "reasoning": "independent issue explanation",
+            "evidence": [],
+            "missing_evidence": []
+        }
+    ],
     "explanation": "Detailed explanation of your analysis",
     "security_weakness": null
 }"""
@@ -212,7 +237,29 @@ VERIFICATION_TOOLS = [
                             "type": "string",
                             "enum": ["complete", "partial", "missing"]
                         },
+                        "parameter_dataflow_status": {
+                            "type": "string",
+                            "enum": ["confirmed", "partial", "missing", "blocked", "not_evaluated"]
+                        },
                         "boundary_type": {"type": "string"},
+                        "direction": {
+                            "type": "string",
+                            "enum": ["inbound", "outbound", "bidirectional", "unknown"]
+                        },
+                        "source_evidence_status": {
+                            "type": "string",
+                            "enum": ["confirmed", "partial", "missing", "unknown"]
+                        },
+                        "registration_evidence": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 8
+                        },
+                        "endpoint": {"type": ["string", "null"]},
+                        "input_relation": {
+                            "type": "string",
+                            "enum": ["confirmed", "partial", "missing", "blocked", "unknown"]
+                        },
                         "missing_evidence": {
                             "type": "array",
                             "items": {"type": "string"}
@@ -245,6 +292,31 @@ VERIFICATION_TOOLS = [
                             "type": ["string", "null"],
                             "description": "Where/why the exploit path breaks (null if complete)"
                         }
+                    }
+                },
+                "findings": {
+                    "type": "array",
+                    "description": "Independent target and context findings. Keep context risks separate from the target verdict.",
+                    "maxItems": 16,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "finding_id": {"type": "string"},
+                            "scope": {"type": "string", "enum": ["target", "context"]},
+                            "relation": {"type": "string", "enum": ["primary", "secondary", "context_risk", "related"]},
+                            "target_match": {"type": ["boolean", "null"]},
+                            "finding": {"type": "string", "enum": ["safe", "protected", "bypassable", "vulnerable", "inconclusive"]},
+                            "function_analyzed": {"type": "string"},
+                            "file": {"type": "string"},
+                            "line_start": {"type": "integer", "minimum": 0},
+                            "line_end": {"type": "integer", "minimum": 0},
+                            "vulnerability_categories": {"type": "array", "items": {"type": "string"}},
+                            "impact": {"type": "array", "items": {"type": "string"}},
+                            "reasoning": {"type": "string"},
+                            "evidence": {"type": "array", "items": {"type": "string"}},
+                            "missing_evidence": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["finding", "scope", "target_match"]
                     }
                 },
                 "explanation": {
@@ -282,6 +354,129 @@ def _more_severe(a: str, b: str) -> str:
         v = str(v or "").strip().lower()
         return FINDING_VERDICT_ORDER.index(v) if v in FINDING_VERDICT_ORDER else len(FINDING_VERDICT_ORDER)
     return a if _rank(a) <= _rank(b) else b
+
+
+# Stage 2 receives model-produced labels from several providers.  Keep the
+# route vocabulary small and stable so that ``Unix Domain Socket``, ``UDS``
+# and ``unix socket`` do not become three different boundary classes in the
+# report.  This is deliberately a normalization layer, not a trust decision:
+# it never promotes a finding or proves that a route is attacker controlled.
+_BOUNDARY_ALIASES = {
+    "binder": "binder",
+    "binder_ipc": "binder",
+    "binder ipc": "binder",
+    "system ability": "system_ability",
+    "system_ability": "system_ability",
+    "sa": "system_ability",
+    "idl": "idl",
+    "unix": "unix_socket",
+    "unix socket": "unix_socket",
+    "unix domain socket": "unix_socket",
+    "unix_domain_socket": "unix_socket",
+    "uds": "unix_socket",
+    "uds socket": "unix_socket",
+    "tcp": "tcp",
+    "tcp socket": "tcp",
+    "udp": "udp",
+    "udp socket": "udp",
+    "socket": "socket",
+    "napi": "napi",
+    "hdf": "hdf_hdi",
+    "hdi": "hdf_hdi",
+    "hdf/hdi": "hdf_hdi",
+    "hdf_hdi": "hdf_hdi",
+    "ioctl": "ioctl",
+    "file": "file",
+    "file/config": "file",
+    "callback": "callback",
+    "event": "callback",
+    "event callback": "callback",
+    "event_callback": "callback",
+    "event/callback": "callback",
+    "queue": "queue",
+    "message queue": "queue",
+    "async queue": "queue",
+    "cli": "cli",
+    "command line": "cli",
+    "command-line": "cli",
+    "argv": "cli",
+    "argc/argv": "cli",
+    "other": "other",
+}
+
+_DIRECTION_ALIASES = {
+    "inbound": "inbound",
+    "in": "inbound",
+    "receive": "inbound",
+    "recv": "inbound",
+    "read": "inbound",
+    "listen": "inbound",
+    "accept": "inbound",
+    "outbound": "outbound",
+    "out": "outbound",
+    "send": "outbound",
+    "write": "outbound",
+    "connect": "outbound",
+    "bidirectional": "bidirectional",
+    "both": "bidirectional",
+    "unknown": "unknown",
+}
+
+_ROUTE_EVIDENCE_ALIASES = {
+    "confirmed": "confirmed",
+    "verified": "confirmed",
+    "source-backed": "confirmed",
+    "source backed": "confirmed",
+    "source_backed": "confirmed",
+    "evidenced": "confirmed",
+    "partial": "partial",
+    "conditional": "partial",
+    "incomplete": "partial",
+    "missing": "missing",
+    "unknown": "unknown",
+}
+
+_INPUT_RELATION_ALIASES = {
+    "confirmed": "confirmed",
+    "verified": "confirmed",
+    "partial": "partial",
+    "possible": "partial",
+    "missing": "missing",
+    "blocked": "blocked",
+    "unknown": "unknown",
+}
+
+
+def _canonical_route_value(value, aliases: dict[str, str], *, limit: int = 128) -> str | None:
+    """Return a bounded canonical label for model-supplied route metadata."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = " ".join(value.strip().lower().replace("-", " ").split())
+    lookup = text.replace(" / ", "/")
+    direct = aliases.get(lookup)
+    if direct:
+        return direct
+    # Boundary descriptions are often composite prose rather than enum-like
+    # labels (for example ``local Unix SOCK_SEQPACKET service socket`` or
+    # ``tcp/udp loopback socket``).  Recognize only transport/boundary words;
+    # do not infer inbound reachability or an attacker identity here.
+    if aliases is _BOUNDARY_ALIASES:
+        has_socket = "socket" in text or "sock_" in text
+        if "tcp" in text and "udp" in text:
+            return "tcp_udp_socket"
+        if has_socket and "unix" in text:
+            return "unix_socket"
+        if has_socket and "tcp" in text:
+            return "tcp"
+        if has_socket and "udp" in text:
+            return "udp"
+        if "callback" in text or ("event" in text and "ingestion" in text):
+            return "callback"
+        if "argc" in text or "argv" in text or "command line" in text:
+            return "cli"
+        if has_socket:
+            return "socket"
+    return aliases.get(lookup, text.replace(" ", "_")[:limit])
 
 
 @dataclass
@@ -322,6 +517,9 @@ class VerificationResult:
     total_tokens: int
     exploit_path: Optional[ExploitPath] = None
     security_weakness: Optional[str] = None
+    # Additive inventory of independent target/context issues.  The legacy
+    # correct_finding/exploit_path fields remain the primary target verdict.
+    findings: list = field(default_factory=list)
     # Orthogonal evidence assessment.  ``correct_finding`` remains the
     # backwards-compatible Stage-2 verdict; this additive object prevents a
     # missing route from erasing a well-supported target defect and gives the
@@ -350,6 +548,13 @@ class VerificationResult:
             result["exploit_path"] = self.exploit_path.to_dict()
         if self.security_weakness:
             result["security_weakness"] = self.security_weakness
+        # Always preserve the inventory.  Incomplete/no-tool-call exits do not
+        # pass through _parse_finish_result, so also synthesize the historical
+        # target verdict there; this keeps a context-only/empty inventory from
+        # being mistaken for the target result disappearing.
+        result["findings"] = ensure_primary_record(
+            list(self.findings or []), self.correct_finding
+        )
         if self.assessment:
             result["assessment"] = self.assessment
         # Always serialize the incomplete flag so downstream consumers
@@ -472,6 +677,8 @@ class FindingVerifier:
         files_included: list = None,
         platform_context: dict | None = None,
         route: str | None = None,
+        stage1_context: dict | None = None,
+        stage1_findings: list | None = None,
     ) -> VerificationResult:
         """
         Validate a Stage 1 assessment with exploit path tracing.
@@ -484,6 +691,10 @@ class FindingVerifier:
             files_included: Optional list of files in context
             platform_context: Optional bounded OpenHarmony unit metadata
             route: Optional source/function route key for route-aware review
+            stage1_context: Optional phase-separated structural context and
+                pending Stage-2 data-flow gaps from the analyze result.
+            stage1_findings: Optional additive inventory of independent
+                Stage-1 target/context findings.
 
         Returns:
             VerificationResult with verdict, exploit path, and explanation
@@ -497,6 +708,8 @@ class FindingVerifier:
             app_context=self.app_context,
             platform_context=platform_context,
             route=route,
+            stage1_context=stage1_context,
+            stage1_findings=stage1_findings,
         )
 
         # Direct callers (including legacy experiment.py integrations) do not
@@ -866,6 +1079,11 @@ class FindingVerifier:
                 files_included=result.get("files_included", []),
                 platform_context=platform_context,
                 route=route_key,
+                stage1_context=result.get("stage_context") or {
+                    "stage1": result.get("stage1_context", {}),
+                    "stage2": result.get("stage2_context", {}),
+                },
+                stage1_findings=result.get("findings"),
             )
 
             result["verification"] = verification.to_dict()
@@ -1219,6 +1437,8 @@ class FindingVerifier:
                 for key in (
                     "defect_status", "reachability_status", "impact_status",
                     "evidence_completeness", "boundary_type",
+                    "direction", "source_evidence_status",
+                    "registration_evidence", "endpoint", "input_relation",
                     "missing_evidence", "confidence",
                 )
                 if key in finish_result
@@ -1333,6 +1553,20 @@ class FindingVerifier:
         elif weakness:
             weakness = weakness[:8_000]
 
+        # Preserve every independently described issue.  Older verifier
+        # responses do not contain ``findings``; synthesize a target-primary
+        # record so the new consumer can adopt the additive field without
+        # invalidating historical checkpoints.  Context records are never
+        # promoted to the legacy ``correct_finding`` verdict here.
+        independent_findings = normalize_findings(
+            finish_result.get("findings"),
+            primary_finding=correct_finding,
+            synthesize_primary=True,
+        )
+        independent_findings = ensure_primary_record(
+            independent_findings, correct_finding
+        )
+
         return VerificationResult(
             agree=agree,
             correct_finding=correct_finding,
@@ -1341,13 +1575,21 @@ class FindingVerifier:
             total_tokens=total_tokens,
             exploit_path=exploit_path,
             security_weakness=weakness,
+            findings=independent_findings,
             assessment=assessment,
             incomplete=incomplete,
         )
 
     @staticmethod
     def _parse_assessment(value) -> dict:
-        """Normalize optional defect/reachability/impact evidence fields."""
+        """Normalize optional defect, route, and impact evidence fields.
+
+        ``assessment`` is model supplied metadata.  The parser canonicalizes
+        aliases for reporting and downstream grouping, but deliberately does
+        not infer a route from a function name or upgrade a verdict.  A route
+        remains usable only when the verifier supplied source evidence and an
+        explicit inbound/conditional assessment.
+        """
         if not isinstance(value, dict):
             return {}
         allowed = {
@@ -1355,6 +1597,9 @@ class FindingVerifier:
             "reachability_status": {"confirmed", "conditional", "unknown", "none"},
             "impact_status": {"confirmed", "plausible", "unknown", "none"},
             "evidence_completeness": {"complete", "partial", "missing"},
+            "parameter_dataflow_status": {
+                "confirmed", "partial", "missing", "blocked", "not_evaluated"
+            },
         }
         result = {}
         for key, values in allowed.items():
@@ -1363,7 +1608,39 @@ class FindingVerifier:
                 result[key] = item.strip().lower()
         boundary = value.get("boundary_type")
         if isinstance(boundary, str) and boundary.strip():
-            result["boundary_type"] = boundary.strip()[:128]
+            result["boundary_type"] = _canonical_route_value(
+                boundary, _BOUNDARY_ALIASES
+            )
+        direction = _canonical_route_value(value.get("direction"), _DIRECTION_ALIASES)
+        if direction:
+            result["direction"] = direction
+        source_status = _canonical_route_value(
+            value.get("source_evidence_status"), _ROUTE_EVIDENCE_ALIASES
+        )
+        if source_status in {"confirmed", "partial", "missing", "unknown"}:
+            result["source_evidence_status"] = source_status
+        input_relation = _canonical_route_value(
+            value.get("input_relation"), _INPUT_RELATION_ALIASES
+        )
+        if input_relation in {"confirmed", "partial", "missing", "blocked", "unknown"}:
+            result["input_relation"] = input_relation
+        registration = value.get("registration_evidence")
+        if registration is None:
+            # Providers occasionally call this field listener_evidence or
+            # route_evidence.  Accept those aliases without treating them as
+            # proof; keeping the evidence text is useful for audit output.
+            registration = value.get("listener_evidence")
+        if isinstance(registration, str):
+            registration = [registration]
+        if isinstance(registration, (list, tuple)):
+            result["registration_evidence"] = [
+                item.strip()[:1_000]
+                for item in registration[:8]
+                if isinstance(item, str) and item.strip()
+            ]
+        endpoint = value.get("endpoint")
+        if isinstance(endpoint, str) and endpoint.strip():
+            result["endpoint"] = endpoint.strip()[:512]
         missing = value.get("missing_evidence")
         if isinstance(missing, (list, tuple)):
             result["missing_evidence"] = [

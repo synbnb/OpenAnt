@@ -166,6 +166,16 @@ from .llm_role_attributor import (
     ROLE_ATTRIBUTION_SYSTEM,
     build_role_attribution_prompt,
 )
+from .llm_entrypoint_attributor import (
+    ENTRYPOINT_ATTRIBUTION_PROMPT_VERSION,
+    ENTRYPOINT_ATTRIBUTION_SCHEMA_VERSION,
+    ENTRYPOINT_ATTRIBUTION_SYSTEM,
+    LLMEntrypointAttributionError,
+    LLMEntrypointAttributionResult,
+    LLMEntrypointAttributor,
+    LLMEntrypointDecision,
+    build_entrypoint_attribution_prompt,
+)
 from .candidate_reviewer import (
     CANDIDATE_REVIEW_PROMPT_VERSION,
     CANDIDATE_REVIEW_SCHEMA_VERSION,
@@ -341,6 +351,14 @@ __all__ = [
     "ROLE_ATTRIBUTION_SCHEMA_VERSION",
     "ROLE_ATTRIBUTION_SYSTEM",
     "build_role_attribution_prompt",
+    "ENTRYPOINT_ATTRIBUTION_PROMPT_VERSION",
+    "ENTRYPOINT_ATTRIBUTION_SCHEMA_VERSION",
+    "ENTRYPOINT_ATTRIBUTION_SYSTEM",
+    "LLMEntrypointAttributionError",
+    "LLMEntrypointAttributionResult",
+    "LLMEntrypointAttributor",
+    "LLMEntrypointDecision",
+    "build_entrypoint_attribution_prompt",
     "CANDIDATE_REVIEW_PROMPT_VERSION",
     "CANDIDATE_REVIEW_SCHEMA_VERSION",
     "CANDIDATE_REVIEW_SYSTEM",

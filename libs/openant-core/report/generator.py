@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
 from core.language_registry import fence_for_path
 from core.report_context import build_disclosure_context, load_report_context_index
+from core.finding_records import normalize_findings
 from .schema import validate_pipeline_output, ValidationError
 from utilities.file_io import normalize_results, open_utf8, read_json
 from utilities.llm import (
@@ -65,6 +66,20 @@ _DISCLOSURE_LABELS = {
         "source_sink": "Source-to-Sink Evidence",
         "call_chain": "Call Chain Source",
         "call_graph": "Call Graph Evidence",
+        "core": "Core Vulnerability Evidence",
+        "description": "Vulnerability Description",
+        "trigger": "Triggering Code",
+        "attack_chain": "Attack Chain",
+        "call_chain_overview": "Call Chain Overview",
+        "strict_chains": "Strict call chains",
+        "candidate_chains": "Candidate call chains",
+        "no_call_chain_overview": "No strict or candidate call-chain paths were preserved.",
+        "root_cause": "Root Cause",
+        "fix_points": "Remediation Key Points",
+        "scenario": "Attack scenario",
+        "granularity": "Evidence granularity",
+        "dataflow_status": "Stage-2 data-flow status",
+        "issue_inventory": "Independent Issue Inventory",
         "function": "Function",
         "file": "File",
         "route": "Route key",
@@ -107,6 +122,20 @@ _DISCLOSURE_LABELS = {
         "source_sink": "源到汇证据",
         "call_chain": "调用链源码",
         "call_graph": "调用图证据",
+        "core": "漏洞核心证据",
+        "description": "漏洞说明",
+        "trigger": "漏洞触发代码",
+        "attack_chain": "攻击链",
+        "call_chain_overview": "调用链总览",
+        "strict_chains": "严格调用链",
+        "candidate_chains": "候选调用链",
+        "no_call_chain_overview": "当前产物没有保存严格或候选调用链。",
+        "root_cause": "漏洞根因",
+        "fix_points": "修复要点",
+        "scenario": "攻击场景",
+        "granularity": "证据粒度",
+        "dataflow_status": "Stage 2 数据流状态",
+        "issue_inventory": "独立问题清单",
         "function": "函数",
         "file": "文件",
         "route": "路由键",
@@ -277,6 +306,11 @@ def _compact_for_summary(pipeline_data: dict) -> dict:
     compact = {k: v for k, v in pipeline_data.items() if k != "findings"}
     compact["findings"] = []
     for f in pipeline_data.get("findings", []):
+        inventory = normalize_findings(
+            f.get("independent_findings") or f.get("findings"),
+            primary_finding=f.get("stage1_verdict") or f.get("stage2_verdict"),
+            synthesize_primary=True,
+        )
         compact["findings"].append({
             "id": f.get("id"),
             "name": f.get("name"),
@@ -290,6 +324,20 @@ def _compact_for_summary(pipeline_data: dict) -> dict:
             "verification_assessment": f.get("verification_assessment"),
             "dynamic_testing": f.get("dynamic_testing"),
             "impact": f.get("impact"),
+            # Keep the summary model aware that one context can contain more
+            # than one issue, while dropping long source/reasoning fields.
+            "independent_findings": [
+                {
+                    key: record.get(key)
+                    for key in (
+                        "finding_id", "scope", "relation", "target_match",
+                        "finding", "function_analyzed", "file", "line_start",
+                        "line_end", "vulnerability_categories", "impact",
+                    )
+                    if record.get(key) not in (None, "", [])
+                }
+                for record in inventory[:16]
+            ],
         })
     return compact
 
@@ -802,6 +850,7 @@ def _generate_repair_suggestion(
             "code": _clean_repair_code(provided),
             "rationale": provided if not _clean_repair_code(provided) else "扫描阶段已提供修复片段。",
             "assumptions": "",
+            "reference_only": False,
         }, {
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
             "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
@@ -811,12 +860,10 @@ def _generate_repair_suggestion(
 
     payload = _repair_context_payload(vulnerability_data)
     if not payload.get("target_source"):
-        return {
-            "status": "unavailable",
-            "code": "",
-            "rationale": "当前扫描产物未保存目标函数源码。",
-            "assumptions": "",
-        }, {
+        return _reference_repair_info(
+            vulnerability_data,
+            "当前扫描产物未保存目标函数源码。",
+        ), {
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
             "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
         }
@@ -839,14 +886,21 @@ def _generate_repair_suggestion(
             binding.model,
             pricing=lookup_pricing(binding),
         )
+        if not info.get("code"):
+            # A model may honestly return manual_review or malformed output.
+            # Keep the reason, but always give the reviewer an actionable
+            # reference template instead of an empty repair section.
+            info = _reference_repair_info(
+                vulnerability_data,
+                str(info.get("rationale") or "修复模型未返回可验证代码片段。"),
+                str(info.get("assumptions") or ""),
+            )
         return info, usage
     except Exception as exc:  # report generation must remain fail-safe
-        return {
-            "status": "unavailable",
-            "code": "",
-            "rationale": f"修复模型调用失败：{type(exc).__name__}。",
-            "assumptions": "",
-        }, {
+        return _reference_repair_info(
+            vulnerability_data,
+            f"修复模型调用失败：{type(exc).__name__}。",
+        ), {
             "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
             "cost_usd": 0.0, "cost_cny": 0.0, "costs_by_currency": {},
         }
@@ -884,6 +938,126 @@ def _report_language(file_path: str, pipeline_data: Mapping) -> str:
     return suffixes.get(suffix, str(pipeline_data.get("language") or "text"))
 
 
+def _reference_repair_code(vulnerability_data: Mapping) -> str:
+    """Build a conservative repair *reference* when a patch cannot be proven.
+
+    A report must remain useful even when the repair model has no source, times
+    out, or correctly refuses to invent repository-specific APIs.  This helper
+    deliberately emits an insertion-level template rather than pretending to
+    know the project's types and error constants.  The renderer labels it as
+    reference-only and includes the target location so a maintainer can adapt
+    it at the real trust boundary.
+    """
+    file_path, function = _finding_location(vulnerability_data)
+    categories = vulnerability_data.get("vulnerability_categories") or []
+    if isinstance(categories, (list, tuple, set)):
+        category_text = " ".join(str(item) for item in categories)
+    else:
+        category_text = str(categories)
+    evidence = " ".join(
+        str(vulnerability_data.get(key) or "")
+        for key in ("cwe_name", "description", "reasoning", "attack_scenario")
+    )
+    signals = f"{category_text} {evidence}".lower()
+    target = f"{file_path}:{function}"
+    header = (
+        "/* Advisory reference template for " + target + ".\n"
+        " * Replace placeholder helpers, types, and error values with the\n"
+        " * repository's verified interfaces before applying or compiling.\n"
+        " */"
+    )
+
+    # Prefer a sink-specific template when the evidence identifies a common
+    # security boundary.  The snippets are intentionally small and do not
+    # assert that an unknown helper already exists in the repository.
+    if any(marker in signals for marker in (
+        "command_injection", "command injection", "os_command", "cwe-78",
+        "shell", "popen", "system(", "exec(", "外部命令", "命令注入",
+    )):
+        body = """// Validate an allowlisted operation and construct argv without a shell.
+if (!IsAllowedCommand(input)) {
+    return ERR_INVALID_PARAM;  // use the repository's established error value
+}
+std::vector<std::string> argv;
+if (!BuildValidatedArgv(input, argv)) {
+    return ERR_INVALID_PARAM;
+}
+return ExecuteWithoutShell(argv, result);  // do not concatenate input into sh -c
+"""
+    elif any(marker in signals for marker in (
+        "null_dereference", "null pointer", "null pointer", "nullptr",
+        "use_after_free", "uaf", "空指针", "悬空",
+    )):
+        body = """if (object == nullptr) {
+    return ERR_INVALID_PARAM;  // use the repository's established error value
+}
+// Continue only after the lifetime/ownership precondition is established.
+"""
+    elif any(marker in signals for marker in (
+        "resource_exhaustion", "uncontrolled resource", "ipc_input_validation",
+        "out_of_bounds", "out-of-bounds", "bounds", "length", "count",
+        "size", "integer", "overflow", "越界", "资源耗尽", "输入校验",
+    )):
+        body = """constexpr size_t kMaxItems = /* repository-specific limit */;
+if (items.size() > kMaxItems) {
+    return ERR_INVALID_PARAM;  // use the repository's established error value
+}
+for (const auto &item : items) {
+    if (item == nullptr) {
+        return ERR_INVALID_PARAM;
+    }
+}
+"""
+    elif any(marker in signals for marker in (
+        "authz", "authorization", "permission", "access control", "权限",
+        "身份校验", "越权",
+    )):
+        body = """if (!HasRequiredPermission(callingIdentity)) {
+    return ERR_PERMISSION_DENIED;  // use the repository's real permission API/value
+}
+"""
+    elif any(marker in signals for marker in (
+        "path traversal", "path", "文件路径", "路径穿越", "directory traversal",
+    )):
+        body = """if (!IsPathWithinAllowedRoot(path, allowedRoot)) {
+    return ERR_INVALID_PARAM;  // use the repository's established error value
+}
+"""
+    elif any(marker in signals for marker in (
+        "race", "deadlock", "concurrency", "竞态", "并发", "锁",
+    )):
+        body = """std::lock_guard<std::mutex> lock(stateMutex_);
+// Perform the check and the state update while holding the same lock.
+"""
+    else:
+        body = """if (!ValidateExternalInput(input)) {
+    return ERR_INVALID_PARAM;  // use the repository's established error value
+}
+"""
+    return header + "\n" + body.strip()
+
+
+def _reference_repair_info(
+    vulnerability_data: Mapping,
+    reason: str,
+    assumptions: str = "",
+) -> dict:
+    """Return a non-empty, explicitly non-applicable repair suggestion."""
+    return {
+        "status": "reference_generated",
+        "code": _reference_repair_code(vulnerability_data),
+        "rationale": (
+            "当前证据不足以证明一份可直接应用的仓库级补丁；已生成保守的参考模板。"
+            + (f" 原因：{reason}" if reason else "")
+        ),
+        "assumptions": assumptions or (
+            "请将占位的校验函数、类型、权限接口和错误码替换为仓库真实实现，"
+            "并通过编译、单元测试、回归测试及必要的安全复核。"
+        ),
+        "reference_only": True,
+    }
+
+
 def _prompt_payload(vulnerability_data: Mapping) -> dict:
     """Copy finding evidence while keeping verbatim source out of the LLM.
 
@@ -911,6 +1085,366 @@ def _prompt_payload(vulnerability_data: Mapping) -> dict:
     return payload
 
 
+def _priority_value(value, *, limit: int = 12_000) -> str:
+    """Render a report claim without assuming the model returned a string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, (list, tuple)):
+        text = "\n".join(
+            f"- {item.strip()}" for item in value
+            if isinstance(item, str) and item.strip()
+        )
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            text = str(value)
+    return text[:limit] + ("…[已截断]" if len(text) > limit else "")
+
+
+def _call_chain_overview(context: Mapping) -> dict[str, list[list[str]]]:
+    """Return all recorded strict/candidate paths for report display.
+
+    The disclosure's attack-chain narrative intentionally uses one selected
+    route. This helper exposes the complete path inventory that was preserved
+    by Stage 1, without upgrading candidate edges or inventing paths. Older
+    artifacts may only contain node-shaped paths, so IDs are derived from
+    stable id/route_key/name fields as a fallback.
+    """
+    if not isinstance(context, Mapping):
+        return {"strict": [], "candidate": []}
+
+    phase_context = context.get("phase_context")
+    phase_context = phase_context if isinstance(phase_context, Mapping) else {}
+    stage1 = phase_context.get("stage1")
+    stage1 = stage1 if isinstance(stage1, Mapping) else {}
+
+    # Keep compatibility with reports produced before phase_context was
+    # introduced, and with contexts copied directly from reachability output.
+    containers = [stage1]
+    if context not in containers:
+        containers.append(context)
+    for key in ("entry_context", "reachability_context", "stage1_context"):
+        value = context.get(key)
+        if isinstance(value, Mapping) and value not in containers:
+            containers.append(value)
+
+    def normalize_path(path) -> list[str]:
+        if not isinstance(path, (list, tuple)):
+            return []
+        result = []
+        for item in path:
+            if isinstance(item, Mapping):
+                item = item.get("id") or item.get("route_key") or item.get("name")
+            if item in (None, ""):
+                continue
+            value = str(item).strip()
+            if value:
+                result.append(value)
+        return result
+
+    def collect(ids_key: str, paths_key: str) -> list[list[str]]:
+        collected = []
+        for container in containers:
+            raw_ids = container.get(ids_key)
+            if isinstance(raw_ids, list):
+                for path in raw_ids:
+                    normalized = normalize_path(path)
+                    if normalized and normalized not in collected:
+                        collected.append(normalized)
+            if collected:
+                # IDs are authoritative when present. Do not duplicate them
+                # with corresponding node-shaped paths.
+                continue
+            raw_paths = container.get(paths_key)
+            if isinstance(raw_paths, list):
+                for path in raw_paths:
+                    normalized = normalize_path(path)
+                    if normalized and normalized not in collected:
+                        collected.append(normalized)
+        return collected
+
+    return {
+        "strict": collect("entry_path_ids", "entry_paths"),
+        "candidate": collect("candidate_entry_path_ids", "candidate_entry_paths"),
+    }
+
+
+def _strip_markdown_section_heading(section: str) -> str:
+    """Remove the leading level-2 heading from a deterministic section."""
+    if not isinstance(section, str):
+        return ""
+    return re.sub(r"(?im)^##\s+[^\n]+\n*", "", section, count=1).strip()
+
+
+def _priority_trigger_location(vulnerability_data: Mapping, context: Mapping) -> tuple[dict, str]:
+    """Choose the most precise source range available for the trigger.
+
+    Stage-1/Stage-2 records sometimes provide a finding-specific line range;
+    older artifacts only carry the target function range.  The latter is
+    reported explicitly instead of inventing a sink line.
+    """
+    target = context.get("target") if isinstance(context, Mapping) else {}
+    target = target if isinstance(target, Mapping) else {}
+    target_location = target.get("source_location")
+    target_location = target_location if isinstance(target_location, Mapping) else {}
+
+    candidates = [
+        vulnerability_data.get("trigger_location"),
+        vulnerability_data.get("evidence_location"),
+    ]
+    issues = vulnerability_data.get("independent_findings")
+    if isinstance(issues, list):
+        candidates.extend(
+            item for item in issues
+            if isinstance(item, Mapping) and item.get("target_match") is not False
+        )
+    candidates.append(vulnerability_data.get("location"))
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        start = candidate.get("line_start", candidate.get("start_line"))
+        end = candidate.get("line_end", candidate.get("end_line", start))
+        file_path = candidate.get("file") or candidate.get("file_path")
+        function = candidate.get("function") or candidate.get("function_analyzed")
+        if isinstance(start, int) and start > 0:
+            return {
+                "file": str(file_path or target_location.get("file") or "unknown"),
+                "function": str(function or target_location.get("function") or "unknown"),
+                "start_line": start,
+                "end_line": end if isinstance(end, int) and end >= start else start,
+            }, "finding-specific evidence range"
+
+    return {
+        "file": str(target_location.get("file") or "unknown"),
+        "function": str(target_location.get("function") or "unknown"),
+        "start_line": target_location.get("start_line"),
+        "end_line": target_location.get("end_line"),
+    }, "target function range (no finer trigger line was preserved)"
+
+
+def _render_priority_disclosure_section(
+    vulnerability_data: Mapping,
+    code_section: str,
+    context: Mapping | None,
+    fix_section: str,
+    *,
+    locale: str = "en",
+) -> str:
+    """Render the reviewer-first portion of a disclosure.
+
+    This block is deterministic for source locations, line ranges and call
+    chain source.  Model prose is used only as an already-recorded claim; it
+    never gets to rewrite source snippets or reorder the evidence chain.
+    """
+    labels = _disclosure_labels(locale)
+    context = context if isinstance(context, Mapping) else {}
+    target = context.get("target")
+    target = target if isinstance(target, Mapping) else {}
+    source_sink = context.get("source_to_sink")
+    source_sink = source_sink if isinstance(source_sink, Mapping) else {}
+    phase_context = context.get("phase_context")
+    phase_context = phase_context if isinstance(phase_context, Mapping) else {}
+    stage2_phase = phase_context.get("stage2")
+    stage2_phase = stage2_phase if isinstance(stage2_phase, Mapping) else {}
+    chain = context.get("call_chain")
+    chain = chain if isinstance(chain, Mapping) else {}
+
+    def line_range(location: Mapping) -> str:
+        start = location.get("start_line")
+        end = location.get("end_line")
+        if isinstance(start, int) and isinstance(end, int):
+            return f"{start}-{end}"
+        if isinstance(start, int):
+            return str(start)
+        return "unknown"
+
+    description = _priority_value(
+        vulnerability_data.get("description")
+        or vulnerability_data.get("reasoning")
+        or "当前产物没有保存详细漏洞说明。"
+    )
+    impact = _priority_value(
+        vulnerability_data.get("impact")
+        or vulnerability_data.get("attack_vector")
+        or "当前产物没有保存明确影响，需人工确认。"
+    )
+    trigger, trigger_basis = _priority_trigger_location(vulnerability_data, context)
+    trigger_code = _strip_markdown_section_heading(code_section)
+    if not trigger_code:
+        trigger_code = "源码片段未保存在当前扫描产物中，请按文件和行号复核。"
+
+    root_cause = _priority_value(
+        vulnerability_data.get("root_cause")
+        or vulnerability_data.get("guard_analysis")
+        or vulnerability_data.get("reasoning")
+        or "当前产物没有保存独立的根因字段。"
+    )
+    attack_scenario = _priority_value(
+        source_sink.get("attack_scenario")
+        or vulnerability_data.get("attack_scenario")
+        or vulnerability_data.get("attack_vector")
+    )
+    entry = _priority_value(source_sink.get("entry_point"))
+    route_chain = source_sink.get("function_route_chain")
+    ordered_steps = source_sink.get("ordered_steps")
+
+    lines = [f"## {labels['core']}", ""]
+    lines.extend([f"### {labels['description']}", "", description, ""])
+    lines.extend([f"### {labels['impact']}", "", impact, ""])
+    lines.extend([f"### {labels['trigger']}", ""])
+    lines.append(
+        f"- **{labels['file']}:** `{trigger.get('file', 'unknown')}`"
+        f"（{trigger.get('function', 'unknown')}，行 {line_range(trigger)}）"
+    )
+    lines.append(f"- **{labels['granularity']}:** {trigger_basis}")
+    lines.extend(["", trigger_code, ""])
+
+    lines.extend([f"### {labels['attack_chain']}", ""])
+    if entry:
+        lines.append(f"- **{labels['entry']}:** {entry}")
+    if isinstance(route_chain, list) and route_chain:
+        lines.append(f"- **{labels['route_chain']}:** `{' → '.join(str(item) for item in route_chain)}`")
+    if isinstance(ordered_steps, list) and ordered_steps:
+        lines.append(f"- **{labels['ordered_flow']}:**")
+        for index, step in enumerate(ordered_steps, 1):
+            rendered = _priority_value(step, limit=4_000)
+            if rendered:
+                lines.append(f"  {index}. {rendered}")
+    if attack_scenario:
+        lines.extend(["", f"**{labels['scenario']}:** {attack_scenario}"])
+    dataflow_status = _priority_value(stage2_phase.get("parameter_dataflow_status"))
+    if dataflow_status:
+        lines.append(f"- **{labels['dataflow_status']}:** `{dataflow_status}`")
+    for label, key in (
+        (labels['sink_reached'], "sink_reached"),
+        (labels['attacker_control'], "attacker_control_at_sink"),
+        (labels['path_broken'], "path_broken_at"),
+    ):
+        value = _priority_value(source_sink.get(key))
+        if value:
+            lines.append(f"- **{label}:** {value}")
+    if not entry and not route_chain and not ordered_steps and not attack_scenario:
+        lines.append("> 当前产物没有保存从外部入口到目标函数的结构化攻击链。")
+
+    # The narrative above intentionally follows one selected route. Keep a
+    # separate deterministic inventory so reviewers can see every strict and
+    # candidate path preserved by reachability, without treating candidates as
+    # confirmed execution paths.
+    overview = _call_chain_overview(context)
+    lines.extend(["", f"### {labels['call_chain_overview']}", ""])
+    overview_rendered = False
+    for key, label in (
+        ("strict", labels["strict_chains"]),
+        ("candidate", labels["candidate_chains"]),
+    ):
+        paths = overview.get(key) or []
+        if not paths:
+            continue
+        overview_rendered = True
+        count_suffix = (
+            f"（{len(paths)} 条）"
+            if _disclosure_locale(locale) == "zh-CN"
+            else f" ({len(paths)})"
+        )
+        lines.append(f"- **{label}{count_suffix}:**")
+        for index, path in enumerate(paths, 1):
+            lines.append(f"  {index}. {' → '.join(path)}")
+    if not overview_rendered:
+        lines.append(f"> {labels['no_call_chain_overview']}")
+    else:
+        lines.append(
+            "> 严格路径来自已记录的结构调用图；候选路径仅作补充证据，"
+            "不等同于已确认的运行时调用。"
+            if _disclosure_locale(locale) == "zh-CN" else
+            "> Strict paths come from the recorded structural graph; candidate "
+            "paths are supplementary evidence and are not confirmed runtime calls."
+        )
+
+    lines.extend(["", f"### {labels['root_cause']}", "", root_cause, ""])
+    lines.extend([f"### {labels['fix_points']}", ""])
+    fix_body = _strip_markdown_section_heading(fix_section)
+    lines.append(fix_body or "修复建议未保存，请结合目标函数、下游实现和调用者权限人工复核。")
+
+    lines.extend(["", f"### {labels['call_chain']}", ""])
+    nodes = chain.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        lines.append("> 可用产物中没有保存调用链函数源码。")
+    else:
+        # ``call_chain.nodes`` also contains bounded caller/callee neighbours
+        # used as surrounding evidence.  Only the explicit source-to-sink
+        # route belongs in the reviewer-facing attack-chain source bundle;
+        # otherwise an unrelated neighbour would be presented as an execution
+        # step.  Keep the neighbouring nodes in the later Evidence Context.
+        route_chain = source_sink.get("function_route_chain")
+        route_chain = route_chain if isinstance(route_chain, list) else []
+        node_by_route = {}
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            node_route = node.get("route_key")
+            if not isinstance(node_route, str) or not node_route:
+                file_path = node.get("file")
+                function_name = node.get("function")
+                if file_path and function_name:
+                    node_route = f"{file_path}:{function_name}"
+            if isinstance(node_route, str) and node_route:
+                node_by_route.setdefault(node_route, node)
+
+        selected_nodes = []
+        missing_routes = []
+        if route_chain:
+            for route in route_chain:
+                route = str(route)
+                node = node_by_route.get(route)
+                if node is None:
+                    missing_routes.append(route)
+                else:
+                    selected_nodes.append(node)
+        else:
+            # Legacy artifacts may not have a structured route; preserve their
+            # recorded node order rather than inventing a new path.
+            selected_nodes = [node for node in nodes if isinstance(node, Mapping)]
+
+        if not selected_nodes:
+            lines.append("> 结构化调用链存在，但对应函数源码未保存在当前扫描产物中。")
+        for node in selected_nodes:
+            if not isinstance(node, Mapping):
+                continue
+            order = node.get("order")
+            function = str(node.get("function") or "unknown").replace("`", "'")
+            file_path = str(node.get("file") or "unknown").replace("`", "'")
+            role = str(node.get("role") or "context")
+            node_loc = {
+                "start_line": node.get("start_line"),
+                "end_line": node.get("end_line"),
+            }
+            lines.extend([
+                f"#### {(str(order) + '. ') if isinstance(order, int) else ''}{function}（{role}）",
+                f"`{file_path}`（行 {line_range(node_loc)}）",
+            ])
+            code = node.get("source_code")
+            if isinstance(code, str) and code:
+                fence = fence_for_path(file_path, fallback="text")
+                lines.extend(["", f"```{fence}", code, "```"])
+            else:
+                lines.append("\n> 该函数源码未保存在当前扫描产物中。")
+        if missing_routes:
+            lines.append(
+                "\n> 调用链中以下函数没有对应的源码节点，未用邻接函数替代："
+                + "、".join(missing_routes[:12])
+            )
+        if route_chain and len(selected_nodes) < len(nodes):
+            lines.append("> 其余 caller/callee 邻接函数保留在后面的证据上下文中，不计入主调用链。")
+    omitted = chain.get("omitted_node_count")
+    if isinstance(omitted, int) and omitted:
+        lines.append(f"\n> 调用链还有 {omitted} 个节点因上下文上限未展开。")
+    lines.extend(["", "> 本节优先展示漏洞核心证据；源码、行号和调用链顺序由扫描产物确定性生成。"])
+    return "\n".join(lines)
+
+
 def _render_disclosure_context(
     vulnerability_data: Mapping,
     language: str = "text",
@@ -922,11 +1456,11 @@ def _render_disclosure_context(
     verbatim source.  This renderer adds the bounded source snippets and graph
     evidence to the final document without allowing the model to rewrite them.
     """
-    # ``locale`` is accepted separately from the code-fence ``language`` for
-    # callers producing Chinese disclosures.  Label translation is applied by
-    # ``_localize_disclosure_markdown`` after this evidence renderer finishes;
-    # keeping this function's default output unchanged preserves old callers.
-    del locale
+    # ``locale`` is separate from the code-fence ``language`` because the
+    # deterministic evidence section is rendered for both English and Chinese
+    # disclosures.  Keep the inventory labels localized here rather than
+    # asking the disclosure model to reproduce them.
+    labels = _disclosure_labels(locale)
     context = vulnerability_data.get("report_context")
     if not isinstance(context, Mapping):
         return ""
@@ -1025,6 +1559,54 @@ def _render_disclosure_context(
         if assessment.get("confidence") is not None:
             lines.append(f"- **Assessment confidence:** `{display(assessment.get('confidence'), 100)}`")
 
+    # A single target context can contain multiple independent issues.  Keep
+    # the inventory visible in the disclosure artifact, but do not turn
+    # context risks into separate disclosures automatically.  This is a
+    # deterministic projection of the normalized Stage-1/Stage-2 records, so
+    # the report cannot silently lose an alternate defect merely because the
+    # LLM's narrative chose one primary issue.
+    inventory = normalize_findings(
+        vulnerability_data.get("independent_findings")
+        or vulnerability_data.get("findings")
+        or context.get("independent_findings"),
+        primary_finding=(
+            vulnerability_data.get("stage2_verdict")
+            or vulnerability_data.get("stage1_verdict")
+        ),
+        synthesize_primary=True,
+    )
+    if inventory:
+        lines.extend(["", f"### {labels['issue_inventory']}", ""])
+        for index, item in enumerate(inventory[:16], 1):
+            scope = str(item.get("scope") or "unknown")
+            relation = str(item.get("relation") or "related")
+            target_match = item.get("target_match")
+            target_text = "unknown" if target_match is None else str(bool(target_match)).lower()
+            issue = str(item.get("finding") or "inconclusive")
+            location_file = str(item.get("file") or "unknown").replace("`", "'")
+            function_name = str(
+                item.get("function_analyzed") or item.get("function") or "unknown"
+            ).replace("`", "'")
+            start = item.get("line_start")
+            end = item.get("line_end", start)
+            location = f"`{location_file}:{start}-{end}`" if isinstance(start, int) else f"`{location_file}`"
+            lines.append(
+                f"{index}. `{issue}` · scope=`{scope}` · relation=`{relation}` "
+                f"· target_match=`{target_text}` · {function_name} · {location}"
+            )
+            categories = item.get("vulnerability_categories")
+            if categories:
+                lines.append(f"   - categories: {display(categories, 1_200)}")
+            impacts = item.get("impact")
+            if impacts:
+                lines.append(f"   - impact: {display(impacts, 1_200)}")
+            reason = display(item.get("reasoning"), 2_000)
+            if reason:
+                lines.append(f"   - reasoning: {reason}")
+            missing = item.get("missing_evidence")
+            if missing:
+                lines.append(f"   - missing evidence: {display(missing, 1_500)}")
+
     lines.extend(["", "### Call Chain Source", ""])
     nodes = chain.get("nodes")
     if not isinstance(nodes, list) or not nodes:
@@ -1111,20 +1693,40 @@ def _render_repair_section(
     assumptions = str(repair_info.get("assumptions") or "").strip()
     file_path, function = _finding_location(vulnerability_data)
     lines = [f"## {_disclosure_labels(locale)['fix']}", ""]
+    # The report contract requires a code example even when the evidence is
+    # insufficient for a repository-specific patch.  This is a final safety
+    # net for historical artifacts or custom callers that bypass
+    # _generate_repair_suggestion().
+    reference_only = bool(repair_info.get("reference_only")) or status == "reference_generated"
+    if not code:
+        code = _reference_repair_code(vulnerability_data)
+        status = "reference_generated"
+        reference_only = True
+        rationale = rationale or "未获得足够证据生成仓库专用补丁，已提供通用修复参考模板。"
+        assumptions = assumptions or (
+            "该片段不是可直接应用的补丁；请维护者替换占位 API、类型和错误码并完成编译验证。"
+        )
     if code:
-        lines.append("以下是基于当前源码和证据生成的最小修复片段，提交前需通过项目编译和回归测试：")
+        if reference_only:
+            lines.append(
+                "以下是基于漏洞类别生成的修复参考模板（不是可直接应用的补丁），"
+                "用于给维护者提供改动方向；提交前必须结合真实源码适配并通过编译和回归测试："
+            )
+        else:
+            lines.append(
+                "以下是基于当前源码和证据生成的候选修复片段（仍需人工适配、编译和回归测试）："
+            )
         lines.extend(["", f"```{language or 'text'}", code, "```"])
         if rationale:
             lines.extend(["", f"修复说明：{rationale}"])
-    else:
-        lines.append(
-            f"当前没有足够证据安全生成可直接应用的修复代码（目标：{file_path}:{function}）。"
-        )
-        if rationale:
-            lines.extend(["", f"原因：{rationale}"])
-        lines.append("请维护者结合目标函数及其下游实现补充并验证修复。")
     if assumptions:
         lines.extend(["", f"前置假设：{assumptions}"])
+    if reference_only:
+        lines.extend([
+            "",
+            f"适用目标：`{file_path}:{function}`。模板中的校验函数、权限接口、类型和错误码均需替换为仓库真实定义。",
+            "该代码仅作为修复建议参考，不代表漏洞已被修复，也不保证可编译或覆盖全部调用路径。",
+        ])
     lines.extend(["", f"修复状态：`{status}`"])
     return "\n".join(lines)
 
@@ -1388,6 +1990,7 @@ def _ensure_disclosure_sections(
     code_section: str,
     context_section: str = "",
     fix_section: str = "",
+    priority_section: str = "",
     language: str = "en",
 ) -> str:
     """Fill mandatory report fields the LLM omitted or left as placeholders.
@@ -1446,7 +2049,7 @@ def _ensure_disclosure_sections(
                 "当前分析字段未提供影响信息，请人工确认受影响的操作。"
             )),
             labels["fix"]: str(vulnerability_data.get("suggested_fix") or (
-                "[需要人工复核] 在确认预期行为后，于识别出的信任边界增加缺失的校验或授权。"
+                _reference_repair_code(vulnerability_data)
             )),
         }
     else:
@@ -1464,8 +2067,7 @@ def _ensure_disclosure_sections(
                 "the affected operation manually."
             )),
             labels["fix"]: str(vulnerability_data.get("suggested_fix") or (
-                "[MANUAL REVIEW REQUIRED] Add the missing validation or authorization "
-                "at the identified trust boundary after confirming intended behavior."
+                _reference_repair_code(vulnerability_data)
             )),
         }
 
@@ -1548,6 +2150,34 @@ def _ensure_disclosure_sections(
         else:
             output += "\n\n" + insertion
 
+    # Put the reviewer-first evidence block immediately after the title.  The
+    # original metadata, verification state and historical narrative therefore
+    # remain available below it, while the high-value description, trigger
+    # range, attack chain, root cause, fix and ordered source bundle are shown
+    # before those auxiliary fields.
+    if priority_section:
+        priority_section = priority_section.strip()
+        # A model may echo the deterministic block. Remove that copy before
+        # inserting the artifact-backed one, so a report never has two
+        # independently rendered core sections.
+        output = re.sub(
+            r"(?ims)^##\s+(?:Core Vulnerability Evidence|漏洞核心证据)\s*$.*?(?=^##\s|\Z)",
+            "",
+            output,
+        ).rstrip()
+        title_match = re.search(r"(?m)^#\s+.+$", output)
+        if title_match:
+            pos = title_match.end()
+            output = (
+                output[:pos].rstrip()
+                + "\n\n"
+                + priority_section
+                + "\n\n"
+                + output[pos:].lstrip()
+            )
+        else:
+            output = output.rstrip() + "\n\n" + priority_section
+
     return output.strip() + "\n"
 
 
@@ -1615,10 +2245,10 @@ def generate_disclosure(
             vulnerability_data.get("preconditions")
             or "调用者身份、设备状态和其他前置条件请以扫描证据为准。"
         ),
-        "fixed_code_snippet": repair_info.get("code") or (
-            "// Manual review required: add the appropriate validation or "
-            "authorization check."
-        ),
+        # _generate_repair_suggestion() normally supplies this code.  Keep a
+        # deterministic fallback here as well so a custom repair adapter or a
+        # legacy caller can never leave the disclosure prompt without code.
+        "fixed_code_snippet": repair_info.get("code") or _reference_repair_code(vulnerability_data),
     }
     prompt_name = "disclosure.zh-CN" if locale == "zh-CN" else "disclosure"
     user_prompt = load_prompt(prompt_name)
@@ -1653,6 +2283,19 @@ def generate_disclosure(
         locale=locale,
     )
     context_section = _localize_disclosure_markdown(context_section, locale)
+    fix_section = _render_repair_section(
+        effective_data,
+        repair_info,
+        replacements["language"],
+        locale=locale,
+    )
+    priority_section = _render_priority_disclosure_section(
+        effective_data,
+        code_section,
+        vulnerability_data.get("report_context"),
+        fix_section,
+        locale=locale,
+    )
     final_output = _ensure_disclosure_sections(
         final_output,
         vulnerability_data,
@@ -1664,12 +2307,8 @@ def generate_disclosure(
         },
         code_section,
         context_section=context_section,
-        fix_section=_render_repair_section(
-            effective_data,
-            repair_info,
-            replacements["language"],
-            locale=locale,
-        ),
+        fix_section=fix_section,
+        priority_section=priority_section,
         language=locale,
     )
 

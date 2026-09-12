@@ -114,6 +114,7 @@ def get_user_prompt(
     reaching_entry_point: Optional[str] = None,
     language: Optional[str] = None,
     platform_context: Optional[dict] = None,
+    reachability_context: Optional[dict] = None,
 ) -> str:
     """
     Generate the initial user prompt for analysis.
@@ -192,6 +193,30 @@ def get_user_prompt(
     platform_context_section = (
         f"{rendered_platform_context}\n\n" if rendered_platform_context else ""
     )
+    lineage_section = ""
+    if isinstance(reachability_context, dict):
+        status = collapse_inline(reachability_context.get("status") or "unknown")
+        root = collapse_inline(reachability_context.get("top_level_entry") or "unknown")
+        lineage_section = (
+            "### Deterministic Entry-Path Context\n"
+            "This is source-backed supporting data, not a vulnerability verdict. "
+            "Verify the path and input propagation independently.\n"
+            f"Status: {status}\nTop-level entry: {root}\n"
+        )
+        paths = reachability_context.get("entry_paths")
+        if isinstance(paths, list):
+            lineage_section += "Paths (entry to target):\n"
+            for path in paths[:3]:
+                if not isinstance(path, list):
+                    continue
+                labels = []
+                for node in path[:24]:
+                    if isinstance(node, dict):
+                        labels.append(
+                            collapse_inline(node.get("id") or node.get("name") or "unknown")
+                        )
+                if labels:
+                    lineage_section += "- " + " -> ".join(labels) + "\n"
     return f"""## Code Unit to Analyze
 
 **ID:** `{unit_id}`
@@ -206,7 +231,8 @@ def get_user_prompt(
 **Functions this code calls:** {deps_str}
 **Functions that call this code:** {callers_str}
 
-{platform_context_section}---
+{platform_context_section}{lineage_section}
+---
 
 ## Your Task
 

@@ -17,11 +17,14 @@ On completion, a final ``scan.report.json`` aggregates all step reports.
 """
 
 import json
+import hashlib
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from core.schemas import (
     ScanResult, AnalysisMetrics, UsageInfo, StepReport,
@@ -52,6 +55,441 @@ def _print_chinese_log(message: str) -> None:
     soon as it arrives rather than waiting for the whole scan to finish.
     """
     print_chinese_log(message)
+
+
+def _source_revision_for_graph(repo_path: str, requested: str | None) -> str:
+    """Resolve the source identity used by derived graph artifacts.
+
+    The caller-provided revision remains authoritative.  For local scans that
+    do not pass one, capture the checkout HEAD so a resumed scan cannot
+    silently reuse an effective graph from another checkout.  Non-Git source
+    directories receive the explicit ``unknown`` marker rather than a null
+    provenance field.
+    """
+    if requested:
+        return str(requested)
+    try:
+        completed = subprocess.run(
+            ["git", "-C", repo_path, "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    revision = (completed.stdout or "").strip()
+    return revision if completed.returncode == 0 and revision else "unknown"
+
+
+def _build_config_id(
+    *,
+    platform: str,
+    effective_platform: str,
+    language: str,
+    languages: list[str] | None,
+    processing_level: str,
+    skip_tests: bool,
+    library_mode: bool,
+) -> str:
+    payload = {
+        "platform": platform,
+        "effective_platform": effective_platform,
+        "language": language,
+        "languages": list(languages or []),
+        "processing_level": processing_level,
+        "skip_tests": bool(skip_tests),
+        "library_mode": bool(library_mode),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return "openant-build:" + hashlib.sha256(encoded).hexdigest()[:20]
+
+
+def _run_clang_semantic_batch(
+    *,
+    repo_path: str,
+    output_dir: str,
+    source_revision: str,
+    graph_build_config_id: str,
+    compile_commands: str | None,
+    build_status: str,
+    max_files: int,
+    timeout_seconds: int,
+    auto_context: bool,
+    batch_size: int,
+    force_recompute: bool,
+    dependency_retry_attempts: int,
+    dependency_retry_low_trust: bool,
+    definition_load_max_files: int,
+    priority_sources: list[str] | None = None,
+) -> list[str]:
+    """Run the bounded Clang fact extractor for each parsed graph.
+
+    This is explicitly opt-in because a real OpenHarmony compilation database
+    is not always present.  Every graph gets an artifact, including a
+    ``no_compile_commands`` result, so missing build context is observable.
+    """
+    from core.platforms.openharmony.clang_batch_extractor import (
+        extract_clang_semantic_overlay,
+    )
+
+    overlays: list[str] = []
+    for _language, graph_dir in resolve_call_graph_dirs(output_dir).items():
+        native_path = os.path.join(graph_dir, "call_graph.json")
+        try:
+            native = read_json(native_path)
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        functions = native.get("functions", {}) if isinstance(native, Mapping) else {}
+        if not isinstance(functions, Mapping):
+            functions = {}
+        artifact = extract_clang_semantic_overlay(
+            repo_path,
+            functions,
+            compile_commands=compile_commands,
+            source_revision=source_revision,
+            build_status=build_status,
+            max_files=max_files,
+            timeout_seconds=timeout_seconds,
+            auto_context=auto_context,
+            context_output_dir=graph_dir,
+            batch_size=batch_size,
+            force_recompute=force_recompute,
+            dependency_retry_attempts=dependency_retry_attempts,
+            dependency_retry_low_trust=dependency_retry_low_trust,
+            definition_load_max_files=definition_load_max_files,
+            priority_sources=priority_sources,
+        )
+        artifact["build_config_id"] = graph_build_config_id
+        artifact["source_revision"] = source_revision
+        artifact["graph_directory"] = graph_dir
+        path = os.path.join(graph_dir, "clang_semantic_overlay.json")
+        write_json(path, artifact, indent=2)
+        overlays.append(path)
+    return overlays
+
+
+def _gap_priority_sources(report: Mapping[str, Any] | None) -> list[str]:
+    """Extract unique source files for unresolved ledger sites.
+
+    This is deliberately a scheduling hint for the bounded Clang pass. It
+    consumes only the immutable pre-Clang snapshot and never turns a gap into
+    an accepted edge. If the report has no site-level file, the extractor
+    retains its normal compilation-database order.
+    """
+    if not isinstance(report, Mapping):
+        return []
+    sites = report.get("sites")
+    if not isinstance(sites, list):
+        return []
+    values: list[str] = []
+    # Prefer sites still unrepaired after the native graph. If that field is
+    # absent in an older report, fall back to all edge-missing sites.
+    selected = [
+        item for item in sites
+        if isinstance(item, Mapping) and bool(item.get("ledger_unrepaired"))
+    ]
+    if not selected:
+        selected = [
+            item for item in sites
+            if isinstance(item, Mapping) and bool(item.get("ledger_edge_missing"))
+        ]
+    # The gap report already aggregates source-file frequencies. Prefer files
+    # with the largest number of unresolved sites so a small Clang budget
+    # attacks the highest-yield translation units first; retain a stable
+    # lexical fallback for older reports without that summary.
+    source_counts = report.get("summary", {})
+    source_counts = (
+        source_counts.get("unrepaired_source_file_counts", {})
+        if isinstance(source_counts, Mapping)
+        else {}
+    )
+    if isinstance(source_counts, Mapping) and source_counts:
+        ordered_files = [
+            str(path) for path, _count in sorted(
+                source_counts.items(),
+                key=lambda item: (-int(item[1] or 0), str(item[0])),
+            )
+            if str(path) and str(path) != "<unknown>"
+        ]
+        for value in ordered_files:
+            if value not in values:
+                values.append(value)
+    for item in selected:
+        value = item.get("file") or item.get("source_file")
+        if not isinstance(value, str) or not value.strip():
+            continue
+        value = value.strip()
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def _write_call_graph_gap_report(
+    *,
+    output_dir: str,
+    effective_graphs: list[Mapping[str, Any]],
+    repo_path: str,
+    source_revision: str,
+    build_config_id: str,
+    filename: str = "call_graph_gap_report.json",
+) -> tuple[str | None, dict[str, Any]]:
+    """Write the P1 per-site gap aggregation after each graph refresh."""
+    if not effective_graphs:
+        return None, {}
+    from core.call_graph_gap_report import write_call_graph_gap_report
+
+    graph_paths = [
+        item.get("path")
+        for item in effective_graphs
+        if isinstance(item, Mapping) and item.get("path")
+    ]
+    report_path = os.path.join(output_dir, filename)
+    report = write_call_graph_gap_report(
+        report_path,
+        graph_paths,
+        repository=repo_path,
+        source_revision=source_revision,
+        build_config_id=build_config_id,
+    )
+    return report_path, report
+
+
+def _write_openharmony_gap_tasks(
+    *,
+    result: ScanResult,
+    output_dir: str,
+    repo_path: str,
+    source_revision: str,
+    build_config_id: str,
+    effective_platform: str,
+    effective_graphs: list[Mapping[str, Any]] | None = None,
+    gap_report: Mapping[str, Any] | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Refresh the gap report and emit the P3 scheduling queue.
+
+    This is intentionally deterministic and runs after optional projection, so
+    task status reflects the effective graph version actually consumed by
+    enhancement and Stage 1.
+    """
+    if effective_platform != "openharmony":
+        return None, {}
+    try:
+        from core.call_graph_facts import refresh_effective_call_graphs
+        from core.platforms.openharmony.gap_tasks import write_gap_tasks
+
+        # Always refresh once here. ``effective_graphs`` captured before the
+        # optional projection may otherwise hide newly accepted overlay edges.
+        graphs = refresh_effective_call_graphs(
+            output_dir,
+            source_revision=source_revision,
+            build_config_id=build_config_id,
+            include_persisted_overlays=True,
+        )
+        refreshed_gap_path, refreshed_gap = _write_call_graph_gap_report(
+            output_dir=output_dir,
+            effective_graphs=graphs,
+            repo_path=repo_path,
+            source_revision=source_revision,
+            build_config_id=build_config_id,
+        )
+        graph_versions: list[str] = []
+        for item in graphs or []:
+            path = item.get("path") if isinstance(item, Mapping) else None
+            if not path:
+                continue
+            try:
+                payload = read_json(path)
+            except Exception:
+                continue
+            version = payload.get("graph_version") if isinstance(payload, Mapping) else None
+            if version:
+                graph_versions.append(str(version))
+        report = refreshed_gap if isinstance(refreshed_gap, Mapping) else gap_report
+        tasks_path = os.path.join(output_dir, "call_graph_gap_tasks.json")
+        tasks = write_gap_tasks(
+            tasks_path,
+            report,
+            repository=repo_path,
+            source_revision=source_revision,
+            build_config_id=build_config_id,
+            graph_versions=graph_versions,
+        )
+        result.call_graph_gap_report_path = refreshed_gap_path or result.call_graph_gap_report_path
+        result.effective_call_graph_paths = [
+            str(item.get("path"))
+            for item in graphs
+            if isinstance(item, Mapping) and item.get("path")
+        ]
+        result.call_graph_gap_tasks_path = tasks_path
+        return tasks_path, tasks
+    except Exception as exc:
+        print(f"  WARNING: OpenHarmony gap task generation failed: {exc}", file=sys.stderr)
+        _print_chinese_log(f"P3 缺口任务队列生成失败（{exc}），保留已有调用图和缺口报告。")
+        return None, {"status": "failed", "error": str(exc)[:500]}
+
+
+def _write_openharmony_analysis_feedback(
+    *,
+    result: ScanResult,
+    output_dir: str,
+    dataset_path: str,
+    results_path: str | None,
+    gap_tasks_path: str | None,
+    repo_path: str,
+    source_revision: str,
+    build_config_id: str,
+    effective_platform: str,
+) -> tuple[str | None, dict[str, Any]]:
+    """Persist P3 facts learned by enhancement/Stage 1/Stage 2.
+
+    This is intentionally run after the optional verification step, so the
+    artifact can describe the exact Stage 1 result that was consumed by Stage 2.
+    It is an audit/next-work queue, not a hidden graph mutation.
+    """
+    if effective_platform != "openharmony":
+        return None, {}
+    try:
+        from core.platforms.openharmony.analysis_feedback import write_analysis_feedback
+
+        dataset = read_json(dataset_path)
+        results = read_json(results_path) if results_path and os.path.exists(results_path) else None
+        gap_tasks = read_json(gap_tasks_path) if gap_tasks_path and os.path.exists(gap_tasks_path) else None
+        graph_versions: list[str] = []
+        for path in result.effective_call_graph_paths:
+            try:
+                graph = read_json(path)
+            except Exception:
+                continue
+            if isinstance(graph, Mapping) and graph.get("graph_version"):
+                graph_versions.append(str(graph["graph_version"]))
+        output_path = os.path.join(output_dir, "analysis_feedback.json")
+        payload = write_analysis_feedback(
+            output_path,
+            dataset,
+            results=results,
+            gap_tasks=gap_tasks,
+            repository=repo_path,
+            source_revision=source_revision,
+            build_config_id=build_config_id,
+            graph_versions=graph_versions,
+        )
+        result.analysis_feedback_path = output_path
+        return output_path, payload
+    except Exception as exc:
+        print(f"  WARNING: OpenHarmony analysis feedback failed: {exc}", file=sys.stderr)
+        _print_chinese_log(f"P3 分析反馈产物生成失败（{exc}），不改变当前分析结果。")
+        return None, {"status": "failed", "error": str(exc)[:500]}
+
+
+def _write_clang_p1_acceptance_report(
+    *,
+    output_dir: str,
+    overlay_paths: list[str],
+    pre_clang_gap_report_path: str | None,
+    repo_path: str,
+    source_revision: str,
+) -> tuple[str | None, dict[str, Any]]:
+    """Correlate Clang batch facts with the pre-Clang unresolved-site ledger.
+
+    The report is intentionally diagnostic.  It does not alter the effective
+    graph or dataset.  The gap report must be the snapshot taken before the
+    Clang overlay is projected; otherwise repaired sites would disappear from
+    the comparison input.
+    """
+    if not overlay_paths or not pre_clang_gap_report_path:
+        return None, {}
+    gap_path = Path(pre_clang_gap_report_path)
+    if not gap_path.is_file():
+        return None, {}
+    from core.platforms.openharmony.clang_p1_validation import (
+        build_clang_batch_acceptance_report,
+    )
+
+    graph_reports: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for overlay_path in overlay_paths:
+        batch_path = Path(overlay_path)
+        graph_dir = batch_path.parent
+        ledger_path = graph_dir / "callsite_ledger.json"
+        if not ledger_path.is_file():
+            ledger_path = graph_dir / "call_graph_residuals.json"
+        if not ledger_path.is_file():
+            errors.append({
+                "overlay": str(batch_path),
+                "reason": "callsite_ledger_missing",
+            })
+            continue
+        try:
+            graph_reports.append(
+                build_clang_batch_acceptance_report(
+                    ledger_path,
+                    gap_path,
+                    batch_path,
+                    source_revision=source_revision,
+                )
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            errors.append({
+                "overlay": str(batch_path),
+                "reason": str(exc)[:500],
+            })
+
+    if not graph_reports and errors:
+        return None, {"errors": errors}
+    outcome_counts: dict[str, int] = {}
+    total_unresolved = 0
+    total_in_scope = 0
+    total_unindexed = 0
+    for item in graph_reports:
+        scope = item.get("scope", {})
+        if isinstance(scope, Mapping):
+            total_unresolved += int(scope.get("unresolved_input_sites", 0) or 0)
+            total_in_scope += int(scope.get("unresolved_sites_in_batch_scope", 0) or 0)
+        unindexed = item.get("unindexed_callers", {})
+        if isinstance(unindexed, Mapping):
+            total_unindexed += int(unindexed.get("count", 0) or 0)
+        outcomes = item.get("unresolved_site_outcomes", {})
+        counts = outcomes.get("counts", {}) if isinstance(outcomes, Mapping) else {}
+        if isinstance(counts, Mapping):
+            for key, value in counts.items():
+                try:
+                    outcome_counts[str(key)] = outcome_counts.get(str(key), 0) + int(value or 0)
+                except (TypeError, ValueError):
+                    continue
+    report = {
+        "schema_version": 1,
+        "report_type": "openharmony_clang_p1_acceptance",
+        "repository": repo_path,
+        "source_revision": source_revision,
+        "comparison_input": {
+            "gap_report": str(gap_path),
+            "gap_snapshot": "pre_clang_projection",
+        },
+        "graphs": graph_reports,
+        "errors": errors,
+        "summary": {
+            "graphs": len(graph_reports),
+            "unresolved_input_sites": total_unresolved,
+            "unresolved_sites_in_batch_scope": total_in_scope,
+            "semantic_fact_observed_candidate_only": outcome_counts.get(
+                "semantic_fact_observed_candidate_only", 0
+            ),
+            "in_batch_scope_not_matched": outcome_counts.get(
+                "in_batch_scope_not_matched", 0
+            ),
+            "outside_batch_scope": outcome_counts.get("outside_batch_scope", 0),
+            "unindexed_callers": total_unindexed,
+            "errors": len(errors),
+        },
+        "interpretation": (
+            "该报告只说明 Clang 批次对原始未决站点观察到了哪些语义事实；"
+            "它不改变有效图，也不把 candidate-only 事实提升为产品 strict 证据。"
+        ),
+    }
+    report_path = os.path.join(output_dir, "clang_p1_acceptance_report.json")
+    write_json(report_path, report, indent=2)
+    return report_path, report
 
 
 _CALL_GRAPH_REVIEW_COUNTERS = (
@@ -323,12 +761,25 @@ def scan_repository(
     diff_manifest: str | None = None,
     llm_reachability: bool = False,
     llm_reachability_max_code_bytes: int = 1500,
+    stop_after: str | None = None,
     llm_call_graph_recovery: bool = False,
     llm_call_graph_iterative_recovery: bool = False,
     llm_call_graph_candidate_review: bool = False,
     llm_call_graph_projection: bool = False,
     openharmony_dispatch_code_evidence: bool = False,
+    clang_semantic: bool = False,
+    clang_compile_commands: str | None = None,
+    clang_build_status: str = "compile_database",
+    clang_max_files: int = 128,
+    clang_timeout_seconds: int = 30,
+    clang_auto_context: bool = True,
+    clang_batch_size: int = 16,
+    clang_force_recompute: bool = False,
+    clang_dependency_retry_attempts: int = 1,
+    clang_dependency_retry_low_trust: bool = False,
+    clang_definition_load_max_files: int = 16,
     library_mode: bool = False,
+    scope_manifest: str | None = None,
 ) -> ScanResult:
     """Scan a repository for vulnerabilities.
 
@@ -393,15 +844,88 @@ def scan_repository(
             for OpenHarmony dispatch selectors from source/header constants.
             This deterministic evidence pass is opt-in and does not modify the
             persisted call graph.
+        clang_semantic: If True, run a bounded Clang AST pass. The context
+            resolver reuses a compilation database or Ninja export when
+            available, otherwise reconstructs candidate commands from BUILD.gn
+            and records the provenance and missing dependencies.
+        clang_compile_commands: Optional path to ``compile_commands.json``.
+        clang_build_status: Provenance label for the compilation context;
+            ``compile_database``/``complete`` are strict for that concrete
+            configuration, while ``manual_rebuild``/
+            ``reconstructed_candidate``/``unknown`` remain candidate facts.
+        clang_max_files: Maximum translation units processed by Clang.
+        clang_timeout_seconds: Per-translation-unit Clang timeout.
+        clang_auto_context: If True, discover an existing compile database,
+            export one from an existing Ninja build directory with the
+            read-only ``ninja -t compdb`` command, or reconstruct candidate
+            commands from bounded BUILD.gn metadata.
+        clang_batch_size: Number of translation units represented by one
+            resumable Clang batch (checkpointing still occurs after each unit).
+        clang_force_recompute: Ignore an existing Clang checkpoint and rerun
+            selected translation units.
+        clang_dependency_retry_attempts: Number of bounded local include-root
+            retry rounds for missing-header failures.
+        clang_dependency_retry_low_trust: Also try paths under test/mock
+            directories; results remain candidate-only.
+        clang_definition_load_max_files: Maximum additional translation units
+            loaded for unique declaration-to-definition candidates.
         workers: Number of parallel workers for LLM steps (default: 8).
         backoff_seconds: Seconds to wait when rate-limited (default: 30).
 
     Returns:
         ScanResult with paths to all generated files and metrics.
     """
-    repo_path = os.path.abspath(repo_path)
+    if stop_after not in (
+        None,
+        "effective-call-graph",
+        "llm-reachability",
+        "openharmony-gap-tasks",
+    ):
+        raise ValueError(
+            f"Unsupported stop_after stage: {stop_after!r}; "
+            "expected None, 'effective-call-graph', 'llm-reachability', "
+            "or 'openharmony-gap-tasks'"
+        )
+    if stop_after == "llm-reachability" and not llm_reachability:
+        raise ValueError(
+            "stop_after='llm-reachability' requires llm_reachability=True"
+        )
+    requested_repo_path = os.path.abspath(repo_path)
+    repo_path = requested_repo_path
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
+
+    # Socket-guided scanning is an explicit, user-confirmed narrowing of the
+    # normal repository input.  Validation is deliberately performed before
+    # any parser or model work; an unconfirmed/foreign manifest must fail
+    # closed rather than silently falling back to a different tree.
+    applied_scope_manifest: dict[str, Any] | None = None
+    applied_scope_path: str | None = None
+    applied_scope_root: str | None = None
+    if scope_manifest:
+        from core.socket_scope import load_selected_scope
+
+        scan_root, applied_scope_manifest = load_selected_scope(
+            requested_repo_path, scope_manifest
+        )
+        repo_path = str(scan_root)
+        applied_scope_path = os.path.abspath(scope_manifest)
+        applied_scope_root = repo_path
+        write_json(
+            os.path.join(output_dir, "scan_scope_applied.json"),
+            {
+                "schema_version": 1,
+                "requested_repository": requested_repo_path,
+                "scan_repository": repo_path,
+                "manifest_path": applied_scope_path,
+                "manifest": applied_scope_manifest,
+                "mode": "confirmed_socket_scope",
+            },
+        )
+        _print_chinese_log(
+            f"Socket 引导范围已确认：原仓库={requested_repo_path}，"
+            f"本次扫描根目录={repo_path}。完整仓库扫描仍可通过不提供 --scope-manifest 保留。"
+        )
 
     _print_chinese_log(
         f"扫描准备完成：目标源码目录为 {repo_path}，本次所有阶段产物写入 {output_dir}。"
@@ -421,31 +945,38 @@ def scan_repository(
     # Reset tracking
     tracking.reset_tracking()
 
-    # Build the registry once at scan start. Sub-steps reuse it, so
-    # a single --llm-config controls every phase without each step
-    # re-reading the config file or having to thread the name through.
-    # ``probe_registry_or_raise`` runs a 1-token probe per unique
-    # (provider, model) pair before any expensive work begins, so bad
-    # keys / typo'd model IDs / unreachable endpoints surface here as
-    # a clean LLMError rather than mid-scan.
-    from utilities.llm import (
-        build_phase_registry,
-        load_config_file,
-        probe_registry_or_raise,
-        resolve_llm_config,
-    )
-    cf = load_config_file()
-    registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
-    print(f"[Scan] LLM config: {registry.config_name}", file=sys.stderr)
-    _print_chinese_log(
-        f"模型配置已解析为“{registry.config_name}”。扫描开始前会先做一次最小连通性探测，"
-        "后续各阶段复用同一套阶段绑定，避免中途悄悄切换模型。"
-    )
-    probe_registry_or_raise(registry)
-    _print_chinese_log("模型连通性探测通过，已允许进入源码解析和后续分析阶段。")
+    # Model initialization is deliberately skipped for the independent graph
+    # checkpoint.  That checkpoint is meant to validate parser/ledger/Clang
+    # facts on a machine that has no model credentials or network access.
+    registry = None
+    if stop_after != "effective-call-graph":
+        # Build the registry once at scan start. Sub-steps reuse it, so a
+        # single --llm-config controls every phase without each step
+        # re-reading the config file or silently switching providers.
+        from utilities.llm import (
+            build_phase_registry,
+            load_config_file,
+            probe_registry_or_raise,
+            resolve_llm_config,
+        )
+        cf = load_config_file()
+        registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+        print(f"[Scan] LLM config: {registry.config_name}", file=sys.stderr)
+        _print_chinese_log(
+            f"模型配置已解析为“{registry.config_name}”。扫描开始前会先做一次最小连通性探测，"
+            "后续各阶段复用同一套阶段绑定，避免中途悄悄切换模型。"
+        )
+        probe_registry_or_raise(registry)
+        _print_chinese_log("模型连通性探测通过，已允许进入源码解析和后续分析阶段。")
+    else:
+        _print_chinese_log(
+            "有效调用图独立检查点：跳过模型配置和联网探测，只运行源码解析、台账与有效图生成。"
+        )
 
     if platform not in {"auto", "generic", "openharmony"}:
         raise ValueError(f"Unsupported platform: {platform}")
+
+    graph_source_revision = _source_revision_for_graph(repo_path, commit_sha)
 
     # Platform detection is an additive, fail-safe layer.  Explicit generic
     # scans never inspect OpenHarmony metadata; auto scans only promote to the
@@ -511,6 +1042,8 @@ def scan_repository(
         platform_selection=(
             effective_platform if effective_platform != "auto" else None
         ),
+        scope_manifest_path=applied_scope_path,
+        scope_root=applied_scope_root,
     )
     collected_step_reports: list[dict] = []
 
@@ -518,11 +1051,13 @@ def scan_repository(
     total_steps = _count_steps(
         generate_context, enhance, verify, generate_report, dynamic_test,
         llm_reachability=llm_reachability,
+        stop_after=stop_after,
         llm_call_graph_recovery=llm_call_graph_recovery,
         llm_call_graph_iterative_recovery=llm_call_graph_iterative_recovery,
         llm_call_graph_candidate_review=llm_call_graph_candidate_review,
         llm_call_graph_projection=llm_call_graph_projection,
         openharmony_dispatch_code_evidence=openharmony_dispatch_code_evidence,
+        openharmony_gap_tasks=(effective_platform == "openharmony"),
     )
     step_num = 0
 
@@ -548,11 +1083,13 @@ def scan_repository(
     _print_banner(repo_path, output_dir, language, processing_level,
                   verify, generate_context, enhance, enhance_mode,
                   generate_report, dynamic_test, workers, backoff_seconds,
+                  stop_after=stop_after,
                   llm_call_graph_recovery=llm_call_graph_recovery,
                   llm_call_graph_iterative_recovery=llm_call_graph_iterative_recovery,
                   llm_call_graph_candidate_review=llm_call_graph_candidate_review,
                   llm_call_graph_projection=llm_call_graph_projection,
-                  openharmony_dispatch_code_evidence=openharmony_dispatch_code_evidence)
+                  openharmony_dispatch_code_evidence=openharmony_dispatch_code_evidence,
+                  clang_semantic=clang_semantic)
 
     # ---------------------------------------------------------------
     # Step 1: Parse
@@ -575,6 +1112,15 @@ def scan_repository(
             and processing_level != "all"
         )
         else processing_level
+    )
+    graph_build_config_id = _build_config_id(
+        platform=platform,
+        effective_platform=effective_platform,
+        language=language,
+        languages=languages,
+        processing_level=effective_parse_level,
+        skip_tests=skip_tests,
+        library_mode=library_mode,
     )
 
     print(_step_label("Parsing repository..."), file=sys.stderr)
@@ -680,10 +1226,178 @@ def scan_repository(
                 **platform_kwargs,
             )
 
+        # Build the audited effective graph immediately after parsing.  This
+        # is a deterministic, additive step: call_graph.json and the parser's
+        # call-site ledger remain immutable inputs, while later reachability,
+        # enhancement and reporting can consume effective_call_graph.json.
+        clang_overlay_paths: list[str] = []
+        clang_definition_loading_report_paths: list[str] = []
+        clang_p1_acceptance_report_path: str | None = None
+        pre_clang_gap_report_path: str | None = None
+        pre_clang_gap_report: dict[str, Any] = {}
+        call_graph_gap_report_path: str | None = None
+        call_graph_gap_report: dict[str, Any] = {}
+        try:
+            from core.call_graph_facts import refresh_effective_call_graphs
+            from core.call_graph_facts import synchronize_dataset_dependencies
+
+            # Do not replay a stale projection artifact when a scan directory
+            # is resumed. New semantic overlays enter only after their own
+            # validation stage below.
+            effective_graphs = refresh_effective_call_graphs(
+                output_dir,
+                source_revision=graph_source_revision,
+                build_config_id=graph_build_config_id,
+                include_persisted_overlays=False,
+            )
+            dependency_sync = synchronize_dataset_dependencies(
+                parse_result.dataset_path,
+                [item.get("path") for item in effective_graphs if item.get("path")],
+            )
+            if effective_graphs:
+                _print_chinese_log(
+                    "调用事实库：已生成有效调用图，保留原生 call_graph.json；"
+                    f"图目录={len(effective_graphs)}，"
+                    f"已同步 {dependency_sync.get('units_updated', 0)} 个单元的调用依赖，"
+                    "后续可达性将优先使用 effective_call_graph.json。"
+                )
+            else:
+                _print_chinese_log(
+                    "调用事实库：本次解析未发现可生成的调用图，保留原解析结果并记录降级。"
+                )
+        except Exception as exc:
+            effective_graphs = []
+            dependency_sync = {}
+            print(f"  WARNING: effective call graph generation failed: {exc}", file=sys.stderr)
+            _print_chinese_log(
+                f"调用事实库生成失败（{exc}），后续按原生 call_graph.json 降级；"
+                "该失败不会被当作图完整。"
+            )
+
+        # Keep an immutable before-Clang snapshot.  The normal gap report is
+        # regenerated after semantic overlays are projected, so using only
+        # that later file would hide sites that Clang repaired.
+        if clang_semantic and effective_platform == "openharmony":
+            try:
+                pre_clang_gap_report_path, pre_clang_gap_report = _write_call_graph_gap_report(
+                    output_dir=output_dir,
+                    effective_graphs=effective_graphs,
+                    repo_path=repo_path,
+                    source_revision=graph_source_revision,
+                    build_config_id=graph_build_config_id,
+                    filename="call_graph_gap_report.pre_clang.json",
+                )
+            except Exception as exc:
+                print(f"  WARNING: pre-Clang gap report failed: {exc}", file=sys.stderr)
+                _print_chinese_log(f"Clang 前调用图缺口快照失败（{exc}），本轮只保留批处理产物。")
+
+        # P1: use a real compilation database when explicitly requested.  The
+        # extractor writes one auditable artifact per graph directory, then a
+        # second deterministic refresh consumes only validated Clang facts.
+        if clang_semantic and effective_platform == "openharmony":
+            try:
+                from core.call_graph_facts import (
+                    refresh_effective_call_graphs,
+                    synchronize_dataset_dependencies,
+                )
+                priority_sources = _gap_priority_sources(pre_clang_gap_report)
+                if priority_sources:
+                    _print_chinese_log(
+                        "P1 Clang 调度：根据 Clang 前调用图缺口，"
+                        f"优先处理 {len(priority_sources)} 个源文件；"
+                        "该排序只影响有限预算分配，不改变事实准入。"
+                    )
+                clang_overlay_paths = _run_clang_semantic_batch(
+                    repo_path=repo_path,
+                    output_dir=output_dir,
+                    source_revision=graph_source_revision,
+                    graph_build_config_id=graph_build_config_id,
+                    compile_commands=clang_compile_commands,
+                    build_status=clang_build_status,
+                    max_files=clang_max_files,
+                    timeout_seconds=clang_timeout_seconds,
+                    auto_context=clang_auto_context,
+                    batch_size=clang_batch_size,
+                    force_recompute=clang_force_recompute,
+                    dependency_retry_attempts=clang_dependency_retry_attempts,
+                    dependency_retry_low_trust=clang_dependency_retry_low_trust,
+                    definition_load_max_files=clang_definition_load_max_files,
+                    priority_sources=priority_sources,
+                )
+                clang_definition_loading_report_paths = [
+                    str(Path(path).parent / "clang_definition_loading_report.json")
+                    for path in clang_overlay_paths
+                    if (Path(path).parent / "clang_definition_loading_report.json").is_file()
+                ]
+                clang_p1_acceptance_report_path, clang_p1_acceptance_report = (
+                    _write_clang_p1_acceptance_report(
+                        output_dir=output_dir,
+                        overlay_paths=clang_overlay_paths,
+                        pre_clang_gap_report_path=pre_clang_gap_report_path,
+                        repo_path=repo_path,
+                        source_revision=graph_source_revision,
+                    )
+                )
+                if clang_p1_acceptance_report:
+                    p1_summary = clang_p1_acceptance_report.get("summary", {})
+                    _print_chinese_log(
+                        "P1 Clang 未决站点对照："
+                        f"本批次范围内={p1_summary.get('unresolved_sites_in_batch_scope', 0)}，"
+                        f"观察到 candidate 事实={p1_summary.get('semantic_fact_observed_candidate_only', 0)}，"
+                        f"未匹配={p1_summary.get('in_batch_scope_not_matched', 0)}，"
+                        f"caller 未入索引={p1_summary.get('unindexed_callers', 0)}。"
+                    )
+                effective_graphs = refresh_effective_call_graphs(
+                    output_dir,
+                    source_revision=graph_source_revision,
+                    build_config_id=graph_build_config_id,
+                    include_persisted_overlays=True,
+                )
+                dependency_sync = synchronize_dataset_dependencies(
+                    parse_result.dataset_path,
+                    [item.get("path") for item in effective_graphs if item.get("path")],
+                )
+                _print_chinese_log(
+                    "P1 Clang 批处理：已保存每个调用图目录的 clang_semantic_overlay.json，"
+                    f"并重新生成有效图；图目录={len(effective_graphs)}。"
+                )
+            except Exception as exc:
+                print(f"  WARNING: Clang semantic batch failed: {exc}", file=sys.stderr)
+                _print_chinese_log(
+                    f"P1 Clang 批处理失败（{exc}），保留原有效图和失败诊断，"
+                    "不会把缺少编译上下文解释成解析成功。"
+                )
+
+        try:
+            call_graph_gap_report_path, call_graph_gap_report = _write_call_graph_gap_report(
+                output_dir=output_dir,
+                effective_graphs=effective_graphs,
+                repo_path=repo_path,
+                source_revision=graph_source_revision,
+                build_config_id=graph_build_config_id,
+            )
+            if call_graph_gap_report:
+                gap_summary = call_graph_gap_report.get("summary", {})
+                _print_chinese_log(
+                    "调用图缺口汇总：按调用点去重后，"
+                    f"未决站点={gap_summary.get('unrepaired_edge_missing_sites', gap_summary.get('unique_gap_sites', 0))}，"
+                    f"候选记录={gap_summary.get('candidate_fact_records', 0)}；"
+                    "候选数量不会被当作缺边数量。"
+                )
+        except Exception as exc:
+            print(f"  WARNING: call graph gap report failed: {exc}", file=sys.stderr)
+            _print_chinese_log(f"调用图缺口汇总失败（{exc}），不影响有效图生成。")
+
         ctx.summary = {
             "total_units": parse_result.units_count,
             "language": parse_result.language,
             "processing_level": parse_result.processing_level,
+            "effective_call_graphs": effective_graphs,
+            "dependency_sync": dependency_sync,
+            "clang_semantic_overlays": clang_overlay_paths,
+            "clang_definition_loading_reports": clang_definition_loading_report_paths,
+            "clang_p1_acceptance_report": clang_p1_acceptance_report_path,
+            "call_graph_gap_report": call_graph_gap_report_path,
         }
         # If the parse step generated a diff_stats report, attach it.
         _diff_report = os.path.join(output_dir, "diff_filter.report.json")
@@ -695,6 +1409,12 @@ def scan_repository(
         ctx.outputs = {
             "dataset_path": parse_result.dataset_path,
             "analyzer_output_path": parse_result.analyzer_output_path,
+            "effective_call_graphs": effective_graphs,
+            "dependency_sync": dependency_sync,
+            "clang_semantic_overlays": clang_overlay_paths,
+            "clang_definition_loading_reports": clang_definition_loading_report_paths,
+            "clang_p1_acceptance_report": clang_p1_acceptance_report_path,
+            "call_graph_gap_report": call_graph_gap_report_path,
         }
 
     result.dataset_path = parse_result.dataset_path
@@ -709,6 +1429,17 @@ def scan_repository(
     result.per_language = getattr(parse_result, "per_language", {}) or {}
     result.parse_errors = getattr(parse_result, "parse_errors", []) or []
     result.platform_coverage = getattr(parse_result, "platform_coverage", None)
+    result.effective_call_graph_paths = [
+        str(item.get("path"))
+        for item in (effective_graphs or [])
+        if isinstance(item, Mapping) and item.get("path")
+    ]
+    result.call_graph_gap_report_path = call_graph_gap_report_path
+    result.clang_semantic_overlay_paths = list(clang_overlay_paths)
+    result.clang_p1_acceptance_report_path = clang_p1_acceptance_report_path
+    result.clang_definition_loading_report_paths = list(
+        clang_definition_loading_report_paths
+    )
     _sync_platform_profile_file_counts(result, output_dir)
     result.excluded_languages = dict(excluded_languages or {})
     collected_step_reports.append(_load_step_report(output_dir, "parse"))
@@ -726,6 +1457,34 @@ def scan_repository(
         f"{graph_hint}。解析器错误数={len(getattr(parse_result, 'parse_errors', []) or [])}。"
     )
     print(file=sys.stderr)
+
+    # The graph-facts checkpoint is intentionally independent of LLM stages.
+    # It lets parser/Clang/ledger work be inspected and benchmarked without
+    # paying for context enhancement or vulnerability analysis.
+    if stop_after == "effective-call-graph":
+        downstream_steps = (
+            "app-context",
+            "llm-reachability",
+            "llm-call-graph-recovery",
+            "llm-call-graph-candidate-review",
+            "llm-call-graph-projection",
+            "openharmony-dispatch-code-evidence",
+            "openharmony-gap-tasks",
+            "enhance",
+            "analyze",
+            "verify",
+            "build-output",
+            "dynamic-test",
+            "report",
+        )
+        for downstream_step in downstream_steps:
+            _record_skip(result, downstream_step, "stop_after_effective_call_graph")
+        result.step_reports = collected_step_reports
+        _print_chinese_log(
+            "有效调用图阶段已完成：根据 --stop-after effective-call-graph "
+            "主动结束本次扫描；未执行上下文增强、漏洞分析、验证、动态测试和报告阶段。"
+        )
+        return result
 
     # Active dataset path — may be updated by enhance step
     active_dataset_path = parse_result.dataset_path
@@ -967,8 +1726,8 @@ def scan_repository(
         )
         _print_chinese_log(
             "可达性安全边界：LLM 只产生入口/输入信号和审计证据；"
-            "external_input/cross_process 的 high 信号作为 BFS 语义种子，"
-            "medium 信号只保留对应单元、不扩散 BFS；"
+            "有具体证据的 external_input/入站 cross_process high 信号作为 BFS 语义种子，"
+            "medium 信号进入独立 candidate BFS，但不会升级为 strict 入口；"
             "证据、边界和方向只用于审计，原生调用图不被直接改写。"
         )
 
@@ -1078,8 +1837,9 @@ def scan_repository(
                 # Re-apply the structural reachability filter using LLM
                 # entry points and accepted high-confidence semantic seeds as
                 # additional BFS roots. Medium-confidence semantic units are
-                # passed separately and retained after BFS without expansion;
-                # the parser keeps all labels distinct.
+                # passed separately into a candidate-only BFS over accepted
+                # edges; the parser keeps strict and candidate evidence
+                # distinct.
                 # Only possible when the parser persisted call_graph.json.
                 # Which parsers do so is determined by PROBING THE FILESYSTEM
                 # below, not by a hardcoded language list — an earlier comment
@@ -1109,6 +1869,12 @@ def scan_repository(
                                 unit.get("semantic_reachability_retain_only") is True
                                 or unit.get("reachability_retain_only") is True
                             )
+                            and unit.get("id")
+                        }
+                        semantic_candidate_seed_ids = {
+                            str(unit.get("id"))
+                            for unit in dataset.get("units", [])
+                            if unit.get("semantic_reachability_candidate_seed") is True
                             and unit.get("id")
                         }
                         partitions = partition_units_by_language(
@@ -1161,6 +1927,9 @@ def scan_repository(
                                 extra_retain_only_units=scope_entry_points_to_units(
                                     semantic_retain_only_ids, lang_units
                                 ),
+                                extra_candidate_reachability_seeds=scope_entry_points_to_units(
+                                    semantic_candidate_seed_ids, lang_units
+                                ),
                                 library_mode=library_mode,
                                 platform=effective_platform,
                             )
@@ -1195,6 +1964,21 @@ def scan_repository(
                                     "semantic_seed_ids": [],
                                     "semantic_retain_only_count": 0,
                                     "semantic_retain_only_ids": [],
+                                    "semantic_candidate_seed_count": 0,
+                                    "semantic_candidate_seed_ids": [],
+                                    "candidate_reachable_units": _cnt,
+                                    "candidate_reachable_added": _cnt,
+                                    "candidate_reachable_ids": [],
+                                    "strict_path_coverage_count": 0,
+                                    "strict_path_coverage_ids": [],
+                                    "candidate_path_coverage_count": 0,
+                                    "candidate_path_coverage_ids": [],
+                                    "fallback_only_count": _cnt,
+                                    "fallback_only_ids": [],
+                                    "final_analysis_count": _cnt,
+                                    "fallback_triggered": True,
+                                    "fallback_reason": "unfiltered_no_call_graph",
+                                    "reachability_evidence": "unfiltered_no_call_graph",
                                     "reachable_only_count": 0,
                                     "reachable_only_ids": [],
                                     "reachable_units": _cnt,
@@ -1239,6 +2023,82 @@ def scan_repository(
                                     )
                                     if unit_id
                                 }),
+                                "semantic_candidate_seed_count": sum(
+                                    r.get("semantic_candidate_seed_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "semantic_candidate_seed_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (
+                                        r.get("semantic_candidate_seed_ids", []) or []
+                                    )
+                                    if unit_id
+                                }),
+                                "candidate_reachable_units": sum(
+                                    r.get("candidate_reachable_units", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "candidate_reachable_added": sum(
+                                    r.get("candidate_reachable_added", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "candidate_reachable_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (
+                                        r.get("candidate_reachable_ids", []) or []
+                                    )
+                                    if unit_id
+                                }),
+                                "strict_path_coverage_count": sum(
+                                    r.get("strict_path_coverage_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "strict_path_coverage_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (r.get("strict_path_coverage_ids", []) or [])
+                                    if unit_id
+                                }),
+                                "candidate_path_coverage_count": sum(
+                                    r.get("candidate_path_coverage_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "candidate_path_coverage_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (r.get("candidate_path_coverage_ids", []) or [])
+                                    if unit_id
+                                }),
+                                "fallback_only_count": sum(
+                                    r.get("fallback_only_count", 0)
+                                    for r in _per_lang.values()
+                                ),
+                                "fallback_only_ids": sorted({
+                                    str(unit_id)
+                                    for r in _per_lang.values()
+                                    for unit_id in (r.get("fallback_only_ids", []) or [])
+                                    if unit_id
+                                }),
+                                "final_analysis_count": sum(
+                                    r.get("final_analysis_count", r.get("reachable_units", 0))
+                                    for r in _per_lang.values()
+                                ),
+                                "fallback_triggered": any(
+                                    bool(r.get("fallback_triggered"))
+                                    for r in _per_lang.values()
+                                ),
+                                "fallback_reason": "; ".join(
+                                    f"{lang}: {reason}"
+                                    for lang, r in _per_lang.items()
+                                    if (reason := r.get("fallback_reason"))
+                                ),
+                                "reachability_evidence": (
+                                    "mixed_filtered_and_unfiltered"
+                                    if _unfiltered
+                                    else "accepted_or_candidate_path"
+                                ),
                                 "reachable_only_count": sum(
                                     r.get(
                                         "reachable_only_count",
@@ -1348,6 +2208,19 @@ def scan_repository(
                     "reachable_only_count": len(
                         summary.get("reachable_only_ids", [])
                     ),
+                    "semantic_candidate_seed_count": len(
+                        summary.get("semantic_candidate_seed_ids", [])
+                    ),
+                    "semantic_candidate_seed_ids": summary.get(
+                        "semantic_candidate_seed_ids", []
+                    ),
+                    "candidate_seed_count": len(
+                        summary.get("semantic_candidate_seed_ids", [])
+                    ),
+                    "candidate_reachable_added": (
+                        (dataset.get("metadata", {}).get("reachability_filter", {}) or {})
+                        .get("candidate_reachable_added", 0)
+                    ),
                     "seed_counts": summary.get("seed_counts", {}),
                     "retained_only_counts": summary.get(
                         "retained_only_counts", {}
@@ -1365,14 +2238,15 @@ def scan_repository(
                     f"  LLM reachability: {summary['signals_applied']} signals, "
                     f"{summary['entry_points_promoted']} new entry points, "
                     f"{len(summary.get('semantic_seed_ids', []))} semantic seeds, "
-                    f"{len(summary.get('reachable_only_ids', summary.get('semantic_retain_only_ids', [])))} retained-only units",
+                    f"{len(summary.get('semantic_candidate_seed_ids', []))} medium candidate seeds",
                     file=sys.stderr,
                 )
                 _print_chinese_log(
                     f"可达性结果：模型应用 {summary['signals_applied']} 条信号，"
                     f"提升 {summary['entry_points_promoted']} 个入口，"
                     f"接受 {len(summary.get('semantic_seed_ids', []))} 个 high 语义种子，"
-                    f"保留 {len(summary.get('reachable_only_ids', summary.get('semantic_retain_only_ids', [])))} 个 medium 单元（不扩散 BFS），"
+                    f"形成 {len(summary.get('semantic_candidate_seed_ids', []))} 个 medium candidate seed，"
+                    "沿已接受调用边扩展到 candidate_reachable，"
                     f"触及 {summary['units_touched']} 个单元；结果写入 {signals_path}。"
                 )
                 if processing_level != "all" and refilter_supported:
@@ -1382,7 +2256,7 @@ def scan_repository(
                     )
                     _print_chinese_log(
                         f"可达性筛选：high 入口/语义种子已重新做 BFS，"
-                        f"medium 单元仅直接保留、不作为 BFS 根；"
+                        f"medium 单元进入独立 candidate BFS，不升级为 strict 入口；"
                         f"下游阶段将处理 {post_filter_count} 个单元，而不是原始 {pre_filter_count} 个单元。"
                     )
                 elif processing_level != "all":
@@ -1394,6 +2268,34 @@ def scan_repository(
         collected_step_reports.append(
             _load_step_report(output_dir, "llm-reachability")
         )
+
+        # Evaluation runs sometimes need to measure only reachability recall.
+        # Return a normal ScanResult after the artifact and stage report are
+        # complete instead of killing the process mid-stage.  The downstream
+        # stages are explicitly recorded as skipped so the result remains
+        # machine-readable and auditable.
+        if stop_after == "llm-reachability":
+            downstream_steps = (
+                "llm-call-graph-recovery",
+                "llm-call-graph-candidate-review",
+                "llm-call-graph-projection",
+                "openharmony-dispatch-code-evidence",
+                "openharmony-gap-tasks",
+                "enhance",
+                "analyze",
+                "verify",
+                "build-output",
+                "dynamic-test",
+                "report",
+            )
+            for downstream_step in downstream_steps:
+                _record_skip(result, downstream_step, "stop_after_llm_reachability")
+            result.step_reports = collected_step_reports
+            _print_chinese_log(
+                "可达性评测阶段已完成：根据 --stop-after llm-reachability "
+                "主动结束本次扫描；后续上下文增强、漏洞分析、验证、动态测试和报告阶段均未执行。"
+            )
+            return result
     else:
         _print_chinese_log(
             "LLM 可达性阶段跳过：未开启 --llm-reachability；"
@@ -1425,9 +2327,10 @@ def scan_repository(
             )
         else:
             _print_chinese_log(
-                "恢复范围决策：单轮模式只处理无候选的残余间接点；已有候选目标的站点"
-                "需要另外开启 --llm-call-graph-candidate-review，或改用迭代恢复，"
-                "否则不会把候选表误当成已确认调用边。"
+                "恢复范围决策：单轮模式默认处理无候选残余；调用站点台账若明确标记"
+                "edge_missing/not_linked，即使已有候选也会排队，避免台账独有缺边被漏掉。"
+                "普通候选站点仍需另外开启 --llm-call-graph-candidate-review，或改用迭代恢复；"
+                "候选表本身不会被当成已确认调用边。"
             )
         _print_chinese_log(
             "调用图恢复输入：每种语言分别读取 call_graph.json、"
@@ -1494,6 +2397,7 @@ def scan_repository(
                     })
 
                 dataset_entry_points: set[str] = set()
+                dataset_candidate_seed_points: set[str] = set()
                 try:
                     dataset_payload = read_json(active_dataset_path)
                     dataset_units = (
@@ -1510,6 +2414,13 @@ def scan_repository(
                                 unit.get("is_entry_point") is True
                                 or unit.get("semantic_reachability_seed") is True
                             )
+                            and unit.get("id")
+                        }
+                        dataset_candidate_seed_points = {
+                            str(unit.get("id"))
+                            for unit in dataset_units
+                            if isinstance(unit, dict)
+                            and unit.get("semantic_reachability_candidate_seed") is True
                             and unit.get("id")
                         }
                 except Exception as exc:
@@ -1577,6 +2488,7 @@ def scan_repository(
                                 functions,
                                 binding=recovery_binding,
                                 entry_point_ids=graph_entry_points | dataset_entry_points,
+                                candidate_seed_ids=dataset_candidate_seed_points,
                                 call_graph=graph_payload.get("call_graph", {}),
                                 semantic_graph=semantic_payload,
                                 # Iterative mode is the explicit high-recall
@@ -1783,12 +2695,15 @@ def scan_repository(
     if llm_call_graph_projection:
         _run_openharmony_recovery_projection_stage(
             result=result,
+            repo_path=repo_path,
             output_dir=output_dir,
             active_dataset_path=active_dataset_path,
             unfiltered_dataset_path=unfiltered_dataset_path,
             processing_level=processing_level,
             library_mode=library_mode,
             effective_platform=effective_platform,
+            source_revision=graph_source_revision,
+            build_config_id=graph_build_config_id,
             collected_step_reports=collected_step_reports,
             step_label=_step_label,
         )
@@ -1819,6 +2734,130 @@ def scan_repository(
             "OpenHarmony 分派码证据阶段跳过：未开启对应开关，"
             "本次不从源码常量提取动态验证所需的 selector 值。"
         )
+
+    # ---------------------------------------------------------------
+    # Step 2.8: OpenHarmony P3 gap-task queue (deterministic)
+    # ---------------------------------------------------------------
+    # Refresh after recovery/projection so task status and graph versions refer
+    # to the effective graph that the following enhancement/Stage 1 consumes.
+    if effective_platform == "openharmony":
+        p3_step = "openharmony-gap-tasks"
+        print(_step_label("Building OpenHarmony gap-task queue..."), file=sys.stderr)
+        _print_chinese_log(
+            "阶段 P3/缺口任务调度：按调用点聚合未决关系，"
+            "为直接绑定、构建上下文、对象/回调分派和候选复核生成有界任务；"
+            "任务不会把未经核验的候选边提升到 strict 图。"
+        )
+        with step_context(p3_step, output_dir, inputs={
+            "platform": effective_platform,
+            "source": "call_graph_gap_report.json + effective_call_graph.json",
+            "revision": graph_source_revision,
+            "build_config_id": graph_build_config_id,
+        }) as ctx:
+            tasks_path, tasks_payload = _write_openharmony_gap_tasks(
+                result=result,
+                output_dir=output_dir,
+                repo_path=repo_path,
+                source_revision=graph_source_revision,
+                build_config_id=graph_build_config_id,
+                effective_platform=effective_platform,
+                effective_graphs=(
+                    effective_graphs
+                    if isinstance(effective_graphs, list)
+                    else None
+                ),
+                gap_report=call_graph_gap_report,
+            )
+            if tasks_path:
+                ctx.outputs = {"gap_tasks_path": tasks_path}
+                summary = tasks_payload.get("summary", {}) if isinstance(tasks_payload, Mapping) else {}
+                ctx.summary = {
+                    "status": "complete",
+                    "tasks": summary.get("tasks", 0),
+                    "pending": summary.get("pending", 0),
+                    "resolved": summary.get("resolved", 0),
+                    "by_kind": summary.get("by_kind", {}),
+                }
+                # Build the deterministic entry-path view on the same graph
+                # snapshot. It is written back to the active dataset because
+                # both agentic enhancement and Stage 1 consume that file.
+                try:
+                    from core.reachability_context import build_reachability_context
+
+                    current_dataset = read_json(active_dataset_path)
+                    enriched_dataset = build_reachability_context(
+                        current_dataset,
+                        result.effective_call_graph_paths,
+                        platform=effective_platform,
+                    )
+                    pre_context_path = os.path.join(
+                        output_dir, "dataset_pre_reachability_context.json"
+                    )
+                    if not os.path.exists(pre_context_path):
+                        write_json(pre_context_path, current_dataset, indent=2)
+                    write_json(active_dataset_path, enriched_dataset, indent=2)
+                    context_summary = enriched_dataset.get("metadata", {}).get(
+                        "reachability_context", {}
+                    )
+                    context_path = os.path.join(output_dir, "reachability_context.json")
+                    write_json(
+                        context_path,
+                        {
+                            "schema_version": context_summary.get("schema_version", 1),
+                            "graph_versions": context_summary.get("graph_versions", []),
+                            "summary": context_summary,
+                            "units": [
+                                {
+                                    "id": unit.get("id"),
+                                    "reachability_context": unit.get("reachability_context"),
+                                }
+                                for unit in enriched_dataset.get("units", [])
+                                if isinstance(unit, Mapping)
+                            ],
+                        },
+                        indent=2,
+                    )
+                    ctx.outputs["reachability_context_path"] = context_path
+                    ctx.outputs["dataset_pre_reachability_context_path"] = pre_context_path
+                    ctx.summary["entry_path_context"] = context_summary
+                    _print_chinese_log(
+                        "P3 入口血缘上下文：已把有效图重建的顶层入口、路径节点、源码位置和"
+                        f"缺失上游信息写入 Stage 1 数据集；有路径单元={context_summary.get('units_with_paths', 0)}，"
+                        f"无完整路径={context_summary.get('units_without_paths', 0)}。"
+                    )
+                except Exception as exc:
+                    ctx.status = "partial"
+                    ctx.summary["entry_path_context_error"] = str(exc)[:500]
+                    _print_chinese_log(
+                        f"P3 入口血缘上下文生成失败（{exc}），保留原 dataset；"
+                        "Stage 1 会明确看到缺少确定入口路径，而不是伪造路径。"
+                    )
+            else:
+                ctx.status = "partial"
+                ctx.summary = tasks_payload if isinstance(tasks_payload, Mapping) else {
+                    "status": "partial"
+                }
+        collected_step_reports.append(_load_step_report(output_dir, p3_step))
+        if stop_after == "openharmony-gap-tasks":
+            downstream_steps = (
+                "enhance",
+                "analyze",
+                "verify",
+                "openharmony-analysis-feedback",
+                "build-output",
+                "dynamic-test",
+                "report",
+            )
+            for downstream_step in downstream_steps:
+                _record_skip(result, downstream_step, "stop_after_openharmony_gap_tasks")
+            result.step_reports = collected_step_reports
+            _print_chinese_log(
+                "OpenHarmony 缺口任务/入口上下文阶段已完成：根据 --stop-after "
+                "openharmony-gap-tasks 主动结束本次扫描；未执行上下文增强和 Stage 1。"
+            )
+            return result
+    else:
+        _record_skip(result, "openharmony-gap-tasks", "unsupported_platform")
 
     # ---------------------------------------------------------------
     # Step 3: Enhance (optional)
@@ -1916,6 +2955,10 @@ def scan_repository(
         f"{registry.get('analyze').model}，并结合应用上下文、调用关系和安全规则给出初步判定。"
     )
     _print_chinese_log(
+        "阶段职责：Stage 1 负责初步漏洞检测；参数级 source-to-sink 数据流不作为"
+        "Stage 1 准入条件，由 Stage 2 工具复核并记录验证状态。"
+    )
+    _print_chinese_log(
         f"检测参数：limit={limit or '不限制'}，并行工作线程={workers}；"
         "分析结果先写入 results.json，后续验证阶段才会决定哪些问题可以确认。"
     )
@@ -1942,6 +2985,9 @@ def scan_repository(
         ctx.summary = {
             "total_units": analyze_result.metrics.total,
             "analyzed": analyze_result.metrics.total - analyze_result.metrics.errors,
+            "stage1_role": "vulnerability_detection",
+            "parameter_dataflow_owner": "stage2",
+            "parameter_dataflow_is_stage1_gate": False,
             "verdicts": {
                 "vulnerable": analyze_result.metrics.vulnerable,
                 "bypassable": analyze_result.metrics.bypassable,
@@ -2120,6 +3166,65 @@ def scan_repository(
             "当前输出仍是第一阶段的初步判定。"
         )
         _record_skip(result, "verify", "not_requested")
+    print(file=sys.stderr)
+
+    # ---------------------------------------------------------------
+    # Step 5.5: OpenHarmony analysis feedback (P3, deterministic)
+    # ---------------------------------------------------------------
+    # Enhancement and Stage 1/2 are allowed to discover useful upstream and
+    # downstream hints.  Persist them after the final result path is known so
+    # the next incremental graph pass can schedule work from one auditable
+    # artifact.  The artifact is deliberately advisory and never mutates the
+    # effective graph in-place.
+    if effective_platform == "openharmony":
+        feedback_step = "openharmony-analysis-feedback"
+        print(_step_label("Writing OpenHarmony analysis feedback..."), file=sys.stderr)
+        _print_chinese_log(
+            "阶段 P3/分析反馈：汇总上下文增强、Stage 1/Stage 2 结果和入口路径；"
+            "候选事实只进入下一轮调度，不自动改写有效调用图。"
+        )
+        with step_context(feedback_step, output_dir, inputs={
+            "dataset_path": result.enhanced_dataset_path or active_dataset_path,
+            "results_path": active_results_path,
+            "gap_tasks_path": result.call_graph_gap_tasks_path,
+            "revision": graph_source_revision,
+            "build_config_id": graph_build_config_id,
+        }) as ctx:
+            feedback_path, feedback_payload = _write_openharmony_analysis_feedback(
+                result=result,
+                output_dir=output_dir,
+                dataset_path=result.enhanced_dataset_path or active_dataset_path,
+                results_path=active_results_path,
+                gap_tasks_path=result.call_graph_gap_tasks_path,
+                repo_path=repo_path,
+                source_revision=graph_source_revision,
+                build_config_id=graph_build_config_id,
+                effective_platform=effective_platform,
+            )
+            if feedback_path:
+                summary = feedback_payload.get("summary", {}) if isinstance(feedback_payload, Mapping) else {}
+                ctx.outputs = {"feedback_path": feedback_path}
+                ctx.summary = {
+                    "status": "complete",
+                    "candidate_facts": summary.get("candidate_facts", 0),
+                    "pending_gap_tasks": summary.get("pending_gap_tasks", 0),
+                    "units_with_entry_paths": summary.get("units_with_entry_paths", 0),
+                    "units_without_entry_paths": summary.get("units_without_entry_paths", 0),
+                    "strict_graph_mutated": False,
+                }
+                _print_chinese_log(
+                    "分析反馈完成：候选事实="
+                    f"{summary.get('candidate_facts', 0)}，待处理缺口任务="
+                    f"{summary.get('pending_gap_tasks', 0)}；产物={feedback_path}。"
+                )
+            else:
+                ctx.status = "partial"
+                ctx.summary = feedback_payload if isinstance(feedback_payload, Mapping) else {
+                    "status": "partial"
+                }
+        collected_step_reports.append(_load_step_report(output_dir, feedback_step))
+    else:
+        _record_skip(result, "openharmony-analysis-feedback", "unsupported_platform")
     print(file=sys.stderr)
 
     # ---------------------------------------------------------------
@@ -2426,26 +3531,28 @@ def _apply_projection_reachability_filter(
     # Preserve LLM reachability promotions/signals that may have been written
     # to the active (already filtered) dataset before this stage.
     current_by_id: dict[str, Mapping] = {}
-    if os.path.abspath(active_dataset_path) != os.path.abspath(source_path):
-        try:
-            current_payload = read_json(active_dataset_path)
-            current_units = (
-                current_payload.get("units", [])
-                if isinstance(current_payload, Mapping)
-                else []
-            )
-            if isinstance(current_units, list):
-                current_by_id = {
-                    str(item.get("id")): item
-                    for item in current_units
-                    if isinstance(item, Mapping) and item.get("id")
-                }
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            print(
-                f"  [Warning] Could not restore LLM reachability signals "
-                f"before overlay filtering: {exc}",
-                file=sys.stderr,
-            )
+    # Read the active dataset even when it is also the re-filter source.  The
+    # fallback path without a dataset_unfiltered sidecar still needs to carry
+    # high semantic seeds and medium candidate markers into the final BFS.
+    try:
+        current_payload = read_json(active_dataset_path)
+        current_units = (
+            current_payload.get("units", [])
+            if isinstance(current_payload, Mapping)
+            else []
+        )
+        if isinstance(current_units, list):
+            current_by_id = {
+                str(item.get("id")): item
+                for item in current_units
+                if isinstance(item, Mapping) and item.get("id")
+            }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            f"  [Warning] Could not restore LLM reachability signals "
+            f"before overlay filtering: {exc}",
+            file=sys.stderr,
+        )
 
     extra_entry_points = {
         unit_id
@@ -2464,6 +3571,11 @@ def _apply_projection_reachability_filter(
             unit.get("semantic_reachability_retain_only") is True
             or unit.get("reachability_retain_only") is True
         )
+    }
+    extra_candidate_reachability_seeds = {
+        unit_id
+        for unit_id, unit in current_by_id.items()
+        if unit.get("semantic_reachability_candidate_seed") is True
     }
     graph_dirs = resolve_call_graph_dirs(output_dir)
     if not graph_dirs:
@@ -2543,6 +3655,9 @@ def _apply_projection_reachability_filter(
                 extra_retain_only_units=scope_entry_points_to_units(
                     extra_retain_only_units, language_units
                 ),
+                extra_candidate_reachability_seeds=scope_entry_points_to_units(
+                    extra_candidate_reachability_seeds, language_units
+                ),
                 library_mode=library_mode,
                 platform=effective_platform,
                 semantic_graph_overlay=language_overlay,
@@ -2564,11 +3679,16 @@ def _apply_projection_reachability_filter(
                     "llm_reachability_signals",
                     "semantic_reachability_seed",
                     "semantic_reachability_retain_only",
+                    "semantic_reachability_candidate_seed",
                     "reachability_retain_only",
                     "reachability_seed_source",
                     "semantic_seed_reasons",
                     "reachability_retain_only_source",
                     "semantic_retain_only_reasons",
+                    "reachability_status",
+                    "reachability_reason",
+                    "analysis_arrangement",
+                    "reachability_evidence",
                 ):
                     if key in current:
                         unit[key] = current[key]
@@ -2597,6 +3717,23 @@ def _apply_projection_reachability_filter(
             per_language[label] = {
                 "original_units": count,
                 "entry_points": 0,
+                "semantic_seed_count": 0,
+                "semantic_seed_ids": [],
+                "semantic_candidate_seed_count": 0,
+                "semantic_candidate_seed_ids": [],
+                "candidate_reachable_units": count,
+                "candidate_reachable_added": count,
+                "candidate_reachable_ids": [],
+                "strict_path_coverage_count": 0,
+                "strict_path_coverage_ids": [],
+                "candidate_path_coverage_count": 0,
+                "candidate_path_coverage_ids": [],
+                "fallback_only_count": count,
+                "fallback_only_ids": [],
+                "final_analysis_count": count,
+                "fallback_triggered": True,
+                "fallback_reason": "unfiltered_no_call_graph",
+                "reachability_evidence": "unfiltered_no_call_graph",
                 "reachable_units": count,
                 "filtered_out": 0,
                 "reduction_percentage": 0,
@@ -2615,6 +3752,92 @@ def _apply_projection_reachability_filter(
             "entry_points": sum(
                 int(item.get("entry_points", 0) or 0)
                 for item in per_language.values()
+            ),
+            "semantic_seed_count": sum(
+                int(item.get("semantic_seed_count", 0) or 0)
+                for item in per_language.values()
+            ),
+            "semantic_seed_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (item.get("semantic_seed_ids", []) or [])
+                if unit_id
+            }),
+            "semantic_candidate_seed_count": sum(
+                int(item.get("semantic_candidate_seed_count", 0) or 0)
+                for item in per_language.values()
+            ),
+            "semantic_candidate_seed_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (
+                    item.get("semantic_candidate_seed_ids", []) or []
+                )
+                if unit_id
+            }),
+            "candidate_reachable_units": sum(
+                int(item.get("candidate_reachable_units", 0) or 0)
+                for item in per_language.values()
+            ),
+            "candidate_reachable_added": sum(
+                int(item.get("candidate_reachable_added", 0) or 0)
+                for item in per_language.values()
+            ),
+            "candidate_reachable_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (item.get("candidate_reachable_ids", []) or [])
+                if unit_id
+            }),
+            "strict_path_coverage_count": sum(
+                int(item.get("strict_path_coverage_count", 0) or 0)
+                for item in per_language.values()
+            ),
+            "strict_path_coverage_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (item.get("strict_path_coverage_ids", []) or [])
+                if unit_id
+            }),
+            "candidate_path_coverage_count": sum(
+                int(item.get("candidate_path_coverage_count", 0) or 0)
+                for item in per_language.values()
+            ),
+            "candidate_path_coverage_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (
+                    item.get("candidate_path_coverage_ids", []) or []
+                )
+                if unit_id
+            }),
+            "fallback_only_count": sum(
+                int(item.get("fallback_only_count", 0) or 0)
+                for item in per_language.values()
+            ),
+            "fallback_only_ids": sorted({
+                str(unit_id)
+                for item in per_language.values()
+                for unit_id in (item.get("fallback_only_ids", []) or [])
+                if unit_id
+            }),
+            "final_analysis_count": sum(
+                int(item.get("final_analysis_count", item.get("reachable_units", 0)) or 0)
+                for item in per_language.values()
+            ),
+            "fallback_triggered": any(
+                bool(item.get("fallback_triggered"))
+                for item in per_language.values()
+            ),
+            "fallback_reason": "; ".join(
+                f"{label}: {reason}"
+                for label, item in per_language.items()
+                if (reason := item.get("fallback_reason"))
+            ),
+            "reachability_evidence": (
+                "mixed_filtered_and_unfiltered"
+                if unfiltered_count
+                else "accepted_or_candidate_path"
             ),
             "reachable_units": reachable_count,
             "filtered_out": original_count - reachable_count,
@@ -2697,6 +3920,9 @@ def _apply_projection_reachability_filter(
     dataset["metadata"] = metadata
     write_json(active_dataset_path, dataset, indent=2)
 
+    aggregate_filter = metadata.get("reachability_filter", {})
+    if not isinstance(aggregate_filter, Mapping):
+        aggregate_filter = {}
     return {
         "applied": bool(refilter_by_language),
         "source": os.path.relpath(source_path, output_dir),
@@ -2710,18 +3936,37 @@ def _apply_projection_reachability_filter(
         ),
         "unfilterable_units": sum(unfilterable.values()),
         "errors": errors,
+        "strict_path_coverage_count": int(
+            aggregate_filter.get("strict_path_coverage_count", 0) or 0
+        ),
+        "candidate_path_coverage_count": int(
+            aggregate_filter.get("candidate_path_coverage_count", 0) or 0
+        ),
+        "fallback_only_count": int(
+            aggregate_filter.get("fallback_only_count", 0) or 0
+        ),
+        "final_analysis_count": int(
+            aggregate_filter.get("final_analysis_count", len(kept)) or 0
+        ),
+        "fallback_triggered": bool(
+            aggregate_filter.get("fallback_triggered", False)
+        ),
+        "fallback_reason": aggregate_filter.get("fallback_reason", ""),
     }
 
 
 def _run_openharmony_recovery_projection_stage(
     *,
     result: ScanResult,
+    repo_path: str,
     output_dir: str,
     active_dataset_path: str,
     unfiltered_dataset_path: str | None,
     processing_level: str,
     library_mode: bool,
     effective_platform: str,
+    source_revision: str,
+    build_config_id: str,
     collected_step_reports: list[dict],
     step_label,
 ) -> None:
@@ -2732,9 +3977,10 @@ def _run_openharmony_recovery_projection_stage(
     explicit bridge between those reports and a semantic graph payload.  It
     consumes only source reports that are present in the scan directory
     (including the entry-driven rounds artifact) and
-    keeps every rejection/provenance detail in the resulting artifact.  No
-    dataset filtering or BFS is performed here; that is a later, independently
-    gated integration step.
+    keeps every rejection/provenance detail in the resulting artifact.  For a
+    non-``all`` scan, this function is also the explicit bridge that re-runs
+    the final reachability filter from the unfiltered dataset; the native graph
+    and active dataset are never overwritten in place.
     """
     projection_step = "llm-call-graph-projection"
     print(
@@ -2771,7 +4017,7 @@ def _run_openharmony_recovery_projection_stage(
             }
             _record_skip(result, projection_step, "unsupported_platform")
         else:
-            from core.platforms.graph import SemanticGraph
+            from core.platforms.graph import SemanticGraph, merge_semantic_graphs
             from core.platforms.openharmony.llm_call_graph_projection import (
                 PROJECTION_SCHEMA_VERSION,
                 PROJECTION_TASK,
@@ -2780,10 +4026,6 @@ def _run_openharmony_recovery_projection_stage(
             from core.platforms.openharmony.llm_call_graph_rounds import (
                 ROUND_TASK,
             )
-            from core.platforms.openharmony.native_dispatch import (
-                merge_semantic_graphs,
-            )
-
             source_names = (
                 "llm_call_graph_recovery.json",
                 "llm_call_graph_recovery_rounds.json",
@@ -3099,6 +4341,9 @@ def _run_openharmony_recovery_projection_stage(
             accepted_input = 0
             rejected_count = 0
             duplicate_edges = 0
+            strict_edges = 0
+            candidate_edges = 0
+            evidence_quality_counts: dict[str, int] = {}
             for item in language_reports:
                 summary = item.get("summary", {})
                 if not isinstance(summary, Mapping):
@@ -3118,6 +4363,24 @@ def _run_openharmony_recovery_projection_stage(
                         rejected_count += value
                     else:
                         duplicate_edges += value
+                try:
+                    strict_edges += int(summary.get("strict_edges", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    candidate_edges += int(summary.get("candidate_edges", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+                quality_counts = summary.get("evidence_quality_counts", {})
+                if isinstance(quality_counts, Mapping):
+                    for quality, count in quality_counts.items():
+                        try:
+                            evidence_quality_counts[str(quality)] = (
+                                evidence_quality_counts.get(str(quality), 0)
+                                + int(count or 0)
+                            )
+                        except (TypeError, ValueError):
+                            continue
 
             projected_from_languages = sum(
                 int((item.get("summary") or {}).get("projected_edges", 0) or 0)
@@ -3136,6 +4399,9 @@ def _run_openharmony_recovery_projection_stage(
                 "projected_edges": len(final_graph.get("edges", [])),
                 "rejected": rejected_count,
                 "duplicate_edges": duplicate_edges + cross_language_duplicates,
+                "strict_edges": strict_edges,
+                "candidate_edges": candidate_edges,
+                "evidence_quality_counts": evidence_quality_counts,
                 "unmatched_reports": unmatched_reports,
                 "errors": len(source_errors)
                 + sum(len(item.get("errors", [])) for item in language_reports),
@@ -3145,6 +4411,8 @@ def _run_openharmony_recovery_projection_stage(
                 "schema_version": PROJECTION_SCHEMA_VERSION,
                 "task": PROJECTION_TASK,
                 "platform": "openharmony",
+                "source_revision": source_revision,
+                "build_config_id": build_config_id,
                 "status": overall_status,
                 "source_artifacts": source_artifacts,
                 "reports": language_reports,
@@ -3157,6 +4425,164 @@ def _run_openharmony_recovery_projection_stage(
             )
             write_json(projection_path, payload, indent=2)
             result.llm_call_graph_overlay_path = projection_path
+            effective_graph_refresh = []
+            try:
+                from core.call_graph_facts import (
+                    refresh_effective_call_graphs,
+                    synchronize_dataset_dependencies,
+                )
+
+                # The projection is the explicit trust boundary: only this
+                # validated overlay is allowed to add semantic edges to the
+                # effective graph. Recovery/review reports remain advisory.
+                effective_graph_refresh = refresh_effective_call_graphs(
+                    output_dir,
+                    semantic_overlays=[payload],
+                    source_revision=source_revision,
+                    build_config_id=build_config_id,
+                    include_persisted_overlays=False,
+                )
+                if effective_graph_refresh:
+                    dependency_sync = synchronize_dataset_dependencies(
+                        active_dataset_path,
+                        [
+                            item.get("path")
+                            for item in effective_graph_refresh
+                            if isinstance(item, Mapping) and item.get("path")
+                        ],
+                    )
+                    _print_chinese_log(
+                        "调用事实库：已把通过投影校验的边合并到 effective_call_graph.json；"
+                        f"更新图目录={len(effective_graph_refresh)}，"
+                        f"并同步 {dependency_sync.get('units_updated', 0)} 个单元的依赖版本。"
+                    )
+                else:
+                    dependency_sync = {}
+            except Exception as exc:
+                dependency_sync = {}
+                print(
+                    f"  WARNING: effective graph refresh after projection failed: {exc}",
+                    file=sys.stderr,
+                )
+                _print_chinese_log(
+                    f"投影后有效调用图刷新失败（{exc}），本次仍保留独立 overlay，"
+                    "可达性将使用可用的原生图降级。"
+                )
+            ablation_path = None
+            ablation_summary = {
+                "status": "skipped",
+                "reason": "requires_single_graph_and_non_all_processing",
+            }
+            # Produce a fixed-input A/B/C/D diagnostic whenever projection is
+            # enabled.  The report is intentionally derived from the same
+            # unfiltered dataset and native graph; it is not used to alter
+            # the active dataset or to accept any additional edge.
+            if processing_level != "all" and graph_count == 1:
+                try:
+                    from core.reachability_ablation import (
+                        run_reachability_ablation,
+                    )
+
+                    ablation_dataset_path = (
+                        unfiltered_dataset_path
+                        if unfiltered_dataset_path
+                        and os.path.isfile(unfiltered_dataset_path)
+                        else active_dataset_path
+                    )
+                    ablation_dataset = read_json(ablation_dataset_path)
+                    active_payload = read_json(active_dataset_path)
+                    if (
+                        isinstance(ablation_dataset, Mapping)
+                        and isinstance(active_payload, Mapping)
+                    ):
+                        # The unfiltered sidecar is created before LLM signals
+                        # are applied. Copy only semantic annotations from the
+                        # active dataset so A/B/C/D share the full unit set
+                        # while using the actual medium seeds from this run.
+                        active_by_id = {
+                            str(item.get("id")): item
+                            for item in active_payload.get("units", [])
+                            if isinstance(item, Mapping) and item.get("id")
+                        }
+                        merged_units = []
+                        for raw_unit in ablation_dataset.get("units", []):
+                            if not isinstance(raw_unit, Mapping):
+                                continue
+                            unit = dict(raw_unit)
+                            current = active_by_id.get(str(unit.get("id")))
+                            if isinstance(current, Mapping):
+                                for key in (
+                                    "is_entry_point",
+                                    "semantic_reachability_seed",
+                                    "semantic_reachability_candidate_seed",
+                                    "semantic_reachability_retain_only",
+                                    "reachability_retain_only",
+                                ):
+                                    if key in current:
+                                        unit[key] = current[key]
+                            merged_units.append(unit)
+                        ablation_dataset = {
+                            **dict(ablation_dataset),
+                            "units": merged_units,
+                        }
+                    native_graph_path = os.path.join(
+                        sorted_graph_dirs[0][1], "call_graph.json"
+                    )
+                    native_graph_payload = read_json(native_graph_path)
+                    candidate_seed_ids = {
+                        str(unit.get("id"))
+                        for unit in ablation_dataset.get("units", [])
+                        if isinstance(unit, Mapping)
+                        and unit.get("id")
+                        and unit.get("semantic_reachability_candidate_seed") is True
+                    }
+                    ablation_report = run_reachability_ablation(
+                        ablation_dataset,
+                        native_graph_payload,
+                        semantic_overlay=payload,
+                        candidate_seed_ids=candidate_seed_ids,
+                        platform=effective_platform,
+                    )
+                    ablation_path = os.path.join(
+                        output_dir, "llm_call_graph_ablation.json"
+                    )
+                    write_json(ablation_path, ablation_report, indent=2)
+                    result.llm_call_graph_ablation_path = ablation_path
+                    ablation_summary = {
+                        "status": "complete",
+                        "path": os.path.relpath(ablation_path, output_dir),
+                        "arms": {
+                            name: {
+                                "unit_count": value.get("unit_count", 0),
+                                "strict_path_coverage_count": value.get(
+                                    "strict_path_coverage_count", 0
+                                ),
+                                "candidate_path_coverage_count": value.get(
+                                    "candidate_path_coverage_count", 0
+                                ),
+                                "fallback_only_count": value.get(
+                                    "fallback_only_count", 0
+                                ),
+                                "final_analysis_count": value.get(
+                                    "final_analysis_count", 0
+                                ),
+                                "fallback_triggered": value.get(
+                                    "fallback_triggered", False
+                                ),
+                                "candidate_reachable_count": value.get(
+                                    "candidate_reachable_count", 0
+                                ),
+                            }
+                            for name, value in ablation_report.get("arms", {}).items()
+                            if isinstance(value, Mapping)
+                        },
+                        "target_matrix": ablation_report.get("target_matrix", {}),
+                    }
+                except Exception as exc:  # diagnostic only; never block projection
+                    ablation_summary = {
+                        "status": "failed",
+                        "reason": str(exc)[:500],
+                    }
             refilter_summary = _apply_projection_reachability_filter(
                 active_dataset_path=active_dataset_path,
                 unfiltered_dataset_path=unfiltered_dataset_path,
@@ -3167,13 +4593,54 @@ def _run_openharmony_recovery_projection_stage(
                 primary_language=result.language,
                 overlay_payload=payload,
             )
+            # Re-filtering may rebuild dataset.json from the preserved
+            # all-units sidecar. Re-apply graph provenance afterwards so the
+            # active dataset cannot regress to the pre-projection graph
+            # version.
+            if effective_graph_refresh:
+                try:
+                    from core.call_graph_facts import synchronize_dataset_dependencies
+
+                    dependency_sync = synchronize_dataset_dependencies(
+                        active_dataset_path,
+                        [
+                            item.get("path")
+                            for item in effective_graph_refresh
+                            if isinstance(item, Mapping) and item.get("path")
+                        ],
+                    )
+                except Exception as exc:
+                    dependency_sync = {
+                        "units_seen": 0,
+                        "units_updated": 0,
+                        "edges_loaded": 0,
+                        "error": str(exc)[:500],
+                    }
             if refilter_summary.get("applied"):
                 result.units_count = int(
                     refilter_summary.get("reachable_units", result.units_count)
                     or 0
                 )
+            gap_report_path = None
+            gap_report = {}
+            try:
+                gap_report_path, gap_report = _write_call_graph_gap_report(
+                    output_dir=output_dir,
+                    effective_graphs=effective_graph_refresh,
+                    repo_path=repo_path,
+                    source_revision=source_revision,
+                    build_config_id=build_config_id,
+                )
+                if gap_report_path:
+                    result.call_graph_gap_report_path = gap_report_path
+            except Exception as exc:
+                _print_chinese_log(f"投影后调用图缺口汇总失败（{exc}），不影响投影结果。")
             ctx.outputs = {
                 "overlay_path": projection_path,
+                "effective_call_graphs": effective_graph_refresh,
+                "dependency_sync": dependency_sync,
+                **({"call_graph_gap_report": gap_report_path} if gap_report_path else {}),
+                **({"ablation_path": ablation_path} if ablation_path else {}),
                 **(
                     {"unfiltered_dataset_path": unfiltered_dataset_path}
                     if unfiltered_dataset_path
@@ -3183,7 +4650,13 @@ def _run_openharmony_recovery_projection_stage(
             ctx.summary = {
                 "status": overall_status,
                 **aggregate,
+                "ablation": ablation_summary,
                 "reachability_refilter": refilter_summary,
+                **(
+                    {"call_graph_gap_summary": gap_report.get("summary", {})}
+                    if gap_report
+                    else {}
+                ),
             }
             if overall_status == "no_artifacts":
                 ctx.status = "skipped"
@@ -3656,16 +5129,42 @@ def _count_steps(
     generate_report: bool,
     dynamic_test: bool,
     llm_reachability: bool = False,
+    stop_after: str | None = None,
     llm_call_graph_recovery: bool = False,
     llm_call_graph_iterative_recovery: bool = False,
     llm_call_graph_candidate_review: bool = False,
     llm_call_graph_projection: bool = False,
     openharmony_dispatch_code_evidence: bool = False,
+    openharmony_gap_tasks: bool = False,
 ) -> int:
     """Count total steps for progress display (always includes parse, detect, build-output)."""
-    count = 3  # parse + detect + build-output (always run)
-    if generate_context:
-        count += 1
+    if stop_after == "effective-call-graph":
+        return 1
+    if stop_after == "llm-reachability":
+        # The application-context checkpoint is displayed even when the
+        # caller explicitly skips it, so it still occupies a progress slot.
+        return 3
+    if stop_after == "openharmony-gap-tasks":
+        # Progress is intentionally conservative: parse plus the selected
+        # pre-analysis stages. Optional recovery/projection stages are counted
+        # below only for a full run; the stop checkpoint itself remains one
+        # auditable terminal stage.
+        count = 3  # parse + application-context checkpoint + gap-task checkpoint
+        if llm_reachability:
+            count += 1
+        if llm_call_graph_recovery or llm_call_graph_iterative_recovery:
+            count += 1
+        if llm_call_graph_candidate_review:
+            count += 1
+        if llm_call_graph_projection:
+            count += 1
+        if openharmony_dispatch_code_evidence:
+            count += 1
+        return count
+    # parse + application-context checkpoint + detect + build-output.  The
+    # context step remains visible as an explicit skip when disabled, so it is
+    # counted in both modes and progress labels do not end in e.g. [5/4].
+    count = 4
     if enhance:
         count += 1
     if verify:
@@ -3683,6 +5182,8 @@ def _count_steps(
     if llm_call_graph_projection:
         count += 1
     if openharmony_dispatch_code_evidence:
+        count += 1
+    if openharmony_gap_tasks:
         count += 1
     return count
 
@@ -3894,6 +5395,9 @@ def _write_scan_report(
             ),
             "llm_call_graph_overlay_path": result.llm_call_graph_overlay_path,
             "llm_call_graph_rounds_path": result.llm_call_graph_rounds_path,
+            "llm_call_graph_ablation_path": result.llm_call_graph_ablation_path,
+            "call_graph_gap_tasks_path": result.call_graph_gap_tasks_path,
+            "analysis_feedback_path": result.analysis_feedback_path,
             "openharmony_dispatch_code_evidence_path": (
                 result.openharmony_dispatch_code_evidence_path
             ),
@@ -3940,11 +5444,13 @@ def _print_banner(
     dynamic_test: bool,
     workers: int = 8,
     backoff_seconds: int = 30,
+    stop_after: str | None = None,
     llm_call_graph_recovery: bool = False,
     llm_call_graph_iterative_recovery: bool = False,
     llm_call_graph_candidate_review: bool = False,
     llm_call_graph_projection: bool = False,
     openharmony_dispatch_code_evidence: bool = False,
+    clang_semantic: bool = False,
 ) -> None:
     """Print the scan configuration banner."""
     print("=" * 60, file=sys.stderr)
@@ -3959,6 +5465,7 @@ def _print_banner(
     print(f"  App context:   {generate_context}", file=sys.stderr)
     print(f"  Report:        {generate_report}", file=sys.stderr)
     print(f"  Dynamic test:  {dynamic_test}", file=sys.stderr)
+    print(f"  Stop after:    {stop_after or 'none'}", file=sys.stderr)
     print(f"  OH call-edge recovery: {llm_call_graph_recovery}", file=sys.stderr)
     print(
         f"  OH iterative call-edge recovery: {llm_call_graph_iterative_recovery}",
@@ -3976,6 +5483,7 @@ def _print_banner(
         f"  OH dispatch-code evidence: {openharmony_dispatch_code_evidence}",
         file=sys.stderr,
     )
+    print(f"  OH Clang semantic batch: {clang_semantic}", file=sys.stderr)
     workers_label = f"{workers} (parallel)" if workers > 1 else "1 (sequential)"
     print(f"  Workers:       {workers_label}", file=sys.stderr)
     print(f"  Rate backoff:  {backoff_seconds}s", file=sys.stderr)
