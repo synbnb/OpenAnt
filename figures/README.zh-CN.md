@@ -7,6 +7,11 @@
 | [openant-full-pipeline-flow.md](openant-full-pipeline-flow.md) | 当前实现的阶段级总览：源码定位、设备暴露面识别和普通静态扫描 |
 | [openant-exposure-surface-flow.md](openant-exposure-surface-flow.md) | 独立暴露面识别的探测、用户确认启动、证据门禁和结果输出 |
 | [openant-integrated-future-pipeline-flow.md](openant-integrated-future-pipeline-flow.md) | 后续整合预想：设备事实作为源码定位线索，再进入静态扫描 |
+| [openant-complete-project-overall-flow.md](openant-complete-project-overall-flow.md) | 当前项目从设备资产、源码定位到分析报告的完整总流程 |
+| [openant-system-runtime-architecture.md](openant-system-runtime-architecture.md) | Web、Go 控制平面、Python Agent 平面、外部事实源与存储边界 |
+| [openant-exposure-location-integrated-flow.md](openant-exposure-location-integrated-flow.md) | 设备资产、单目标识别、源码定位、用户确认与 Git 交接 |
+| [openant-repository-scan-detailed-flow.md](openant-repository-scan-detailed-flow.md) | 仓库解析、有效图、可达性、Stage 1/2、动态验证与报告 |
+| [openant-evidence-and-feedback-loop.md](openant-evidence-and-feedback-loop.md) | 原生图、严格/候选事实、入口血缘和分析反馈闭环 |
 
 .mmd 是原始 Mermaid 源码；.png 适合直接插入文档；.svg 是可缩放的矢量图。
 整合预想图中的虚线只表示规划中的证据关联，不代表当前版本已经自动串联阶段。

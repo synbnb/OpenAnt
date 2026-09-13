@@ -1,0 +1,51 @@
+flowchart LR
+    SRC["源码、构建配置、设备与注册证据"]
+    TS["Tree-sitter / 语言解析器"]
+    CLANG["Clang 语义 sidecar<br/>可选"]
+    LLMEDGE["LLM 调用边求证<br/>可选"]
+    LEDGER[("调用点台账<br/>站点、绑定、完整性、缺口")]
+    NATIVE[("不可变原生调用图")]
+    FACTS["统一调用事实生成器"]
+    STRICT[("严格边事实")]
+    CAND[("候选事实")]
+    EXCL[("排除与原因")]
+    EFFECTIVE[("effective_call_graph<br/>带版本的有效图")]
+    REACH["可达性视图<br/>strict / candidate / fallback"]
+    LINEAGE["入口血缘与有序源码包"]
+    ENHANCE["上下文增强"]
+    S1["Stage 1"]
+    S2["Stage 2"]
+    FEEDBACK[("analysis_feedback<br/>缺口任务与新线索")]
+
+    SRC --> TS
+    SRC --> CLANG
+    SRC --> LLMEDGE
+    TS --> LEDGER
+    TS --> NATIVE
+    CLANG --> FACTS
+    LLMEDGE --> FACTS
+    LEDGER --> FACTS
+    NATIVE --> FACTS
+    FACTS --> STRICT
+    FACTS --> CAND
+    FACTS --> EXCL
+    STRICT --> EFFECTIVE
+    NATIVE --> EFFECTIVE
+    EFFECTIVE --> REACH
+    CAND -. "保召回候选传播" .-> REACH
+    REACH --> LINEAGE --> ENHANCE --> S1 --> S2
+    ENHANCE -. "观察事实" .-> FEEDBACK
+    S1 -. "证据缺口" .-> FEEDBACK
+    S2 -. "新调用/注册线索" .-> FEEDBACK
+    FEEDBACK -. "下一轮核验，不自动升级" .-> FACTS
+
+    classDef raw fill:#eff6ff,stroke:#2563eb,color:#172554;
+    classDef fact fill:#f8fafc,stroke:#475569,color:#0f172a;
+    classDef strict fill:#f0fdf4,stroke:#15803d,color:#052e16;
+    classDef candidate fill:#fff7ed,stroke:#c2410c,color:#431407,stroke-dasharray:5 3;
+    classDef llm fill:#faf5ff,stroke:#7e22ce,color:#3b0764;
+    class SRC,TS,NATIVE raw;
+    class LEDGER,FACTS,EFFECTIVE,LINEAGE,FEEDBACK fact;
+    class STRICT,REACH strict;
+    class CAND,EXCL candidate;
+    class CLANG,LLMEDGE,ENHANCE,S1,S2 llm;

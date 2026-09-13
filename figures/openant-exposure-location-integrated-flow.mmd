@@ -1,0 +1,52 @@
+flowchart TB
+    D0["开发板在线"]
+    D1["资产发现根任务<br/>扫描所有 Socket 暴露面"]
+    D2["模型动态拆分任务树"]
+    D3["device_exec 执行只读 HDC 命令"]
+    D4["证据登记与字段缺口复查"]
+    D5{"finish_inventory<br/>证据门禁通过?"}
+    D6[("设备专属 Socket 资产快照")]
+
+    T0["选定 Unix / TCP / UDP 目标"]
+    T1["目标标准化"]
+    T2["Agentic 单目标侦查"]
+    T3["确定性兼容采集与证据校验"]
+    T4{"已安装但未运行?"}
+    T5["等待用户同意临时启动"]
+    T6["重新侦查并提取标准字段"]
+
+    L0["源码定位会话"]
+    L1["OpenGrok 探测与有界初始搜索"]
+    L2["LLM 选择搜索 / 读取动作"]
+    L3["构造证据图并归因服务端、客户端"]
+    L4["Manifest 仓库映射与多候选 PK"]
+    L5{"证据充分?"}
+    L6["有界补证或标记 missing_predicates"]
+    L7["展示入口函数完整源码证据"]
+    L8["等待用户确认仓库和版本"]
+    L9["Git 拉取或安全复用"]
+    L10{"拉取后核验通过?"}
+    L11["版本选择 / 替代候选"]
+    L12[("source_handoff.json")]
+
+    D0 --> D1 --> D2 --> D3 --> D4 --> D5
+    D5 -->|"否"| D2
+    D5 -->|"是"| D6 --> T0
+    T0 --> T1 --> T2 --> T3 --> T4
+    T4 -->|"否"| T6
+    T4 -->|"是"| T5 -->|"同意"| T6
+    T5 -->|"拒绝"| T6
+    T6 --> L0 --> L1 --> L2 --> L3 --> L4 --> L5
+    L5 -->|"缺证"| L6 --> L2
+    L5 -->|"可展示"| L7 --> L8 --> L9 --> L10
+    L10 -->|"否"| L11 --> L8
+    L10 -->|"是"| L12
+
+    classDef device fill:#ecfeff,stroke:#0891b2,color:#083344;
+    classDef decision fill:#fff7ed,stroke:#c2410c,color:#431407;
+    classDef locator fill:#eff6ff,stroke:#2563eb,color:#172554;
+    classDef artifact fill:#f8fafc,stroke:#475569,color:#0f172a;
+    class D0,D1,D2,D3,D4,D6,T0,T1,T2,T3,T5,T6 device;
+    class D5,T4,L5,L10 decision;
+    class L0,L1,L2,L3,L4,L6,L7,L8,L9,L11 locator;
+    class L12 artifact;

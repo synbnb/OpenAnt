@@ -1,0 +1,55 @@
+flowchart TB
+    I["本地仓库 + 参数 + 可选 scan_scope"]
+    P0["0 启动与阶段模型预检"]
+    P1["1 平台画像与语言选择"]
+    P2["2 解析全量或目标范围<br/>dataset / native graph / ledger / residual"]
+    P3["3 P0 有效调用图构建"]
+    P4{"启用 Clang semantic?"}
+    P5["4 P1 编译上下文发现与批量语义提取"]
+    P6["5 缺口报告与对象流候选事实"]
+    P7["6 应用安全上下文"]
+    P8{"启用 LLM 可达性?"}
+    P9["7 全量单元分批语义入口复核"]
+    P10["8 strict / candidate 可达性筛选"]
+    P11{"启用调用图语义复核?"}
+    P12["9 residual 恢复与候选边复核"]
+    P13["10 合格边投影、刷新有效图、重新 BFS"]
+    P14["11 分派码证据与 P3 缺口任务"]
+    P15["12 入口到目标的有序源码包"]
+    P16{"启用上下文增强?"}
+    P17["13 Agentic / single-shot 增强"]
+    P18["14 Stage 1 按函数初步安全分析"]
+    P19{"启用 Stage 2?"}
+    P20["15 FindingVerifier 工具循环"]
+    P21["16 分析反馈与标准 pipeline_output"]
+    P22{"启用动态验证?"}
+    P23["17 Docker / Claude Code 验证"]
+    P24["18 HTML、摘要、中文/英文披露、scan.report"]
+
+    I --> P0 --> P1 --> P2 --> P3 --> P4
+    P4 -->|"是"| P5 --> P6
+    P4 -->|"否"| P6
+    P6 --> P7 --> P8
+    P8 -->|"是"| P9 --> P10
+    P8 -->|"否"| P10
+    P10 --> P11
+    P11 -->|"是"| P12 --> P13 --> P14
+    P11 -->|"否"| P14
+    P14 --> P15 --> P16
+    P16 -->|"是"| P17 --> P18
+    P16 -->|"否"| P18
+    P18 --> P19
+    P19 -->|"是"| P20 --> P21
+    P19 -->|"否"| P21
+    P21 --> P22
+    P22 -->|"是"| P23 --> P24
+    P22 -->|"否"| P24
+
+    classDef required fill:#f0fdf4,stroke:#15803d,color:#052e16;
+    classDef optional fill:#faf5ff,stroke:#7e22ce,color:#3b0764;
+    classDef decision fill:#fff7ed,stroke:#c2410c,color:#431407;
+    classDef input fill:#eff6ff,stroke:#1d4ed8,color:#172554;
+    class I input;
+    class P0,P1,P2,P3,P6,P7,P10,P14,P15,P18,P21,P24 required;
+    class P5,P9,P12,P13,P17,P20,P23 optional;
+    class P4,P8,P11,P16,P19,P22 decision;
