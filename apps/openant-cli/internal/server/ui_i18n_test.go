@@ -302,6 +302,8 @@ func TestDeviceSocketAssetsTemplateProvidesAgenticInventoryControls(t *testing.T
 		"socket-record-prev",
 		"id=\"asset-history\"",
 		"设备 Socket 资产历史",
+		"renderSocketRecordsWithState",
+		"socket_record_summary",
 		"textContent",
 	} {
 		if !strings.Contains(body, want) {
