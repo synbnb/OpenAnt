@@ -17,7 +17,7 @@ Proposed（批准只读对比实验，不批准接入主扫描流程）
 
 本文不取代 ADR-001。ADR-001 仍然定义“间接调用边必须有证据、原生图保持不变、增强只能单调增加、LLM 失败时安全降级”等基本原则。本文主要回答另一个问题：
 
-> Joern 应当成为 OpenAnt 的正式 C/C++ 语义后端，还是只作为实验工具，甚至根本没有必要用于当前调用边缺失问题？
+> Joern 应当成为 VulnFounder 的正式 C/C++ 语义后端，还是只作为实验工具，甚至根本没有必要用于当前调用边缺失问题？
 
 当前决定不是“引入 Joern”，而是“先做能够否决 Joern 的小规模对比实验”。
 
@@ -90,7 +90,7 @@ Proposed（批准只读对比实验，不批准接入主扫描流程）
 
 ### 3. 当前项目已经具备的增强图骨架
 
-OpenAnt 已经存在：
+VulnFounder 已经存在：
 
 - `SemanticGraph`：带节点、边、证据、置信度、resolver 版本和 orphan；
 - `semantic_graph.json`：当前主要保存 OpenHarmony IDL/IPC 语义关系；
@@ -107,11 +107,11 @@ OpenAnt 已经存在：
 
 ### 1. 保留 tree-sitter，Joern 只做可选的 C/C++ 深层语义后端
 
-这是正确方向。OpenAnt 是多语言系统，且现有函数 ID、Unit、函数索引、入口检测和源码切片都建立在当前解析结果之上。Joern 即使通过实验，也只能补充 C/C++ 事实，不应接管全部解析。
+这是正确方向。VulnFounder 是多语言系统，且现有函数 ID、Unit、函数索引、入口检测和源码切片都建立在当前解析结果之上。Joern 即使通过实验，也只能补充 C/C++ 事实，不应接管全部解析。
 
 ### 2. Joern 输出必须经过稳定 JSON Contract
 
-正确。OpenAnt 不应让 Python 主流程依赖 Joern 内部节点对象或 Scala 类型。适配层只应输出有限事实，例如：
+正确。VulnFounder 不应让 Python 主流程依赖 Joern 内部节点对象或 Scala 类型。适配层只应输出有限事实，例如：
 
 ```json
 {
@@ -137,7 +137,7 @@ Joern 版本
 c2cpg 参数哈希
 源码范围哈希
 查询脚本版本
-OpenAnt 事实协议版本
+VulnFounder 事实协议版本
 ```
 
 只用 `repo + commit` 不够，因为排除规则、前端参数或查询逻辑变化后，旧结果可能已经不兼容。
@@ -158,7 +158,7 @@ OpenAnt 事实协议版本
 
 ### 1. 不接受“跨函数 caller/callee 默认 Joern first”
 
-当前方案把跨函数 caller/callee 简化为 `Joern first`，这不适合 OpenAnt。
+当前方案把跨函数 caller/callee 简化为 `Joern first`，这不适合 VulnFounder。
 
 原因是：
 
@@ -234,7 +234,7 @@ Web 需要展示增强图时，可以按需生成派生视图，但不把它当�
 
 ### 6. 不接受从 Joern 标准输出中直接抓 JSON
 
-Joern、JVM 和查询脚本都可能在标准输出中混入日志、进度或警告。OpenAnt 已经在其他外部工具调用中遇到过“预期 JSON envelope，但 stdout 混入交互文本”的问题。
+Joern、JVM 和查询脚本都可能在标准输出中混入日志、进度或警告。VulnFounder 已经在其他外部工具调用中遇到过“预期 JSON envelope，但 stdout 混入交互文本”的问题。
 
 建议查询脚本把结果原子写入指定文件，Python 只读取该文件，并验证：
 
@@ -249,7 +249,7 @@ stdout/stderr 只作为运行日志保存。
 
 ### 7. 不接受把整个仓库无差别交给 Joern 后直接使用全部结果
 
-OpenAnt 当前会区分 production、test、fuzz、vendor 等源码范围，而 Joern 示例命令直接解析仓库根目录。这样容易把测试 Stub、mock handler 和 fuzz 入口混入候选。
+VulnFounder 当前会区分 production、test、fuzz、vendor 等源码范围，而 Joern 示例命令直接解析仓库根目录。这样容易把测试 Stub、mock handler 和 fuzz 入口混入候选。
 
 初始 PoC 可以完整建 CPG以保留头文件和类型上下文，但输出适配层必须使用当前 `eligible function IDs` 作为端点白名单。正式实现后再评估：
 
@@ -340,7 +340,7 @@ JoernSemanticFactProvider
 
 resolver 只消费统一事实，不知道事实来自哪种工具。这样才能真正进行 A/B 对比，也避免以后被 Joern 的版本和 DSL 锁死。
 
-### 3. Joern 方法到 OpenAnt 函数 ID 的映射
+### 3. Joern 方法到 VulnFounder 函数 ID 的映射
 
 Joern 不能自行创建最终函数端点。建议按以下顺序映射：
 
@@ -348,7 +348,7 @@ Joern 不能自行创建最终函数端点。建议按以下顺序映射：
 2. 使用方法起始行/代码范围与 tree-sitter 函数范围求唯一重叠；
 3. 校验限定名或末级方法名；
 4. 对重载使用参数数量和签名作附加校验；
-5. 只有唯一匹配才返回现有 OpenAnt function ID；
+5. 只有唯一匹配才返回现有 VulnFounder function ID；
 6. 多匹配、零匹配或路径越界全部进入 orphan。
 
 所有被接受的语义边必须满足：
@@ -537,7 +537,7 @@ experiment_root/
 
 - 仓库路径和 commit；
 - source scope；
-- OpenAnt commit；
+- VulnFounder commit；
 - Joern/JDK 版本；
 - provider/resolver/schema 版本；
 - 命令行参数；
@@ -635,7 +635,7 @@ CPG 磁盘体积
 - 安装固定 Joern + JDK 19；
 - 对三个小样本建 CPG；
 - 手工查询 METHOD、CALL、METHOD_REF、assignment 和 local flow；
-- 记录 Joern 原生是否恢复目标，而不是先写 OpenAnt 集成代码。
+- 记录 Joern 原生是否恢复目标，而不是先写 VulnFounder 集成代码。
 
 ### P1：只读事实导出
 
@@ -691,7 +691,7 @@ CPG 磁盘体积
 最后：LLM 审核确定性工具仍无法解决的 residual
 ```
 
-这比“先引入 Joern，再围绕 Joern 重构”更符合 OpenAnt 当前状态，因为：
+这比“先引入 Joern，再围绕 Joern 重构”更符合 VulnFounder 当前状态，因为：
 
 - 缺边问题已有精确案例；
 - 现有语义图和单调 overlay 已经可复用；

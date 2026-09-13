@@ -1,0 +1,15 @@
+# Synthetic OpenHarmony target used only by VulnFounder tests.
+ohos_shared_library("openant_ipc_service") {
+  sources = [
+    "frameworks/health_sensor_service_proxy.cpp",
+    "services/health_sensor_service_stub.cpp",
+  ]
+
+  external_deps = [
+    "access_token:libaccesstoken_sdk",
+    "ipc:ipc_core",
+  ]
+
+  part_name = "openant_ipc_fixture"
+  subsystem_name = "security"
+}

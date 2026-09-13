@@ -1,17 +1,17 @@
-# OpenAnt 面向 OpenHarmony 源码的适配实施计划
+# VulnFounder 面向 OpenHarmony 源码的适配实施计划
 
 > - 文档状态：实施前设计稿
 > - 基线日期：2026-08-21
-> - OpenAnt 基线：`master` / `2476527`
-> - 目标：使 OpenAnt 能以 OpenHarmony 组件源码为输入，完成可度量、可复现、证据可追踪的静态安全分析。
+> - VulnFounder 基线：`master` / `2476527`
+> - 目标：使 VulnFounder 能以 OpenHarmony 组件源码为输入，完成可度量、可复现、证据可追踪的静态安全分析。
 
 ## 1. 结论先行
 
-OpenAnt 现有框架可以继续复用，但当前版本还不能可靠地扫描 OpenHarmony 源码。主要问题不在于“缺少几条 Prompt”，而在于平台语义缺失：它不能完整识别 ArkTS（`.ets`）和仓颉（`.cj`），不了解 `bundle.json`、GN、IDL、System Ability、Binder IPC、HDI/HDF、N-API/ANI/FFI 等 OpenHarmony 边界，也没有跨这些边界构造安全数据流。
+VulnFounder 现有框架可以继续复用，但当前版本还不能可靠地扫描 OpenHarmony 源码。主要问题不在于“缺少几条 Prompt”，而在于平台语义缺失：它不能完整识别 ArkTS（`.ets`）和仓颉（`.cj`），不了解 `bundle.json`、GN、IDL、System Ability、Binder IPC、HDI/HDF、N-API/ANI/FFI 等 OpenHarmony 边界，也没有跨这些边界构造安全数据流。
 
 建议采用“平台画像 + 多语言前端 + OpenHarmony 语义图 + 确定性规则 + LLM 复核”的混合架构：
 
-1. 保留 OpenAnt 现有的解析、增强、Stage 1、Stage 2 和报告主流程。
+1. 保留 VulnFounder 现有的解析、增强、Stage 1、Stage 2 和报告主流程。
 2. 在解析前增加 OpenHarmony 平台识别与组件清单生成。
 3. 在普通语言调用图之上增加 IPC、HDI/HDF、IDL、FFI 和权限检查语义边。
 4. 先用 AST/数据流规则产生可解释候选，再把候选及完整证据交给 LLM 研判；LLM 继续负责复杂语义和未知漏洞，不作为唯一检测依据。
@@ -31,8 +31,8 @@ OpenAnt 现有框架可以继续复用，但当前版本还不能可靠地扫描
 |---|---|---|---|
 | P0 | `../openharmony_reference/security` | OpenHarmony 已披露漏洞、影响、攻击面、补丁链接、SSTS 元数据和 YARA 修复特征的主要事实来源 | 不能直接替代源码级 AST/数据流规则；YARA 多数验证编译产物中的补丁特征 |
 | P0 | `../openharmony_reference/openharmony_source_code` | 验证真实目录、语言、构建、IPC/HDF/FFI 模式以及后续集成测试 | 当前只是若干组件仓，不代表完整 OpenHarmony 主干 |
-| P1 | `../openharmony_reference/security-skill-library` | 提炼 Parcel、IPC、资源约束、Fuzz 等检查思想和误报边界 | 内容未补全，现有脚本以正则为主，不能原样成为 OpenAnt 的核心检测引擎 |
-| P1 | OpenAnt 当前源码和测试 | 确定兼容性约束、落点、数据契约和回归测试方式 | 现有通用 Web/CLI 威胁模型不能直接套用到 OpenHarmony |
+| P1 | `../openharmony_reference/security-skill-library` | 提炼 Parcel、IPC、资源约束、Fuzz 等检查思想和误报边界 | 内容未补全，现有脚本以正则为主，不能原样成为 VulnFounder 的核心检测引擎 |
+| P1 | VulnFounder 当前源码和测试 | 确定兼容性约束、落点、数据契约和回归测试方式 | 现有通用 Web/CLI 威胁模型不能直接套用到 OpenHarmony |
 
 `security` 中的中英文月度公告需要去重；SSTS JSON/YARA 应作为漏洞知识、补丁验证和基准标签输入，而不是直接被解释成“当前源码一定有漏洞”。所有导入记录必须保存来源文件、公告编号、版本、哈希和解析器版本。
 
@@ -57,7 +57,7 @@ OpenAnt 现有框架可以继续复用，但当前版本还不能可靠地扫描
 - 仓颉包装层通过 `foreign` 声明进入 C FFI，包含 URL、脚本、Cookie、证书、文件路径等高风险参数。
 - `bundle.json` 提供 component、subsystem、syscap、系统类型、依赖、inner kits、构建目标和测试目标，是组件边界的重要权威输入。
 
-## 4. 当前 OpenAnt 的主要差距
+## 4. 当前 VulnFounder 的主要差距
 
 | 维度 | 当前行为 | 对 OpenHarmony 的后果 | 必须修改 |
 |---|---|---|---|
@@ -413,7 +413,7 @@ report/
 - 解析、清单、语义图和确定性规则使用 `commit + profile + scope + parser/rule/config hash` 缓存。
 - 先运行低成本规则和风险评分，再按 IPC/HDF/权限/内存高风险路径调度 LLM。
 - 每个 component 设置 unit、token、时间和内存预算；预算耗尽时输出未分析清单。
-- 多语言解析暂时保持顺序，避免破坏 OpenAnt 现有全局成本统计；未来并行化需先消除进程级共享状态。
+- 多语言解析暂时保持顺序，避免破坏 VulnFounder 现有全局成本统计；未来并行化需先消除进程级共享状态。
 
 ## 9. 用户接口建议
 
@@ -421,14 +421,14 @@ Go CLI 和 Python CLI 需要保持参数一致。推荐用法：
 
 ```bash
 # 自动识别 OpenHarmony，扫描生产代码；当前阶段跳过通用 Docker 动态测试
-openant scan /path/to/component \
+vulnfounder scan /path/to/component \
   --platform auto \
   --source-scope production \
   --strict-coverage \
   --skip-dynamic-test
 
 # 显式指定 OpenHarmony 和组件，加入 Fuzz/安全测试审计
-openant scan /path/to/repo \
+vulnfounder scan /path/to/repo \
   --platform openharmony \
   --component medical_sensor \
   --source-scope security-tests \
@@ -459,7 +459,7 @@ openant scan /path/to/repo \
 |---|---|---|---|---|
 | OH-00 | 建立外部 corpus manifest 和小型脱敏 golden fixtures：`tests/fixtures/openharmony/`、`tests/openharmony/test_corpus_manifest.py` | 无 | M | 用 `OPENHARMONY_CORPUS_ROOT` 可定位五仓；CI 不依赖用户绝对路径；记录当前发现/解析/入口基线 |
 | OH-01 | 定义平台协议和 schema：新建 `core/platforms/base.py`，扩展 `core/schemas.py` | OH-00 | M | generic 扫描序列化结果完全兼容；profile/coverage 可 round-trip；schema 版本必填 |
-| OH-02 | 打通 Go/Python 参数：`apps/openant-cli/cmd/scan.go`、`openant/cli.py`、`core/scanner.py` 及各自测试 | OH-01 | M | 两端 flags 一致；Go 参数逐项传到 Python；旧命令行为测试通过 |
+| OH-02 | 打通 Go/Python 参数：`apps/vulnfounder-cli/cmd/scan.go`、`vulnfounder/cli.py`、`core/scanner.py` 及各自测试 | OH-01 | M | 两端 flags 一致；Go 参数逐项传到 Python；旧命令行为测试通过 |
 | OH-03 | 修复 C 文件范围契约：`parsers/c/repository_scanner.py`、`core/parser_adapter.py` 和测试 | OH-02 | M | `fuzz/` 只在 scope 策略要求时排除；`--no-skip-tests` 真正可包含测试；覆盖统计含每类角色 |
 
 **检查点 A：** 运行现有全部 Python/Go 测试；对五仓只做 inventory，不调用 LLM。确认没有修改 generic 默认漏洞结论，且所有未支持扩展被计数。
@@ -655,7 +655,7 @@ flowchart TD
 
 ## 17. 实施完成定义（Definition of Done）
 
-只有同时满足以下条件，才能称为“OpenAnt 已成功支持 OpenHarmony 源码输入”：
+只有同时满足以下条件，才能称为“VulnFounder 已成功支持 OpenHarmony 源码输入”：
 
 - 用户命令从 Go CLI 到 Python 核心参数一致，返回码能反映漏洞、错误和严格覆盖失败。
 - 平台、组件、语言、文件角色、构建目标、入口和未覆盖项均有机器可读产物。
@@ -665,4 +665,4 @@ flowchart TD
 - `security` 是主要漏洞知识与 benchmark 来源；skill library 明确保持为辅助参考。
 - 五个样例仓的所有相关扩展都有 analyzed 或明确 unsupported 原因，没有静默遗漏。
 - MVP 和最终阶段对应的单元、golden、集成、兼容、打包、性能和安全测试全部通过。
-- 报告保存 OpenAnt commit、目标仓 commit、规则/配置/知识库哈希，能够复现实验。
+- 报告保存 VulnFounder commit、目标仓 commit、规则/配置/知识库哈希，能够复现实验。

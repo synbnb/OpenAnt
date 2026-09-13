@@ -1,18 +1,18 @@
 <p align="center">
-  <img src="assets/open-ant-black.png" alt="OpenAnt" width="180" />
+  <img src="assets/vulnfounder-black.png" alt="VulnFounder" width="180" />
 </p>
 
-# OpenAnt
+# VulnFounder
 
-[OpenAnt](https://knostic.ai/openant) from [Knostic](https://knostic.ai) is an open source LLM-based vulnerability discovery product that helps defenders proactively find verified security flaws while minimizing both false positives and false negatives. Stage 1 detects. Stage 2 attacks. What survives is real.
+[VulnFounder](https://knostic.ai/openant) from [Knostic](https://knostic.ai) is an open source LLM-based vulnerability discovery product that helps defenders proactively find verified security flaws while minimizing both false positives and false negatives. Stage 1 detects. Stage 2 attacks. What survives is real.
 
 We're pretty proud of this product and are in the vulnerability disclosure process for its findings, but do keep in mind that this started as a research project, and some of its features are still in beta. We welcome contributions to make it better.
 
 ## Why open source?
 
-Considering the explosion of AI-discovered vulnerabilities, we hope OpenAnt will be the tool helping open source maintainers stay ahead of attackers, where they can use it themselves or submit their repo for scanning at no cost.
+Considering the explosion of AI-discovered vulnerabilities, we hope VulnFounder will be the tool helping open source maintainers stay ahead of attackers, where they can use it themselves or submit their repo for scanning at no cost.
 
-Then, since Knostic's focus is on protecting agents and coding assistants and not vulnerability research or application security, and we like open source, we decided to release OpenAnt under the Apache 2 license.
+Then, since Knostic's focus is on protecting agents and coding assistants and not vulnerability research or application security, and we like open source, we decided to release VulnFounder under the Apache 2 license.
 Besides, you may have heard about Aardvark from OpenAI (now Codex Security) and Claude Code Security from Anthropic, and we have zero intention of competing with them.
 
 ## Technical details and free scanning for open source projects
@@ -52,31 +52,36 @@ With thanks to: [Michal Kamensky](https://github.com/kamenskymic/), [Imri Goldbe
 Build the CLI binary (requires Go 1.25+):
 
 ```bash
-cd apps/openant-cli && make build
+cd apps/vulnfounder-cli && make build
 ```
 
-This compiles the Go source and outputs the binary to `apps/openant-cli/bin/openant`.
+This compiles the Go source and outputs the binary to `apps/vulnfounder-cli/bin/vulnfounder`.
 
-Symlink it onto your PATH so you can run `openant` from anywhere:
+Symlink it onto your PATH so you can run `vulnfounder` from anywhere:
 
 ```bash
-ln -sf "$(pwd)/apps/openant-cli/bin/openant" /usr/local/bin/openant
+ln -sf "$(pwd)/apps/vulnfounder-cli/bin/vulnfounder" /usr/local/bin/vulnfounder
 ```
 
 _Note: run this from the repo root so `$(pwd)` resolves to the correct absolute path._
 
+`openant` remains available as a compatibility binary and Python module for
+existing automation. New scripts should use `vulnfounder`, the
+`vulnfounder-*` configuration/data paths, and the `VULNFOUNDER_*` environment
+variables; legacy `OPENANT_*` variables and paths are read as fallbacks.
+
 ### Setting up an LLM
 
-OpenAnt routes each pipeline phase through a configurable (provider, model) pair. The fastest path is the interactive wizard:
+VulnFounder routes each pipeline phase through a configurable (provider, model) pair. The fastest path is the interactive wizard:
 
 ```bash
-openant setup llm
+vulnfounder setup llm
 ```
 
-You name the config (e.g. `my-llm`), pick a provider per pipeline phase (any of the shipped adapters below), enter its API key once per provider (Bedrock uses the AWS credential chain instead — leave the key blank), and the wizard probes each unique provider+model pair with a 1-token request before writing the resolved OpenAnt config file (project-local `config/openant/config.json` in a checkout). Run a scan against it with `--llm-config`:
+You name the config (e.g. `my-llm`), pick a provider per pipeline phase (any of the shipped adapters below), enter its API key once per provider (Bedrock uses the AWS credential chain instead — leave the key blank), and the wizard probes each unique provider+model pair with a 1-token request before writing the resolved VulnFounder config file (project-local `config/vulnfounder/config.json` in a checkout). Run a scan against it with `--llm-config`:
 
 ```bash
-openant scan /path/to/repo --llm-config my-llm
+vulnfounder scan /path/to/repo --llm-config my-llm
 ```
 
 Wizard defaults reflect the project's per-phase recommendations (stronger reasoning models for detection / verification / reachability review; lighter models for context, report, and test generation) — override any answer to taste.
@@ -88,8 +93,8 @@ Wizard defaults reflect the project's per-phase recommendations (stronger reason
 | `anthropic` | [console.anthropic.com](https://console.anthropic.com/settings/keys) | Reference adapter. NOT included in Claude Pro / Max subscriptions — separate billing. |
 | `openai` | [platform.openai.com](https://platform.openai.com/api-keys) | NOT included in ChatGPT / Codex subscriptions — separate billing. |
 | `google` | [aistudio.google.com](https://aistudio.google.com/apikey) | NOT included in Gemini Advanced — separate billing. |
-| `bedrock` | — (AWS credential chain) | Claude on AWS Bedrock. No `api_key`: credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars or a `~/.aws` profile, region from `AWS_REGION`. Model IDs are inference profiles (`us.anthropic.claude-sonnet-4-6`, `global.anthropic.claude-haiku-4-5-20251001-v1:0`, ...) — enable them under "Model access" in the Bedrock console and list them with `aws bedrock list-inference-profiles`. Offered by `openant setup llm` (leave the API key blank — AWS credential chain, probe skipped) — full guide: [`utilities/llm/providers/BEDROCK.md`](libs/openant-core/utilities/llm/providers/BEDROCK.md). |
-| `openrouter` | [openrouter.ai](https://openrouter.ai/settings/keys) | Gateway to many providers with one key and one prepaid balance (also reads `OPENROUTER_API_KEY`). Model IDs are `vendor/model` slugs (`anthropic/claude-sonnet-4.6`, `openai/gpt-4o-mini`, ...) — browse them at [openrouter.ai/models](https://openrouter.ai/models). Offered by `openant setup llm` (leave the base URL blank for the OpenRouter default) — full guide: [`utilities/llm/providers/OPENROUTER.md`](libs/openant-core/utilities/llm/providers/OPENROUTER.md). |
+| `bedrock` | — (AWS credential chain) | Claude on AWS Bedrock. No `api_key`: credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars or a `~/.aws` profile, region from `AWS_REGION`. Model IDs are inference profiles (`us.anthropic.claude-sonnet-4-6`, `global.anthropic.claude-haiku-4-5-20251001-v1:0`, ...) — enable them under "Model access" in the Bedrock console and list them with `aws bedrock list-inference-profiles`. Offered by `vulnfounder setup llm` (leave the API key blank — AWS credential chain, probe skipped) — full guide: [`utilities/llm/providers/BEDROCK.md`](libs/vulnfounder-core/utilities/llm/providers/BEDROCK.md). |
+| `openrouter` | [openrouter.ai](https://openrouter.ai/settings/keys) | Gateway to many providers with one key and one prepaid balance (also reads `OPENROUTER_API_KEY`). Model IDs are `vendor/model` slugs (`anthropic/claude-sonnet-4.6`, `openai/gpt-4o-mini`, ...) — browse them at [openrouter.ai/models](https://openrouter.ai/models). Offered by `vulnfounder setup llm` (leave the base URL blank for the OpenRouter default) — full guide: [`utilities/llm/providers/OPENROUTER.md`](libs/vulnfounder-core/utilities/llm/providers/OPENROUTER.md). |
 
 All four support tool calling, so any of them can drive the `enhance` and `verify` phases that use the agentic tool-use loop.
 
@@ -98,15 +103,15 @@ All four support tool calling, so any of them can drive the `enhance` and `verif
 If you want today's per-phase Claude defaults and nothing else, skip the wizard:
 
 ```bash
-openant set-api-key sk-ant-...
-openant scan /path/to/repo
+vulnfounder set-api-key sk-ant-...
+vulnfounder scan /path/to/repo
 ```
 
-This uses the built-in `openant-default` config (compiled into the binary, no `config.json` needed) — Claude Opus 4.6 for detection phases, Sonnet 4 for the rest.
+This uses the built-in `vulnfounder-default` config (compiled into the binary, no `config.json` needed) — Claude Opus 4.6 for detection phases, Sonnet 4 for the rest.
 
 #### Hand-authored config
 
-The wizard writes the resolved OpenAnt config file for you (project-local `config/openant/config.json` in a checkout), but you can edit it directly too. Every llm-config must list all seven pipeline phases:
+The wizard writes the resolved VulnFounder config file for you (project-local `config/vulnfounder/config.json` in a checkout), but you can edit it directly too. Every llm-config must list all seven pipeline phases:
 
 ```json
 {
@@ -131,45 +136,45 @@ The wizard writes the resolved OpenAnt config file for you (project-local `confi
 }
 ```
 
-Providers accept a custom `base_url` for OpenAI-compatible / Anthropic-compatible proxies (vLLM, Bedrock, internal gateways); OpenRouter has its own first-class `openrouter` provider type. The `openant-default` config (Claude across all phases) is built in and always available regardless of file contents.
+Providers accept a custom `base_url` for OpenAI-compatible / Anthropic-compatible proxies (vLLM, Bedrock, internal gateways); OpenRouter has its own first-class `openrouter` provider type. The `vulnfounder-default` config (Claude across all phases) is built in and always available regardless of file contents.
 
 #### Adding a new provider adapter
 
-OpenAnt's adapter layer is a small Python recipe — one Python file implementing the `LLMAdapter` Protocol, one factory for the contract-test harness, plus a registry entry — and that alone is enough to run the adapter from a hand-authored config. To also have it offered by the `openant setup llm` wizard and pass its pre-save probe, add a few Go touch-points in `apps/openant-cli/cmd/setup.go` (the supported-provider list, a probe `case`, the per-phase default-model maps) plus a Go probe function. The 12 contract tests run automatically against your adapter once it's wired in. See [`docs/features/llm-providers/HOW_TO_ADD_AN_ADAPTER.md`](docs/features/llm-providers/HOW_TO_ADD_AN_ADAPTER.md) for the full recipe.
+VulnFounder's adapter layer is a small Python recipe — one Python file implementing the `LLMAdapter` Protocol, one factory for the contract-test harness, plus a registry entry — and that alone is enough to run the adapter from a hand-authored config. To also have it offered by the `vulnfounder setup llm` wizard and pass its pre-save probe, add a few Go touch-points in `apps/vulnfounder-cli/cmd/setup.go` (the supported-provider list, a probe `case`, the per-phase default-model maps) plus a Go probe function. The 12 contract tests run automatically against your adapter once it's wired in. Provider-specific examples are in [`libs/vulnfounder-core/utilities/llm/providers/`](libs/vulnfounder-core/utilities/llm/providers/).
 
 ### Python runtime
 
-OpenAnt's parsing, enhancement, analysis, and reporting code is Python 3.11+. The Go CLI picks an interpreter in this order:
+VulnFounder's parsing, enhancement, analysis, and reporting code is Python 3.11+. The Go CLI picks an interpreter in this order:
 
-1. `OPENANT_PYTHON` env var (set this to pin a specific interpreter — e.g. `OPENANT_PYTHON=python3.11`).
-2. Managed venv at `~/.openant/venv/` (auto-created on first use). The CLI uses `bin/python` on Linux/macOS and `Scripts\python.exe` on Windows.
+1. `VULNFOUNDER_PYTHON` env var (the legacy `OPENANT_PYTHON` alias is also accepted; set either to pin a specific interpreter — e.g. `VULNFOUNDER_PYTHON=python3.11`).
+2. Managed venv at `~/.vulnfounder/venv/` (auto-created on first use). The CLI uses `bin/python` on Linux/macOS and `Scripts\python.exe` on Windows.
 3. `python3` / `python` on `PATH`.
 
-If none yield Python 3.11+, the command exits with an error pointing at [python.org](https://www.python.org/downloads/). To rebuild a stale managed venv (e.g. after upgrading Python), delete `~/.openant/venv/` and rerun any `openant` command.
+If none yield Python 3.11+, the command exits with an error pointing at [python.org](https://www.python.org/downloads/). To rebuild a stale managed venv (e.g. after upgrading Python), delete `~/.vulnfounder/venv/` and rerun any `vulnfounder` command.
 
 ## Data directories
 
-OpenAnt creates two directories:
+VulnFounder creates two directories:
 
-- **`config/openant/`** — project-local CLI configuration (`config.json`). The real file is ignored by Git and must remain `0600`; `config.example.json` is the safe delivery template. `OPENANT_CONFIG_FILE` can override the path explicitly.
-- **`~/.config/openant/`** — legacy user configuration fallback for installations outside an OpenAnt checkout.
-- **`~/.openant/`** — Project data. Each initialized project gets a workspace under `~/.openant/projects/<org>/<repo>/` containing `project.json` and a `scans/` directory with per-commit outputs.
+- **`config/vulnfounder/`** — project-local CLI configuration (`config.json`). The real file is ignored by Git and must remain `0600`; `config.example.json` is the safe delivery template. `VULNFOUNDER_CONFIG_FILE` can override the path explicitly; `OPENANT_CONFIG_FILE` remains a legacy alias.
+- **`~/.config/vulnfounder/`** — user configuration for installations outside a VulnFounder checkout. Existing `~/.config/openant/` files remain a migration fallback.
+- **`~/.vulnfounder/`** — project data. Each initialized project gets a workspace under `~/.vulnfounder/projects/<org>/<repo>/` containing `project.json` and a `scans/` directory with per-commit outputs. Existing `~/.openant/` data is reused when no new directory exists.
 
 ## Analyzing a project
 
 ### 1. Initialize
 
-Point OpenAnt at a repository. The `-l` flag (language) is required — use `go` or `python`.
+Point VulnFounder at a repository. The `-l` flag (language) is required — use `go` or `python`.
 
 ```bash
 # Remote — clones the repo
-openant init <repo-url> -l go
+vulnfounder init <repo-url> -l go
 
 # Remote — pin to a specific commit
-openant init <repo-url> -l go --commit <sha>
+vulnfounder init <repo-url> -l go --commit <sha>
 
 # Local — references the directory in-place
-openant init <path-to-repo> -l go --name <org/repo>
+vulnfounder init <path-to-repo> -l go --name <org/repo>
 ```
 
 This creates a project workspace and sets it as the active project. All subsequent commands operate on the active project automatically — no path arguments needed.
@@ -179,46 +184,46 @@ This creates a project workspace and sets it as the active project. All subseque
 Each step picks up the output of the previous one from the project's scan directory:
 
 ```bash
-openant parse
-openant enhance
-openant analyze
-openant verify
-openant build-output
-openant report -f summary
+vulnfounder parse
+vulnfounder enhance
+vulnfounder analyze
+vulnfounder verify
+vulnfounder build-output
+vulnfounder report -f summary
 ```
 
 Or run the full pipeline in one command:
 
 ```bash
-openant scan --verify
+vulnfounder scan --verify
 ```
 
 ### Web UI
 
-`openant serve` starts a local web UI over the same scan pipeline: submit a
+`vulnfounder serve` starts a local web UI over the same scan pipeline: submit a
 repository URL or local path, watch the scan logs stream live, and read the HTML
 report, markdown summary, and disclosures — all from the browser.
 
 ```bash
-openant serve                       # http://127.0.0.1:8080, opens your browser
-openant serve --addr 127.0.0.1:9000 # choose a port
+vulnfounder serve                       # http://127.0.0.1:8080, opens your browser
+vulnfounder serve --addr 127.0.0.1:9000 # choose a port
 ```
 
 The server binds to loopback only (it refuses any non-loopback `--addr`) and is
 intended for local single-user use. Scan outputs persist under
-`~/.openant/webui/` across restarts. Analysis still sends source code to your
+`~/.vulnfounder/webui/` across restarts. Analysis still sends source code to your
 configured LLM provider, the same as the CLI.
 
 ### Incremental and diff-based scans
 
-For repositories where a full scan is too slow or expensive, OpenAnt can
+For repositories where a full scan is too slow or expensive, VulnFounder can
 restrict the pipeline to units whose bodies overlap a git diff hunk:
 
 ```bash
-openant scan --diff-base origin/main          # diff vs a ref
-openant scan --pr 123                         # diff vs the base of a GitHub PR
-openant scan --staged                         # diff vs HEAD using the staged index
-openant scan --incremental                    # diff vs the last successful scan
+vulnfounder scan --diff-base origin/main          # diff vs a ref
+vulnfounder scan --pr 123                         # diff vs the base of a GitHub PR
+vulnfounder scan --staged                         # diff vs HEAD using the staged index
+vulnfounder scan --incremental                    # diff vs the last successful scan
 ```
 
 `--staged` reads `git diff --cached` and is intended for pre-commit hooks or
@@ -226,40 +231,40 @@ local "scan what I'm about to commit" runs. The base is HEAD; the head is the
 index, so files staged with `git add` are scanned and worktree-only edits are
 not.
 
-The shorter `openant diff` form takes the same flags, e.g.:
+The shorter `vulnfounder diff` form takes the same flags, e.g.:
 
 ```bash
-openant diff --staged --skip-dynamic-test
+vulnfounder diff --staged --skip-dynamic-test
 ```
 
 ### Working with multiple projects
 
-The pipeline operates on one project at a time. Running `openant init` sets the newly initialized project as the active one, so all subsequent commands target it by default.
+The pipeline operates on one project at a time. Running `vulnfounder init` sets the newly initialized project as the active one, so all subsequent commands target it by default.
 
 If you're working with several projects, you have two options:
 
 ```bash
 # Option 1: switch the active project
-openant project switch org/repo
-openant parse
+vulnfounder project switch org/repo
+vulnfounder parse
 
 # Option 2: target a project directly with -p
-openant parse -p org/repo
+vulnfounder parse -p org/repo
 ```
 
 ### Project management
 
 ```bash
-openant project list              # shows all projects, marks active
-openant project show              # details of active project
-openant project switch <org/repo> # switch active project
+vulnfounder project list              # shows all projects, marks active
+vulnfounder project show              # details of active project
+vulnfounder project switch <org/repo> # switch active project
 ```
 
 ## Roadmap
 
 Things on the list, in no particular order:
 
-- **More provider adapters.** Ollama (local models), vLLM, Cohere, Mistral, Groq, Azure OpenAI — each is a small Python adapter recipe (plus a few Go wizard/probe touch-points if you want it offered by `openant setup llm`) per the contributor guide. Lower the barrier to local / on-prem inference.
+- **More provider adapters.** Ollama (local models), vLLM, Cohere, Mistral, Groq, Azure OpenAI — each is a small Python adapter recipe (plus a few Go wizard/probe touch-points if you want it offered by `vulnfounder setup llm`) per the contributor guide. Lower the barrier to local / on-prem inference.
 - **Subscription-based auth.** ChatGPT / Codex, Claude Pro / Max, and Gemini Advanced subscriptions don't currently grant API quota — users have to maintain a separate API-tier key per provider. OAuth-based adapters that ride the consumer subscription would close that gap.
 - **Cross-provider tool-call quirks.** All three shipped adapters support tool calling, but the long tail (parallel tool calls, strict-mode schema enforcement, retry semantics on partial JSON) behaves differently per provider. Real-world scans surface these — PRs welcome.
 - **More languages.** The supported-languages list above is current coverage. Java and C# come up frequently.
@@ -273,6 +278,6 @@ This project is licensed under Apache 2. See the LICENSE file for details.
 
 ## Disclaimer and legal notice
 
-This project is intended for defensive and research purposes only. OpenAnt is still in the research phase, use it carefully and at your own risk. Knostic, OpenAnt, and associated developers, researchers, and maintainers assume no responsibility whatsoever for any misuse, damage, or consequences arising from the use of this tool.
+This project is intended for defensive and research purposes only. VulnFounder is still in the research phase, use it carefully and at your own risk. Knostic, VulnFounder, and associated developers, researchers, and maintainers assume no responsibility whatsoever for any misuse, damage, or consequences arising from the use of this tool.
 
 Only scan code you own or have explicit permission to test. If you discover a vulnerability in someone else's project through legitimate means, please follow coordinated vulnerability disclosure practices and report it to the maintainers before making it public.

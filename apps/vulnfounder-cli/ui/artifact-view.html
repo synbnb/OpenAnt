@@ -1,0 +1,1427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>产物查看 | vulnfounder</title>
+<style>
+  :root {
+    color-scheme: light;
+    --canvas: #eef3f5;
+    --surface: #ffffff;
+    --surface-muted: #f5f8f9;
+    --ink: #17252d;
+    --ink-soft: #536772;
+    --ink-faint: #7a8b94;
+    --line: #d7e0e4;
+    --line-strong: #b8c8ce;
+    --accent: #075e73;
+    --accent-soft: #dceef2;
+    --danger: #b4232f;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { min-width: 320px; background: var(--canvas); }
+  body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: var(--sans); }
+  button, select { font: inherit; }
+  :focus-visible { outline: 3px solid rgba(7, 94, 115, 0.28); outline-offset: 2px; }
+  .topbar { min-height: 64px; padding: 11px clamp(16px, 4vw, 42px); display: flex; align-items: center; gap: 14px; background: #15232b; color: #f5f8fa; }
+  .brand { display: grid; gap: 2px; }
+  .brand strong { font-size: 0.92rem; letter-spacing: 0.02em; }
+  .brand span { color: #a9bac4; font-size: 0.7rem; }
+  .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .language-field { display: flex; align-items: center; gap: 6px; color: #a9bac4; font-size: 0.72rem; }
+  .language-field select { min-height: 30px; padding: 5px 24px 5px 8px; border: 1px solid #455b67; border-radius: 7px; background: #1c2d36; color: #f5f8fa; }
+  .close-button { padding: 6px 9px; border: 1px solid #536b76; border-radius: 7px; background: transparent; color: #e3edf0; cursor: pointer; font-size: 0.72rem; }
+  .close-button:hover { background: #213640; }
+  .page { width: min(1180px, 100%); margin: 0 auto; padding: 24px clamp(16px, 4vw, 42px) 48px; display: grid; gap: 16px; }
+  .hero, .content, .info-card { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px rgba(25, 45, 58, 0.07); }
+  .hero { padding: 22px 24px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+  .kicker { margin: 0 0 7px; color: var(--accent); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+  h1 { margin: 0; font-size: clamp(1.15rem, 2vw, 1.55rem); line-height: 1.3; overflow-wrap: anywhere; }
+  .file-name { display: block; margin-top: 7px; color: var(--ink-soft); font: 0.73rem/1.45 var(--mono); overflow-wrap: anywhere; }
+  .description { max-width: 78ch; margin: 12px 0 0; color: var(--ink-soft); font-size: 0.8rem; line-height: 1.6; }
+  .hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
+  .action { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface-muted); color: var(--accent); text-decoration: none; cursor: pointer; font-size: 0.73rem; font-weight: 750; white-space: nowrap; }
+  .action:hover, .action.active { border-color: #8db8c3; background: var(--accent-soft); }
+  .meta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 16px 18px; }
+  .meta-item { min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
+  .meta-label { color: var(--ink-faint); font-size: 0.68rem; font-weight: 750; }
+  .meta-value { margin-top: 5px; color: var(--ink); font: 0.74rem/1.45 var(--mono); overflow-wrap: anywhere; }
+  .content-header { padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+  .content-header h2 { margin: 0; font-size: 0.92rem; }
+  .content-header p { margin: 4px 0 0; color: var(--ink-faint); font-size: 0.73rem; line-height: 1.45; }
+  .status { color: var(--ink-faint); font-size: 0.72rem; }
+  .status.error { color: var(--danger); }
+  .content-body { padding: 16px 18px 20px; }
+  .structured-view { display: grid; gap: 16px; }
+  .focus-summary {
+    border: 1px solid #9bc7cf; border-radius: 10px; background: linear-gradient(135deg, #f2fbfc, #ffffff 72%);
+    box-shadow: 0 8px 22px rgba(7, 94, 115, 0.07); overflow: hidden;
+  }
+  .focus-summary-header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 14px;
+    padding: 13px 14px 11px; border-bottom: 1px solid #d5e8eb;
+  }
+  .focus-summary-heading { min-width: 0; }
+  .focus-summary-kicker { margin: 0 0 4px; color: #267184; font-size: 0.66rem; font-weight: 850; letter-spacing: 0.08em; }
+  .focus-summary-title { margin: 0; color: #164d5c; font-size: 0.88rem; }
+  .focus-summary-subtitle { margin: 4px 0 0; color: #58727b; font-size: 0.7rem; line-height: 1.5; }
+  .focus-summary-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: 0 0 auto; }
+  .focus-summary-action { padding: 5px 8px; border: 1px solid #9bc7cf; border-radius: 6px; background: #ffffff; color: #075e73; cursor: pointer; font-size: 0.68rem; font-weight: 800; white-space: nowrap; }
+  .focus-summary-action:hover { background: #dceef2; border-color: #6fa4b1; }
+  .focus-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 8px; padding: 11px 12px 13px; }
+  .focus-card { min-width: 0; padding: 9px 10px; border: 1px solid #d6e6e9; border-left: 3px solid #75afbb; border-radius: 7px; background: #ffffff; }
+  .focus-card.success { border-left-color: #299265; background: #f5fbf7; }
+  .focus-card.warning { border-left-color: #c28728; background: #fffaf0; }
+  .focus-card.danger { border-left-color: #c24a55; background: #fff7f7; }
+  .focus-card-label { display: block; color: #607b84; font-size: 0.67rem; line-height: 1.35; }
+  .focus-card-value { display: -webkit-box; margin-top: 4px; overflow: hidden; color: #0f5364; font-size: 0.86rem; font-weight: 850; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .focus-card.success .focus-card-value { color: #176b4a; }
+  .focus-card.warning .focus-card-value { color: #8a5a0a; }
+  .focus-card.danger .focus-card-value { color: #a52d38; }
+  .focus-card-description { margin-top: 4px; color: #718891; font-size: 0.66rem; line-height: 1.4; }
+  .focus-empty { grid-column: 1 / -1; padding: 8px; color: #718891; font-size: 0.71rem; }
+  .full-fields { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
+  .full-fields > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--surface-muted); color: var(--ink); cursor: pointer; font-size: 0.78rem; font-weight: 850; list-style: none; }
+  .full-fields > summary::-webkit-details-marker { display: none; }
+  .full-fields > summary::after { content: "＋"; color: var(--ink-faint); font-weight: 500; }
+  .full-fields[open] > summary::after { content: "－"; }
+  .full-fields-hint { color: var(--ink-faint); font-size: 0.67rem; font-weight: 500; }
+  .full-fields-body { padding: 12px; border-top: 1px solid var(--line); }
+  .full-fields-body > .form-root { gap: 10px; }
+  .collection-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+  .collection-toolbar[hidden], .collection-layout[hidden], .object-view[hidden], .raw-view[hidden] { display: none; }
+  .collection-field { display: grid; gap: 4px; min-width: 130px; }
+  .collection-field.search { flex: 1 1 260px; }
+  .collection-field label { color: var(--ink-faint); font-size: 0.68rem; font-weight: 750; }
+  .collection-field input, .collection-field select { width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 0.74rem; }
+  .collection-button { min-height: 32px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--accent); cursor: pointer; font-size: 0.72rem; font-weight: 750; }
+  .collection-button:hover, .collection-button.active { border-color: #8db8c3; background: var(--accent-soft); }
+  .collection-count { align-self: center; color: var(--ink-faint); font: 0.7rem var(--mono); white-space: nowrap; }
+  .collection-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .collection-layout { display: grid; grid-template-columns: minmax(250px, 0.75fr) minmax(0, 1.25fr); gap: 12px; min-height: 360px; }
+  .collection-list-panel, .collection-detail-panel { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
+  .collection-list { max-height: 680px; overflow: auto; padding: 7px; }
+  .collection-row { width: 100%; display: grid; gap: 4px; padding: 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+  .collection-row:hover { background: var(--surface-muted); }
+  .collection-row.selected { border-color: #8db8c3; background: var(--accent-soft); }
+  .collection-row-title { overflow: hidden; color: var(--ink); font-size: 0.75rem; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+  .collection-row-id { overflow: hidden; color: var(--ink-faint); font: 0.68rem/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+  .collection-row-meta { display: flex; flex-wrap: wrap; gap: 5px; color: var(--ink-faint); font-size: 0.67rem; line-height: 1.4; }
+  .collection-chip { padding: 2px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-muted); }
+  .collection-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--surface-muted); }
+  .collection-pager span { color: var(--ink-faint); font: 0.68rem var(--mono); }
+  .collection-detail { max-height: 760px; overflow: auto; padding: 15px; }
+  .collection-detail > h3 { margin: 0; font-size: 0.94rem; line-height: 1.45; overflow-wrap: anywhere; }
+  .collection-detail-location { margin-top: 5px; color: var(--ink-faint); font: 0.7rem/1.45 var(--mono); overflow-wrap: anywhere; }
+  .form-root { display: grid; gap: 12px; }
+  .form-section { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
+  .form-section > summary, .form-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-muted); color: var(--ink); cursor: pointer; list-style: none; }
+  .form-section > summary::-webkit-details-marker { display: none; }
+  .form-section > summary::after { content: "＋"; color: var(--ink-faint); font-weight: 500; }
+  .form-section[open] > summary::after { content: "－"; }
+  .form-section-title { min-width: 0; font-size: 0.8rem; font-weight: 800; overflow-wrap: anywhere; }
+  .form-section-count { color: var(--ink-faint); font: 0.68rem var(--mono); white-space: nowrap; }
+  .form-section-body { display: grid; gap: 8px; padding: 11px 12px 13px; }
+  .field-card { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .field-card-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .field-title { color: var(--ink); font-size: 0.76rem; font-weight: 800; }
+  .field-key { color: var(--ink-faint); font: 0.66rem var(--mono); overflow-wrap: anywhere; text-align: right; }
+  .field-description { margin-top: 4px; color: var(--ink-faint); font-size: 0.68rem; line-height: 1.45; }
+  .field-value { margin-top: 7px; color: var(--ink); font-size: 0.76rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .field-value.mono { font-family: var(--mono); font-size: 0.7rem; }
+  .field-value.code { margin-top: 8px; padding: 10px; max-height: 360px; overflow: auto; border: 1px solid #253d49; border-radius: 7px; background: #15232b; color: #dce5ea; font: 0.7rem/1.55 var(--mono); white-space: pre-wrap; }
+  .field-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .field-tag { padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-muted); color: var(--ink-soft); font: 0.69rem/1.4 var(--mono); overflow-wrap: anywhere; }
+  .field-empty { color: var(--ink-faint); font-style: italic; }
+  .form-section > summary .field-key { margin-left: auto; }
+  .object-view { display: grid; gap: 12px; }
+  .root-summary { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+  .root-summary h3 { margin: 0 0 8px; font-size: 0.82rem; }
+  .root-summary .form-root { gap: 8px; }
+  .graph-view { display: grid; gap: 12px; }
+  .graph-view[hidden] { display: none; }
+  .graph-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); }
+  .graph-toolbar .collection-button { min-width: 34px; }
+  .graph-depth-control { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 0.72rem; }
+  .graph-depth-control select { min-width: 58px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+  .graph-toolbar-status { margin-left: auto; color: var(--ink-faint); font: 0.7rem var(--mono); }
+  .graph-layout { display: grid; grid-template-columns: minmax(190px, 0.25fr) minmax(420px, 1fr) minmax(260px, 0.38fr); gap: 12px; min-height: 520px; }
+  .graph-panel { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); overflow: hidden; }
+  .graph-panel-header { padding: 11px 12px; border-bottom: 1px solid var(--line); background: var(--surface-muted); }
+  .graph-panel-header h3 { margin: 0; font-size: 0.8rem; }
+  .graph-panel-header p { margin: 4px 0 0; color: var(--ink-faint); font-size: 0.68rem; line-height: 1.45; }
+  .graph-entry-list { max-height: 650px; overflow: auto; padding: 7px; }
+  .graph-entry { width: 100%; display: grid; gap: 4px; padding: 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+  .graph-entry:hover, .graph-entry.selected { border-color: #8db8c3; background: var(--accent-soft); }
+  .graph-entry-title { overflow: hidden; font-size: 0.73rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+  .graph-entry-id { color: var(--ink-faint); font: 0.65rem/1.4 var(--mono); overflow-wrap: anywhere; }
+  .graph-entry-meta { color: var(--ink-soft); font-size: 0.66rem; line-height: 1.4; }
+  .graph-canvas-panel { position: relative; min-height: 520px; }
+  .graph-canvas { display: block; width: 100%; height: 520px; background: #f8fbfc; cursor: grab; touch-action: none; }
+  .graph-canvas.dragging { cursor: grabbing; }
+  .graph-canvas:focus-visible { outline-offset: -3px; }
+  .graph-edge { fill: none; stroke: #8aa6af; stroke-width: 1.5; opacity: 0.9; }
+  .graph-edge.agentic-context { stroke: #b8752a; stroke-width: 2; stroke-dasharray: 7 4; opacity: 0.95; }
+  .graph-node { cursor: pointer; }
+  .graph-node rect { fill: #ffffff; stroke: #8db8c3; stroke-width: 1.5; }
+  .graph-node.agentic-context rect { fill: #fff8ed; stroke: #b8752a; stroke-dasharray: 4 2; }
+  .graph-node.entry rect { fill: #e0f2e8; stroke: #18714a; }
+  .graph-node.selected rect { fill: #dceef2; stroke: #075e73; stroke-width: 2.5; }
+  .graph-node text { pointer-events: none; fill: #17252d; font-family: var(--sans); font-size: 12px; }
+  .graph-node .graph-node-name { font-weight: 800; }
+  .graph-node .graph-node-file { fill: #536772; font-family: var(--mono); font-size: 9px; }
+  .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--ink-faint); text-align: center; font-size: 0.76rem; pointer-events: none; }
+  .graph-empty[hidden] { display: none; }
+  .graph-node-detail { max-height: 650px; overflow: auto; padding: 13px; }
+  .graph-node-detail > h3 { margin: 0; font-size: 0.86rem; line-height: 1.45; overflow-wrap: anywhere; }
+  .graph-node-detail-location { margin-top: 5px; color: var(--ink-faint); font: 0.68rem/1.45 var(--mono); overflow-wrap: anywhere; }
+  .graph-legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.66rem; }
+  .graph-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+  .graph-legend-swatch { width: 10px; height: 10px; border: 1px solid #8db8c3; border-radius: 3px; background: #ffffff; }
+  .graph-legend-swatch.entry { border-color: #18714a; background: #e0f2e8; }
+  .graph-legend-swatch.agentic { width: 18px; height: 0; border: 0; border-top: 2px dashed #b8752a; border-radius: 0; background: transparent; }
+  .raw-view { max-height: 72vh; margin: 0; padding: 14px; overflow: auto; border: 1px solid #253d49; border-radius: 8px; background: #15232b; color: #dce5ea; font: 0.72rem/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .empty { padding: 28px 14px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--ink-faint); text-align: center; font-size: 0.78rem; }
+  @media (max-width: 680px) {
+    .focus-summary-header { flex-direction: column; }
+    .focus-summary-actions { justify-content: flex-start; }
+    .hero { flex-direction: column; }
+    .hero-actions { justify-content: flex-start; }
+    .meta-grid { grid-template-columns: 1fr; }
+    .collection-layout { grid-template-columns: 1fr; }
+    .collection-list { max-height: 300px; }
+    .collection-detail { max-height: none; }
+    .collection-field { min-width: min(100%, 180px); }
+    .graph-layout { grid-template-columns: 1fr; }
+    .graph-entry-list { max-height: 260px; }
+    .graph-canvas { height: 440px; }
+    .graph-toolbar-status { margin-left: 0; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
+</style>
+<link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+<script src="/assets/vulnfounder-navigation.js" defer></script>
+</head>
+<body data-job-id="{{.ID}}" data-artifact-name="{{.Name}}" data-artifact-label="{{.Label}}" data-artifact-stage="{{.Stage}}" data-artifact-description="{{.Description}}">
+<header class="topbar">
+  <div class="brand"><strong>vulnfounder</strong><span data-i18n="brand.subtitle">扫描产物查看器</span></div>
+  <div class="topbar-actions">
+    <vulnfounder-workspace-nav></vulnfounder-workspace-nav>
+    <label class="language-field" for="language-select"><span data-i18n="language.label">语言</span><select id="language-select"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
+    <button type="button" class="close-button" id="close-button" data-i18n="action.close">关闭窗口</button>
+  </div>
+</header>
+<main class="page">
+  <section class="hero">
+    <div>
+      <p class="kicker" data-i18n="artifact.kicker">扫描阶段产物</p>
+      <h1 id="artifact-label">{{.Label}}</h1>
+      <code class="file-name" id="artifact-name">{{.Name}}</code>
+      <p class="description" id="artifact-description">{{.Description}}</p>
+    </div>
+    <div class="hero-actions">
+      <button type="button" class="action" id="graph-button" data-i18n="action.graph" hidden>调用图</button>
+      <button type="button" class="action active" id="structured-button" data-i18n="action.structured">结构化预览</button>
+      <button type="button" class="action" id="raw-button" data-i18n="action.raw">原始 JSON</button>
+      <a class="action" id="raw-link" href="#" target="_blank" rel="noopener noreferrer" data-i18n="action.openRaw">新标签页打开</a>
+    </div>
+  </section>
+  <section class="info-card">
+    <div class="meta-grid">
+      <div class="meta-item"><div class="meta-label" data-i18n="meta.job">扫描任务</div><div class="meta-value" id="job-id">{{.ID}}</div></div>
+      <div class="meta-item"><div class="meta-label" data-i18n="meta.stage">所属阶段</div><div class="meta-value" id="artifact-stage">{{.Stage}}</div></div>
+      <div class="meta-item"><div class="meta-label" data-i18n="meta.mode">查看方式</div><div class="meta-value" id="view-mode">结构化预览</div></div>
+    </div>
+  </section>
+  <section class="content">
+    <div class="content-header"><div><h2 data-i18n="content.title">产物内容</h2><p data-i18n="content.subtitle">按产物类型展示中文字段、用途说明和完整值；大列表按页加载，详情按需读取。</p></div><span class="status" id="status" role="status"></span></div>
+    <div class="content-body">
+      <div class="structured-view" id="structured-view">
+        <div class="collection-toolbar" id="collection-toolbar" hidden>
+          <div class="collection-field search"><label for="collection-search" data-i18n="collection.search">搜索字段值、函数名或文件路径</label><input id="collection-search" type="search" autocomplete="off" placeholder="例如 OnRemoteRequest、文件名或漏洞编号"></div>
+          <div class="collection-field" id="language-filter-wrap"><label for="language-filter" data-i18n="collection.language">语言</label><select id="language-filter"><option value="" data-i18n="collection.all">全部</option><option value="cpp">C/C++</option><option value="c">C</option><option value="javascript">JavaScript/ArkTS</option><option value="rust">Rust</option></select></div>
+          <div class="collection-field" id="unit-type-filter-wrap"><label for="unit-type-filter" data-i18n="collection.unitType">单元类型</label><select id="unit-type-filter"><option value="" data-i18n="collection.all">全部</option><option value="function">function</option><option value="method">method</option><option value="callback">callback</option></select></div>
+          <div class="collection-field" id="verdict-filter-wrap"><label for="verdict-filter" data-i18n="collection.verdict">判定</label><select id="verdict-filter"><option value="" data-i18n="collection.all">全部</option><option value="SAFE">SAFE</option><option value="VULNERABLE">VULNERABLE</option><option value="INCONCLUSIVE">INCONCLUSIVE</option><option value="PROTECTED">PROTECTED</option></select></div>
+          <div class="collection-field" id="entry-filter-wrap"><label for="entry-filter" data-i18n="collection.entry">入口</label><select id="entry-filter"><option value="" data-i18n="collection.all">全部</option><option value="true" data-i18n="collection.yes">是</option><option value="false" data-i18n="collection.no">否</option></select></div>
+          <button type="button" class="collection-button" id="clear-filters" data-i18n="collection.clear">清除筛选</button>
+          <span class="collection-count" id="collection-count" aria-live="polite"></span>
+        </div>
+        <div class="collection-tabs" id="collection-tabs" hidden></div>
+        <div class="root-summary" id="root-summary" hidden></div>
+        <div class="collection-layout" id="collection-layout" hidden>
+          <div class="collection-list-panel"><div class="collection-list" id="collection-list"></div><div class="collection-pager"><button type="button" class="collection-button" id="previous-page" data-i18n="collection.previous">上一页</button><span id="page-label"></span><button type="button" class="collection-button" id="next-page" data-i18n="collection.next">下一页</button></div></div>
+          <div class="collection-detail-panel"><div class="collection-detail" id="collection-detail"><div class="empty" data-i18n="collection.select">请选择一条记录查看完整字段。</div></div></div>
+        </div>
+        <div class="object-view" id="object-view"><div class="empty" data-i18n="content.loading">正在读取产物...</div></div>
+        <div class="graph-view" id="graph-view" hidden>
+          <div class="graph-toolbar">
+            <button type="button" class="collection-button" id="graph-fit" data-i18n="graph.fit">适配画布</button>
+            <button type="button" class="collection-button" id="graph-zoom-out" aria-label="缩小">−</button>
+            <button type="button" class="collection-button" id="graph-zoom-in" aria-label="放大">＋</button>
+            <label class="graph-depth-control" for="graph-depth-select"><span data-i18n="graph.depthSelect">查看层数</span><select id="graph-depth-select" aria-label="查看层数"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></label>
+            <button type="button" class="collection-button" id="graph-collapse" data-i18n="graph.collapse">收起一层</button>
+            <button type="button" class="collection-button" id="graph-expand" data-i18n="graph.expand">展开一层</button>
+            <span class="graph-toolbar-status" id="graph-toolbar-status" role="status"></span>
+          </div>
+          <div class="graph-layout">
+            <section class="graph-panel" aria-labelledby="graph-entry-title">
+              <div class="graph-panel-header"><h3 id="graph-entry-title" data-i18n="graph.entries">入口函数</h3><p id="graph-entry-hint" data-i18n="graph.entriesHint">来自 dataset.json 的入口标记；没有标记时才使用图结构推断。</p></div>
+              <div class="graph-entry-list" id="graph-entry-list"></div>
+            </section>
+            <section class="graph-panel graph-canvas-panel" aria-labelledby="graph-canvas-title">
+              <div class="graph-panel-header"><h3 id="graph-canvas-title" data-i18n="graph.canvasTitle">向下调用图</h3><p id="graph-canvas-hint" data-i18n="graph.canvasHint">滚轮缩放，拖动画布，点击节点查看函数详情。</p></div>
+              <svg class="graph-canvas" id="graph-canvas" role="img" aria-label="向下调用图" viewBox="0 0 900 520" tabindex="0"><defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8aa6af"></path></marker></defs><g id="graph-world"></g></svg>
+              <div class="graph-empty" id="graph-empty" hidden></div>
+              <div class="graph-legend"><span class="graph-legend-item"><span class="graph-legend-swatch entry"></span><span data-i18n="graph.entryLegend">入口函数</span></span><span class="graph-legend-item"><span class="graph-legend-swatch"></span><span data-i18n="graph.nodeLegend">已解析函数节点</span></span><span class="graph-legend-item" id="graph-agentic-edge-legend" hidden><span class="graph-legend-swatch agentic"></span><span data-i18n="graph.agenticLegend">Agentic 上下文关联（方向未确认）</span></span></div>
+            </section>
+            <section class="graph-panel" aria-labelledby="graph-detail-title">
+              <div class="graph-panel-header"><h3 id="graph-detail-title" data-i18n="graph.detailTitle">节点详情</h3><p data-i18n="graph.detailHint">点击图中的节点查看完整函数字段。</p></div>
+              <div class="graph-node-detail" id="graph-node-detail"><div class="empty" data-i18n="graph.selectNode">请选择一个节点。</div></div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <pre class="raw-view" id="raw-view" hidden></pre>
+    </div>
+  </section>
+</main>
+<script>
+(function() {
+  'use strict';
+  const root = document.body;
+  const jobID = root.dataset.jobId || '';
+  const artifactName = root.dataset.artifactName || '';
+  const rawURL = '/scan/' + encodeURIComponent(jobID) + '/artifact/' + encodeURIComponent(artifactName);
+  const translations = {
+    'zh-CN': {
+      'brand.subtitle': '扫描产物查看器', 'language.label': '语言', 'action.close': '关闭窗口',
+      'artifact.kicker': '扫描阶段产物', 'action.graph': '调用图', 'action.agenticGraph': 'Agentic 上下文图', 'action.structured': '友好表单', 'action.raw': '原始 JSON', 'action.openRaw': '新标签页打开',
+      'meta.job': '扫描任务', 'meta.stage': '所属阶段', 'meta.mode': '查看方式', 'mode.structured': '中文字段表单', 'mode.raw': '原始 JSON',
+      'content.title': '产物内容', 'content.subtitle': '先看重点摘要，再按需展开完整字段；大列表按页加载，原始 JSON 始终可核对。',
+      'content.loading': '正在读取产物...', 'content.error': '读取产物失败，请稍后重试。', 'content.empty': '产物内容为空。',
+      'collection.search': '搜索字段值、函数名或文件路径', 'collection.searchPlaceholder': '例如 OnRemoteRequest、文件名或漏洞编号',
+      'collection.language': '语言', 'collection.unitType': '单元类型', 'collection.verdict': '判定', 'collection.entry': '入口',
+      'collection.all': '全部', 'collection.yes': '是', 'collection.no': '否', 'collection.clear': '清除筛选',
+      'collection.previous': '上一页', 'collection.next': '下一页', 'collection.select': '请选择一条记录查看完整字段。',
+      'collection.items': '条记录', 'collection.page': '第 {current} / {total} 页', 'collection.root': '产物概览',
+      'collection.tabs': '可浏览的数据集合', 'collection.loadingDetail': '正在读取完整详情...', 'collection.noMatches': '没有匹配的记录。',
+      'field.unknown': '扩展字段：已保留原始字段和值，请结合字段名核对。', 'field.empty': '空值', 'field.item': '第 {index} 项',
+      'field.count': '{count} 项', 'field.value': '值',
+      'focus.kicker': '先看重点', 'focus.title': '优先关注的信息', 'focus.artifactSubtitle': '这里先展示最影响判断的结论、位置和安全信号；完整字段仍保留在下方。', 'focus.itemSubtitle': '先看这条记录的结论、源码位置和安全信号；其余字段按需展开。', 'focus.expand': '展开全部字段', 'focus.collapse': '收起全部字段', 'focus.allFields': '完整字段', 'focus.allFieldsHint': '原始字段和值均保留，默认折叠以减少干扰。', 'focus.noHighlights': '暂时没有可自动提取的重点字段，请展开完整字段查看。', 'focus.fields': '个字段', 'focus.contextCount': '{count} 个上下文函数', 'focus.linkCount': '{count} 条关联',
+      'graph.fit': '适配画布', 'graph.collapse': '收起一层', 'graph.expand': '展开一层', 'graph.depthSelect': '查看层数', 'graph.entries': '入口函数',
+      'graph.entriesHint': '来自 dataset.json 的入口标记；没有标记时才使用图结构推断。', 'graph.agenticEntriesHint': '入口来自增强数据集；实线是原生调用边，虚线是模型选入的上下文关联。', 'graph.canvasTitle': '向下调用图', 'graph.agenticCanvasTitle': '静态调用与 Agentic 上下文图',
+      'graph.canvasHint': '滚轮缩放，拖动画布，点击节点查看函数详情。', 'graph.agenticCanvasHint': '实线表示解析器确认的调用边；橙色虚线表示模型选入的相关源码，方向未被静态分析证明。', 'graph.entryLegend': '入口函数', 'graph.nodeLegend': '已解析函数节点', 'graph.agenticLegend': 'Agentic 上下文关联（方向未确认）',
+      'graph.detailTitle': '节点详情', 'graph.detailHint': '点击图中的节点查看完整函数字段。', 'graph.selectNode': '请选择一个节点。',
+      'graph.loading': '正在读取调用图和入口信息...', 'graph.error': '调用图读取失败，请稍后重试。', 'graph.noEntries': '没有找到入口函数。',
+      'graph.noEdges': '该入口目前没有已解析的下游调用边。', 'graph.noEdgesAgentic': '该函数目前没有原生调用边或 Agentic 上下文关联。', 'graph.inferred': '图结构推断入口', 'graph.dataset': 'dataset.json 入口标记', 'graph.enhancedDataset': 'dataset_enhanced.json 入口标记',
+      'graph.nodes': '节点', 'graph.edges': '边', 'graph.depth': '展开深度', 'graph.truncated': '节点过多，已限制显示前 {count} 个节点。', 'graph.contextLinks': '上下文关联', 'graph.unresolvedContext': '个上下文函数未在索引中找到'
+    },
+    'en': {
+      'brand.subtitle': 'Scan artifact viewer', 'language.label': 'Language', 'action.close': 'Close window',
+      'artifact.kicker': 'Scan stage artifact', 'action.graph': 'Call graph', 'action.agenticGraph': 'Agentic context graph', 'action.structured': 'Friendly form', 'action.raw': 'Raw JSON', 'action.openRaw': 'Open in new tab',
+      'meta.job': 'Scan job', 'meta.stage': 'Stage', 'meta.mode': 'View mode', 'mode.structured': 'Chinese field form', 'mode.raw': 'Raw JSON',
+      'content.title': 'Artifact content', 'content.subtitle': 'Start with the priority summary, then expand complete fields as needed; large collections are paginated and raw JSON remains available.',
+      'content.loading': 'Loading artifact...', 'content.error': 'Could not load the artifact. Try again.', 'content.empty': 'The artifact is empty.',
+      'collection.search': 'Search field values, functions, or file paths', 'collection.searchPlaceholder': 'For example OnRemoteRequest, a file, or finding ID',
+      'collection.language': 'Language', 'collection.unitType': 'Unit type', 'collection.verdict': 'Verdict', 'collection.entry': 'Entry point',
+      'collection.all': 'All', 'collection.yes': 'Yes', 'collection.no': 'No', 'collection.clear': 'Clear filters',
+      'collection.previous': 'Previous', 'collection.next': 'Next', 'collection.select': 'Select a record to inspect every field.',
+      'collection.items': 'records', 'collection.page': 'Page {current} / {total}', 'collection.root': 'Artifact overview',
+      'collection.tabs': 'Browsable collections', 'collection.loadingDetail': 'Loading complete details...', 'collection.noMatches': 'No matching records.',
+      'field.unknown': 'Extension field: the original field and value are preserved for verification.', 'field.empty': 'Empty', 'field.item': 'Item {index}',
+      'field.count': '{count} items', 'field.value': 'Value',
+      'focus.kicker': 'Start here', 'focus.title': 'Priority information', 'focus.artifactSubtitle': 'The conclusion, source location, and security signals most useful for review appear first; every field remains below.', 'focus.itemSubtitle': 'Review this record’s verdict, source location, and security signals first; expand the remaining fields when needed.', 'focus.expand': 'Expand all fields', 'focus.collapse': 'Collapse all fields', 'focus.allFields': 'All fields', 'focus.allFieldsHint': 'Original keys and values are preserved; sections start collapsed to reduce noise.', 'focus.noHighlights': 'No priority fields could be extracted automatically. Expand all fields to inspect the artifact.', 'focus.fields': 'fields', 'focus.contextCount': '{count} context functions', 'focus.linkCount': '{count} links',
+      'graph.fit': 'Fit canvas', 'graph.collapse': 'Collapse one level', 'graph.expand': 'Expand one level', 'graph.depthSelect': 'Depth', 'graph.entries': 'Entry functions',
+      'graph.entriesHint': 'Uses entry markers from dataset.json; graph roots are inferred only when markers are unavailable.', 'graph.agenticEntriesHint': 'Entries come from the enhanced dataset; solid lines are native calls and dashed lines are model-selected context links.', 'graph.canvasTitle': 'Downstream call graph', 'graph.agenticCanvasTitle': 'Static calls plus Agentic context',
+      'graph.canvasHint': 'Scroll to zoom, drag the canvas, and click a node for function details.', 'graph.agenticCanvasHint': 'Solid lines are parser-confirmed calls; orange dashed lines are model-selected source context whose direction is not statically proven.', 'graph.entryLegend': 'Entry function', 'graph.nodeLegend': 'Parsed function node', 'graph.agenticLegend': 'Agentic context link (direction unconfirmed)',
+      'graph.detailTitle': 'Node details', 'graph.detailHint': 'Click a graph node to inspect every function field.', 'graph.selectNode': 'Select a node.',
+      'graph.loading': 'Loading call graph and entry information...', 'graph.error': 'Could not load the call graph. Try again.', 'graph.noEntries': 'No entry functions found.',
+      'graph.noEdges': 'This entry currently has no parsed downstream call edges.', 'graph.noEdgesAgentic': 'This function has no native call edges or Agentic context links.', 'graph.inferred': 'Inferred graph root', 'graph.dataset': 'dataset.json entry marker', 'graph.enhancedDataset': 'dataset_enhanced.json entry marker',
+      'graph.nodes': 'nodes', 'graph.edges': 'edges', 'graph.depth': 'depth', 'graph.truncated': 'Too many nodes; showing the first {count} nodes.', 'graph.contextLinks': 'context links', 'graph.unresolvedContext': 'context functions were not found in the index'
+    }
+  };
+  const artifactGuides = {
+    'parse.report.json': ['解析阶段执行记录', '记录源码解析状态、耗时、输入输出、统计和错误。', 'Parse stage report', 'Records parsing status, timing, inputs, outputs, counters, and errors.'],
+    'app-context.report.json': ['应用上下文阶段执行记录', '记录威胁模型和平台安全上下文生成状态。', 'Application context stage report', 'Records threat-model and platform-context generation.'],
+    'llm-reachability.report.json': ['LLM 可达性阶段执行记录', '记录模型辅助入口和可达性复核状态。', 'LLM reachability stage report', 'Records model-assisted entry-point and reachability review.'],
+    'enhance.report.json': ['上下文增强阶段执行记录', '记录调用者、被调用者、语义上下文和安全信号增强状态。', 'Enhancement stage report', 'Records caller, callee, semantic, and security-signal enrichment.'],
+    'analyze.report.json': ['漏洞分析阶段执行记录', '记录大模型漏洞分析的状态、用量和错误。', 'Analysis stage report', 'Records primary model vulnerability analysis status and usage.'],
+    'verify.report.json': ['攻击路径验证阶段执行记录', '记录候选问题的攻击者视角验证状态。', 'Verification stage report', 'Records attacker-path verification status.'],
+    'build-output.report.json': ['结果归一化阶段执行记录', '记录跨阶段结果转换为统一输出格式的状态。', 'Build-output stage report', 'Records normalization into the stable pipeline output.'],
+    'dynamic-test.report.json': ['动态测试阶段执行记录', '记录隔离运行时测试的状态和限制。', 'Dynamic-test stage report', 'Records isolated runtime-test status and limitations.'],
+    'report-data.report.json': ['报告数据阶段执行记录', '记录报告数据整理和修复建议生成状态。', 'Report-data stage report', 'Records report-data and remediation generation.'],
+    'report.report.json': ['报告生成阶段执行记录', '记录摘要、HTML 和披露文件生成状态。', 'Report stage report', 'Records summary, HTML, and disclosure generation.'],
+    'scan.report.json': ['扫描汇总执行记录', '记录整个扫描流程的状态、累计用量、费用和步骤。', 'Aggregate scan report', 'Records scan-wide status, usage, cost, and steps.'],
+    'platform_profile.json': ['OpenHarmony 平台画像', '展示平台识别证据、组件、构建目标、边界和覆盖情况。', 'OpenHarmony platform profile', 'Shows platform evidence, components, build targets, boundaries, and coverage.'],
+    'application_context.json': ['应用安全上下文', '展示应用用途、攻击者、信任边界、输入源和漏洞判定标准。', 'Application security context', 'Shows purpose, attackers, trust boundaries, inputs, and vulnerability criteria.'],
+    'dataset.json': ['解析单元数据集', '按函数单元展示源码位置、入口状态、可达性和直接调用关系。', 'Parsed dataset', 'Shows source locations, entry status, reachability, and direct calls per unit.'],
+    'dataset_enhanced.json': ['增强单元数据集', '在解析单元基础上展示调用上下文、平台语义、安全防护和模型上下文；可切换 Agentic 上下文图查看模型选入的关联函数。', 'Enhanced dataset', 'Adds call context, platform semantics, guards, and model context to each unit; switch to the Agentic context graph to inspect model-selected related functions.'],
+    'analyzer_output.json': ['原生分析器输出', '展示函数索引、源码位置和原生调用图索引。', 'Native analyzer output', 'Shows function index, source locations, and native call-graph indexes.'],
+    'call_graph.json': ['调用图原始索引', '展示函数、调用边、反向调用边和调用图统计。', 'Call-graph index', 'Shows functions, call edges, reverse edges, and graph statistics.'],
+    'call_graphs.json': ['调用图文件索引', '展示各语言生成的调用图文件位置。', 'Call-graph file index', 'Shows generated call-graph files by language.'],
+    'results.json': ['第一阶段分析结果', '展示大模型对每个分析单元给出的判定、证据和置信度。', 'Stage 1 analysis results', 'Shows model verdicts, evidence, and confidence per unit.'],
+    'results_verified.json': ['验证后分析结果', '展示攻击路径验证、结论和拒绝原因。', 'Stage 2 verified results', 'Shows attacker-path verification, verdicts, and rejection reasons.'],
+    'pipeline_output.json': ['统一管线输出', '展示最终统一发现、统计和威胁模型提示。', 'Pipeline output', 'Shows normalized findings, statistics, and threat-model warnings.'],
+    'pipeline_results.json': ['管线阶段结果', '展示各阶段是否成功以及阶段级输出。', 'Pipeline stage results', 'Shows stage success and stage-level output.'],
+    'scan_results.json': ['扫描原始结果', '展示扫描文件范围、统计和扫描时间。', 'Raw scan results', 'Shows scanned files, counters, and scan time.'],
+    'dynamic_test_results.json': ['动态测试结果', '展示隔离运行时测试的观察结果。', 'Dynamic-test results', 'Shows observations from isolated runtime tests.']
+  };
+  const commonFields = {
+    schema_version: ['模式版本', 'Schema version', '用于判断产物字段兼容性的版本号。', 'Version used to interpret artifact fields.'],
+    id: ['标识', 'Identifier', '记录或分析单元的稳定标识。', 'Stable identifier for the record or analysis unit.'],
+    name: ['名称', 'Name', '函数、组件或产物名称。', 'Function, component, or artifact name.'],
+    repository: ['代码仓库', 'Repository', '产生该产物的源码仓库。', 'Source repository that produced this artifact.'],
+    platform: ['目标平台', 'Target platform', '本次扫描识别或使用的平台。', 'Platform detected or selected for the scan.'],
+    language: ['源码语言', 'Source language', '函数或文件所属的编程语言。', 'Programming language for the function or file.'],
+    unit_type: ['单元类型', 'Unit type', '分析单元的类型，例如函数、方法或回调。', 'Analysis-unit type, such as function, method, or callback.'],
+    unitType: ['单元类型', 'Unit type', '分析单元的类型，例如函数、方法或回调。', 'Analysis-unit type, such as function, method, or callback.'],
+    code: ['代码信息', 'Code information', '函数源码及其原始位置。', 'Function source and its original location.'],
+    primary_code: ['函数源码', 'Function source', '分析时使用的主要函数代码。', 'Primary function code used for analysis.'],
+    primary_origin: ['主要代码位置', 'Primary source location', '函数在源码中的文件、行号和名称。', 'File, lines, and name of the function in source.'],
+    file_path: ['文件路径', 'File path', '源码文件相对于仓库根目录的路径。', 'Source path relative to the repository root.'],
+    filePath: ['文件路径', 'File path', '源码文件相对于仓库根目录的路径。', 'Source path relative to the repository root.'],
+    start_line: ['起始行', 'Start line', '函数或证据在文件中的起始行。', 'Starting line in the file.'],
+    end_line: ['结束行', 'End line', '函数或证据在文件中的结束行。', 'Ending line in the file.'],
+    function_name: ['函数名', 'Function name', '源码中声明的函数名。', 'Declared function name in source.'],
+    class_name: ['类名', 'Class name', '函数所属的类或命名空间。', 'Class or namespace containing the function.'],
+    parameters: ['参数列表', 'Parameters', '函数声明的参数和类型。', 'Declared parameters and types.'],
+    return_type: ['返回类型', 'Return type', '函数返回值类型。', 'Function return type.'],
+    returnType: ['返回类型', 'Return type', '函数返回值类型。', 'Function return type.'],
+    is_entry_point: ['是否为入口', 'Entry point', '是否被识别为可接收外部输入的分析入口。', 'Whether the unit is an identified external-input entry point.'],
+    isEntryPoint: ['是否为入口', 'Entry point', '是否被识别为可接收外部输入的分析入口。', 'Whether the unit is an identified external-input entry point.'],
+    entry_point_reason: ['入口判定依据', 'Entry-point reason', '说明该函数被识别为入口的规则或平台信号。', 'Rule or platform signal that identified the entry point.'],
+    reachable: ['是否可达', 'Reachable', '是否从入口集合沿调用关系可达。', 'Whether reachable from the entry-point set.'],
+    reachable_from_entry: ['入口可达状态', 'Reachable from entry', '从入口函数追踪得到的可达状态。', 'Reachability state derived from entry functions.'],
+    dependencies: ['依赖函数', 'Dependencies', '该单元需要的上游或上下文函数。', 'Upstream or context functions used by the unit.'],
+    dependency_metadata: ['依赖统计', 'Dependency metadata', '调用深度、上下游数量和内联统计。', 'Call depth, upstream/downstream counts, and inlining counters.'],
+    direct_calls: ['直接调用', 'Direct calls', '该函数直接调用的函数列表。', 'Functions directly called by this function.'],
+    direct_callers: ['直接调用者', 'Direct callers', '直接调用该函数的函数列表。', 'Functions that directly call this function.'],
+    direct_callees: ['下游调用边', 'Downstream call edges', '从当前函数向下解析到的直接调用目标。', 'Direct downstream call targets parsed from this function.'],
+    graph_entry_source: ['入口来源', 'Entry source', '说明入口来自 dataset.json 标记还是图结构推断。', 'Whether the entry came from dataset.json or graph inference.'],
+    context_functions: ['上下文函数', 'Context functions', '为安全分析补充的相关函数。', 'Related functions added for security-analysis context.'],
+    agentic_context_links: ['Agentic 上下文关联', 'Agentic context links', '模型在上下文增强阶段选入的相关函数；这些关系不等同于已被静态分析证明的调用边。', 'Functions selected by the model during context enhancement; these relationships are not equivalent to statically proven call edges.'],
+    agentic_only: ['仅有 Agentic 标识', 'Agentic-only marker', '该节点没有在原生函数索引中找到完整记录，仅保留模型选入的函数标识。', 'The native function index did not contain a complete record; only the model-selected identifier is retained.'],
+    agentic_source_status: ['上下文源码状态', 'Context source status', '说明该上下文函数是否有可展示的索引源码。', 'Whether indexed source is available for this context function.'],
+    platform_context: ['平台安全上下文', 'Platform security context', 'OpenHarmony 边界、组件、目标和安全防护信号。', 'OpenHarmony boundaries, components, targets, and guard signals.'],
+    agent_context: ['模型分析上下文', 'Model analysis context', '模型分析时使用的安全分类、证据和可达性上下文。', 'Security classification, evidence, and reachability context used by the model.'],
+    guard: ['安全防护信号', 'Guard signals', '接口令牌、权限检查等已识别的安全防护。', 'Identified guards such as interface-token and permission checks.'],
+    evidence: ['证据', 'Evidence', '支持平台识别、入口判断或安全结论的证据。', 'Evidence supporting platform, entry-point, or security conclusions.'],
+    status: ['执行状态', 'Execution status', '该阶段或记录的执行状态。', 'Execution status for the stage or record.'],
+    step: ['流程阶段', 'Pipeline stage', '产物对应的扫描阶段。', 'Pipeline stage represented by the artifact.'],
+    timestamp: ['时间戳', 'Timestamp', '阶段或记录生成的时间。', 'Time when the stage or record was produced.'],
+    duration_seconds: ['耗时（秒）', 'Duration (seconds)', '该阶段的执行耗时。', 'Execution duration for the stage.'],
+    cost_usd: ['费用（美元）', 'Cost (USD)', '按输入输出 Token 估算的美元费用。', 'Estimated cost in US dollars from token usage.'],
+    cost_cny: ['费用（人民币）', 'Cost (CNY)', '按输入输出 Token 估算的人民币费用。', 'Estimated cost in Chinese yuan from token usage.'],
+    token_usage: ['Token 用量', 'Token usage', '输入、输出和总 Token 数。', 'Input, output, and total token counts.'],
+    summary: ['阶段摘要', 'Stage summary', '阶段产生的统计摘要。', 'Counters and summary produced by the stage.'],
+    inputs: ['阶段输入', 'Stage inputs', '阶段读取的仓库、数据集或配置。', 'Repository, dataset, or configuration read by the stage.'],
+    outputs: ['阶段输出', 'Stage outputs', '阶段写出的文件或结果。', 'Files or results written by the stage.'],
+    errors: ['错误信息', 'Errors', '阶段执行期间记录的错误。', 'Errors recorded during stage execution.'],
+    verdict: ['安全判定', 'Security verdict', '模型或验证阶段对该单元的安全结论。', 'Security conclusion from model or verification.'],
+    finding: ['问题类型', 'Finding type', '该记录归类的问题或安全结论。', 'Finding or security conclusion classification.'],
+    reasoning: ['分析理由', 'Analysis reasoning', '模型给出该判定的详细理由。', 'Detailed reasoning behind the verdict.'],
+    classification_reasoning: ['分类理由', 'Classification reasoning', '安全分类的判定依据。', 'Reasoning for the security classification.'],
+    security_classification: ['安全分类', 'Security classification', '例如安全控制、可疑或漏洞。', 'Classification such as security control, suspicious, or vulnerability.'],
+    confidence: ['置信度', 'Confidence', '模型对当前判定的置信度。', 'Model confidence in the current verdict.'],
+    cwe_id: ['CWE 编号', 'CWE ID', '对应的 CWE 弱点编号。', 'Associated Common Weakness Enumeration ID.'],
+    cwe_name: ['CWE 名称', 'CWE name', '对应的 CWE 弱点名称。', 'Associated CWE weakness name.'],
+    attack_vector: ['攻击向量', 'Attack vector', '从入口到敏感操作的攻击路径描述。', 'Description of the path from entry to sensitive operation.'],
+    function_analyzed: ['被分析函数', 'Analyzed function', '模型实际分析的函数签名。', 'Function signature analyzed by the model.'],
+    unit_id: ['分析单元 ID', 'Analysis unit ID', '对应数据集单元的稳定 ID。', 'Stable ID of the corresponding dataset unit.'],
+    route_key: ['路由键', 'Route key', '用于关联分析结果和数据集单元的键。', 'Key linking the result to a dataset unit.'],
+    files_included: ['包含文件', 'Included files', '分析提示词中包含的源码文件。', 'Source files included in the analysis prompt.'],
+    has_deps_inlined: ['是否内联依赖', 'Dependencies inlined', '分析上下文是否包含依赖函数代码。', 'Whether dependency code was inlined into context.'],
+    context_reviewed: ['是否复核上下文', 'Context reviewed', '模型是否明确复核了平台和应用上下文。', 'Whether platform and application context was reviewed.'],
+    application_type: ['应用类型', 'Application type', '应用或组件的安全分类。', 'Security classification of the application or component.'],
+    purpose: ['组件用途', 'Component purpose', '组件在系统中的功能和用途。', 'Function and purpose of the component.'],
+    intended_behaviors: ['预期行为', 'Intended behaviors', '组件被设计为执行的正常行为。', 'Normal behaviors the component is designed to perform.'],
+    attacker_profiles: ['攻击者画像', 'Attacker profiles', '允许分析使用的攻击者位置、能力和影响。', 'Attacker position, capabilities, and impact used in analysis.'],
+    trust_boundaries: ['信任边界', 'Trust boundaries', '外部输入和调用身份的信任级别。', 'Trust levels for external inputs and calling identity.'],
+    input_sources: ['输入源', 'Input sources', '可能由攻击者控制的输入来源。', 'Input sources potentially controlled by an attacker.'],
+    vulnerability_criteria: ['漏洞判定标准', 'Vulnerability criteria', '平台上下文要求检查的安全条件。', 'Security conditions required by the platform context.'],
+    openharmony_binder_parcel: ['Binder IPC 数据', 'Binder IPC data', '通过 OpenHarmony Binder IPC 传入、需要按字段校验的数据。', 'Data received through OpenHarmony Binder IPC that must be validated field by field.'],
+    openharmony_calling_identity: ['IPC 调用者身份', 'IPC caller identity', '由系统 IPC 框架提供、需要经过权限判断的调用者身份。', 'Caller identity supplied by the IPC framework and requiring permission checks.'],
+    not_a_vulnerability: ['不应报告的情况', 'Not a vulnerability', '明确排除的正常平台行为。', 'Normal platform behavior explicitly excluded from findings.'],
+    requires_remote_trigger: ['是否需要远程触发', 'Requires remote trigger', '问题是否必须通过远程网络触发。', 'Whether the issue requires a remote network trigger.'],
+    components: ['组件列表', 'Components', '从 bundle.json 和构建文件识别的组件。', 'Components identified from bundle.json and build files.'],
+    boundaries: ['平台边界', 'Platform boundaries', '识别出的 IPC、System Ability 等边界。', 'Identified IPC, System Ability, and other boundaries.'],
+    detection: ['平台检测', 'Platform detection', '平台识别置信度、信号和失败项。', 'Platform confidence, signals, and failures.'],
+    coverage: ['源码覆盖', 'Source coverage', '发现、筛选、解析文件的覆盖统计。', 'Coverage counters for discovered, eligible, and parsed files.'],
+    provenance: ['来源信息', 'Provenance', '平台画像和上下文的生成来源。', 'Origin of the platform profile and context.'],
+    build_metadata: ['构建元数据', 'Build metadata', 'bundle.json、BUILD.gn 和目标信息。', 'bundle.json, BUILD.gn, and target information.'],
+    statistics: ['统计信息', 'Statistics', '函数数、调用边、孤立函数等统计。', 'Function, edge, and isolated-function counters.'],
+    call_graph: ['正向调用图', 'Forward call graph', '函数到其直接被调用函数的映射。', 'Mapping from a function to directly called functions.'],
+    reverse_call_graph: ['反向调用图', 'Reverse call graph', '函数到其直接调用者的映射。', 'Mapping from a function to its direct callers.'],
+    functions: ['函数索引', 'Function index', '按稳定 ID 索引的函数定义信息。', 'Function definitions indexed by stable ID.'],
+    includes: ['头文件依赖', 'Includes', '源码中的 include 关系。', 'Include relationships in source.'],
+    macros: ['宏定义', 'Macros', '解析到的宏定义。', 'Parsed macro definitions.'],
+    macro_aliases: ['宏别名', 'Macro aliases', '宏别名和展开关系。', 'Macro aliases and expansion relationships.'],
+    prototypes: ['函数原型', 'Prototypes', '解析到的函数声明原型。', 'Parsed function declarations.'],
+    findings: ['漏洞发现', 'Findings', '统一管线中需要用户关注的问题列表。', 'Issues requiring attention in normalized pipeline output.'],
+    results: ['结果汇总', 'Result summary', '按安全结论汇总的数量或结果集合。', 'Counts or results grouped by security conclusion.'],
+    pipeline_stats: ['管线统计', 'Pipeline statistics', '各阶段耗时、单元数量和可达性统计。', 'Stage timings, unit counts, and reachability counters.'],
+    threat_model_warnings: ['威胁模型提示', 'Threat-model warnings', '威胁模型合并时产生的提示或冲突。', 'Warnings or conflicts from threat-model merging.'],
+    analysis_date: ['分析日期', 'Analysis date', '生成统一分析结果的日期。', 'Date when normalized analysis was generated.'],
+    context_source: ['上下文来源', 'Context source', '应用安全上下文的来源。', 'Source of the application security context.'],
+    processing_level: ['处理级别', 'Processing level', '本次扫描使用的单元处理范围。', 'Unit-processing scope used by the scan.'],
+    success: ['是否成功', 'Successful', '管线或阶段是否成功完成。', 'Whether the pipeline or stage completed successfully.'],
+    stages: ['阶段结果', 'Stage results', '各扫描阶段的结果详情。', 'Details for each scan stage.'],
+    files: ['扫描文件', 'Scanned files', '本次扫描涉及的文件列表。', 'Files included in the scan.'],
+    scan_time: ['扫描时间', 'Scan time', '扫描开始或完成时间。', 'Scan start or completion time.'],
+    scope: ['扫描范围', 'Scan scope', '扫描使用的仓库范围和筛选条件。', 'Repository scope and filters used by the scan.'],
+    test_time: ['测试时间', 'Test time', '阶段测试或管线测试时间。', 'Stage or pipeline test time.'],
+    model: ['模型', 'Model', '执行该阶段的大模型名称。', 'Model used for the stage.'],
+    provider: ['模型服务商', 'Provider', '执行该阶段的模型服务商。', 'Model provider used for the stage.'],
+    total: ['总数量', 'Total count', '记录或分析单元总数。', 'Total record or analysis-unit count.'],
+    vulnerable: ['漏洞数量', 'Vulnerable count', '判定为漏洞的数量。', 'Number of vulnerable records.'],
+    safe: ['安全数量', 'Safe count', '判定为安全的数量。', 'Number of safe records.'],
+    inconclusive: ['待定数量', 'Inconclusive count', '无法形成确定结论的数量。', 'Number of inconclusive records.'],
+    errors_count: ['错误数量', 'Error count', '处理或分析错误数量。', 'Number of processing or analysis errors.']
+  };
+  // Fields emitted by the OpenHarmony adapters and by the stage reports. Keep
+  // this registry explicit so the friendly form explains the real artifact
+  // schema instead of falling back to a generic placeholder.
+  const additionalFields = {
+    source: ['来源', 'Source', '说明该信息来自源码、配置文件、平台画像或模型上下文。', 'Identifies whether the information came from source, configuration, platform profile, or model context.'],
+    value: ['原始值', 'Raw value', '字段对应的原始值；界面不会改写其内容。', 'Original value for the field; the viewer does not rewrite it.'],
+    path: ['路径', 'Path', '文件、目录或产物在仓库或扫描工作区中的路径。', 'File, directory, or artifact path in the repository or scan workspace.'],
+    repo: ['仓库路径', 'Repository path', '本次扫描使用的源码仓库路径。', 'Filesystem path of the source repository used by the scan.'],
+    repo_path: ['仓库路径', 'Repository path', '本次阶段使用的源码仓库路径。', 'Source-repository path used by this stage.'],
+    repository_root: ['仓库根目录', 'Repository root', '源码仓库的根目录，用于解析相对文件路径。', 'Repository root used to resolve relative source paths.'],
+    repository_url: ['仓库地址', 'Repository URL', '源码仓库的远程地址或本地位置。', 'Remote URL or local location of the source repository.'],
+    commit_sha: ['提交哈希', 'Commit hash', '扫描源码对应的 Git 提交哈希。', 'Git commit hash corresponding to the scanned source.'],
+    url: ['链接地址', 'URL', '关联仓库、文档或报告的链接地址。', 'URL associated with a repository, document, or report.'],
+    source_sha256: ['源码 SHA-256', 'Source SHA-256', '用于确认上下文来源未被替换的源码哈希。', 'Source hash used to confirm that the context input was not replaced.'],
+    source_role: ['源码角色', 'Source role', '文件在扫描范围中的角色，例如生产代码、测试或接口描述。', 'Role of the file in scan scope, such as production, test, or interface description.'],
+    role: ['文件角色', 'File role', '文件在扫描范围中的分类角色。', 'Classification role assigned to the file in scan scope.'],
+    roles: ['文件角色统计', 'File-role counts', '按生产代码、测试、生成文件等角色汇总的数量。', 'Counts grouped by production, test, generated, and other file roles.'],
+    component: ['组件', 'Component', '源码文件或构建目标所属的系统组件。', 'System component containing the source file or build target.'],
+    kind: ['条目类型', 'Entry kind', '当前记录的具体类型，例如函数、构建目标、接口或宏。', 'Concrete type of the record, such as function, build target, interface, or macro.'],
+    target: ['目标', 'Target', '当前规则、构建项或调用关系指向的目标。', 'Target referenced by a rule, build item, or relationship.'],
+    targets: ['目标列表', 'Targets', '记录关联的构建、测试或调用目标列表。', 'Build, test, or call targets associated with the record.'],
+    sources: ['来源列表', 'Sources', '构建目标或平台证据引用的源码文件列表。', 'Source files referenced by a build target or platform evidence.'],
+    metadata: ['元数据', 'Metadata', '描述产物生成方式、扫描范围或附加状态的元数据集合。', 'Metadata describing artifact generation, scan scope, or additional state.'],
+    generator: ['生成器', 'Generator', '生成当前产物的程序或模块名称。', 'Program or module that generated the artifact.'],
+    generated_at: ['生成时间', 'Generated at', '当前产物或记录生成的时间。', 'Time when the artifact or record was generated.'],
+    extension: ['文件扩展名', 'File extension', '文件的扩展名，用于判断解析语言和文件类型。', 'File extension used to determine language and file type.'],
+    size: ['文件大小', 'File size', '文件大小，通常以字节计。', 'File size, usually measured in bytes.'],
+    total_size_bytes: ['总文件大小（字节）', 'Total size (bytes)', '扫描文件集合的总字节数。', 'Total byte size of the scanned file set.'],
+    build_files: ['构建文件', 'Build files', '扫描到的 BUILD.gn、CMake 或其他构建描述文件。', 'BUILD.gn, CMake, or other build-description files found by the scan.'],
+    bundle_manifests: ['组件清单', 'Bundle manifests', '扫描到的 bundle.json 组件清单文件。', 'bundle.json component manifest files found by the scan.'],
+    manifest_path: ['清单路径', 'Manifest path', '组件 bundle.json 或其他清单文件的路径。', 'Path to a bundle.json or other component manifest.'],
+    manifest_paths: ['清单路径列表', 'Manifest paths', '平台画像使用的全部组件清单路径。', 'All component-manifest paths used by the platform profile.'],
+    package_name: ['包名', 'Package name', '组件或接口包的声明名称。', 'Declared name of the component or interface package.'],
+    package: ['包信息', 'Package', 'IDL 或组件包的结构化包信息。', 'Structured package information for an IDL or component package.'],
+    subsystem: ['子系统', 'Subsystem', 'OpenHarmony 组件所属的子系统。', 'OpenHarmony subsystem containing the component.'],
+    namespace_ohos: ['OHOS 命名空间', 'OHOS namespace', '源码中识别到的 OHOS 命名空间标记。', 'OHOS namespace marker detected in source.'],
+    syscaps: ['系统能力', 'System capabilities', '组件声明或使用的 OpenHarmony 系统能力。', 'OpenHarmony system capabilities declared or used by the component.'],
+    system_types: ['系统类型', 'System types', '组件清单声明的系统类型或服务类型。', 'System or service types declared by the component manifest.'],
+    system_ability: ['系统能力服务', 'System Ability', '识别到的 OpenHarmony System Ability 服务信息。', 'Detected OpenHarmony System Ability service information.'],
+    binder_ipc: ['Binder IPC 证据', 'Binder IPC evidence', '源码中识别到的 Binder IPC 边界证据。', 'Binder IPC boundary evidence detected in source.'],
+    hdf: ['HDF 证据', 'HDF evidence', '源码中识别到的 HDF 驱动框架证据。', 'HDF driver-framework evidence detected in source.'],
+    idl: ['IDL 证据', 'IDL evidence', '源码中识别到的接口描述语言文件或边界证据。', 'Interface-definition files or boundary evidence detected in source.'],
+    idl_paths: ['IDL 路径列表', 'IDL paths', '平台画像引用的 IDL 文件路径。', 'IDL file paths referenced by the platform profile.'],
+    sa_profile_paths: ['SA 配置路径', 'SA profile paths', 'System Ability 配置文件的路径。', 'Paths to System Ability profile files.'],
+    profiles: ['配置档案', 'Profiles', '平台或组件解析到的配置档案集合。', 'Configuration profiles parsed for the platform or component.'],
+    sa_profiles: ['SA 配置档案', 'SA profiles', 'System Ability 服务配置档案。', 'System Ability service configuration profiles.'],
+    sequenceables: ['可序列化类型', 'Sequenceables', 'IDL 中可以跨 IPC 序列化传输的类型。', 'IDL types that can be serialized across IPC.'],
+    imports: ['IDL 导入项', 'Imports', 'IDL 文件导入的其他接口或类型。', 'Interfaces or types imported by an IDL file.'],
+    interfaces: ['接口列表', 'Interfaces', 'IDL、头文件或组件声明的接口列表。', 'Interfaces declared by IDL, headers, or the component.'],
+    enums: ['枚举类型', 'Enumerations', 'IDL 或源码解析到的枚举类型。', 'Enumerations parsed from IDL or source.'],
+    structs: ['结构体类型', 'Structures', 'IDL 或源码解析到的结构体类型。', 'Structures parsed from IDL or source.'],
+    defines: ['编译宏', 'Defines', '构建目标声明的预处理宏。', 'Preprocessor definitions declared by the build target.'],
+    include_dirs: ['头文件目录', 'Include directories', '构建目标搜索头文件时使用的目录。', 'Directories searched for headers by the build target.'],
+    deps: ['构建依赖', 'Build dependencies', '构建目标直接依赖的其他目标或库。', 'Targets or libraries directly required by the build target.'],
+    external_deps: ['外部依赖', 'External dependencies', '来自当前组件之外的构建依赖。', 'Build dependencies originating outside the current component.'],
+    third_party_dependencies: ['第三方依赖', 'Third-party dependencies', '组件声明的第三方库或模块依赖。', 'Third-party libraries or modules declared by the component.'],
+    gn: ['GN 构建信息', 'GN build information', '从 GN 构建描述中解析出的结构化信息。', 'Structured information parsed from GN build descriptions.'],
+    gn_target: ['GN 目标证据', 'GN target evidence', '用于识别组件构建目标的 GN 证据。', 'GN evidence used to identify the component build target.'],
+    build_metadata_paths: ['构建元数据路径', 'Build-metadata paths', '平台画像使用的构建元数据文件路径。', 'Build-metadata file paths used by the platform profile.'],
+    source_hashes: ['来源哈希', 'Source hashes', '平台画像输入文件的哈希，用于来源追踪。', 'Hashes of platform-profile inputs used for provenance tracking.'],
+    profile_builder_version: ['画像生成器版本', 'Profile-builder version', '生成平台画像的适配器版本。', 'Adapter version that generated the platform profile.'],
+    signals: ['平台识别信号', 'Platform signals', '用于判断 OpenHarmony 平台和组件边界的识别信号。', 'Signals used to identify OpenHarmony and component boundaries.'],
+    detection: ['检测结果', 'Detection result', '平台检测的置信度、信号和失败项汇总。', 'Summary of platform-detection confidence, signals, and failures.'],
+    languages: ['源码语言列表', 'Languages', '扫描或平台画像中出现的源码语言。', 'Source languages found by the scan or platform profile.'],
+    language_stats: ['语言统计', 'Language statistics', '按源码语言汇总的文件和解析统计。', 'File and parsing statistics grouped by source language.'],
+    per_language: ['按语言统计', 'Per-language statistics', '每种源码语言对应的扫描统计。', 'Scan statistics for each source language.'],
+    languages_without_coverage_data: ['缺少覆盖数据的语言', 'Languages without coverage data', '当前没有完整覆盖统计的源码语言。', 'Source languages without complete coverage statistics.'],
+    discovered_files: ['发现文件数', 'Discovered files', '扫描器发现的全部候选文件数量。', 'Number of candidate files discovered by the scanner.'],
+    eligible_files: ['可解析文件数', 'Eligible files', '通过语言和范围筛选、进入解析阶段的文件数量。', 'Files that passed language and scope filters and entered parsing.'],
+    parsed_files: ['已解析文件数', 'Parsed files', '解析器成功处理的文件数量。', 'Number of files successfully processed by the parser.'],
+    unsupported_files: ['不支持文件数', 'Unsupported files', '因语言或格式不支持而未解析的文件数量或列表。', 'Files skipped because their language or format is unsupported.'],
+    unsupported_source: ['不支持的源码', 'Unsupported source', '未被当前解析器支持的源码类型或文件。', 'Source types or files not supported by the current parser.'],
+    parse_failures: ['解析失败', 'Parse failures', '解析器处理文件或函数时失败的记录。', 'Records of files or functions that failed to parse.'],
+    parse_errors: ['解析错误', 'Parse errors', '解析阶段捕获的错误详情。', 'Error details captured during parsing.'],
+    directories_scanned: ['扫描目录数', 'Scanned directories', '实际遍历过的目录数量。', 'Number of directories actually traversed.'],
+    directories_excluded: ['排除目录数', 'Excluded directories', '按范围或角色规则排除的目录数量。', 'Directories excluded by scope or role rules.'],
+    directories_unreadable: ['不可读目录数', 'Unreadable directories', '因权限或文件系统问题无法读取的目录数量。', 'Directories that could not be read due to permissions or filesystem errors.'],
+    excluded_directories: ['排除目录', 'Excluded directories', '扫描器明确跳过的目录名称或路径。', 'Directory names or paths explicitly skipped by the scanner.'],
+    symlinks_skipped: ['跳过符号链接数', 'Skipped symlinks', '为避免重复或越界而跳过的符号链接数量。', 'Symlinks skipped to avoid duplication or traversal outside scope.'],
+    symlink_examples: ['符号链接示例', 'Symlink examples', '被跳过的符号链接示例路径。', 'Example paths of skipped symlinks.'],
+    unreadable_examples: ['不可读路径示例', 'Unreadable examples', '读取失败的目录或文件示例路径。', 'Example paths that could not be read.'],
+    scope_files_skipped_by_role: ['按角色跳过的文件', 'Files skipped by role', '按生产、测试、第三方等角色筛选而跳过的文件统计。', 'Files skipped by production, test, third-party, or other role filters.'],
+    test_files_skipped: ['跳过测试文件数', 'Test files skipped', '因测试范围策略未进入分析的测试文件数量。', 'Test files omitted by the scan-scope policy.'],
+    excluded_languages: ['排除语言', 'Excluded languages', '本次扫描明确排除的源码语言。', 'Source languages explicitly excluded from the scan.'],
+    production: ['生产代码文件', 'Production files', '被识别为正式产品代码的文件统计或列表。', 'Files identified as production code.'],
+    test: ['测试代码文件', 'Test files', '被识别为测试代码的文件统计或列表。', 'Files identified as test code.'],
+    fuzz: ['模糊测试文件', 'Fuzz files', '被识别为 fuzz 测试代码的文件统计或列表。', 'Files identified as fuzz-test code.'],
+    third_party: ['第三方文件', 'Third-party files', '被识别为第三方代码的文件统计或列表。', 'Files identified as third-party code.'],
+    generated: ['生成文件', 'Generated files', '被识别为自动生成的文件统计或列表。', 'Files identified as generated code.'],
+    interface_metadata: ['接口元数据文件', 'Interface metadata files', '接口或 IDL 元数据文件的统计或列表。', 'Statistics or lists of interface and IDL metadata files.'],
+    unknown: ['未分类文件', 'Unknown files', '暂时无法归入已知角色的文件统计或列表。', 'Files that could not yet be assigned a known role.'],
+    total_files: ['文件总数', 'Total files', '本次扫描涉及的文件总数量。', 'Total number of files involved in the scan.'],
+    total_functions: ['函数总数', 'Total functions', '调用图或数据集中的函数总数量。', 'Total number of functions in the call graph or dataset.'],
+    total_edges: ['调用边总数', 'Total edges', '调用图中解析出的调用关系总数量。', 'Total number of parsed call relationships in the graph.'],
+    total_units: ['分析单元总数', 'Total units', '数据集中函数、方法或回调单元的总数量。', 'Total number of function, method, or callback units.'],
+    total_units_analyzed: ['已分析单元总数', 'Total units analyzed', '实际送入模型分析的单元数量。', 'Number of units actually sent to model analysis.'],
+    units_count: ['单元数量', 'Unit count', '当前阶段统计的分析单元数量。', 'Number of analysis units counted by the stage.'],
+    total_upstream: ['上游函数数', 'Upstream count', '当前单元直接或间接上游调用者数量。', 'Direct or indirect upstream callers for the unit.'],
+    total_downstream: ['下游函数数', 'Downstream count', '当前单元直接或间接下游调用目标数量。', 'Direct or indirect downstream call targets for the unit.'],
+    depth: ['调用深度', 'Call depth', '当前函数相对入口或上下文根节点的调用层数。', 'Call depth of the function from an entry or context root.'],
+    dependency_depth: ['依赖展开深度', 'Dependency depth', '上下文依赖函数向上或向下展开的最大层数。', 'Maximum depth used to expand dependency context.'],
+    avg_upstream: ['平均上游数', 'Average upstream count', '所有单元平均拥有的上游调用者数量。', 'Average number of upstream callers per unit.'],
+    avg_downstream: ['平均下游数', 'Average downstream count', '所有单元平均拥有的下游调用目标数量。', 'Average number of downstream callees per unit.'],
+    avg_in_degree: ['平均入度', 'Average in-degree', '调用图节点平均被调用次数。', 'Average number of incoming edges per graph node.'],
+    avg_out_degree: ['平均出度', 'Average out-degree', '调用图节点平均调用其他节点次数。', 'Average number of outgoing edges per graph node.'],
+    max_in_degree: ['最大入度', 'Maximum in-degree', '调用图中单个节点的最大入边数量。', 'Maximum incoming-edge count for one graph node.'],
+    max_out_degree: ['最大出度', 'Maximum out-degree', '调用图中单个节点的最大出边数量。', 'Maximum outgoing-edge count for one graph node.'],
+    isolated_functions: ['孤立函数数', 'Isolated functions', '在调用图中没有入边和出边的函数数量。', 'Functions with neither incoming nor outgoing graph edges.'],
+    call_graph_edges: ['调用图边数', 'Call-graph edges', '该阶段生成或保留的调用关系数量。', 'Number of call relationships generated or retained by the stage.'],
+    is_static: ['是否为静态函数', 'Static function', '函数是否具有静态链接或文件内可见性。', 'Whether the function has static linkage or file-local visibility.'],
+    is_exported: ['是否导出', 'Exported', '函数或符号是否对其他编译单元导出。', 'Whether the function or symbol is exported to other compilation units.'],
+    is_inline: ['是否内联', 'Inline', '函数是否声明或推断为 inline。', 'Whether the function is declared or inferred to be inline.'],
+    class_name: ['类名', 'Class name', '函数所属的类名或结构体名。', 'Class or struct containing the function.'],
+    className: ['类名', 'Class name', '函数所属的类名或结构体名。', 'Class or struct containing the function.'],
+    startLine: ['起始行', 'Start line', '函数或条目在文件中的起始行。', 'Starting line of the function or item in the file.'],
+    endLine: ['结束行', 'End line', '函数或条目在文件中的结束行。', 'Ending line of the function or item in the file.'],
+    matched: ['匹配文本', 'Matched text', '规则或平台检测命中的原始文本。', 'Original text matched by a rule or platform detector.'],
+    body: ['条目正文', 'Entry body', '宏、原型或其他索引条目的原始正文。', 'Original body of a macro, prototype, or indexed item.'],
+    openharmony_file_evidence: ['OpenHarmony 文件证据', 'OpenHarmony file evidence', '支持 OpenHarmony 平台判断的文件级证据。', 'File-level evidence supporting the OpenHarmony platform judgment.'],
+    statistics: ['统计信息', 'Statistics', '当前对象或阶段的数量、覆盖率和图结构统计。', 'Count, coverage, and graph-structure statistics for the object or stage.'],
+    coverage: ['覆盖统计', 'Coverage', '发现、筛选、解析和保留范围的覆盖率统计。', 'Coverage statistics for discovery, filtering, parsing, and retention.'],
+    annotation_source: ['标注来源', 'Annotation source', '数据集标注或基准答案的来源。', 'Origin of dataset annotations or ground truth.'],
+    annotation_key: ['标注键', 'Annotation key', '关联外部标注或基准记录的键。', 'Key linking to an external annotation or ground-truth record.'],
+    ground_truth: ['基准答案', 'Ground truth', '用于评估或人工复核的参考安全结论。', 'Reference security conclusion used for evaluation or review.'],
+    vulnerability_types: ['漏洞类型列表', 'Vulnerability types', '标注或分析涉及的漏洞类别。', 'Vulnerability categories covered by the annotation or analysis.'],
+    issues: ['问题列表', 'Issues', '标注或解析阶段记录的具体问题。', 'Specific issues recorded by annotation or parsing.'],
+    notes: ['备注', 'Notes', '对记录、标注或分析结果的补充说明。', 'Additional notes about the record, annotation, or analysis.'],
+    agent_context: ['Agent 上下文', 'Agent context', '交互式增强 Agent 使用的上下文信息。', 'Context information used by the interactive enhancement agent.'],
+    agent_metadata: ['Agent 元数据', 'Agent metadata', 'Agent 运行次数、工具和处理状态等元数据。', 'Agent metadata such as iterations, tools, and processing state.'],
+    agentic_enhanced: ['是否经过 Agent 增强', 'Agent-enhanced', '该单元是否经过 Agent 辅助上下文增强。', 'Whether the unit received agent-assisted context enhancement.'],
+    enhancement_mode: ['增强模式', 'Enhancement mode', '上下文增强采用的运行模式。', 'Runtime mode used for context enhancement.'],
+    usage_context: ['使用场景', 'Usage context', '说明函数或上下文在系统中的使用场景。', 'Describes how the function or context is used in the system.'],
+    include_functions: ['纳入的上下文函数', 'Included context functions', 'Agent 选择纳入分析上下文的函数列表。', 'Functions selected by the agent for analysis context.'],
+    iterations: ['迭代次数', 'Iterations', 'Agent 或阶段执行的迭代次数。', 'Number of iterations performed by the agent or stage.'],
+    functions_added: ['新增函数数', 'Functions added', '上下文增强阶段新增的函数数量。', 'Number of functions added by context enhancement.'],
+    units_processed: ['已处理单元数', 'Units processed', 'Agent 实际处理的单元数量。', 'Number of units actually processed by the agent.'],
+    units_with_context: ['带上下文单元数', 'Units with context', '成功获得增强上下文的单元数量。', 'Number of units that received enhanced context.'],
+    security_controls_found: ['发现安全控制数', 'Security controls found', '增强阶段识别出的安全控制数量。', 'Number of security controls identified during enhancement.'],
+    exploitable_found: ['发现可利用项数', 'Exploitable found', '增强阶段识别出的可利用候选数量。', 'Number of exploitable candidates identified during enhancement.'],
+    vulnerable_found: ['发现漏洞项数', 'Vulnerable found', '增强阶段识别出的漏洞候选数量。', 'Number of vulnerable candidates identified during enhancement.'],
+    neutral_found: ['发现中性项数', 'Neutral found', '增强阶段识别出的中性或无关项数量。', 'Number of neutral or irrelevant items identified during enhancement.'],
+    incomplete_found: ['发现不完整项数', 'Incomplete found', '增强阶段发现上下文不完整的单元数量。', 'Number of units with incomplete context found during enhancement.'],
+    error_summary: ['错误摘要', 'Error summary', '增强阶段错误的汇总信息。', 'Summary of errors from the enhancement stage.'],
+    total_calls: ['调用次数', 'Call count', '模型或工具调用的总次数。', 'Total number of model or tool calls.'],
+    total_input_tokens: ['输入 Token 总数', 'Total input tokens', '累计发送给模型的输入 Token 数量。', 'Cumulative number of input tokens sent to the model.'],
+    total_output_tokens: ['输出 Token 总数', 'Total output tokens', '累计从模型返回的输出 Token 数量。', 'Cumulative number of output tokens returned by the model.'],
+    total_cost_usd: ['总费用（美元）', 'Total cost (USD)', '累计模型调用的美元费用。', 'Cumulative model-call cost in US dollars.'],
+    total_cost_cny: ['总费用（人民币）', 'Total cost (CNY)', '累计模型调用的人民币费用。', 'Cumulative model-call cost in Chinese yuan.'],
+    cost_amount: ['费用数值', 'Cost amount', '当前阶段或调用的费用数值。', 'Cost amount for the current stage or call.'],
+    cost_currency: ['费用币种', 'Cost currency', '费用数值使用的货币单位。', 'Currency used for the cost amount.'],
+    costs_by_currency: ['按币种费用', 'Costs by currency', '按美元、人民币等币种汇总的费用。', 'Costs grouped by currencies such as USD or CNY.'],
+    CNY: ['人民币费用', 'CNY cost', '以人民币计价的费用明细。', 'Cost detail denominated in Chinese yuan.'],
+    input_tokens: ['输入 Token 数', 'Input tokens', '本次调用发送给模型的输入 Token 数量。', 'Input-token count sent to the model for this call.'],
+    output_tokens: ['输出 Token 数', 'Output tokens', '本次调用从模型获得的输出 Token 数量。', 'Output-token count returned by the model for this call.'],
+    total_tokens: ['总 Token 数', 'Total tokens', '输入和输出 Token 的合计数量。', 'Combined input and output token count.'],
+    elapsed_seconds: ['单项耗时（秒）', 'Elapsed time (seconds)', '单条记录或单元分析所用的时间。', 'Time spent on one record or unit analysis.'],
+    prompt_length: ['提示词长度', 'Prompt length', '发送给模型的提示词长度。', 'Length of the prompt sent to the model.'],
+    response_length: ['模型响应长度', 'Response length', '模型返回响应的长度。', 'Length of the model response.'],
+    code_length: ['代码长度', 'Code length', '发送给模型的源码片段长度。', 'Length of the source fragment sent to the model.'],
+    analyze_fingerprint: ['分析指纹', 'Analysis fingerprint', '用于复用或核对分析结果的稳定指纹。', 'Stable fingerprint used to reuse or verify analysis results.'],
+    code_by_route: ['按路由代码', 'Code by route', '按入口或调用路由整理的代码片段。', 'Code fragments organized by entry or call route.'],
+    dataset: ['数据集路径', 'Dataset path', '本阶段使用的数据集文件或路径。', 'Dataset file or path used by the stage.'],
+    analyzed: ['已分析数量', 'Analyzed count', '实际完成模型分析的单元数量。', 'Number of units that completed model analysis.'],
+    verdicts: ['判定统计', 'Verdict counts', '按安全判定分类汇总的数量。', 'Counts grouped by security verdict.'],
+    limit: ['处理上限', 'Processing limit', '本阶段允许处理的最大单元数量。', 'Maximum number of units allowed for the stage.'],
+    description: ['问题描述', 'Description', '对问题、组件或阶段的文字描述。', 'Textual description of the issue, component, or stage.'],
+    impact: ['安全影响', 'Impact', '问题可能造成的安全影响或影响范围。', 'Potential security impact or affected scope.'],
+    location: ['问题位置', 'Finding location', '问题所在的文件和行号位置。', 'File and line location of the finding.'],
+    file: ['问题文件', 'Finding file', '问题所在的源码文件。', 'Source file containing the finding.'],
+    short_name: ['问题简称', 'Short name', '用于列表展示的问题简短名称。', 'Short finding name used in lists.'],
+    stage1_verdict: ['第一阶段判定', 'Stage 1 verdict', '初次模型分析给出的安全判定。', 'Security verdict from the initial model analysis.'],
+    stage2_verdict: ['第二阶段判定', 'Stage 2 verdict', '攻击路径验证阶段给出的安全判定。', 'Security verdict from attacker-path verification.'],
+    steps_to_reproduce: ['复现步骤', 'Reproduction steps', '复现或验证该问题所需的操作步骤。', 'Steps required to reproduce or verify the issue.'],
+    suggested_fix: ['修复建议', 'Suggested fix', '针对该问题给出的修复方向。', 'Suggested remediation for the finding.'],
+    vulnerable_code: ['疑似漏洞代码', 'Vulnerable code', '被判定为风险相关的源码片段。', 'Source fragment considered relevant to the risk.'],
+    vulnerable_code_section: ['漏洞代码区段', 'Vulnerable code section', '风险代码在源码中的完整区段信息。', 'Full source-section information for the risk code.'],
+    actual: ['实际用量或费用', 'Actual usage or cost', '阶段实际产生的用量或费用记录。', 'Actual usage or cost recorded for the stage.'],
+    by_currency: ['按币种汇总', 'By currency', '按费用币种整理的金额明细。', 'Amount details grouped by currency.'],
+    costs: ['费用明细', 'Cost details', '各阶段或模型调用的费用明细。', 'Cost details for stages or model calls.'],
+    durations: ['阶段耗时', 'Stage durations', '各扫描阶段的耗时明细。', 'Duration details for scan stages.'],
+    reachability_filter_applied: ['是否应用可达性过滤', 'Reachability filter applied', '是否根据入口可达性裁剪分析单元。', 'Whether units were filtered by entry reachability.'],
+    reachability_reduction_percentage: ['可达性裁剪比例', 'Reachability reduction', '可达性过滤移除的单元比例。', 'Percentage of units removed by reachability filtering.'],
+    reachability_warnings: ['可达性警告', 'Reachability warnings', '调用图或入口可达性分析产生的警告。', 'Warnings produced by call-graph or reachability analysis.'],
+    skipped_steps: ['跳过阶段', 'Skipped steps', '管线中未执行的阶段名称。', 'Pipeline stages that were not executed.'],
+    steps_completed: ['完成阶段', 'Completed steps', '管线中已完成的阶段名称。', 'Pipeline stages that completed.'],
+    steps_skipped: ['跳过阶段', 'Skipped steps', '管线中被跳过的阶段名称。', 'Pipeline stages that were skipped.'],
+    steps_skipped_reasons: ['跳过原因', 'Skip reasons', '每个被跳过阶段的具体原因。', 'Reason recorded for each skipped stage.'],
+    llm_reachability: ['LLM 可达性阶段', 'LLM reachability stage', 'LLM 可达性阶段被跳过或执行的原因。', 'Reason the LLM reachability stage was skipped or executed.'],
+    signals_received: ['模型信号数', 'Signals received', '模型在可达性复核中返回的信号总数。', 'Total signals returned by the reachability model.'],
+    signals_applied: ['有效信号数', 'Signals applied', '通过基本结构校验并附加到单元的信号数。', 'Signals that passed structural validation and were attached to units.'],
+    entry_points_promoted: ['提升入口数', 'Entry points promoted', '高置信入口信号提升为入口标记的数量。', 'High-confidence entry signals promoted to entry labels.'],
+    semantic_seed_ids: ['语义 BFS 种子', 'Semantic BFS seeds', '由高置信度外部输入或跨进程信号提升、实际用于 BFS 的语义种子单元。', 'Semantic seed units promoted from high-confidence external-input or cross-process signals and used by BFS.'],
+    semantic_retain_only_ids: ['中置信度语义保留单元', 'Medium-confidence semantic retained units', '由中置信度外部输入或跨进程信号直接纳入 reachable，但不会作为 BFS 根继续扩展的单元。', 'Units retained in reachable from medium-confidence external-input or cross-process signals without expanding BFS.'],
+    reachable_only_ids: ['仅保留单元', 'Reachable-only units', '直接纳入 reachable 结果、但不作为 BFS 根扩散调用图的单元。', 'Units added directly to reachable without becoming BFS roots.'],
+    reachable_only_count: ['仅保留单元数', 'Reachable-only count', '中置信度信号直接保留、未参与 BFS 扩展的单元数量。', 'Units retained from medium-confidence signals without BFS expansion.'],
+    semantic_retain_only_count: ['中置信度语义保留数', 'Medium-confidence semantic retained count', '中置信度外部输入或跨进程信号对应的直接保留单元数量。', 'Units directly retained from medium-confidence external-input or cross-process signals.'],
+    retained_only: ['直接保留信号数', 'Retained-only signals', '中置信度信号的数量；对应单元纳入 reachable，但不驱动 BFS。', 'Medium-confidence signal count; corresponding units enter reachable but do not drive BFS.'],
+    retained_only_counts: ['直接保留类型统计', 'Retained-only counts by type', '按入口、外部输入和跨进程信号统计的直接保留数量。', 'Directly retained counts grouped by entry-point, external-input, and cross-process signals.'],
+    semantic_reachability_retain_only: ['仅保留语义标记', 'Semantic reachable-only flag', '该单元因中置信度语义信号进入 reachable，但不参与 BFS 扩展。', 'This unit entered reachable from a medium-confidence semantic signal without BFS expansion.'],
+    reachability_retain_only: ['仅保留标记', 'Reachable-only flag', '该单元被直接保留在 reachable 集合中，不作为 BFS 根。', 'This unit is retained directly in the reachable set and is not a BFS root.'],
+    reachability_retain_only_source: ['仅保留来源', 'Reachable-only source', '说明该单元由哪类中置信度信号直接保留。', 'Signal type that caused this unit to be retained without BFS.'],
+    semantic_retain_only_reasons: ['仅保留原因', 'Reachable-only reason', '模型信号被纳入 reachable-only 的判定原因。', 'Reason the model signal was classified as reachable-only.'],
+    seed_counts: ['种子类型统计', 'Seed counts by type', '按入口、外部输入和跨进程类型统计的种子数量；方向仅作为审计信息。', 'Seed counts by entry, external-input, and cross-process type; direction is audit metadata only.'],
+    rejected_counts: ['未采用原因统计', 'Rejected/review counts', '未成为 BFS 种子的信号及其原因统计。', 'Counts and reasons for signals not used as BFS seeds.'],
+    review_only: ['待复核信号数', 'Review-only signals', '低置信度或其他未满足准入条件的信号数；中置信度信号另计为“仅保留”，不会在这里重复统计。', 'Low-confidence or otherwise ineligible signals; medium-confidence signals are counted separately as reachable-only.'],
+    duplicates_removed: ['去重信号数', 'Duplicates removed', '同一单元同一语义角色重复返回、被去重的信号数。', 'Repeated signals for the same unit and semantic role removed during deduplication.'],
+    seed_status: ['种子判定', 'Seed decision', '该信号是 BFS 种子、直接保留单元，还是仅作为待复核证据。', 'Whether the signal is a BFS seed, a directly retained unit, or review-only evidence.'],
+    seed_reason: ['种子判定原因', 'Seed decision reason', '根据置信度和信号类型决定 BFS、直接保留或待复核的具体原因。', 'Reason the signal was routed to BFS, direct retention, or review based on confidence and type.'],
+    evidence_status: ['模型证据状态', 'Model evidence status', '模型是否提供了用于解释和审计的证据字段；不作为种子准入条件。', 'Whether the model supplied evidence for explanation and audit; it is not a seed-admission condition.'],
+    evidence_excerpt: ['模型证据片段', 'Model evidence excerpt', '模型引用的源码或行为片段，仅作解释和审计参考。', 'Source or behavior excerpt cited by the model for explanation and audit only.'],
+    evidence_line_start: ['证据起始行', 'Evidence start line', '模型提供的源码证据起始行号，仅作定位参考。', 'Model-provided source line for locating evidence; informational only.'],
+    evidence_line_end: ['证据结束行', 'Evidence end line', '模型提供的源码证据结束行号，仅作定位参考。', 'Model-provided ending source line for locating evidence; informational only.'],
+    boundary: ['外部边界', 'External boundary', '模型判断的输入或跨进程通信边界类型。', 'Boundary type identified for the input or cross-process communication.'],
+    direction: ['通信方向', 'Communication direction', '跨进程信号的接收、发送或双向方向；外部输入默认表示接收。', 'Receive, send, or bidirectional direction for cross-process signals; external input is inherently inbound.'],
+    verify: ['验证阶段', 'Verification stage', '攻击路径验证阶段的状态或跳过原因。', 'Status or skip reason for attacker-path verification.'],
+    dynamic_test: ['动态测试阶段', 'Dynamic-test stage', '动态测试阶段的状态或跳过原因。', 'Status or skip reason for dynamic testing.'],
+    dynamic_test_path: ['动态测试产物路径', 'Dynamic-test artifact path', '动态测试结果文件或任务目录路径。', 'Path to dynamic-test results or task workspace.'],
+    verified_results_path: ['验证结果路径', 'Verified-results path', '第二阶段验证结果文件路径。', 'Path to stage-2 verified results.'],
+    platform_profile_path: ['平台画像路径', 'Platform-profile path', 'OpenHarmony 平台画像文件路径。', 'Path to the OpenHarmony platform profile.'],
+    application_context_provenance: ['应用上下文来源记录', 'Application-context provenance', '应用安全上下文使用的来源、哈希和合并结果。', 'Sources, hashes, and merge results used for application context.'],
+    context_provenance: ['上下文来源记录', 'Context provenance', '上下文生成所使用的文件和模型来源。', 'Files and model sources used to generate context.'],
+    security_model: ['安全模型', 'Security model', '应用上下文采用的攻击者和安全边界模型。', 'Attacker and security-boundary model used by application context.'],
+    threat_model_version: ['威胁模型版本', 'Threat-model version', '使用的威胁模型规则或模板版本。', 'Version of the threat-model rules or template.'],
+    classification: ['应用分类', 'Classification', '组件或应用的安全分类结果。', 'Security classification of the component or application.'],
+    impact_statement: ['影响说明', 'Impact statement', '对潜在安全影响的完整说明。', 'Full statement of potential security impact.'],
+    permissive_warnings: ['宽松配置警告', 'Permissive warnings', '上下文中识别到的宽松权限或安全配置警告。', 'Warnings about permissive permissions or security configuration.'],
+    platform_baseline_conflicts: ['平台基线冲突', 'Platform-baseline conflicts', '仓库上下文与 OpenHarmony 安全基线之间的冲突。', 'Conflicts between repository context and the OpenHarmony security baseline.'],
+    repository_advisory_exclusions: ['仓库排除项', 'Repository exclusions', '仓库上下文明确要求不报告的情况。', 'Repository-specific cases explicitly excluded from reporting.'],
+    attacker_profile_ids: ['攻击者画像 ID', 'Attacker-profile IDs', '应用上下文引用的攻击者画像标识。', 'Attacker-profile identifiers referenced by application context.'],
+    input_source_names: ['输入源名称', 'Input-source names', '应用上下文引用的外部输入源名称。', 'External input-source names referenced by application context.'],
+    criteria_count: ['判定标准数量', 'Criteria count', '应用上下文中安全判定标准的数量。', 'Number of security criteria in application context.'],
+    position: ['攻击者位置', 'Attacker position', '攻击者在系统或网络中的位置。', 'Attacker position in the system or network.'],
+    capabilities: ['攻击者能力', 'Attacker capabilities', '攻击者画像允许的能力范围。', 'Capabilities assigned to the attacker profile.'],
+    cannot: ['攻击者限制', 'Attacker limitations', '攻击者画像明确不具备的能力。', 'Capabilities explicitly unavailable to the attacker profile.'],
+    entry_via: ['进入方式', 'Entry mechanism', '攻击者进入组件或触发路径的方式。', 'How the attacker enters or triggers the component.'],
+    trust: ['信任属性', 'Trust attribute', '输入源或调用身份的信任属性。', 'Trust attribute of an input source or caller identity.'],
+    openharmony_binder_parcel: ['Binder Parcel 输入', 'Binder Parcel input', 'OpenHarmony Binder IPC 传入的 Parcel 数据边界。', 'Parcel-data boundary received through OpenHarmony Binder IPC.'],
+    openharmony_calling_identity: ['调用身份', 'Calling identity', 'OpenHarmony IPC 调用者身份和 UID/PID 边界。', 'Caller identity and UID/PID boundary for OpenHarmony IPC.'],
+    applied: ['是否已应用', 'Applied', '对应基线、配置或策略是否已经合并到结果。', 'Whether the baseline, configuration, or policy was merged into the result.'],
+    retained: ['是否保留', 'Retained', '该条目在合并或过滤后是否继续保留。', 'Whether the item was retained after merging or filtering.'],
+    reason: ['原因', 'Reason', '说明该状态、判定或跳过行为产生的原因。', 'Reason for the state, verdict, or skip behavior.'],
+    merge_conflicts: ['合并冲突', 'Merge conflicts', '多个上下文来源合并时发现的冲突。', 'Conflicts found while merging context sources.'],
+    item: ['冲突条目', 'Conflict item', '合并冲突所涉及的具体条目名称。', 'Specific item involved in a merge conflict.'],
+    version: ['版本', 'Version', '组件、协议、产物或规则的版本号。', 'Version of the component, protocol, artifact, or rules.'],
+    test_time: ['测试时间', 'Test time', '阶段或管线测试记录的时间。', 'Time recorded for a stage or pipeline test.'],
+    output_file: ['输出文件', 'Output file', '阶段写出的主要结果文件。', 'Primary result file written by the stage.'],
+    app_context_path: ['应用上下文路径', 'Application-context path', '应用安全上下文文件路径。', 'Path to the application security context file.'],
+    enhanced_dataset_path: ['增强数据集路径', 'Enhanced-dataset path', '上下文增强后数据集文件路径。', 'Path to the dataset after context enhancement.'],
+    analyzer_output_path: ['分析器输出路径', 'Analyzer-output path', '原生解析器输出文件路径。', 'Path to native parser output.'],
+    dataset_path: ['数据集路径', 'Dataset path', '解析或分析阶段数据集文件路径。', 'Dataset file path used by parsing or analysis.'],
+    pipeline_output_path: ['管线输出路径', 'Pipeline-output path', '统一管线输出文件路径。', 'Path to normalized pipeline output.'],
+    results_path: ['结果文件路径', 'Results path', '阶段结果文件路径。', 'Path to the stage result file.'],
+    disclosures_dir: ['披露目录', 'Disclosure directory', '漏洞披露文件的输出目录。', 'Output directory for disclosure files.'],
+    formats_generated: ['生成格式', 'Generated formats', '报告阶段实际生成的报告格式列表。', 'Report formats actually generated by the stage.'],
+    actionable: ['可行动问题数', 'Actionable count', '可以形成修复建议或后续行动的问题数量。', 'Number of findings that can produce remediation or follow-up action.'],
+    error_count: ['错误数量', 'Error count', '当前阶段记录的错误数量。', 'Number of errors recorded by the stage.'],
+    classifications: ['分类统计', 'Classification counts', '按安全分类汇总的数量。', 'Counts grouped by security classification.'],
+    security_control: ['安全控制数量', 'Security-control count', '识别为已有安全控制的单元数量。', 'Number of units identified as having security controls.'],
+    neutral: ['中性数量', 'Neutral count', '识别为中性或不相关的单元数量。', 'Number of units identified as neutral or irrelevant.'],
+    vulnerable_internal: ['内部漏洞候选数', 'Internal vulnerable count', '增强阶段识别为内部漏洞候选的数量。', 'Number of internal vulnerable candidates identified during enhancement.']
+  };
+  Object.assign(commonFields, additionalFields);
+  const artifactFields = {
+    'dataset.json': { metadata: ['数据集元数据', 'Dataset metadata', '生成器和扫描范围信息。', 'Generator and scan-scope metadata.'], ground_truth: ['标注信息', 'Ground truth', '用于评估或复核的标注信息。', 'Annotation information for evaluation or review.'] },
+    'dataset_enhanced.json': { metadata: ['数据集元数据', 'Dataset metadata', '生成器和扫描范围信息。', 'Generator and scan-scope metadata.'], ground_truth: ['标注信息', 'Ground truth', '用于评估或复核的标注信息。', 'Annotation information for evaluation or review.'] },
+    'platform_profile.json': { syscaps: ['系统能力', 'System capabilities', '组件声明的 OpenHarmony 系统能力。', 'OpenHarmony system capabilities declared by the component.'], build_targets: ['构建目标', 'Build targets', '组件声明的 GN 构建目标。', 'GN build targets declared by the component.'], test_targets: ['测试目标', 'Test targets', '组件声明的测试目标。', 'Test targets declared by the component.'], inner_kits: ['内部 Kit', 'Inner kits', '组件向系统提供的内部 Kit。', 'Inner kits provided by the component.'], dependencies: ['组件依赖', 'Dependencies', 'bundle.json 中声明的依赖。', 'Dependencies declared in bundle.json.'] },
+    'application_context.json': { classification: ['应用分类', 'Application classification', '模型对应用类型和安全边界的分类。', 'Model classification of application type and boundaries.'], platform_baseline: ['平台安全基线', 'Platform baseline', 'OpenHarmony 最低安全基线和攻击者模型。', 'OpenHarmony minimum security baseline and attacker model.'], platform_baseline_conflicts: ['基线合并提示', 'Baseline merge notes', '仓库上下文与平台基线合并时的提示。', 'Notes from merging repository context with the platform baseline.'], context_provenance: ['上下文来源记录', 'Context provenance', '上下文文件和模型生成来源。', 'Files and model sources used to generate context.'] },
+    'results.json': { elapsed_seconds: ['分析耗时（秒）', 'Analysis time (seconds)', '单条分析结果的耗时。', 'Time spent on this result.'], prompt_length: ['提示词长度', 'Prompt length', '发送给模型的提示词字符或 Token 规模。', 'Prompt character or token size sent to the model.'], response_length: ['响应长度', 'Response length', '模型返回内容的长度。', 'Length of the model response.'], code_length: ['代码长度', 'Code length', '发送给模型的代码长度。', 'Length of code sent to the model.'] },
+    'results_verified.json': { verification_verdict: ['验证结论', 'Verification verdict', '攻击路径验证后的结论。', 'Verdict after attacker-path verification.'], exploit_path: ['利用路径', 'Exploit path', '验证阶段构造或确认的利用路径。', 'Exploit path constructed or confirmed during verification.'], rejection_reason: ['拒绝原因', 'Rejection reason', '候选问题未通过验证的原因。', 'Reason a candidate finding failed verification.'] },
+    'pipeline_output.json': { application_context_provenance: ['上下文来源记录', 'Context provenance', '统一结果使用的应用上下文来源。', 'Application-context provenance used by normalized results.'], repository: ['仓库信息', 'Repository information', '统一结果中的仓库和版本信息。', 'Repository and revision information in normalized results.'] },
+    'parse.report.json': { skip_tests: ['是否跳过测试', 'Tests skipped', '解析阶段是否跳过测试目录。', 'Whether test directories were skipped during parsing.'], effective_platform: ['实际平台', 'Effective platform', '解析阶段最终采用的平台。', 'Platform finally used by the parser.'] },
+    'scan.report.json': { metrics: ['扫描指标', 'Scan metrics', '按安全判定统计的扫描指标。', 'Scan counters grouped by security verdict.'], steps_completed: ['已完成阶段', 'Completed stages', '本次扫描已经完成的阶段。', 'Stages completed by the scan.'], steps_skipped: ['已跳过阶段', 'Skipped stages', '未请求或没有候选问题而跳过的阶段。', 'Stages skipped because they were not requested or had no candidates.'] }
+  };
+  const collectionArtifacts = { 'dataset.json': true, 'dataset_enhanced.json': true, 'analyzer_output.json': true, 'call_graph.json': true, 'call_graphs.json': true, 'results.json': true, 'results_verified.json': true, 'pipeline_output.json': true, 'pipeline_results.json': true, 'scan_results.json': true, 'dynamic_test_results.json': true };
+  const graphArtifacts = { 'call_graph.json': true, 'analyzer_output.json': true, 'dataset_enhanced.json': true };
+  const defaultGraphArtifacts = { 'call_graph.json': true, 'analyzer_output.json': true };
+  const GRAPH_DEFAULT_DEPTH = 3;
+  const GRAPH_MAX_DEPTH = 8;
+  const GRAPH_MAX_NODES = 160;
+  let currentLanguage = 'zh-CN';
+  let mode = 'structured';
+  let rawText = '';
+  let parsedObject = null;
+  let collectionView = null;
+  let collectionKey = '';
+  let selectedID = '';
+  let selectedDetail = null;
+  let requestSerial = 0;
+  let searchTimer = null;
+  let graphData = null;
+  let graphRootID = '';
+  let graphSelectedID = '';
+  let graphDepth = GRAPH_DEFAULT_DEPTH;
+  let graphZoom = 1;
+  let graphPan = { x: 0, y: 0 };
+  let graphDragging = false;
+  let graphDragStart = null;
+  let graphDragOrigin = null;
+
+  function t(key) { return (translations[currentLanguage] && translations[currentLanguage][key]) || translations['zh-CN'][key] || key; }
+  function guideFor(name) {
+    const guide = artifactGuides[name];
+    if (!guide) return { title: name, description: t('field.unknown') };
+    return { title: currentLanguage === 'zh-CN' ? guide[0] : guide[2], description: currentLanguage === 'zh-CN' ? guide[1] : guide[3] };
+  }
+  function applyLanguage(language) {
+    currentLanguage = translations[language] ? language : 'zh-CN';
+    document.documentElement.lang = currentLanguage;
+    const guide = guideFor(artifactName);
+    document.title = guide.title + ' | vulnfounder';
+    document.getElementById('artifact-label').textContent = guide.title;
+    document.getElementById('artifact-description').textContent = guide.description;
+    document.querySelectorAll('[data-i18n]').forEach(function(el) { el.textContent = t(el.dataset.i18n); });
+    document.getElementById('collection-search').placeholder = t('collection.searchPlaceholder');
+    document.getElementById('graph-button').hidden = !graphArtifacts[artifactName];
+    document.getElementById('graph-button').textContent = graphIsAgenticContext() ? t('action.agenticGraph') : t('action.graph');
+    updateGraphCopy();
+    updateModeLabel();
+    renderCurrentView();
+    try { localStorage.setItem('vulnfounder.ui.language', currentLanguage); } catch (_) {}
+  }
+  function graphIsAgenticContext() { return artifactName === 'dataset_enhanced.json' || Boolean(graphData && graphData.isAgenticContext); }
+  function updateGraphCopy() {
+    const agentic = graphIsAgenticContext();
+    const entryHint = document.getElementById('graph-entry-hint');
+    const canvasTitle = document.getElementById('graph-canvas-title');
+    const canvasHint = document.getElementById('graph-canvas-hint');
+    const agenticLegend = document.getElementById('graph-agentic-edge-legend');
+    if (entryHint) entryHint.textContent = t(agentic ? 'graph.agenticEntriesHint' : 'graph.entriesHint');
+    if (canvasTitle) canvasTitle.textContent = t(agentic ? 'graph.agenticCanvasTitle' : 'graph.canvasTitle');
+    if (canvasHint) canvasHint.textContent = t(agentic ? 'graph.agenticCanvasHint' : 'graph.canvasHint');
+    if (agenticLegend) agenticLegend.hidden = !agentic;
+  }
+  function updateModeLabel() { document.getElementById('view-mode').textContent = mode === 'raw' ? t('mode.raw') : (mode === 'graph' ? (graphIsAgenticContext() ? t('action.agenticGraph') : t('action.graph')) : t('mode.structured')); }
+  function setStatus(message, error) { const status = document.getElementById('status'); status.textContent = message || ''; status.classList.toggle('error', Boolean(error)); }
+  function normalizedKey(key) { return String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/-/g, '_'); }
+  const fieldWordLabels = {
+    repo: '仓库', repository: '仓库', source: '来源', path: '路径', file: '文件', files: '文件', directory: '目录', directories: '目录',
+    component: '组件', platform: '平台', language: '语言', role: '角色', roles: '角色', kind: '类型', type: '类型', name: '名称',
+    id: '标识', version: '版本', status: '状态', reason: '原因', source: '来源', target: '目标', targets: '目标', input: '输入', inputs: '输入',
+    output: '输出', outputs: '输出', result: '结果', results: '结果', summary: '摘要', metadata: '元数据', statistics: '统计', count: '数量',
+    total: '总数', average: '平均', avg: '平均', max: '最大', min: '最小', start: '起始', end: '结束', line: '行', lines: '行',
+    function: '函数', functions: '函数', unit: '单元', units: '单元', call: '调用', calls: '调用', caller: '调用者', callers: '调用者',
+    callee: '被调用者', callees: '被调用者', edge: '边', edges: '边', graph: '图', depth: '深度', dependency: '依赖', dependencies: '依赖',
+    context: '上下文', entry: '入口', entries: '入口', point: '点', reachable: '可达', reachability: '可达性', filter: '过滤', reduction: '裁剪',
+    security: '安全', control: '控制', controls: '控制', vulnerable: '漏洞', vulnerability: '漏洞', vulnerabilities: '漏洞', safe: '安全',
+    protected: '受保护', bypassable: '可绕过', inconclusive: '待定', finding: '发现', findings: '发现', verdict: '判定', confidence: '置信度',
+    classification: '分类', reasoning: '理由', evidence: '证据', attack: '攻击', vector: '向量', impact: '影响', description: '描述',
+    code: '代码', source_code: '源码', primary: '主要', origin: '位置', parameter: '参数', parameters: '参数', return: '返回', type: '类型',
+    model: '模型', provider: '服务商', token: 'Token', tokens: 'Token', prompt: '提示词', response: '响应', length: '长度', elapsed: '耗时',
+    duration: '耗时', cost: '费用', currency: '币种', input_tokens: '输入 Token', output_tokens: '输出 Token', total_tokens: '总 Token',
+    build: '构建', target_name: '目标名称', manifest: '清单', bundle: '组件包', package: '包', subsystem: '子系统', system: '系统', ability: '能力',
+    profile: '画像', profiles: '画像', boundary: '边界', boundaries: '边界', signal: '信号', signals: '信号', coverage: '覆盖', parse: '解析',
+    parsed: '已解析', eligible: '可解析', discovered: '已发现', unsupported: '不支持', excluded: '排除', skipped: '跳过', error: '错误',
+    errors: '错误', warning: '警告', warnings: '警告', generated: '生成', generated_at: '生成时间', source_role: '源码角色',
+    static: '静态', exported: '导出', inline: '内联', class: '类', method: '方法', constructor: '构造函数', destructor: '析构函数',
+    annotation: '标注', ground: '基准', truth: '答案', issue: '问题', issues: '问题', note: '备注', notes: '备注', agent: 'Agent',
+    iteration: '迭代', iterations: '迭代', enhancement: '增强', mode: '模式', usage: '使用', actual: '实际', applied: '已应用', retained: '保留',
+    stage: '阶段', stages: '阶段', step: '步骤', steps: '步骤', test: '测试', tests: '测试', dynamic: '动态', verify: '验证', verification: '验证',
+    platform_context: '平台上下文', application_context: '应用上下文', security_model: '安全模型', trust: '信任', attacker: '攻击者',
+    profile_id: '画像 ID', sha256: 'SHA-256', hash: '哈希', url: '链接', commit: '提交', date: '日期', time: '时间',
+    source_sha256: '源码 SHA-256', cost_amount: '费用数值', cost_currency: '费用币种', costs_by_currency: '按币种费用',
+    input_tokens: '输入 Token', output_tokens: '输出 Token', total_input_tokens: '输入 Token 总数', total_output_tokens: '输出 Token 总数'
+  };
+  const securityValueTranslations = {
+    'Validate interface tokens, read return values, field types, widths, and ordering before use.': '使用接口数据前，必须校验接口令牌、返回值、字段类型、字段宽度和字段顺序。',
+    'Bound Parcel-derived lengths, counts, indexes, and callback registrations before allocation or iteration.': '在分配内存或开始遍历前，必须限制并校验来自 Parcel 的长度、数量、索引和回调注册信息。',
+    'Require caller identity and permission checks to dominate sensitive IPC operations.': '执行敏感 IPC 操作前，必须先完成调用者身份和权限检查，并确保检查覆盖整个敏感操作路径。',
+    'openharmony': 'OpenHarmony',
+    'production': '正式生产代码',
+    'test': '测试代码',
+    'untrusted': '不可信（外部可控）',
+    'semi_trusted': '半可信（需经过权限/身份校验）',
+    'trusted': '可信（受系统控制）',
+    'openharmony_component': 'OpenHarmony 系统组件',
+    'Caller-controlled MessageParcel fields and transaction payloads.': '由调用者控制的 MessageParcel 字段和事务载荷。',
+    'Caller UID/token metadata used by service authorization guards.': '服务授权防护逻辑使用的调用者 UID/令牌元数据。'
+  };
+  function humanizeFieldKey(key) {
+    const raw = String(key);
+    const words = normalizedKey(raw).replace(/[^A-Za-z0-9_]+/g, '_').split('_').filter(Boolean);
+    if (!words.length) return raw || '字段';
+    return words.map(function(word) { return fieldWordLabels[word.toLowerCase()] || word; }).join('');
+  }
+  function generatedFieldInfo(key) {
+    const raw = String(key);
+    const label = humanizeFieldKey(raw);
+    const dynamic = /[/:]/.test(raw) || (raw.length > 24 && /[A-Z]/.test(raw));
+    return {
+      zh: dynamic ? '动态条目：' + raw : label,
+      en: dynamic ? 'Dynamic entry: ' + raw : raw,
+      zhDesc: dynamic
+        ? '这是索引对象中的动态键，通常对应函数、宏、原型或源码路径；原始字段和值已完整保留。'
+        : '该字段用于记录“' + label + '”信息；原始字段名和值已完整保留，便于与 JSON 核对。',
+      enDesc: dynamic
+        ? 'Dynamic key in an index object, usually a function, macro, prototype, or source path; the original key and value are preserved.'
+        : 'Records “' + raw + '” information; the original field name and value are preserved for JSON-level verification.'
+    };
+  }
+  function fieldInfo(key) {
+    const artifactMap = artifactFields[artifactName] || {};
+    const candidates = [String(key), normalizedKey(key)];
+    let info = null;
+    candidates.some(function(candidate) { if (artifactMap[candidate]) { info = artifactMap[candidate]; return true; } return false; });
+    if (!info) candidates.some(function(candidate) { if (commonFields[candidate]) { info = commonFields[candidate]; return true; } return false; });
+    if (!info) return generatedFieldInfo(key);
+    return { zh: info[0], en: info[1], zhDesc: info[2], enDesc: info[3] };
+  }
+  function localizedInfo(info) { return { title: currentLanguage === 'zh-CN' ? info.zh : info.en, description: currentLanguage === 'zh-CN' ? info.zhDesc : info.enDesc }; }
+  function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+  function primitiveText(value) {
+    if (value === null || value === undefined) return t('field.empty');
+    if (typeof value === 'boolean') return value ? t('collection.yes') : t('collection.no');
+    if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString(currentLanguage) : String(value);
+    const text = String(value);
+    return currentLanguage === 'zh-CN' && securityValueTranslations[text] ? securityValueTranslations[text] : text;
+  }
+  function isCodeField(key, value) { const candidate = normalizedKey(key).toLowerCase(); return typeof value === 'string' && (candidate === 'code' || candidate.indexOf('primary_code') >= 0 || candidate.indexOf('reasoning') >= 0 || candidate.indexOf('description') >= 0 || candidate.indexOf('statement') >= 0 || value.length > 260); }
+  function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+  function fieldHeader(parent, key) {
+    const info = localizedInfo(fieldInfo(key));
+    const header = element('div', 'field-card-header');
+    header.appendChild(element('span', 'field-title', info.title));
+    header.appendChild(element('code', 'field-key', String(key)));
+    parent.appendChild(header);
+    parent.appendChild(element('div', 'field-description', info.description));
+  }
+  const focusFieldPaths = {
+    'platform_profile.json': ['platform', 'detection.confidence', 'coverage.discovered_files', 'coverage.eligible_files', 'coverage.parsed_files', 'components', 'boundaries'],
+    'application_context.json': ['application_type', 'confidence', 'requires_remote_trigger', 'attacker_profiles', 'input_sources', 'trust_boundaries', 'vulnerability_criteria'],
+    'llm_reachability.json': ['summary.signals_received', 'summary.signals_applied', 'summary.entry_points_promoted', 'summary.semantic_seed_ids', 'summary.semantic_retain_only_ids', 'summary.reachable_only_ids', 'summary.retained_only_counts', 'summary.seed_counts', 'summary.rejected_counts', 'summary.review_only', 'signals'],
+    'dataset.json': ['id', 'code.primary_origin.file_path', 'code.primary_origin.start_line', 'unit_type', 'is_entry_point', 'reachable', 'direct_calls'],
+    'dataset_enhanced.json': ['id', 'code.primary_origin.file_path', 'code.primary_origin.start_line', 'unit_type', 'is_entry_point', 'reachable', 'agent_context.security_classification', 'agent_context.confidence', 'agent_context.include_functions', 'platform_context'],
+    'analyzer_output.json': ['name', 'file_path', 'start_line', 'unitType', 'isExported', 'direct_calls'],
+    'call_graph.json': ['statistics.total_functions', 'statistics.total_edges', 'statistics.avg_out_degree', 'statistics.isolated_functions'],
+    'call_graphs.json': ['languages', 'graphs', 'files'],
+    'results.json': ['metrics.total', 'metrics.vulnerable', 'metrics.bypassable', 'metrics.protected', 'metrics.inconclusive', 'model', 'provider'],
+    'results_verified.json': ['metrics.total', 'metrics.confirmed', 'metrics.agreed', 'metrics.disagreed', 'metrics.inconclusive', 'verification_verdict', 'verdict'],
+    'pipeline_output.json': ['results.vulnerable', 'results.inconclusive', 'pipeline_stats.units_analyzed', 'pipeline_stats.reachable_units', 'findings', 'threat_model_warnings'],
+    'pipeline_results.json': ['success', 'processing_level', 'total_functions', 'call_graph_edges', 'reachable_units', 'reduction_percentage'],
+    'scan.report.json': ['status', 'summary.units_count', 'summary.metrics.vulnerable', 'summary.metrics.inconclusive', 'duration_seconds', 'cost_cny'],
+    'parse.report.json': ['status', 'summary.units_count', 'summary.language', 'duration_seconds', 'cost_cny', 'errors'],
+    'app-context.report.json': ['status', 'summary.application_type', 'summary.confidence', 'duration_seconds', 'cost_cny', 'errors'],
+    'llm-reachability.report.json': ['status', 'summary.units_reviewed', 'summary.signals_added', 'summary.entry_points_promoted', 'summary.semantic_seed_count', 'summary.semantic_retain_only_count', 'summary.reachable_only_count', 'summary.retained_only_counts', 'summary.post_filter_units', 'summary.seed_review_only', 'duration_seconds', 'cost_cny', 'errors'],
+    'enhance.report.json': ['status', 'summary.units_enhanced', 'summary.classifications', 'summary.error_count', 'duration_seconds', 'cost_cny'],
+    'analyze.report.json': ['status', 'summary.analyzed', 'summary.verdicts', 'duration_seconds', 'cost_cny', 'errors'],
+    'verify.report.json': ['status', 'summary.confirmed', 'summary.agreed', 'summary.disagreed', 'duration_seconds', 'cost_cny'],
+    'build-output.report.json': ['status', 'summary.results', 'summary.findings', 'duration_seconds', 'cost_cny', 'errors'],
+    'dynamic-test.report.json': ['status', 'summary.findings', 'summary.observations', 'duration_seconds', 'errors'],
+    'report.report.json': ['status', 'summary.formats_generated', 'outputs.summary_path', 'outputs.disclosures_dir', 'duration_seconds', 'cost_cny']
+  };
+  const focusRootFieldPaths = {
+    'dataset.json': ['name', 'repository', 'statistics.total_units', 'statistics.units_with_upstream', 'statistics.units_with_downstream', 'metadata.openharmony_scope.platform', 'metadata.openharmony_scope.coverage.parsed_files'],
+    'dataset_enhanced.json': ['name', 'repository', 'statistics.total_units', 'statistics.units_enhanced', 'statistics.semantic_context_functions', 'metadata.enhancement_mode', 'metadata.agentic_enhanced'],
+    'analyzer_output.json': ['repository', 'statistics.total_functions', 'statistics.total_edges', 'statistics.isolated_functions'],
+    'call_graph.json': ['repository', 'statistics.total_functions', 'statistics.total_edges', 'statistics.avg_out_degree', 'statistics.isolated_functions'],
+    'call_graphs.json': ['languages', 'graphs', 'files'],
+    'results.json': ['dataset', 'model', 'provider', 'metrics.total', 'metrics.vulnerable', 'metrics.bypassable', 'metrics.inconclusive'],
+    'results_verified.json': ['metrics.total', 'metrics.confirmed', 'metrics.agreed', 'metrics.disagreed', 'metrics.inconclusive'],
+    'pipeline_output.json': ['repository.name', 'results.total', 'results.vulnerable', 'results.inconclusive', 'pipeline_stats.total_units', 'pipeline_stats.units_analyzed', 'pipeline_stats.reachable_units'],
+    'pipeline_results.json': ['repository', 'processing_level', 'success', 'total_functions', 'call_graph_edges', 'reachable_units'],
+    'platform_profile.json': ['platform', 'repository_root', 'detection.confidence', 'coverage.discovered_files', 'coverage.parsed_files', 'components', 'boundaries'],
+    'application_context.json': ['application_type', 'purpose', 'confidence', 'requires_remote_trigger', 'attacker_profiles', 'input_sources', 'trust_boundaries'],
+    'llm_reachability.json': ['summary.signals_received', 'summary.signals_applied', 'summary.semantic_seed_ids', 'summary.semantic_retain_only_ids', 'summary.reachable_only_ids', 'summary.retained_only_counts', 'summary.seed_counts', 'summary.review_only', 'signals'],
+    'scan.report.json': ['status', 'summary.units_count', 'summary.metrics.vulnerable', 'summary.metrics.safe', 'summary.metrics.inconclusive', 'duration_seconds', 'cost_cny'],
+    'parse.report.json': ['status', 'summary.units_count', 'summary.language', 'duration_seconds', 'cost_cny'],
+    'app-context.report.json': ['status', 'summary.application_type', 'summary.confidence', 'duration_seconds', 'cost_cny'],
+    'llm-reachability.report.json': ['status', 'summary.units_reviewed', 'summary.signals_added', 'summary.semantic_seed_count', 'summary.semantic_retain_only_count', 'summary.reachable_only_count', 'summary.retained_only_counts', 'summary.post_filter_units', 'duration_seconds', 'cost_cny'],
+    'enhance.report.json': ['status', 'summary.units_enhanced', 'summary.mode', 'summary.error_count', 'duration_seconds', 'cost_cny'],
+    'analyze.report.json': ['status', 'summary.analyzed', 'summary.verdicts', 'duration_seconds', 'cost_cny'],
+    'verify.report.json': ['status', 'summary.confirmed', 'summary.agreed', 'summary.disagreed', 'duration_seconds', 'cost_cny'],
+    'build-output.report.json': ['status', 'summary.findings', 'summary.results', 'duration_seconds', 'cost_cny'],
+    'dynamic-test.report.json': ['status', 'summary.findings', 'summary.observations', 'duration_seconds'],
+    'report.report.json': ['status', 'summary.formats_generated', 'outputs.summary_path', 'outputs.disclosures_dir', 'duration_seconds', 'cost_cny']
+  };
+  const focusPriority = ['status', 'verdict', 'finding', 'id', 'name', 'function_analyzed', 'file_path', 'filePath', 'function_name', 'unit_type', 'is_entry_point', 'reachable', 'confidence', 'cwe_id', 'security_classification', 'summary', 'metrics', 'statistics', 'platform', 'language'];
+  function focusPathValue(value, path) {
+    if (value === null || value === undefined || !path) return { found: false };
+    let current = value;
+    const parts = String(path).split('.');
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      if (Array.isArray(current)) {
+        const position = Number(part);
+        if (!Number.isInteger(position) || position < 0 || position >= current.length) return { found: false };
+        current = current[position];
+      } else if (current && typeof current === 'object' && Object.prototype.hasOwnProperty.call(current, part)) {
+        current = current[part];
+      } else {
+        return { found: false };
+      }
+    }
+    return { found: true, value: current };
+  }
+  function focusPathLabel(path) {
+    const parts = String(path).split('.');
+    return localizedInfo(fieldInfo(parts[parts.length - 1])).title;
+  }
+  function focusPathDescription(path) {
+    const parts = String(path).split('.');
+    return localizedInfo(fieldInfo(parts[parts.length - 1])).description;
+  }
+  function focusCompactValue(value, path) {
+    if (Array.isArray(value)) {
+      if (!value.length) return t('field.empty');
+      const labels = value.slice(0, 3).map(function(item) {
+        if (item && typeof item === 'object') return item.id || item.name || item.function_id || item.function_name || t('field.item').replace('{index}', '');
+        return primitiveText(item);
+      });
+      const suffix = value.length > 3 ? ' …（' + value.length + '）' : '';
+      return labels.join('、') + suffix;
+    }
+    if (value && typeof value === 'object') {
+      const keys = Object.keys(value);
+      if (keys.length === 0) return t('field.empty');
+      return keys.length + ' ' + t('focus.fields');
+    }
+    const text = primitiveText(value);
+    const limit = /reason|description|code|summary/i.test(String(path)) ? 180 : 120;
+    return text.length > limit ? text.slice(0, limit) + '…' : text;
+  }
+  function focusTone(path, value) {
+    const key = String(path || '').toLowerCase();
+    if (/vulnerable|bypassable|error|failed|disagreed|inconclusive|warning/.test(key)) {
+      if (typeof value === 'number' && value === 0) return 'success';
+      if (typeof value === 'boolean' && !value) return 'success';
+      return 'danger';
+    }
+    if (/safe|protected|confirmed|agreed|success|parsed|reachable|applied/.test(key)) {
+      if (typeof value === 'number' && value === 0) return '';
+      if (typeof value === 'boolean' && !value) return '';
+      return 'success';
+    }
+    if (/confidence|remote|optional|status/.test(key)) return 'warning';
+    return '';
+  }
+  function fallbackFocusPaths(value) {
+    if (!isObject(value)) return [];
+    return Object.keys(value).sort(function(left, right) {
+      const leftIndex = focusPriority.indexOf(left); const rightIndex = focusPriority.indexOf(right);
+      const leftScore = leftIndex < 0 ? 999 : leftIndex; const rightScore = rightIndex < 0 ? 999 : rightIndex;
+      return leftScore - rightScore || left.localeCompare(right);
+    }).slice(0, 8);
+  }
+  function createFocusSummary(value, itemMode) {
+    const wrapper = element('section', 'focus-summary');
+    const header = element('div', 'focus-summary-header');
+    const heading = element('div', 'focus-summary-heading');
+    heading.appendChild(element('div', 'focus-summary-kicker', t('focus.kicker')));
+    heading.appendChild(element('h3', 'focus-summary-title', t('focus.title')));
+    heading.appendChild(element('p', 'focus-summary-subtitle', t(itemMode ? 'focus.itemSubtitle' : 'focus.artifactSubtitle')));
+    header.appendChild(heading);
+    const actions = element('div', 'focus-summary-actions');
+    const expand = element('button', 'focus-summary-action', t('focus.expand')); expand.type = 'button';
+    const collapse = element('button', 'focus-summary-action', t('focus.collapse')); collapse.type = 'button';
+    actions.appendChild(expand); actions.appendChild(collapse); header.appendChild(actions); wrapper.appendChild(header);
+    const grid = element('div', 'focus-summary-grid');
+    const configured = (itemMode ? focusFieldPaths[artifactName] : (focusRootFieldPaths[artifactName] || focusFieldPaths[artifactName])) || [];
+    const paths = configured.slice();
+    fallbackFocusPaths(value).forEach(function(path) { if (!paths.includes(path)) paths.push(path); });
+    const seen = new Set(); let count = 0;
+    paths.forEach(function(path) {
+      if (count >= 8) return;
+      const result = focusPathValue(value, path);
+      if (!result.found || seen.has(path)) return;
+      seen.add(path); count += 1;
+      const card = element('article', 'focus-card ' + focusTone(path, result.value));
+      card.appendChild(element('span', 'focus-card-label', focusPathLabel(path)));
+      card.appendChild(element('strong', 'focus-card-value', focusCompactValue(result.value, path)));
+      card.appendChild(element('p', 'focus-card-description', focusPathDescription(path)));
+      grid.appendChild(card);
+    });
+    if (!count) grid.appendChild(element('div', 'focus-empty', t('focus.noHighlights')));
+    wrapper.appendChild(grid);
+    function setDetails(open) {
+      const scope = wrapper.parentElement;
+      if (!scope) return;
+      Array.from(scope.children).forEach(function(child) {
+        if (child.classList && child.classList.contains('full-fields')) {
+          if (typeof child.setAllFields === 'function') child.setAllFields(open);
+          else child.open = open;
+        }
+      });
+      scope.querySelectorAll('details.form-section').forEach(function(details) { details.open = open; });
+    }
+    expand.addEventListener('click', function() { setDetails(true); });
+    collapse.addEventListener('click', function() { setDetails(false); });
+    return wrapper;
+  }
+  function createFullFields(value) {
+    const details = document.createElement('details'); details.className = 'full-fields';
+    const summary = document.createElement('summary');
+    summary.appendChild(element('span', null, t('focus.allFields')));
+    summary.appendChild(element('span', 'full-fields-hint', t('focus.allFieldsHint')));
+    details.appendChild(summary);
+    const body = element('div', 'full-fields-body'); details.appendChild(body);
+    let rendered = false;
+    function renderAllFields() {
+      if (rendered) return;
+      body.appendChild(renderForm(value));
+      rendered = true;
+    }
+    details.setAllFields = function(open) {
+      if (open) renderAllFields();
+      details.open = open;
+      details.querySelectorAll('details.form-section').forEach(function(section) { section.open = open; });
+    };
+    details.addEventListener('toggle', function() {
+      if (details.open) renderAllFields();
+    });
+    return details;
+  }
+  function appendPrimitiveField(parent, key, value) {
+    const card = element('article', 'field-card'); fieldHeader(card, key);
+    const valueNode = element('div', 'field-value', primitiveText(value));
+    if (typeof value === 'string' && (isCodeField(key, value) || /path|file|id|hash|key|target/i.test(String(key)))) valueNode.classList.add('mono');
+    if (isCodeField(key, value)) { valueNode.classList.add('code'); valueNode.textContent = String(value); }
+    if (value === null || value === undefined) valueNode.classList.add('field-empty');
+    card.appendChild(valueNode); parent.appendChild(card);
+  }
+  function arrayItemLabel(value, index) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const candidate = value.id || value.name || value.function_id || value.function_name || value.route_key || value.title || value.verdict;
+      if (candidate) return String(candidate);
+    }
+    return t('field.item').replace('{index}', String(index + 1));
+  }
+  function appendArrayField(parent, key, values, depth) {
+    const info = localizedInfo(fieldInfo(key));
+    const details = document.createElement('details'); details.className = 'form-section'; details.open = false;
+    const summary = document.createElement('summary');
+    const title = element('span', 'form-section-title', info.title); summary.appendChild(title);
+    summary.appendChild(element('span', 'form-section-count', t('field.count').replace('{count}', String(values.length)))); details.appendChild(summary);
+    const body = element('div', 'form-section-body'); body.appendChild(element('div', 'field-description', info.description));
+    if (values.length === 0) body.appendChild(element('div', 'field-empty', t('field.empty')));
+    else if (values.every(function(value) { return !isObject(value) && !Array.isArray(value); })) {
+      const tags = element('div', 'field-tags'); values.forEach(function(value) { tags.appendChild(element('span', 'field-tag', primitiveText(value))); }); body.appendChild(tags);
+    } else {
+      values.forEach(function(value, index) {
+        if (isObject(value)) {
+          const card = document.createElement('details'); card.className = 'form-section'; card.open = false;
+          const cardSummary = document.createElement('summary'); cardSummary.appendChild(element('span', 'form-section-title', arrayItemLabel(value, index))); card.appendChild(cardSummary);
+          const cardBody = element('div', 'form-section-body'); appendObjectFields(cardBody, value, depth + 1); card.appendChild(cardBody); body.appendChild(card);
+        } else { appendPrimitiveField(body, String(index + 1), value); }
+      });
+    }
+    details.appendChild(body); parent.appendChild(details);
+  }
+  function appendObjectField(parent, key, value, depth) {
+    if (Array.isArray(value)) { appendArrayField(parent, key, value, depth); return; }
+    if (isObject(value)) {
+      const info = localizedInfo(fieldInfo(key));
+      const details = document.createElement('details'); details.className = 'form-section'; details.open = false;
+      const summary = document.createElement('summary'); summary.appendChild(element('span', 'form-section-title', info.title)); summary.appendChild(element('code', 'field-key', String(key))); details.appendChild(summary);
+      const body = element('div', 'form-section-body'); body.appendChild(element('div', 'field-description', info.description)); appendObjectFields(body, value, depth + 1); details.appendChild(body); parent.appendChild(details); return;
+    }
+    appendPrimitiveField(parent, key, value);
+  }
+  function fieldOrderScore(key) {
+    const index = focusPriority.indexOf(String(key));
+    return index < 0 ? 999 : index;
+  }
+  function appendObjectFields(parent, object, depth) {
+    Object.keys(object).sort(function(left, right) { return fieldOrderScore(left) - fieldOrderScore(right) || left.localeCompare(right); }).forEach(function(key) { appendObjectField(parent, key, object[key], depth); });
+  }
+  function renderForm(value) { const rootNode = element('div', 'form-root'); if (isObject(value)) appendObjectFields(rootNode, value, 0); else if (Array.isArray(value)) appendArrayField(rootNode, 'value', value, 0); else appendPrimitiveField(rootNode, 'value', value); return rootNode; }
+  function renderObjectData(data) {
+    parsedObject = data;
+    const objectView = document.getElementById('object-view'); objectView.replaceChildren(); objectView.hidden = false;
+    document.getElementById('collection-toolbar').hidden = true; document.getElementById('collection-tabs').hidden = true; document.getElementById('collection-layout').hidden = true; document.getElementById('root-summary').hidden = true;
+    if (data === null || data === undefined) { objectView.appendChild(element('div', 'empty', t('content.empty'))); return; }
+    objectView.appendChild(createFocusSummary(data, false));
+    objectView.appendChild(createFullFields(data));
+  }
+  function explorerURL(params) { const url = '/scan/' + encodeURIComponent(jobID) + '/explore/' + encodeURIComponent(artifactName); const query = params.toString(); return query ? url + '?' + query : url; }
+  function filterParams(offset, limit) {
+    const params = new URLSearchParams();
+    const fields = [['q', 'collection-search'], ['language', 'language-filter'], ['unit_type', 'unit-type-filter'], ['verdict', 'verdict-filter'], ['entry_point', 'entry-filter']];
+    fields.forEach(function(pair) { const control = document.getElementById(pair[1]); if (control && control.value) params.set(pair[0], control.value); });
+    if (collectionKey) params.set('collection', collectionKey);
+    params.set('offset', String(Math.max(0, offset || 0))); params.set('limit', String(limit || 30)); return params;
+  }
+  function itemTitle(item) { return (item && (item.label || item.id)) || t('field.item').replace('{index}', ''); }
+  function renderRootSummary(summary) {
+    const container = document.getElementById('root-summary'); container.replaceChildren();
+    if (!summary || !isObject(summary) || !Object.keys(summary).length) { container.hidden = true; return; }
+    container.hidden = false; container.appendChild(element('h3', null, t('collection.root'))); container.appendChild(createFocusSummary(summary, false)); container.appendChild(createFullFields(summary));
+  }
+  function renderTabs(keys) {
+    const tabs = document.getElementById('collection-tabs'); tabs.replaceChildren(); tabs.hidden = !Array.isArray(keys) || keys.length < 2;
+    if (tabs.hidden) return;
+    tabs.appendChild(element('span', 'field-description', t('collection.tabs')));
+    keys.forEach(function(key) { const button = element('button', 'collection-button' + (key === collectionKey ? ' active' : ''), localizedInfo(fieldInfo(key)).title + ' (' + key + ')'); button.type = 'button'; button.addEventListener('click', function() { if (collectionKey === key) return; collectionKey = key; loadCollection(0); }); tabs.appendChild(button); });
+  }
+  function renderCollectionList(view) {
+    const list = document.getElementById('collection-list'); list.replaceChildren();
+    const items = Array.isArray(view.items) ? view.items : [];
+    document.getElementById('collection-count').textContent = Number(view.total || 0).toLocaleString(currentLanguage) + ' ' + t('collection.items');
+    const size = Number(view.limit || 30); const currentPage = size ? Math.floor(Number(view.offset || 0) / size) + 1 : 1; const totalPages = size ? Math.max(1, Math.ceil(Number(view.total || 0) / size)) : 1;
+    document.getElementById('page-label').textContent = t('collection.page').replace('{current}', String(currentPage)).replace('{total}', String(totalPages));
+    document.getElementById('previous-page').disabled = Number(view.offset || 0) <= 0; document.getElementById('next-page').disabled = !view.next_offset;
+    if (!items.length) { list.appendChild(element('div', 'empty', t('collection.noMatches'))); return; }
+    items.forEach(function(item) {
+      const row = element('button', 'collection-row' + (item.id === selectedID ? ' selected' : '')); row.type = 'button'; row.setAttribute('aria-pressed', item.id === selectedID ? 'true' : 'false');
+      row.appendChild(element('span', 'collection-row-title', itemTitle(item))); row.appendChild(element('code', 'collection-row-id', item.id || ''));
+      const meta = element('span', 'collection-row-meta');
+      if (item.file) meta.appendChild(element('span', 'collection-chip', item.file + (item.start_line ? ':' + item.start_line : '')));
+      if (item.summary && isObject(item.summary)) Object.keys(item.summary).sort().forEach(function(key) { meta.appendChild(element('span', 'collection-chip', localizedInfo(fieldInfo(key)).title + ': ' + focusCompactValue(item.summary[key], key))); });
+      if (meta.childNodes.length) row.appendChild(meta);
+      row.addEventListener('click', function() { selectedID = item.id; selectedDetail = null; renderCollectionList(view); renderDetailLoading(); loadCollectionItem(item.id); }); list.appendChild(row);
+    });
+  }
+  function renderDetailLoading() { const detail = document.getElementById('collection-detail'); detail.replaceChildren(); detail.appendChild(element('div', 'empty', t('collection.loadingDetail'))); }
+  function renderCollectionDetail(view) {
+    const detail = document.getElementById('collection-detail'); detail.replaceChildren();
+    detail.appendChild(element('h3', null, itemTitle({ id: view.item_id, label: view.item_id })));
+    if (view.item && isObject(view.item)) {
+      const location = view.item.filePath || view.item.file_path || (view.item.code && view.item.code.primary_origin && view.item.code.primary_origin.file_path);
+      if (location) detail.appendChild(element('div', 'collection-detail-location', String(location)));
+    }
+    detail.appendChild(createFocusSummary(view.item, true));
+    detail.appendChild(createFullFields(view.item));
+  }
+  function renderCollectionView(view) {
+    collectionView = view; document.getElementById('collection-toolbar').hidden = false; document.getElementById('collection-layout').hidden = false; document.getElementById('object-view').hidden = true;
+    renderTabs(view.available_collections || []); renderRootSummary(view.root_summary); renderCollectionList(view);
+    if (selectedDetail && selectedDetail.item_id === selectedID) renderCollectionDetail(selectedDetail); else if (!selectedID) { const detail = document.getElementById('collection-detail'); detail.replaceChildren(); detail.appendChild(element('div', 'empty', t('collection.select'))); }
+  }
+  function graphFetchText(url) { return fetch(url, { cache: 'no-store' }).then(function(response) { if (!response.ok) throw new Error('graph artifact request failed'); return response.text(); }); }
+  function graphUnique(values) { const seen = new Set(); return (values || []).filter(function(value) { if (typeof value !== 'string' || seen.has(value)) return false; seen.add(value); return true; }); }
+  function graphNativeChildren(id) { const raw = graphData && graphData.callGraph ? graphData.callGraph[id] : null; return Array.isArray(raw) ? raw.filter(function(value) { return typeof value === 'string'; }) : []; }
+  function graphContextNeighbors(id) { const raw = graphData && graphData.agenticAdjacency ? graphData.agenticAdjacency[id] : null; return Array.isArray(raw) ? raw.filter(function(value) { return typeof value === 'string'; }) : []; }
+  function graphChildren(id) { return graphData && graphData.isAgenticContext ? graphUnique(graphNativeChildren(id).concat(graphContextNeighbors(id))) : graphNativeChildren(id); }
+  function graphCallers(id) { const raw = graphData && graphData.reverseCallGraph ? graphData.reverseCallGraph[id] : null; return Array.isArray(raw) ? raw.filter(function(value) { return typeof value === 'string'; }) : []; }
+  function graphFunctionInfo(id) { return graphData && graphData.functions && isObject(graphData.functions[id]) ? graphData.functions[id] : {}; }
+  function graphPairKey(left, right) { return [String(left), String(right)].sort().join('\u0000'); }
+  function graphContextDetails(id) { return graphData && graphData.agenticDetails && Array.isArray(graphData.agenticDetails[id]) ? graphData.agenticDetails[id] : []; }
+  function graphNodeRecord(id) {
+    const info = graphFunctionInfo(id); const entry = graphData && graphData.entryMap ? graphData.entryMap[id] : null;
+    const record = Object.assign({}, info, { id: id, direct_callees: graphNativeChildren(id), direct_callers: graphCallers(id) });
+    if (graphIsAgenticContext()) record.agentic_context_links = graphContextDetails(id);
+    if (entry) { record.is_entry_point = true; record.entry_point_reason = entry.reason || t('graph.dataset'); record.graph_entry_source = entry.source || t('graph.dataset'); }
+    return record;
+  }
+  function graphEntryRecords(dataset) {
+    const entries = []; const units = dataset && Array.isArray(dataset.units) ? dataset.units : [];
+    units.forEach(function(unit) {
+      if (!unit || !unit.id) return;
+      const agentReachability = unit.agent_context && unit.agent_context.reachability;
+      const markedEntry = unit.is_entry_point === true || (agentReachability && agentReachability.is_entry_point === true);
+      if (!markedEntry || !graphFunctionInfo(unit.id)) return;
+      entries.push({ id: unit.id, reason: unit.entry_point_reason || '', source: graphIsAgenticContext() ? t('graph.enhancedDataset') : t('graph.dataset') });
+    });
+    if (entries.length) return entries;
+    const reverse = graphData.reverseCallGraph || {}; Object.keys(graphData.functions || {}).forEach(function(id) { const callers = reverse[id]; if (!Array.isArray(callers) || callers.length === 0) entries.push({ id: id, reason: '', source: t('graph.inferred') }); });
+    return entries.slice(0, 80);
+  }
+  function graphNodeLabel(id) { const info = graphFunctionInfo(id); if (info.name) return String(info.name); const parts = String(id).split(':'); return parts[parts.length - 1] || id; }
+  function graphNodeFile(id) { const info = graphFunctionInfo(id); const file = info.filePath || info.file_path || ''; const line = info.startLine || info.start_line; return file ? String(file) + (line ? ':' + String(line) : '') : ''; }
+  function graphSvgElement(name, attributes) { const node = document.createElementNS('http://www.w3.org/2000/svg', name); Object.keys(attributes || {}).forEach(function(key) { node.setAttribute(key, attributes[key]); }); return node; }
+  function graphFallbackFunction(id, unit) {
+    const rawID = String(id || ''); const splitAt = rawID.lastIndexOf(':');
+    const code = unit && isObject(unit.code) ? unit.code : {};
+    const origin = code && isObject(code.primary_origin) ? code.primary_origin : {};
+    return {
+      name: origin.function_name || (splitAt >= 0 ? rawID.slice(splitAt + 1) : rawID),
+      language: unit && unit.language,
+      unitType: unit && unit.unit_type,
+      filePath: origin.file_path || (splitAt >= 0 ? rawID.slice(0, splitAt) : ''),
+      startLine: origin.start_line,
+      endLine: origin.end_line,
+      code: code.primary_code || '',
+      agentic_only: true,
+      agentic_source_status: unit ? '增强数据集提供了源码位置' : '函数索引未找到源码，仅保留模型选择关系',
+    };
+  }
+  function graphBuildAgentic(graphJSON, datasetJSON) {
+    const functions = graphJSON && isObject(graphJSON.functions) ? graphJSON.functions : {};
+    const callGraph = graphJSON && isObject(graphJSON.call_graph) ? graphJSON.call_graph : {};
+    const reverseCallGraph = graphJSON && isObject(graphJSON.reverse_call_graph) ? graphJSON.reverse_call_graph : {};
+    const units = datasetJSON && Array.isArray(datasetJSON.units) ? datasetJSON.units : [];
+    const unitsByID = {}; units.forEach(function(unit) { if (unit && unit.id) unitsByID[String(unit.id)] = unit; });
+    const agenticAdjacency = {}; const agenticDetails = {}; const agenticNodeMap = {}; const agenticContextEdges = []; const edgeKeys = new Set(); const detailKeys = new Set(); const unresolvedContextIDs = new Set();
+    function ensureNode(id, unit) { if (!functions[id]) functions[id] = graphFallbackFunction(id, unit); }
+    function addNeighbor(left, right) {
+      if (!agenticAdjacency[left]) agenticAdjacency[left] = [];
+      if (!agenticAdjacency[left].includes(right)) agenticAdjacency[left].push(right);
+    }
+    units.forEach(function(unit) {
+      if (!unit || !unit.id) return;
+      const sourceID = String(unit.id); ensureNode(sourceID, unit);
+      const context = unit.agent_context && isObject(unit.agent_context) ? unit.agent_context : {};
+      const includes = Array.isArray(context.include_functions) ? context.include_functions : [];
+      includes.forEach(function(item) {
+        const targetID = typeof item === 'string' ? item : (item && item.id);
+        if (!targetID || typeof targetID !== 'string' || targetID === sourceID) return;
+        const targetUnit = unitsByID[targetID];
+        ensureNode(targetID, targetUnit);
+        const reason = typeof item === 'string' ? '' : String((item && item.reason) || '');
+        const edgeKey = sourceID + '\u0000' + targetID;
+        if (functions[targetID].agentic_only && !targetUnit) unresolvedContextIDs.add(targetID);
+        if (!edgeKeys.has(edgeKey)) {
+          edgeKeys.add(edgeKey);
+          agenticContextEdges.push({ from: sourceID, to: targetID, kind: 'agentic_context', direction: 'unconfirmed', reason: reason });
+        }
+        addNeighbor(sourceID, targetID); addNeighbor(targetID, sourceID);
+        agenticNodeMap[sourceID] = true; agenticNodeMap[targetID] = true;
+        const sourceDetailKey = sourceID + '\u0000' + targetID + '\u0000forward';
+        if (!detailKeys.has(sourceDetailKey)) {
+          detailKeys.add(sourceDetailKey);
+          if (!agenticDetails[sourceID]) agenticDetails[sourceID] = [];
+          agenticDetails[sourceID].push({ function_id: targetID, reason: reason, relation: '模型选入上下文' });
+        }
+        const targetDetailKey = targetID + '\u0000' + sourceID + '\u0000reverse';
+        if (!detailKeys.has(targetDetailKey)) {
+          detailKeys.add(targetDetailKey);
+          if (!agenticDetails[targetID]) agenticDetails[targetID] = [];
+          agenticDetails[targetID].push({ function_id: sourceID, reason: reason, relation: '被模型关联到该上下文' });
+        }
+      });
+    });
+    const contextEdgeMap = {}; agenticContextEdges.forEach(function(edge) { contextEdgeMap[graphPairKey(edge.from, edge.to)] = edge; });
+    const nativeEdgePairs = {};
+    Object.keys(callGraph).forEach(function(from) { const children = Array.isArray(callGraph[from]) ? callGraph[from] : []; children.forEach(function(to) { if (typeof to === 'string') nativeEdgePairs[graphPairKey(from, to)] = true; }); });
+    return { functions: functions, callGraph: callGraph, reverseCallGraph: reverseCallGraph, entryMap: {}, entries: [], isAgenticContext: true, agenticAdjacency: agenticAdjacency, agenticDetails: agenticDetails, agenticNodeMap: agenticNodeMap, agenticContextEdges: agenticContextEdges, contextEdgeMap: contextEdgeMap, nativeEdgePairs: nativeEdgePairs, unresolvedContextCount: unresolvedContextIDs.size };
+  }
+  function graphVisibleSubgraph() {
+    const rootID = graphRootID; const maxNodes = GRAPH_MAX_NODES; const nodes = new Map(); const edges = []; const queue = [];
+    if (!rootID || !graphFunctionInfo(rootID)) return { nodes: [], edges: [], truncated: false };
+    nodes.set(rootID, { id: rootID, depth: 0 }); queue.push(rootID);
+    while (queue.length) {
+      const current = queue.shift(); const currentNode = nodes.get(current); if (!currentNode || currentNode.depth >= graphDepth) continue;
+      graphChildren(current).forEach(function(child) {
+        if (!nodes.has(child)) {
+          if (nodes.size >= maxNodes) return;
+          nodes.set(child, { id: child, depth: currentNode.depth + 1 }); queue.push(child);
+        }
+        if (!nodes.has(child)) return;
+        if (graphNativeChildren(current).includes(child)) edges.push({ from: current, to: child, kind: 'native' });
+        if (graphIsAgenticContext() && graphContextNeighbors(current).includes(child)) {
+          edges.push({ from: current, to: child, kind: 'agentic_context' });
+        }
+      });
+    }
+    const uniqueEdges = []; const edgeKeys = new Set(); edges.forEach(function(edge) { const key = edge.kind === 'agentic_context' ? 'context\u0000' + graphPairKey(edge.from, edge.to) : 'native\u0000' + edge.from + '\u0000' + edge.to; if (!edgeKeys.has(key)) { edgeKeys.add(key); uniqueEdges.push(edge); } });
+    return { nodes: Array.from(nodes.values()), edges: uniqueEdges, truncated: nodes.size >= maxNodes };
+  }
+  function graphPosition(nodes) {
+    const columns = {}; nodes.forEach(function(node) { if (!columns[node.depth]) columns[node.depth] = []; columns[node.depth].push(node); });
+    const nodeWidth = 210; const nodeHeight = 64; const gapX = 30; const gapY = 24; const positions = {}; let maxRows = 1; let maxDepth = 0;
+    Object.keys(columns).forEach(function(depthText) { const depth = Number(depthText); maxDepth = Math.max(maxDepth, depth); maxRows = Math.max(maxRows, columns[depth].length); columns[depth].forEach(function(node, index) { positions[node.id] = { x: 30 + depth * (nodeWidth + gapX), y: 30 + index * (nodeHeight + gapY), width: nodeWidth, height: nodeHeight }; }); });
+    return { positions: positions, width: Math.max(900, 60 + (maxDepth + 1) * (nodeWidth + gapX)), height: Math.max(520, 60 + maxRows * (nodeHeight + gapY)) };
+  }
+  function graphRenderEntryList() {
+    const list = document.getElementById('graph-entry-list'); list.replaceChildren(); const entries = graphData && Array.isArray(graphData.entries) ? graphData.entries : [];
+    if (!entries.length) { list.appendChild(element('div', 'empty', t('graph.noEntries'))); return; }
+    entries.forEach(function(entry) { const button = element('button', 'graph-entry' + (entry.id === graphRootID ? ' selected' : '')); button.type = 'button'; button.setAttribute('aria-pressed', entry.id === graphRootID ? 'true' : 'false'); button.appendChild(element('span', 'graph-entry-title', graphNodeLabel(entry.id))); button.appendChild(element('code', 'graph-entry-id', entry.id)); const meta = graphNodeFile(entry.id); button.appendChild(element('span', 'graph-entry-meta', (meta ? meta + ' · ' : '') + entry.source)); button.addEventListener('click', function() { graphRootID = entry.id; graphSelectedID = entry.id; graphDepth = GRAPH_DEFAULT_DEPTH; graphRender(); }); list.appendChild(button); });
+  }
+  function graphRenderDetail() {
+    const detail = document.getElementById('graph-node-detail'); detail.replaceChildren(); if (!graphSelectedID || !graphData) { detail.appendChild(element('div', 'empty', t('graph.selectNode'))); return; }
+    const info = graphFunctionInfo(graphSelectedID); const title = graphNodeLabel(graphSelectedID); detail.appendChild(element('h3', null, title)); const location = graphNodeFile(graphSelectedID); if (location) detail.appendChild(element('div', 'graph-node-detail-location', location));
+    const record = graphNodeRecord(graphSelectedID); detail.appendChild(renderForm(record));
+    if (!graphChildren(graphSelectedID).length) { const empty = element('div', 'empty', t(graphIsAgenticContext() ? 'graph.noEdgesAgentic' : 'graph.noEdges')); empty.style.marginTop = '10px'; detail.appendChild(empty); }
+  }
+  function graphRenderSvg() {
+    const svg = document.getElementById('graph-canvas'); const world = document.getElementById('graph-world'); world.replaceChildren(); const subgraph = graphVisibleSubgraph(); const layout = graphPosition(subgraph.nodes); svg.setAttribute('viewBox', '0 0 ' + layout.width + ' ' + layout.height); world.setAttribute('transform', 'translate(' + graphPan.x + ' ' + graphPan.y + ') scale(' + graphZoom + ')');
+    const positions = layout.positions; subgraph.edges.forEach(function(edge) { const from = positions[edge.from]; const to = positions[edge.to]; if (!from || !to) return; const startX = from.x + from.width; const startY = from.y + from.height / 2; const endX = to.x; const endY = to.y + to.height / 2; const midX = (startX + endX) / 2; const attrs = { class: 'graph-edge' + (edge.kind === 'agentic_context' ? ' agentic-context' : ''), d: 'M ' + startX + ' ' + startY + ' C ' + midX + ' ' + startY + ', ' + midX + ' ' + endY + ', ' + endX + ' ' + endY }; if (edge.kind !== 'agentic_context') attrs['marker-end'] = 'url(#graph-arrow)'; world.appendChild(graphSvgElement('path', attrs)); });
+    subgraph.nodes.forEach(function(node) { const position = positions[node.id]; const nodeClass = 'graph-node' + (graphData.entryMap[node.id] ? ' entry' : '') + (graphData.agenticNodeMap && graphData.agenticNodeMap[node.id] ? ' agentic-context' : '') + (node.id === graphSelectedID ? ' selected' : ''); const group = graphSvgElement('g', { class: nodeClass, transform: 'translate(' + position.x + ' ' + position.y + ')', role: 'button', tabindex: '0', 'aria-label': graphNodeLabel(node.id) }); const rect = graphSvgElement('rect', { x: 0, y: 0, width: position.width, height: position.height, rx: 7 }); group.appendChild(rect); const name = graphSvgElement('text', { x: 10, y: 22, class: 'graph-node-name' }); name.textContent = graphNodeLabel(node.id).slice(0, 29); group.appendChild(name); const file = graphSvgElement('text', { x: 10, y: 40, class: 'graph-node-file' }); file.textContent = graphNodeFile(node.id).slice(0, 42); group.appendChild(file); const edgeCount = graphChildren(node.id).length; const count = graphSvgElement('text', { x: 10, y: 55, class: 'graph-node-file' }); count.textContent = edgeCount + ' ' + t('graph.edges'); group.appendChild(count); const select = function(event) { event.stopPropagation(); graphSelectedID = node.id; graphRender(); }; group.addEventListener('click', select); group.addEventListener('keydown', function(event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(event); } }); world.appendChild(group); });
+    const empty = document.getElementById('graph-empty'); empty.hidden = subgraph.nodes.length > 0; if (!empty.hidden) empty.textContent = t('graph.noEntries');
+    const status = document.getElementById('graph-toolbar-status'); const truncated = subgraph.truncated ? ' · ' + t('graph.truncated').replace('{count}', '160') : ''; const contextCount = graphIsAgenticContext() ? ' · ' + (graphData.agenticContextEdges || []).length + ' ' + t('graph.contextLinks') : ''; const unresolved = graphIsAgenticContext() && graphData.unresolvedContextCount ? ' · ' + graphData.unresolvedContextCount + ' ' + t('graph.unresolvedContext') : ''; status.textContent = subgraph.nodes.length + ' ' + t('graph.nodes') + ' · ' + subgraph.edges.length + ' ' + t('graph.edges') + contextCount + unresolved + ' · ' + t('graph.depth') + ' ' + graphDepth + truncated;
+  }
+  function graphRender() { if (!graphData) return; document.getElementById('graph-button').hidden = false; updateGraphCopy(); const depthSelect = document.getElementById('graph-depth-select'); if (depthSelect) depthSelect.value = String(graphDepth); graphRenderEntryList(); graphRenderSvg(); graphRenderDetail(); }
+  function graphLoad() {
+    if (graphData) { graphRender(); return; }
+    const sequence = ++requestSerial; setStatus(t('graph.loading')); const isAgentic = artifactName === 'dataset_enhanced.json'; const datasetURL = isAgentic ? rawURL : '/scan/' + encodeURIComponent(jobID) + '/artifact/dataset.json'; const graphURL = isAgentic ? '/scan/' + encodeURIComponent(jobID) + '/artifact/call_graph.json' : rawURL; const fallbackGraphURL = '/scan/' + encodeURIComponent(jobID) + '/artifact/analyzer_output.json'; const graphPromise = isAgentic ? graphFetchText(graphURL).catch(function() { return graphFetchText(fallbackGraphURL); }) : graphFetchText(graphURL);
+    Promise.all([graphPromise, graphFetchText(datasetURL).catch(function() { return '{}'; })]).then(function(texts) {
+      if (sequence !== requestSerial) return; let graphJSON; let datasetJSON;
+      try { graphJSON = JSON.parse(texts[0]); datasetJSON = JSON.parse(texts[1]); } catch (_) { throw new Error('invalid graph JSON'); }
+      graphData = isAgentic ? graphBuildAgentic(graphJSON, datasetJSON) : { functions: isObject(graphJSON.functions) ? graphJSON.functions : {}, callGraph: isObject(graphJSON.call_graph) ? graphJSON.call_graph : {}, reverseCallGraph: isObject(graphJSON.reverse_call_graph) ? graphJSON.reverse_call_graph : {}, entryMap: {}, entries: [] };
+      graphData.entries = graphEntryRecords(datasetJSON); graphData.entries.forEach(function(entry) { graphData.entryMap[entry.id] = entry; }); const firstExpandedEntry = graphData.entries.find(function(entry) { return graphChildren(entry.id).length > 0; }); graphRootID = firstExpandedEntry ? firstExpandedEntry.id : (graphData.entries.length ? graphData.entries[0].id : ''); graphSelectedID = graphRootID; if (!isAgentic) { rawText = texts[0]; document.getElementById('raw-view').textContent = rawText; } setStatus(''); graphRender();
+    }).catch(function() { if (sequence === requestSerial) setStatus(t('graph.error'), true); });
+  }
+  function loadCollectionItem(itemID) {
+    const sequence = ++requestSerial; const params = filterParams(0, 1); params.set('item', itemID); setStatus(t('collection.loadingDetail'));
+    fetch(explorerURL(params), { cache: 'no-store' }).then(function(response) { if (!response.ok) throw new Error('item request failed'); return response.json(); }).then(function(view) { if (sequence !== requestSerial) return; selectedDetail = view; renderCollectionDetail(view); setStatus(''); }).catch(function() { if (sequence === requestSerial) setStatus(t('content.error'), true); });
+  }
+  function loadCollection(offset) {
+    const sequence = ++requestSerial; selectedID = ''; selectedDetail = null; setStatus(t('content.loading')); const params = filterParams(offset, 30);
+    fetch(explorerURL(params), { cache: 'no-store' }).then(function(response) { if (!response.ok) throw new Error('collection request failed'); return response.json(); }).then(function(view) {
+      if (sequence !== requestSerial) return;
+      if (view.kind !== 'collection') { collectionView = null; renderObjectData(view.data); setStatus(''); return; }
+      collectionKey = view.collection_key || collectionKey; if (Array.isArray(view.items) && view.items.length) selectedID = view.items[0].id; renderCollectionView(view); setStatus(''); if (selectedID) { renderDetailLoading(); loadCollectionItem(selectedID); }
+    }).catch(function() { if (sequence === requestSerial) { collectionView = null; setStatus(t('content.error'), true); } });
+  }
+  function loadRaw() {
+    if (rawText) { document.getElementById('raw-view').textContent = rawText; return; }
+    setStatus(t('content.loading')); fetch(rawURL, { cache: 'no-store' }).then(function(response) { if (!response.ok) throw new Error('raw request failed'); return response.text(); }).then(function(text) { rawText = text; document.getElementById('raw-view').textContent = text; if (mode === 'structured' && !collectionView) { try { renderObjectData(JSON.parse(text)); } catch (_) { renderObjectData(text); } } setStatus(''); }).catch(function() { setStatus(t('content.error'), true); });
+  }
+  function loadStructured() { if (collectionArtifacts[artifactName]) loadCollection(0); else loadRaw(); }
+  function renderCurrentView() {
+    const graphVisible = mode === 'graph' && graphArtifacts[artifactName];
+    document.getElementById('raw-view').hidden = mode !== 'raw'; document.getElementById('structured-view').hidden = mode === 'raw';
+    document.getElementById('graph-view').hidden = !graphVisible;
+    if (mode === 'raw') return;
+    if (graphVisible) { document.getElementById('collection-toolbar').hidden = true; document.getElementById('collection-tabs').hidden = true; document.getElementById('root-summary').hidden = true; document.getElementById('collection-layout').hidden = true; document.getElementById('object-view').hidden = true; if (graphData) graphRender(); return; }
+    if (collectionView) renderCollectionView(collectionView); else if (parsedObject !== null) renderObjectData(parsedObject);
+  }
+  function setMode(nextMode) {
+    if (nextMode === 'graph' && !graphArtifacts[artifactName]) nextMode = 'structured';
+    mode = nextMode === 'raw' ? 'raw' : (nextMode === 'graph' ? 'graph' : 'structured');
+    document.getElementById('graph-button').classList.toggle('active', mode === 'graph'); document.getElementById('structured-button').classList.toggle('active', mode === 'structured'); document.getElementById('raw-button').classList.toggle('active', mode === 'raw'); updateModeLabel(); renderCurrentView();
+    if (mode === 'raw') loadRaw(); else if (mode === 'graph') graphLoad(); else if (!collectionView && parsedObject === null) loadStructured();
+  }
+  function graphAdjustZoom(delta) { graphZoom = Math.max(0.45, Math.min(2.2, graphZoom + delta)); if (graphData) graphRenderSvg(); }
+  function graphFit() { graphZoom = 1; graphPan = { x: 0, y: 0 }; if (graphData) graphRenderSvg(); }
+  function clearFilters() { ['collection-search', 'language-filter', 'unit-type-filter', 'verdict-filter', 'entry-filter'].forEach(function(id) { const control = document.getElementById(id); if (control) control.value = ''; }); loadCollection(0); }
+  document.getElementById('raw-link').href = rawURL;
+  document.getElementById('graph-button').addEventListener('click', function() { setMode('graph'); });
+  document.getElementById('structured-button').addEventListener('click', function() { setMode('structured'); });
+  document.getElementById('raw-button').addEventListener('click', function() { setMode('raw'); });
+  document.getElementById('close-button').addEventListener('click', function() { if (window.opener && !window.opener.closed) window.close(); else window.history.back(); });
+  document.getElementById('clear-filters').addEventListener('click', clearFilters);
+  document.getElementById('previous-page').addEventListener('click', function() { if (collectionView) loadCollection(Math.max(0, Number(collectionView.offset || 0) - Number(collectionView.limit || 30))); });
+  document.getElementById('next-page').addEventListener('click', function() { if (collectionView && collectionView.next_offset !== undefined) loadCollection(Number(collectionView.next_offset)); });
+  ['language-filter', 'unit-type-filter', 'verdict-filter', 'entry-filter'].forEach(function(id) { document.getElementById(id).addEventListener('change', function() { loadCollection(0); }); });
+  document.getElementById('collection-search').addEventListener('input', function() { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(function() { loadCollection(0); }, 260); });
+  document.getElementById('graph-fit').addEventListener('click', graphFit);
+  document.getElementById('graph-zoom-in').addEventListener('click', function() { graphAdjustZoom(0.15); });
+  document.getElementById('graph-zoom-out').addEventListener('click', function() { graphAdjustZoom(-0.15); });
+  document.getElementById('graph-expand').addEventListener('click', function() { graphDepth = Math.min(GRAPH_MAX_DEPTH, graphDepth + 1); if (graphData) graphRender(); });
+  document.getElementById('graph-collapse').addEventListener('click', function() { graphDepth = Math.max(1, graphDepth - 1); if (graphData) graphRender(); });
+  document.getElementById('graph-depth-select').addEventListener('change', function(event) { const selected = Number(event.target.value); graphDepth = Number.isFinite(selected) ? Math.min(GRAPH_MAX_DEPTH, Math.max(1, selected)) : GRAPH_DEFAULT_DEPTH; if (graphData) graphRender(); });
+  const graphCanvas = document.getElementById('graph-canvas');
+  graphCanvas.addEventListener('wheel', function(event) { if (mode !== 'graph') return; event.preventDefault(); graphAdjustZoom(event.deltaY < 0 ? 0.1 : -0.1); }, { passive: false });
+  graphCanvas.addEventListener('mousedown', function(event) { if (event.button !== 0) return; graphDragging = true; graphDragStart = { x: event.clientX, y: event.clientY }; graphDragOrigin = { x: graphPan.x, y: graphPan.y }; graphCanvas.classList.add('dragging'); });
+  window.addEventListener('mousemove', function(event) { if (!graphDragging) return; graphPan = { x: graphDragOrigin.x + event.clientX - graphDragStart.x, y: graphDragOrigin.y + event.clientY - graphDragStart.y }; if (graphData) graphRenderSvg(); });
+  window.addEventListener('mouseup', function() { graphDragging = false; graphCanvas.classList.remove('dragging'); });
+  const languageSelect = document.getElementById('language-select'); let preferredLanguage = new URLSearchParams(window.location.search).get('lang'); if (!translations[preferredLanguage]) { try { preferredLanguage = localStorage.getItem('vulnfounder.ui.language') || localStorage.getItem('openant.ui.language'); } catch (_) {} }
+  languageSelect.value = translations[preferredLanguage] ? preferredLanguage : 'zh-CN'; languageSelect.addEventListener('change', function() { applyLanguage(languageSelect.value); });
+  applyLanguage(languageSelect.value); setMode(defaultGraphArtifacts[artifactName] ? 'graph' : 'structured');
+})();
+</script>
+</body>
+</html>

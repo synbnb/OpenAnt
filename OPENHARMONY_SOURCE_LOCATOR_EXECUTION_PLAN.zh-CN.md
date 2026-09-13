@@ -8,7 +8,7 @@
 
 ## 1. 目标和结论
 
-当前 OpenAnt 的输入是一个已经存在的本地仓库路径，用户必须先知道目标服务属于哪个 OpenHarmony 代码仓库，再手动准备源码。本计划要增加一个前置环节，使用户可以直接输入：
+当前 VulnFounder 的输入是一个已经存在的本地仓库路径，用户必须先知道目标服务属于哪个 OpenHarmony 代码仓库，再手动准备源码。本计划要增加一个前置环节，使用户可以直接输入：
 
 ```text
 我想分析 /dev/unix/socket/paramservice
@@ -26,7 +26,7 @@
   → OpenHarmony Manifest 路径到仓库映射
   → 证据和版本校验
   → 用户确认或拒绝并补充理由
-  → GitCode 仓库拉取到 OpenAnt/source_code_base
+  → GitCode 仓库拉取到 VulnFounder/source_code_base
   → 拉取后再次验证
   → 生成交接信息，进入原有静态分析流程
 ```
@@ -54,7 +54,7 @@
 | 用户确认后才能 clone | 采纳 | 确认按钮是 Git 操作的硬门禁；拒绝时保留已有证据，只增加约束重新检索。 |
 | clone 后验证文件、符号和字符串 | 采纳 | 还要验证 commit/revision、remote 和目标路径均在允许范围内。 |
 | 新增 FastAPI backend 和 React feature | 不采纳 | 当前项目没有这套运行时；改为 Go 路由、Go SSE、嵌入式 HTML/JS 和 Python worker。 |
-| 使用 `workspace/openharmony/{revision}/` 作为 clone 目录 | 不直接采纳 | 当前 Web 只枚举 `source_code_base` 一级 Git 子目录；首版使用 `OpenAnt/source_code_base/<project>`，版本记录放在元数据中。 |
+| 使用 `workspace/openharmony/{revision}/` 作为 clone 目录 | 不直接采纳 | 当前 Web 只枚举 `source_code_base` 一级 Git 子目录；首版使用 `VulnFounder/source_code_base/<project>`，版本记录放在元数据中。 |
 | 默认示例版本 `OpenHarmony-6.1-LTS` | 不采纳为默认值 | 只能作为测试示例，生产 session 必须提供或配置 `target_revision`。 |
 | 没有 Manifest 时使用 bundle.json 猜仓库 | 限制使用 | 仅作为明确标记的 fallback；没有可靠仓库 URL 时进入 `NEEDS_REVIEW`，绝不自动 clone。 |
 
@@ -77,10 +77,10 @@
 
 当前入口位于：
 
-- `apps/openant-cli/internal/server/server.go`
-- `apps/openant-cli/ui/index.html`
-- `apps/openant-cli/ui/scan.html`
-- `apps/openant-cli/internal/server/claude_web.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/ui/index.html`
+- `apps/vulnfounder-cli/ui/scan.html`
+- `apps/vulnfounder-cli/internal/server/claude_web.go`
 
 当前 Go Web 服务已经具备可复用能力：
 
@@ -98,10 +98,10 @@
 
 当前 Python 入口位于：
 
-- `libs/openant-core/openant/cli.py`
-- `libs/openant-core/core/scanner.py`
-- `libs/openant-core/utilities/agentic_enhancer/`
-- `libs/openant-core/utilities/llm/`
+- `libs/vulnfounder-core/vulnfounder/cli.py`
+- `libs/vulnfounder-core/core/scanner.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/`
+- `libs/vulnfounder-core/utilities/llm/`
 
 现有能力可以复用：
 
@@ -118,14 +118,14 @@
 当前默认源码目录是：
 
 ```text
-OpenAnt/source_code_base/
+VulnFounder/source_code_base/
 ├── communication_ipc/
 ├── sensors_medical_sensor/
 ├── systemabilitymgr_samgr/
 └── ...
 ```
 
-`apps/openant-cli/internal/config/source_code_base.go` 会枚举该目录的一级独立 Git 仓库。首版定位器必须把仓库放在这里，不能把仓库藏在 `~/.openant/projects` 或只放在扫描任务临时目录。
+`apps/vulnfounder-cli/internal/config/source_code_base.go` 会枚举该目录的一级独立 Git 仓库。首版定位器必须把仓库放在这里，不能把仓库藏在 `~/.openant/projects` 或只放在扫描任务临时目录。
 
 `source_code_base/repositories.json` 是迁移时的静态清单，不应被当成定位结果的唯一来源。定位器成功拉取后，Web 可以通过动态目录发现仓库；如需展示 revision/origin，则读取定位器生成的元数据。
 
@@ -228,7 +228,7 @@ Go Web Server
   ├─ 会话创建、锁、取消、CSRF、SSE、页面和历史
   └─ 每次操作调用 Python source-locator worker
 
-Python OpenAnt Core
+Python VulnFounder Core
   ├─ 目标标准化
   ├─ OpenGrok adapter
   ├─ Evidence Graph 和评分
@@ -285,7 +285,7 @@ session 总时长：默认 20 分钟，可配置
 
 ### 7.1 项目级配置
 
-在现有 `config/openant/config.json` 中增加可选的 `source_locator` 节，不破坏没有该节的旧配置。建议形状如下：
+在现有 `config/vulnfounder/config.json` 中增加可选的 `source_locator` 节，不破坏没有该节的旧配置。建议形状如下：
 
 ```json
 {
@@ -693,7 +693,7 @@ resolution_method = bundle_fallback
 定位 session 与扫描任务分开保存：
 
 ```text
-~/.openant/webui/source-locator/<session_id>/
+~/.vulnfounder/webui/source-locator/<session_id>/（旧的 `~/.openant/` 目录仍可作为兼容回退）
 ├── session.json
 ├── events.jsonl
 ├── target.json
@@ -712,7 +712,7 @@ resolution_method = bundle_fallback
 实际源码仓库仍放在：
 
 ```text
-OpenAnt/source_code_base/<project_name>/
+VulnFounder/source_code_base/<project_name>/
 ```
 
 在 `source_code_base/.openant-locator/` 保存 origin、revision、session ID 和验证摘要等元数据；不依赖 `repositories.json` 才能使用仓库。
@@ -783,7 +783,7 @@ FAILED
 首版目标：
 
 ```text
-<OpenAnt 项目根>/source_code_base/<安全化 project_name>
+<VulnFounder 项目根>/source_code_base/<安全化 project_name>
 ```
 
 规则：
@@ -825,7 +825,7 @@ revision 必须来自 Manifest/配置并经过字符校验；不把用户文本�
 为了匹配当前代码组织，建议新增：
 
 ```text
-libs/openant-core/core/source_locator/
+libs/vulnfounder-core/core/source_locator/
 ├── __init__.py
 ├── models.py
 ├── config.py
@@ -850,7 +850,7 @@ libs/openant-core/core/source_locator/
 测试放在：
 
 ```text
-libs/openant-core/tests/source_locator/
+libs/vulnfounder-core/tests/source_locator/
 ├── fixtures/opengrok/
 ├── fixtures/manifests/
 ├── fixtures/repositories/
@@ -868,16 +868,16 @@ libs/openant-core/tests/source_locator/
 └── test_golden_sockets.py
 ```
 
-CLI 在 `libs/openant-core/openant/cli.py` 增加 `source-locator` 子命令族。所有命令遵守已有约定：JSON envelope 写 stdout，中文进度写 stderr，退出码遵守 0/1/2 语义，敏感信息不出现在任何输出。
+CLI 在 `libs/vulnfounder-core/vulnfounder/cli.py` 增加 `source-locator` 子命令族。所有命令遵守已有约定：JSON envelope 写 stdout，中文进度写 stderr，退出码遵守 0/1/2 语义，敏感信息不出现在任何输出。
 
 推荐子命令：
 
 ```text
-openant source-locator start --session-dir <dir> --message <text> [--revision <rev>]
-openant source-locator advance --session-dir <dir>
-openant source-locator approve --session-dir <dir>
-openant source-locator reject --session-dir <dir> --reason <text> [--role-hint <hint>]
-openant source-locator cancel --session-dir <dir>
+vulnfounder source-locator start --session-dir <dir> --message <text> [--revision <rev>]
+vulnfounder source-locator advance --session-dir <dir>
+vulnfounder source-locator approve --session-dir <dir>
+vulnfounder source-locator reject --session-dir <dir> --reason <text> [--role-hint <hint>]
+vulnfounder source-locator cancel --session-dir <dir>
 ```
 
 每次只推进有限状态，`approve` 只负责进入 Clone 阶段，不允许绕过 `VERIFY_EVIDENCE` 和用户确认状态。
@@ -887,15 +887,15 @@ openant source-locator cancel --session-dir <dir>
 建议新增或修改：
 
 ```text
-apps/openant-cli/internal/server/source_locator.go
-apps/openant-cli/internal/server/source_locator_events.go
-apps/openant-cli/internal/server/source_locator_test.go
-apps/openant-cli/internal/config/source_locator.go
-apps/openant-cli/internal/config/source_locator_test.go
-apps/openant-cli/internal/python/invoke_ctx.go（仅在需要复用桥接时扩展）
-apps/openant-cli/ui/source-locator.html
-apps/openant-cli/ui/index.html（增加入口和链接）
-apps/openant-cli/ui/embed.go（嵌入新模板）
+apps/vulnfounder-cli/internal/server/source_locator.go
+apps/vulnfounder-cli/internal/server/source_locator_events.go
+apps/vulnfounder-cli/internal/server/source_locator_test.go
+apps/vulnfounder-cli/internal/config/source_locator.go
+apps/vulnfounder-cli/internal/config/source_locator_test.go
+apps/vulnfounder-cli/internal/python/invoke_ctx.go（仅在需要复用桥接时扩展）
+apps/vulnfounder-cli/ui/source-locator.html
+apps/vulnfounder-cli/ui/index.html（增加入口和链接）
+apps/vulnfounder-cli/ui/embed.go（嵌入新模板）
 ```
 
 路由建议：
@@ -954,7 +954,7 @@ GET  /source-locator/sessions/{id}/artifact/{name}
 **测试**：
 
 ```bash
-cd libs/openant-core
+cd libs/vulnfounder-core
 pytest tests/source_locator/test_models.py -v
 ```
 
@@ -1219,8 +1219,8 @@ pytest tests/source_locator/test_repository_manager.py tests/source_locator/test
 **文件范围**：
 
 ```text
-修改 libs/openant-core/openant/cli.py
-新增/修改 apps/openant-cli/internal/python/invoke_ctx.go
+修改 libs/vulnfounder-core/vulnfounder/cli.py
+新增/修改 apps/vulnfounder-cli/internal/python/invoke_ctx.go
 新增 CLI 与桥接测试
 ```
 
@@ -1235,9 +1235,9 @@ pytest tests/source_locator/test_repository_manager.py tests/source_locator/test
 **测试**：
 
 ```bash
-cd libs/openant-core
+cd libs/vulnfounder-core
 pytest tests/source_locator -v
-cd ../../apps/openant-cli
+cd ../../apps/vulnfounder-cli
 go test ./internal/python ./internal/server
 ```
 
@@ -1252,8 +1252,8 @@ go test ./internal/python ./internal/server
 **文件范围**：
 
 ```text
-新增 apps/openant-cli/internal/server/source_locator.go
-新增 apps/openant-cli/internal/server/source_locator_events.go
+新增 apps/vulnfounder-cli/internal/server/source_locator.go
+新增 apps/vulnfounder-cli/internal/server/source_locator_events.go
 新增 Go API/security tests
 ```
 
@@ -1269,7 +1269,7 @@ go test ./internal/python ./internal/server
 **测试**：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 go test ./internal/server -run SourceLocator -v
 go test ./internal/server -run 'CSRF|SSRF|Lifecycle' -v
 ```
@@ -1285,9 +1285,9 @@ go test ./internal/server -run 'CSRF|SSRF|Lifecycle' -v
 **文件范围**：
 
 ```text
-新增 apps/openant-cli/ui/source-locator.html
-修改 apps/openant-cli/ui/index.html
-修改 apps/openant-cli/ui/embed.go
+新增 apps/vulnfounder-cli/ui/source-locator.html
+修改 apps/vulnfounder-cli/ui/index.html
+修改 apps/vulnfounder-cli/ui/embed.go
 ```
 
 **验收**：
@@ -1303,7 +1303,7 @@ go test ./internal/server -run 'CSRF|SSRF|Lifecycle' -v
 **测试**：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 go test ./internal/server -run 'SourceLocator|UI' -v
 ```
 
@@ -1322,7 +1322,7 @@ test_records/openharmony/OH-SL-11-web-ui-YYYY-MM-DD.md
 **文件范围**：
 
 ```text
-修改 apps/openant-cli/internal/server/server.go（仅接入 handoff）
+修改 apps/vulnfounder-cli/internal/server/server.go（仅接入 handoff）
 修改 pipeline/job 适配处
 新增 handoff integration tests
 ```
@@ -1338,7 +1338,7 @@ test_records/openharmony/OH-SL-11-web-ui-YYYY-MM-DD.md
 **测试**：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 go test ./internal/server -run 'Handoff|Repository|Pipeline' -v
 ```
 
@@ -1382,9 +1382,9 @@ go test ./internal/server -run 'Handoff|Repository|Pipeline' -v
 **测试**：
 
 ```bash
-cd libs/openant-core
+cd libs/vulnfounder-core
 pytest tests/source_locator -v
-cd ../../apps/openant-cli
+cd ../../apps/vulnfounder-cli
 go test ./...
 ```
 
@@ -1604,12 +1604,12 @@ SL-00 契约/夹具
 
 ```text
 源码仓库已准备好
-主分析仓库：OpenAnt/source_code_base/...
-附属通信仓库：OpenAnt/source_code_base/...
+主分析仓库：VulnFounder/source_code_base/...
+附属通信仓库：VulnFounder/source_code_base/...
 可以继续静态源码分析
 ```
 
-这套行为可以把专家计划的核心思想落到当前 OpenAnt 的真实代码结构中，同时保留人工确认、版本可追溯、跨仓处理和失败可恢复能力。
+这套行为可以把专家计划的核心思想落到当前 VulnFounder 的真实代码结构中，同时保留人工确认、版本可追溯、跨仓处理和失败可恢复能力。
 
 ## 25. 2026-08-29 实施核对
 

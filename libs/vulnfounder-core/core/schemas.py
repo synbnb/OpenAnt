@@ -1,0 +1,508 @@
+"""
+Output schemas for VulnFounder CLI.
+
+All CLI commands produce a JSON envelope on stdout:
+    { "status": "success|error", "data": {...}, "errors": [...] }
+
+Human-readable progress goes to stderr.
+
+Each pipeline step also writes a {step}.report.json file with
+standardized metadata (timing, cost, inputs, outputs).
+"""
+
+import os
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from typing import Any
+
+from utilities.file_io import write_json
+
+
+# ---------------------------------------------------------------------------
+# JSON Envelope
+# ---------------------------------------------------------------------------
+
+def success(data: dict) -> dict:
+    """Create a success response envelope."""
+    return {"status": "success", "data": data, "errors": []}
+
+
+def error(message: str, data: dict | None = None, errors: list[str] | None = None) -> dict:
+    """Create an error response envelope."""
+    return {
+        "status": "error",
+        "data": data or {},
+        "errors": errors or [message],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Result types for each command
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ParseResult:
+    """Result of `vulnfounder parse`."""
+    dataset_path: str
+    analyzer_output_path: str | None = None
+    units_count: int = 0
+    language: str = "unknown"
+    processing_level: str = "all"
+    # --- multi-language (additive) -------------------------------------
+    # `language` above stays scalar and means THE PRIMARY language: it is
+    # serialized into JSON the Go CLI unmarshals, so widening its type would be
+    # a cross-language breaking change. These fields sit beside it, following
+    # the same convention as skipped_steps / skipped_step_reasons.
+    languages: list = field(default_factory=list)
+    language_stats: dict = field(default_factory=dict)
+    per_language: dict = field(default_factory=dict)
+    parse_errors: list = field(default_factory=list)
+    # Languages detected but deliberately not scanned, with the reason.
+    # Carried on the result so a coverage gap is inspectable after the fact,
+    # not only visible in a stderr line that CI discards.
+    excluded_languages: dict = field(default_factory=dict)
+    # Which path supplied the application context: "threat_model" (a file in
+    # the scanned repo), "generated" (the built-in LLM generator), or "none".
+    # Recorded because a scan run under the WRONG security model looks
+    # identical to a correct one unless the source is stated.
+    context_source: str = "none"
+    # Optional, serialized platform-neutral profile.  Omitted from legacy JSON
+    # when absent so existing Go and downstream consumers keep the old shape.
+    platform_profile: dict | None = None
+    # Optional scope/coverage emitted by a platform-aware parser.  Kept
+    # separate from the profile because a parser may report coverage before a
+    # complete RepositoryProfile can be built.
+    platform_coverage: dict | None = None
+    # Explicit CLI platform mode. Omitted for the default ``auto`` mode so
+    # legacy parse JSON retains its previous shape.
+    platform_selection: str | None = None
+
+    @property
+    def degraded(self) -> bool:
+        """Whether any requested language failed to parse.
+
+        Derived rather than stored so it cannot disagree with parse_errors.
+        """
+        return bool(self.parse_errors)
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        if self.platform_profile is None:
+            d.pop("platform_profile")
+        if self.platform_coverage is None:
+            d.pop("platform_coverage")
+        if self.platform_selection is None:
+            d.pop("platform_selection")
+        # ``degraded`` is a @property, which asdict() omits — include it explicitly so
+        # the parse envelope carries it like ScanResult.to_dict does.
+        d["degraded"] = self.degraded
+        return d
+
+
+@dataclass
+class UsageInfo:
+    """Token usage and cost summary."""
+    total_calls: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    # Additive multi-currency accounting.  ``total_cost_usd`` remains for
+    # consumers of legacy artifacts; CNY and future currencies are never
+    # converted with an implicit exchange rate.
+    total_cost_cny: float = 0.0
+    costs_by_currency: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class AnalysisMetrics:
+    """Metrics from vulnerability analysis."""
+    total: int = 0
+    vulnerable: int = 0
+    bypassable: int = 0
+    inconclusive: int = 0
+    protected: int = 0
+    safe: int = 0
+    errors: int = 0
+    # Stage 2 metrics (optional)
+    verified: int = 0
+    stage2_agreed: int = 0
+    stage2_disagreed: int = 0
+    # PR #69 F5: findings whose Stage-2 verification could not COMPLETE
+    # (degenerate path or adapter error). These are preserved Stage-1
+    # potential vulnerabilities awaiting manual review — they must NOT be
+    # folded into ``safe``.
+    needs_review: int = 0
+    # Stage 2 may run an evidence-recovery pass for Stage-1 inconclusive
+    # findings.  These additive counters make promotions/resolutions visible
+    # without inferring them from ``safe`` or ``disagreed``.
+    stage2_inconclusive_input: int = 0
+    stage2_inconclusive_promoted: int = 0
+    stage2_inconclusive_resolved: int = 0
+    stage2_inconclusive_remaining: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class AnalyzeResult:
+    """Result of `vulnfounder analyze`."""
+    results_path: str
+    metrics: AnalysisMetrics = field(default_factory=AnalysisMetrics)
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+    def to_dict(self) -> dict:
+        return {
+            "results_path": self.results_path,
+            "metrics": self.metrics.to_dict(),
+            "usage": self.usage.to_dict(),
+        }
+
+
+@dataclass
+class ReportResult:
+    """Result of `vulnfounder report`."""
+    output_path: str
+    format: str = "html"
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+    def to_dict(self) -> dict:
+        return {
+            "output_path": self.output_path,
+            "format": self.format,
+            "usage": self.usage.to_dict(),
+        }
+
+
+@dataclass
+class ScanResult:
+    """Result of `vulnfounder scan` (all-in-one)."""
+    output_dir: str
+    dataset_path: str | None = None
+    enhanced_dataset_path: str | None = None
+    analyzer_output_path: str | None = None
+    app_context_path: str | None = None
+    results_path: str | None = None
+    verified_results_path: str | None = None
+    pipeline_output_path: str | None = None
+    report_path: str | None = None
+    summary_path: str | None = None
+    dynamic_test_path: str | None = None
+    # Optional OpenHarmony indirect-call review artifact.  The review is
+    # advisory in the first integration stage and never mutates the graph.
+    llm_call_graph_recovery_path: str | None = None
+    # Optional OpenHarmony candidate-edge review artifact.  This is a
+    # separate, opt-in advisory pass for residual sites with deterministic
+    # candidate targets and likewise never mutates the graph.
+    llm_call_graph_candidate_review_path: str | None = None
+    # Optional OpenHarmony semantic overlay produced from validated LLM
+    # recovery decisions. The overlay is separate from the native call graph;
+    # a later reachability stage may consume it explicitly.
+    llm_call_graph_overlay_path: str | None = None
+    # Optional OpenHarmony entry-driven iterative recovery artifact.  It
+    # contains per-round review/projection records and is kept separate from
+    # the legacy one-shot recovery report for backwards compatibility.
+    llm_call_graph_rounds_path: str | None = None
+    # Optional fixed-input four-way reachability ablation produced alongside
+    # the semantic overlay. It compares native/recovered graphs with and
+    # without medium candidate propagation; it never changes scan semantics.
+    llm_call_graph_ablation_path: str | None = None
+    # Derived audited graph views consumed by reachability and enhancement.
+    # The native call_graph.json files remain immutable.
+    effective_call_graph_paths: list[str] = field(default_factory=list)
+    # P1 diagnostic aggregation of unresolved call sites. This report counts
+    # one site once even when the parser produced many candidate targets.
+    call_graph_gap_report_path: str | None = None
+    # P3 deterministic task queue derived from the gap report. Tasks are
+    # grouped by call site and never promote candidate edges by themselves.
+    call_graph_gap_tasks_path: str | None = None
+    # P3 feedback facts emitted after enhancement/Stage 1/Stage 2. These are
+    # auditable observations and candidate evidence; they never mutate the
+    # effective graph implicitly.
+    analysis_feedback_path: str | None = None
+    # Optional Clang batch overlays, one per language graph directory.
+    clang_semantic_overlay_paths: list[str] = field(default_factory=list)
+    # Correlates a Clang batch with the immutable pre-Clang unresolved-site
+    # snapshot. This is diagnostic only and never changes graph admission.
+    clang_p1_acceptance_report_path: str | None = None
+    # Per-language definition-loading plans/results produced by the Clang
+    # semantic batch.
+    clang_definition_loading_report_paths: list[str] = field(default_factory=list)
+    # Optional deterministic OpenHarmony selector/value evidence artifact.
+    # It is source-backed metadata for later dynamic-test payloads and does
+    # not mutate the call graph.
+    openharmony_dispatch_code_evidence_path: str | None = None
+    units_count: int = 0
+    language: str = "unknown"
+    metrics: AnalysisMetrics = field(default_factory=AnalysisMetrics)
+    usage: UsageInfo = field(default_factory=UsageInfo)
+    step_reports: list = field(default_factory=list)
+    skipped_steps: list = field(default_factory=list)
+    # Disambiguated skip cause per skipped step. ADDITIVE / non-breaking:
+    # `skipped_steps` stays a flat bare list of step names (telemetry consumers
+    # read it). This map records WHY each step was skipped (e.g. 'verify' ->
+    # 'no_candidates' for an auto-skip vs 'not_requested' for an opt-out).
+    skipped_step_reasons: dict = field(default_factory=dict)
+
+    # --- multi-language (additive) -------------------------------------
+    # `language` above stays scalar and means THE PRIMARY language: it is
+    # serialized into JSON the Go CLI unmarshals, so widening its type would be
+    # a cross-language breaking change. These fields sit beside it, following
+    # the same convention as skipped_steps / skipped_step_reasons.
+    languages: list = field(default_factory=list)
+    language_stats: dict = field(default_factory=dict)
+    per_language: dict = field(default_factory=dict)
+    parse_errors: list = field(default_factory=list)
+    # Languages detected but deliberately not scanned, with the reason.
+    # Carried on the result so a coverage gap is inspectable after the fact,
+    # not only visible in a stderr line that CI discards.
+    excluded_languages: dict = field(default_factory=dict)
+    # Which path supplied the application context: "threat_model" (a file in
+    # the scanned repo), "generated" (the built-in LLM generator), or "none".
+    # Recorded because a scan run under the WRONG security model looks
+    # identical to a correct one unless the source is stated.
+    context_source: str = "none"
+    # Provenance for a repo-supplied threat model (context_source ==
+    # "threat_model"). sha256 is over the raw file bytes so a scan can be tied
+    # to the exact file that shaped it; None (never the empty-string hash) when
+    # no threat model was loaded. permissive_warnings carries the previously
+    # discarded warn_permissive_threat_model output so an over-permissive model
+    # is visible in the artifact, not only on stderr.
+    threat_model_sha256: str | None = None
+    threat_model_warnings: list = field(default_factory=list)
+    # Provenance for the effective application security context.  This is
+    # additive: legacy consumers can continue using context_source/sha while
+    # OpenHarmony scans disclose the immutable platform baseline and merge
+    # conflicts explicitly.
+    application_context_provenance: dict = field(default_factory=dict)
+    # Optional platform contract fields.  They are intentionally omitted from
+    # generic scan JSON until a platform adapter explicitly supplies them.
+    platform_profile: dict | None = None
+    platform_coverage: dict | None = None
+    # Requested platform mode. This is distinct from platform_profile, which
+    # appears only after a platform adapter has built a real profile.
+    platform_selection: str | None = None
+    # Optional user-confirmed socket-guided scan scope.  The native repository
+    # scan remains the baseline when this is absent.
+    scope_manifest_path: str | None = None
+    scope_root: str | None = None
+
+    @property
+    def degraded(self) -> bool:
+        """Whether any requested language failed to parse.
+
+        Derived rather than stored so it cannot disagree with parse_errors.
+        """
+        return bool(self.parse_errors)
+
+    def to_dict(self) -> dict:
+        result = {
+            "output_dir": self.output_dir,
+            "dataset_path": self.dataset_path,
+            "enhanced_dataset_path": self.enhanced_dataset_path,
+            "analyzer_output_path": self.analyzer_output_path,
+            "app_context_path": self.app_context_path,
+            "results_path": self.results_path,
+            "verified_results_path": self.verified_results_path,
+            "pipeline_output_path": self.pipeline_output_path,
+            "report_path": self.report_path,
+            "summary_path": self.summary_path,
+            "dynamic_test_path": self.dynamic_test_path,
+            "llm_call_graph_recovery_path": self.llm_call_graph_recovery_path,
+            "llm_call_graph_candidate_review_path": (
+                self.llm_call_graph_candidate_review_path
+            ),
+            "llm_call_graph_overlay_path": self.llm_call_graph_overlay_path,
+            "llm_call_graph_rounds_path": self.llm_call_graph_rounds_path,
+            "llm_call_graph_ablation_path": self.llm_call_graph_ablation_path,
+            "effective_call_graph_paths": self.effective_call_graph_paths,
+            "call_graph_gap_report_path": self.call_graph_gap_report_path,
+            "call_graph_gap_tasks_path": self.call_graph_gap_tasks_path,
+            "analysis_feedback_path": self.analysis_feedback_path,
+            "clang_semantic_overlay_paths": self.clang_semantic_overlay_paths,
+            "clang_p1_acceptance_report_path": self.clang_p1_acceptance_report_path,
+            "clang_definition_loading_report_paths": self.clang_definition_loading_report_paths,
+            "openharmony_dispatch_code_evidence_path": (
+                self.openharmony_dispatch_code_evidence_path
+            ),
+            "units_count": self.units_count,
+            "language": self.language,
+            "metrics": self.metrics.to_dict(),
+            "usage": self.usage.to_dict(),
+            "step_reports": self.step_reports,
+            "skipped_steps": self.skipped_steps,
+            "skipped_step_reasons": self.skipped_step_reasons,
+            "languages": self.languages,
+            "language_stats": self.language_stats,
+            "per_language": self.per_language,
+            "parse_errors": self.parse_errors,
+            "excluded_languages": self.excluded_languages,
+            "context_source": self.context_source,
+            "threat_model_sha256": self.threat_model_sha256,
+            "threat_model_warnings": self.threat_model_warnings,
+            "degraded": self.degraded,
+        }
+        if self.platform_profile is not None:
+            result["platform_profile"] = self.platform_profile
+        if self.platform_coverage is not None:
+            result["platform_coverage"] = self.platform_coverage
+        if self.platform_selection is not None:
+            result["platform_selection"] = self.platform_selection
+        if self.scope_manifest_path is not None:
+            result["scope_manifest_path"] = self.scope_manifest_path
+        if self.scope_root is not None:
+            result["scope_root"] = self.scope_root
+        if self.application_context_provenance:
+            result["application_context_provenance"] = self.application_context_provenance
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Enhance result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EnhanceResult:
+    """Result of `vulnfounder enhance`."""
+    enhanced_dataset_path: str
+    units_enhanced: int = 0
+    error_count: int = 0
+    error_summary: dict = field(default_factory=dict)
+    classifications: dict = field(default_factory=dict)
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+    def to_dict(self) -> dict:
+        result = {
+            "enhanced_dataset_path": self.enhanced_dataset_path,
+            "units_enhanced": self.units_enhanced,
+            "error_count": self.error_count,
+            "classifications": self.classifications,
+            "usage": self.usage.to_dict(),
+        }
+        if self.error_summary:
+            result["error_summary"] = self.error_summary
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Verify result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VerifyResult:
+    """Result of `vulnfounder verify`."""
+    verified_results_path: str
+    findings_input: int = 0
+    findings_verified: int = 0
+    agreed: int = 0
+    disagreed: int = 0
+    confirmed_vulnerabilities: int = 0
+    # PR #69 F5: findings whose Stage-2 verification could not COMPLETE
+    # (degenerate path or adapter error). Counted separately so the scanner
+    # never folds them into ``safe``.
+    needs_review: int = 0
+    error_count: int = 0
+    # Additive counters for Stage-2 evidence recovery on Stage-1
+    # inconclusive findings.
+    inconclusive_input: int = 0
+    inconclusive_promoted: int = 0
+    inconclusive_resolved: int = 0
+    inconclusive_remaining: int = 0
+    # Final verdict counts are computed from the merged verification output.
+    # The scanner uses them to avoid double-counting inconclusive findings
+    # that Stage 2 resolves to safe/protected or promotes to vulnerable.
+    final_counts: dict = field(default_factory=dict)
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+    def to_dict(self) -> dict:
+        return {
+            "verified_results_path": self.verified_results_path,
+            "findings_input": self.findings_input,
+            "findings_verified": self.findings_verified,
+            "agreed": self.agreed,
+            "disagreed": self.disagreed,
+            "confirmed_vulnerabilities": self.confirmed_vulnerabilities,
+            "needs_review": self.needs_review,
+            "error_count": self.error_count,
+            "inconclusive_input": self.inconclusive_input,
+            "inconclusive_promoted": self.inconclusive_promoted,
+            "inconclusive_resolved": self.inconclusive_resolved,
+            "inconclusive_remaining": self.inconclusive_remaining,
+            "final_counts": self.final_counts,
+            "usage": self.usage.to_dict(),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Dynamic test result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DynamicTestStepResult:
+    """Result of `vulnfounder dynamic-test`."""
+    results_json_path: str
+    results_md_path: str | None = None
+    mode: str = "docker"
+    task_workspace: str | None = None
+    public_tool_library: str | None = None
+    task_manifest_path: str | None = None
+    candidate_manifest: str | None = None
+    launch_command: str | None = None
+    findings_tested: int = 0
+    confirmed: int = 0
+    not_reproduced: int = 0
+    blocked: int = 0
+    inconclusive: int = 0
+    errors: int = 0
+    usage: UsageInfo = field(default_factory=UsageInfo)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Step Report — written as {step}.report.json by every pipeline step
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StepReport:
+    """Standardized report written by each pipeline step.
+
+    Written as ``{step}.report.json`` in the output directory.
+    """
+    step: str
+    status: str = "success"
+    timestamp: str = ""
+    duration_seconds: float = 0.0
+    cost_usd: float = 0.0
+    cost_cny: float = 0.0
+    cost_amount: float = 0.0
+    cost_currency: str | None = None
+    costs_by_currency: dict = field(default_factory=dict)
+    token_usage: dict = field(default_factory=lambda: {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    })
+    summary: dict = field(default_factory=dict)
+    inputs: dict = field(default_factory=dict)
+    outputs: dict = field(default_factory=dict)
+    errors: list = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def write(self, output_dir: str) -> str:
+        """Write ``{step}.report.json`` to *output_dir*. Returns the path."""
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, f"{self.step}.report.json")
+        write_json(path, self.to_dict())
+        return path

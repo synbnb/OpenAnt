@@ -1,0 +1,855 @@
+/*
+ * VulnFounder shared visual language.
+ *
+ * Page-specific styles keep responsibility for dense data layouts. This file
+ * owns the common canvas, typography, controls, surfaces, status colors and
+ * top-level navigation so every workbench feels like one product.
+ */
+:root {
+  color-scheme: light;
+  --oa-canvas: #eef3f5;
+  --oa-surface: #ffffff;
+  --oa-surface-soft: #f6f9fa;
+  --oa-surface-muted: #e9eff2;
+  --oa-ink: #17252e;
+  --oa-ink-soft: #526671;
+  --oa-ink-faint: #72838c;
+  --oa-line: #d2dde2;
+  --oa-line-strong: #b6c6cd;
+  --oa-accent: #086579;
+  --oa-accent-hover: #064f60;
+  --oa-accent-soft: #e0f0f3;
+  --oa-success: #18704a;
+  --oa-success-soft: #e5f4eb;
+  --oa-warning: #8a5a0a;
+  --oa-warning-soft: #fff2d1;
+  --oa-danger: #b42b37;
+  --oa-danger-soft: #fcebed;
+  --oa-header: #152831;
+  --oa-header-hover: #203b46;
+  --oa-code: #101c22;
+  --oa-code-ink: #dbe9ed;
+  --oa-radius-sm: 0.5rem;
+  --oa-radius-md: 0.75rem;
+  --oa-shadow: 0 0.75rem 2rem rgba(20, 44, 55, 0.07);
+  --oa-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --oa-sans: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  /* Compatibility aliases consumed by existing page-local layouts. */
+  --canvas: var(--oa-canvas);
+  --bg: var(--oa-canvas);
+  --surface: var(--oa-surface);
+  --surface-strong: var(--oa-surface);
+  --surface-soft: var(--oa-surface-soft);
+  --surface-muted: var(--oa-surface-muted);
+  --panel: var(--oa-surface);
+  --ink: var(--oa-ink);
+  --text: var(--oa-ink);
+  --ink-soft: var(--oa-ink-soft);
+  --ink-faint: var(--oa-ink-faint);
+  --muted: var(--oa-ink-soft);
+  --line: var(--oa-line);
+  --line-strong: var(--oa-line-strong);
+  --accent: var(--oa-accent);
+  --accent-dark: var(--oa-accent-hover);
+  --accent-hover: var(--oa-accent-hover);
+  --accent-soft: var(--oa-accent-soft);
+  --blue: var(--oa-accent);
+  --ok: var(--oa-success);
+  --green: var(--oa-success);
+  --success: var(--oa-success);
+  --success-soft: var(--oa-success-soft);
+  --warn: var(--oa-warning);
+  --yellow: var(--oa-warning);
+  --warning: var(--oa-warning);
+  --warning-soft: var(--oa-warning-soft);
+  --bad: var(--oa-danger);
+  --red: var(--oa-danger);
+  --danger: var(--oa-danger);
+  --danger-soft: var(--oa-danger-soft);
+  --shadow: var(--oa-shadow);
+  --mono: var(--oa-mono);
+  --sans: var(--oa-sans);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 20rem;
+  background: var(--oa-canvas);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--oa-canvas);
+  color: var(--oa-ink);
+  font-family: var(--oa-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #b9dfe5;
+  color: #102d35;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 0.1875rem solid rgba(8, 101, 121, 0.28);
+  outline-offset: 0.125rem;
+}
+
+a {
+  color: var(--oa-accent);
+  text-underline-offset: 0.16em;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--oa-mono);
+}
+
+/* Shared top-level shell. */
+.topbar,
+.top {
+  min-height: 4.25rem;
+  margin: 0;
+  padding: 0.75rem clamp(1rem, 4vw, 3.25rem);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--oa-header);
+  color: #f5fafb;
+  border-bottom: 0.0625rem solid #29414b;
+  box-shadow: none;
+}
+
+.brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.brand-mark,
+.mark {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 0.625rem;
+  background: #d6edf1;
+  color: #0b5363;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+
+.brand h1,
+.brand-copy h1,
+.scan-heading h1,
+.top > h1 {
+  margin: 0;
+  color: #f5fafb;
+  font-size: 1rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.brand p,
+.brand-copy p,
+.scan-heading p {
+  margin: 0.125rem 0 0;
+  color: #adc0c8;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.top-actions,
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+vulnfounder-workspace-nav {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.workspace-menu {
+  position: relative;
+}
+
+.workspace-menu > summary {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border: 0.0625rem solid #49636e;
+  border-radius: var(--oa-radius-sm);
+  background: transparent;
+  color: #dce9ed;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.workspace-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-menu > summary::after {
+  content: "⌄";
+  color: #9db4bd;
+  font-size: 0.875rem;
+  line-height: 1;
+  transition: transform 140ms ease;
+}
+
+.workspace-menu[open] > summary,
+.workspace-menu > summary:hover {
+  border-color: #68848f;
+  background: var(--oa-header-hover);
+  color: #ffffff;
+}
+
+.workspace-menu[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.workspace-menu-panel {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: 15rem;
+  padding: 0.375rem;
+  border: 0.0625rem solid var(--oa-line);
+  border-radius: var(--oa-radius-md);
+  background: var(--oa-surface);
+  box-shadow: 0 1rem 2.5rem rgba(15, 37, 47, 0.2);
+}
+
+.top .workspace-menu-panel .workspace-menu-link,
+.topbar .workspace-menu-panel .workspace-menu-link {
+  min-height: 2.5rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--oa-ink-soft);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1.3;
+  text-decoration: none;
+  white-space: normal;
+}
+
+.top .workspace-menu-panel .workspace-menu-link:hover,
+.topbar .workspace-menu-panel .workspace-menu-link:hover {
+  background: var(--oa-surface-soft);
+  color: var(--oa-accent-hover);
+}
+
+.top .workspace-menu-panel .workspace-menu-link[aria-current="page"],
+.topbar .workspace-menu-panel .workspace-menu-link[aria-current="page"] {
+  background: var(--oa-accent-soft);
+  color: var(--oa-accent-hover);
+}
+
+.workspace-menu-current {
+  flex: 0 0 auto;
+  color: var(--oa-accent);
+  font-size: 0.6875rem;
+  font-weight: 750;
+}
+
+.top-actions a,
+.top > a,
+.home-link,
+.locator-link,
+.close-button {
+  min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.375rem 0.625rem;
+  border: 0.0625rem solid #49636e;
+  border-radius: var(--oa-radius-sm);
+  background: transparent;
+  color: #dce9ed;
+  text-decoration: none;
+  font-size: 0.75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.top-actions a:hover,
+.top > a:hover,
+.home-link:hover,
+.locator-link:hover,
+.close-button:hover {
+  border-color: #68848f;
+  background: var(--oa-header-hover);
+  color: #ffffff;
+}
+
+/* Keep spacing on the action container. A few legacy pages assigned auto
+ * margins to every direct header link, which made multi-link headers uneven. */
+.top > a,
+.top-actions a,
+.topbar-actions a {
+  margin-left: 0;
+}
+
+.top > .brand + a {
+  margin-left: auto;
+}
+
+.top .muted,
+.topbar .muted,
+.top-actions label,
+.topbar-actions label,
+.language-field label {
+  color: #adc0c8;
+}
+
+.language-field select,
+.top-actions select,
+.topbar-actions select {
+  width: auto;
+  min-width: 7rem;
+  min-height: 2rem;
+  border: 0.0625rem solid #49636e;
+  border-radius: var(--oa-radius-sm);
+  background: #1d333d;
+  color: #f5fafb;
+}
+
+/* Common surfaces and controls. */
+.panel,
+.section-panel,
+.info-card {
+  border-color: var(--oa-line);
+  background: var(--oa-surface);
+  box-shadow: var(--oa-shadow);
+}
+
+.panel,
+.section-panel,
+.info-card,
+.modal-card,
+dialog {
+  border-radius: var(--oa-radius-md);
+}
+
+.panel-head,
+.panel-header,
+.section-head,
+.stage-head,
+.card-head,
+.dialog-head,
+.modal-head {
+  border-color: var(--oa-line);
+  background: var(--oa-surface);
+}
+
+.panel-head p,
+.panel-header p,
+.section-head span,
+.stage-head p,
+.hint,
+.muted,
+.empty {
+  color: var(--oa-ink-soft);
+}
+
+.btn,
+.text-btn,
+.link-btn,
+.action,
+.icon-btn,
+button.secondary {
+  min-height: 2.25rem;
+  border: 0.0625rem solid var(--oa-line-strong);
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-surface-soft);
+  color: #314651;
+  font-weight: 700;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, transform 100ms ease;
+}
+
+.btn:hover,
+.text-btn:hover,
+.link-btn:hover,
+.action:hover,
+.icon-btn:hover,
+button.secondary:hover {
+  border-color: #91b5be;
+  background: var(--oa-accent-soft);
+  color: var(--oa-accent-hover);
+}
+
+.btn:active,
+.text-btn:active,
+.link-btn:active,
+.action:active,
+.icon-btn:active,
+button.secondary:active {
+  transform: translateY(0.0625rem);
+}
+
+.btn.primary,
+.btn-primary,
+.primary,
+.btn-primary:link {
+  border-color: var(--oa-accent);
+  background: var(--oa-accent);
+  color: #f7fbfc;
+}
+
+.btn.primary:hover,
+.btn-primary:hover,
+.primary:hover {
+  border-color: var(--oa-accent-hover);
+  background: var(--oa-accent-hover);
+  color: #ffffff;
+}
+
+.btn.danger,
+.btn-danger,
+.danger,
+.text-btn.danger {
+  border-color: #e2aeb4;
+  background: #fffafa;
+  color: var(--oa-danger);
+}
+
+.btn.danger:hover,
+.btn-danger:hover,
+.danger:hover,
+.text-btn.danger:hover {
+  border-color: #d78e96;
+  background: var(--oa-danger-soft);
+  color: #8f1f29;
+}
+
+button:disabled,
+.btn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  transform: none;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  border-color: var(--oa-line-strong);
+  border-radius: var(--oa-radius-sm);
+  background: var(--oa-surface);
+  color: var(--oa-ink);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--oa-accent);
+  box-shadow: 0 0 0 0.1875rem rgba(8, 101, 121, 0.12);
+  outline: none;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--oa-accent);
+}
+
+.badge,
+.stage-badge,
+.state,
+.risk,
+.agent-state {
+  border: 0.0625rem solid #bfd6dc;
+  background: var(--oa-accent-soft);
+  color: #245967;
+}
+
+.badge.running,
+.badge.in_progress,
+.badge.pending,
+.stage-badge.running,
+.state.running {
+  border-color: #ead49d;
+  background: var(--oa-warning-soft);
+  color: var(--oa-warning);
+}
+
+.badge.completed,
+.badge.complete,
+.stage-badge.done,
+.state.done,
+.risk.low,
+.agent-state.done {
+  border-color: #b8d8c5;
+  background: var(--oa-success-soft);
+  color: var(--oa-success);
+}
+
+.badge.blocked,
+.badge.error,
+.badge.failed,
+.stage-badge.failed,
+.state.failed,
+.agent-state.failed {
+  border-color: #edbcc1;
+  background: var(--oa-danger-soft);
+  color: var(--oa-danger);
+}
+
+.empty {
+  border-color: var(--oa-line-strong);
+  background: var(--oa-surface-soft);
+}
+
+/* Device Socket inventory used to be a separate dark theme. */
+body.device-assets-page {
+  background: var(--oa-canvas);
+  color: var(--oa-ink);
+}
+
+.device-assets-page > main {
+  width: min(90rem, 100%);
+  margin: 0 auto;
+  padding: 1.5rem clamp(1rem, 4vw, 3.25rem) 3.5rem;
+}
+
+.device-assets-page #asset-history {
+  scroll-margin-top: 1rem;
+}
+
+.device-assets-page .panel {
+  margin: 1rem 0;
+  padding: 1.25rem;
+  border: 0.0625rem solid var(--oa-line);
+  background: var(--oa-surface);
+  box-shadow: var(--oa-shadow);
+}
+
+.device-assets-page h1,
+.device-assets-page h2,
+.device-assets-page h3,
+.device-assets-page h4,
+.device-assets-page strong,
+.device-assets-page .task-title,
+.device-assets-page .trace-name,
+.device-assets-page .asset-value {
+  color: var(--oa-ink);
+}
+
+.device-assets-page p,
+.device-assets-page .status,
+.device-assets-page .task-finding-summary {
+  color: var(--oa-ink-soft);
+}
+
+.device-assets-page .top h1 {
+  color: #f5fafb;
+}
+
+.device-assets-page .top p,
+.device-assets-page .top label,
+.device-assets-page .top .muted {
+  color: #adc0c8;
+}
+
+.device-assets-page .field input,
+.device-assets-page .field select,
+.device-assets-page .field textarea,
+.device-assets-page select,
+.device-assets-page .socket-record-toolbar input {
+  border-color: var(--oa-line-strong);
+  background: var(--oa-surface);
+  color: var(--oa-ink);
+}
+
+.device-assets-page .hint {
+  border-left-color: var(--oa-accent);
+  background: var(--oa-accent-soft);
+  color: #355e69;
+}
+
+.device-assets-page .stat,
+.device-assets-page .task-node,
+.device-assets-page .model-turn,
+.device-assets-page .trace-event,
+.device-assets-page .evidence-item,
+.device-assets-page .command-item,
+.device-assets-page .socket-record,
+.device-assets-page .task-finding,
+.device-assets-page .task-result-goal {
+  border-color: var(--oa-line);
+  background: var(--oa-surface-soft);
+}
+
+.device-assets-page .task-progress {
+  border-color: var(--oa-line);
+  background: var(--oa-surface-muted);
+}
+
+.device-assets-page .task-progress-bar {
+  background: var(--oa-accent);
+}
+
+.device-assets-page .key,
+.device-assets-page .label-chip,
+.device-assets-page .trace-seq,
+.device-assets-page .trace-time,
+.device-assets-page .model-turn-meta,
+.device-assets-page .model-block-title {
+  color: var(--oa-ink-faint);
+}
+
+.device-assets-page .task-meta code {
+  color: var(--oa-accent);
+}
+
+.device-assets-page .observed-list code {
+  border-color: #c4d9de;
+  background: #eef7f8;
+  color: #245967;
+}
+
+.device-assets-page .link-list a,
+.device-assets-page .socket-record details summary {
+  color: var(--oa-accent);
+  border-color: #80aeba;
+}
+
+.device-assets-page .model-turn-text,
+.device-assets-page .trace-json,
+.device-assets-page .log-box,
+.device-assets-page pre {
+  border-color: #29424c;
+  background: var(--oa-code);
+  color: var(--oa-code-ink);
+}
+
+/* Guided scope page and generated Markdown readers. */
+body.socket-scope-page > main {
+  width: min(74rem, 100%);
+  margin: 0 auto;
+  padding: 1.75rem clamp(1rem, 4vw, 3.25rem) 3.5rem;
+}
+
+.socket-scope-page .panel {
+  padding: 1.375rem;
+  border: 0.0625rem solid var(--oa-line);
+  background: var(--oa-surface);
+  box-shadow: var(--oa-shadow);
+}
+
+.socket-scope-page .candidate {
+  border-color: var(--oa-line);
+  background: var(--oa-surface-soft);
+}
+
+.socket-scope-page .candidate.selected {
+  border-color: #87b6c1;
+  background: #f0f8f9;
+}
+
+.socket-scope-page .predicate {
+  background: var(--oa-surface-muted);
+  color: var(--oa-ink-soft);
+}
+
+.socket-scope-page .predicate.yes,
+.socket-scope-page .badge.high {
+  background: var(--oa-success-soft);
+  color: var(--oa-success);
+}
+
+.report-reader-page > header {
+  min-height: 4rem;
+  padding: 0.75rem clamp(1rem, 4vw, 3.25rem);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--oa-header);
+  color: #f5fafb;
+}
+
+.report-reader-page > header a {
+  color: #c8d9de;
+  text-decoration: none;
+  font-size: 0.8rem;
+}
+
+.report-reader-page > header a:hover {
+  color: #ffffff;
+}
+
+.report-reader-page > header .sep {
+  color: #718c96;
+}
+
+.report-reader-page > header .title {
+  min-width: 0;
+  overflow: hidden;
+  color: #f5fafb;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-reader-page .main {
+  width: min(62rem, 100%);
+  max-width: none;
+  margin: 2rem auto;
+  padding: 0 clamp(1rem, 4vw, 2rem) 3rem;
+}
+
+.report-reader-page .content {
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  border: 0.0625rem solid var(--oa-line);
+  background: var(--oa-surface);
+  box-shadow: var(--oa-shadow);
+  line-height: 1.7;
+}
+
+.report-reader-page .content h1 {
+  color: var(--oa-ink);
+  letter-spacing: -0.03em;
+}
+
+.report-reader-page .content h2 {
+  border-color: var(--oa-line);
+  color: #244e5a;
+}
+
+.report-reader-page .content h3,
+.report-reader-page .content h4,
+.report-reader-page .content p {
+  color: var(--oa-ink);
+}
+
+.report-reader-page .content code {
+  background: var(--oa-surface-muted);
+  color: #294852;
+}
+
+.report-reader-page .content pre {
+  border: 0.0625rem solid #29424c;
+  background: var(--oa-code);
+  color: var(--oa-code-ink);
+}
+
+.report-reader-page .content blockquote {
+  border-color: #83b1bc;
+  color: var(--oa-ink-soft);
+}
+
+.report-reader-page .content th,
+.report-reader-page .content td {
+  border-color: var(--oa-line);
+}
+
+.report-reader-page .content th {
+  background: var(--oa-surface-muted);
+  color: #294852;
+}
+
+@media (max-width: 48rem) {
+  .topbar,
+  .top {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .top-actions,
+  .topbar-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .workspace-menu-panel {
+    right: auto;
+    left: 0;
+  }
+
+  .brand p,
+  .brand-copy p,
+  .scan-heading p {
+    display: none;
+  }
+
+  .device-assets-page .grid-three {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .report-reader-page > header {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 30rem) {
+  .device-assets-page .grid-three,
+  .device-assets-page .asset-grid,
+  .device-assets-page .socket-record-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-reader-page .content {
+    padding: 1.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,90 @@
+# VulnFounder 源码定位、暴露面识别与静态扫描整合预想图
+
+这是一张后续整合的预想流程图，不改变当前独立 Web 阶段的事实边界。预想流程先用设备端事实确认暴露面，再把端点、进程和配置线索交给源码定位；用户确认仓库和版本后，统一进入静态漏洞扫描。
+
+![源码定位、暴露面识别与静态扫描整合预想图](vulnfounder-integrated-future-pipeline-flow.png)
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "16px", "primaryTextColor": "#17202A"}, "flowchart": {"htmlLabels": true, "curve": "linear", "nodeSpacing": 36, "rankSpacing": 52}}}%%
+flowchart LR
+    start(["用户输入服务名、Socket 或仓库"])
+    normalize["统一目标标准化<br/>生成目标 ID、源码线索和设备线索"]
+    start --> normalize
+
+    subgraph exposure["① 设备暴露面识别（预想串联）"]
+        direction TB
+        deviceSelect["选择开发板"] --> hdcProbe["受限只读 HDC 探测"]
+        hdcProbe --> deviceFacts["端点、进程、权限、SELinux、配置"]
+        deviceFacts --> deviceState{"运行中？"}
+        deviceState -->|"是或未找到"| deviceResult["结构化暴露面结果"]
+        deviceState -->|"配置存在但未运行"| deviceConfirm{"用户同意临时启动？"}
+        deviceConfirm -->|"同意"| deviceRecheck["复核 0 → 1"]
+        deviceRecheck -->|"通过"| deviceStart["固定启动参数并重新侦查"]
+        deviceStart --> hdcProbe
+        deviceRecheck -->|"失败"| deviceResult
+        deviceConfirm -->|"拒绝"| deviceResult
+    end
+
+    subgraph locator["② OpenHarmony 源码定位"]
+        direction TB
+        locatorSeed["端点、进程、配置和路径<br/>作为检索线索"] --> grok["OpenGrok 搜索与读文件"]
+        grok --> sourceEvidence["服务端/客户端证据<br/>宏、注册、调用和配置"]
+        sourceEvidence --> repoMap["Manifest 映射仓库"]
+        repoMap --> repoConfirm{"用户确认仓库与版本？"}
+        repoConfirm -->|"拒绝或补充约束"| grok
+        repoConfirm -->|"确认"| clone["Git 拉取与版本校验"]
+        clone --> handoff["源码交接"]
+    end
+
+    subgraph scan["③ 普通静态扫描与验证"]
+        direction TB
+        handoff --> scanInit["初始化扫描"]
+        scanInit --> parse["平台检测与 Tree-sitter 解析"]
+        parse --> callGraph["函数索引与原生调用图"]
+        callGraph --> reachable["all 或入口驱动 reachable"]
+        reachable --> semantic["可选语义阶段<br/>可达性、调用图恢复、候选复核、投影"]
+        semantic --> context["安全基线与 Agentic 上下文"]
+        context --> analyze["Stage 1 漏洞分析"]
+        analyze --> verify{"Stage 2 需要补证？"}
+        verify -->|"是"| stage2["FindingVerifier 查定义、用法和函数"]
+        verify -->|"否"| output["统一结果"]
+        stage2 --> output
+        output --> dynamic{"请求动态验证？"}
+        dynamic -->|"是"| dyn["隔离环境验证"]
+        dynamic -->|"否"| report["漏洞报告与 Web 展示"]
+        dyn --> report
+    end
+
+    normalize -->|"设备端点目标"| deviceSelect
+    normalize -->|"已有源码线索"| locatorSeed
+    deviceResult -->|"设备事实补充检索"| locatorSeed
+    normalize -->|"本地仓库"| handoff
+
+    deviceResult -.-> context
+    sourceEvidence -.-> context
+    observe["统一可观测性<br/>日志、证据、成本、版本、用户决策和断点"]
+    start -.-> observe
+    observe -.-> report
+
+    classDef start fill:#E8F1FF,stroke:#2F6BFF,stroke-width:2px,color:#17315C
+    classDef process fill:#F7F9FC,stroke:#64748B,stroke-width:1.2px,color:#17202A
+    classDef decision fill:#FFF4D6,stroke:#C98A00,stroke-width:1.5px,color:#5C4100
+    classDef model fill:#F1EAFE,stroke:#815AC7,stroke-width:1.5px,color:#38215F
+    classDef output fill:#E8F7EE,stroke:#2E8B57,stroke-width:1.5px,color:#164B2D
+    classDef observe fill:#EEF7F7,stroke:#2D7F7F,stroke-dasharray: 5 4,color:#174B4B
+
+    class start start
+    class normalize,deviceState,deviceConfirm,deviceRecheck,repoConfirm,verify,dynamic decision
+    class deviceSelect,hdcProbe,deviceFacts,deviceStart,locatorSeed,grok,sourceEvidence,repoMap,clone,handoff,scanInit,parse,callGraph,reachable,context,output process
+    class deviceResult,semantic,analyze,stage2,dyn model
+    class report output
+    class observe observe
+```
+
+## 当前实现与预想整合的边界
+
+- 当前：源码定位、暴露面识别、普通静态扫描可以分别启动；暴露面结果不会自动触发源码定位或扫描。
+- 预想：设备暴露面结果作为 OpenGrok 检索线索，并以证据引用的方式进入扫描上下文；仍需用户确认仓库和版本。
+- 启动服务仍需用户同意，并且只能在复核通过后执行固定的 `0 → 1` 启动参数。
+- 大模型用于目标理解、语义检索、上下文和验证；设备命令、Git 操作和证据写入由确定性代码校验和审计。
+- 虚线表示证据补充或可观测性关联，不表示当前版本已经自动串联这些阶段。

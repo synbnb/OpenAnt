@@ -2,7 +2,7 @@
 
 版本：v1.0  
 日期：2026-08-28  
-适用项目：OpenAnt  
+适用项目：VulnFounder
 前置实测：`test_records/openharmony/OH-SL-01-opengrok-live-api-2026-08-28.md`、`OH-SL-02-opengrok-client-2026-08-28.md`、`OH-SL-03-live-target-locator-2026-08-28.md`
 
 > 本文是优化设计和分阶段执行计划，不把尚未实现的部分描述成已经可用。当前已经存在的只读 OpenGrok 客户端能力与后续待实现能力会明确区分。
@@ -64,7 +64,7 @@ https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source/api/v1
 | `file/defs`、`list`、`projects/*` | 401 | 不能依赖项目元数据和文件定义接口 |
 | `/raw/<path>` | 200 | 可返回纯文本源码，不在提供的 OpenAPI 中 |
 | `/xref/<path>` | 200 | 可返回 HTML 交叉引用页面，只作为可选人工辅助 |
-| CORS | 未返回 `Access-Control-Allow-Origin` | 必须由 OpenAnt 后端代理，浏览器不能直连 |
+| CORS | 未返回 `Access-Control-Allow-Origin` | 必须由 VulnFounder 后端代理，浏览器不能直连 |
 
 ### 2.2 当前搜索效果
 
@@ -100,7 +100,7 @@ https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source/api/v1
 ```text
 用户先找到本地 OpenHarmony 仓库
   → 手动指定本地路径
-  → OpenAnt 执行静态扫描
+  → VulnFounder 执行静态扫描
 ```
 
 该流程继续保留，不能破坏已有用户和 `POST /scan` 的语义。
@@ -187,7 +187,7 @@ def / symbol / path
 - 区分 `socket_creator`、`service_owner`、`server_handler`、`client_consumer`；
 - 使用配置的 Manifest 将源码路径映射到仓库；
 - 版本和仓库信息不确定时不自动 clone；
-- 用户确认后把仓库放到 `OpenAnt/source_code_base`；
+- 用户确认后把仓库放到 `VulnFounder/source_code_base`；
 - clone 后复核关键文件、符号、字符串、remote 和 revision；
 - 生成可交接给现有扫描流程的主仓库路径。
 
@@ -398,7 +398,7 @@ connect / send / write / Request / Client / Proxy
 
 统一适配器对外使用语义参数，对 REST 使用准确字段：
 
-| OpenAnt 参数 | REST 参数 | 说明 |
+| VulnFounder 参数 | REST 参数 | 说明 |
 | --- | --- | --- |
 | `definition` | `def` | REST 使用单数 `def` |
 | `symbol` | `symbol` | 符号/引用搜索 |
@@ -623,7 +623,7 @@ EVIDENCE_READY
 所有仓库放在：
 
 ```text
-OpenAnt/source_code_base/<repository_name>
+VulnFounder/source_code_base/<repository_name>
 ```
 
 不能使用 `~/.openant/projects` 作为唯一存储，也不能把版本嵌套目录放到现有一级仓库扫描器无法发现的位置。
@@ -658,7 +658,7 @@ Web 必须复用现有 Go 服务和 Python 桥接，不新增 FastAPI/React 服�
 建议新增：
 
 ```text
-libs/openant-core/core/source_locator/
+libs/vulnfounder-core/core/source_locator/
 ├── models.py
 ├── target_normalizer.py
 ├── opengrok_client.py       # 已有，只继续扩展
@@ -681,12 +681,12 @@ libs/openant-core/core/source_locator/
 建议新增：
 
 ```text
-apps/openant-cli/internal/server/source_locator.go
-apps/openant-cli/internal/server/source_locator_events.go
-apps/openant-cli/internal/server/source_locator_test.go
-apps/openant-cli/internal/config/source_locator.go
-apps/openant-cli/internal/config/source_locator_test.go
-apps/openant-cli/ui/source-locator.html
+apps/vulnfounder-cli/internal/server/source_locator.go
+apps/vulnfounder-cli/internal/server/source_locator_events.go
+apps/vulnfounder-cli/internal/server/source_locator_test.go
+apps/vulnfounder-cli/internal/config/source_locator.go
+apps/vulnfounder-cli/internal/config/source_locator_test.go
+apps/vulnfounder-cli/ui/source-locator.html
 ```
 
 建议路由：

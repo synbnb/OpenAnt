@@ -1,7 +1,7 @@
 
 # Changelog
 
-All notable changes to OpenAnt are documented in this file.
+All notable changes to VulnFounder are documented in this file.
 
 ## [2026-08-14] — Recover reasoning-only (empty-completion) analyze responses
 
@@ -146,9 +146,9 @@ All notable changes to OpenAnt are documented in this file.
 
 ### Added
 
-- **LLM adapter plugin layer.** OpenAnt's pipeline used to hardcode
+- **LLM adapter plugin layer.** VulnFounder's pipeline used to hardcode
   `anthropic.Anthropic` calls in 15+ files. All LLM IO now flows
-  through `libs/openant-core/utilities/llm/`, a Protocol-based
+  through `libs/vulnfounder-core/utilities/llm/`, a Protocol-based
   adapter layer with one provider plugin per file in
   `utilities/llm/providers/`. Three adapters ship today —
   **Anthropic** (reference), **OpenAI** (Chat Completions), and
@@ -247,7 +247,7 @@ All notable changes to OpenAnt are documented in this file.
 ### Removed
 
 - **`AnthropicClient` class deleted** from
-  `libs/openant-core/utilities/llm_client.py`. The file remains
+  `libs/vulnfounder-core/utilities/llm_client.py`. The file remains
   for `TokenTracker` (still shared across all adapter call sites)
   but the LLM-wrapper class is gone — every caller now uses
   `simple_text(binding, prompt, ...)` (for text-only phases) or
@@ -309,7 +309,7 @@ All notable changes to OpenAnt are documented in this file.
 ### Added
 
 - **Auto-reinstall when `pyproject.toml` changes.** The Go CLI now hashes
-  `libs/openant-core/pyproject.toml` (SHA-256) and stores the hash at
+  `libs/vulnfounder-core/pyproject.toml` (SHA-256) and stores the hash at
   `~/.openant/venv/.deps-hash`. Every `EnsureRuntime` call compares the
   stored hash against the current file and re-runs `pip install -e <core>`
   automatically when they differ. Eliminates the "user did `git pull`,
@@ -364,7 +364,7 @@ All notable changes to OpenAnt are documented in this file.
   an empty result. The TypeScript analyzer now normalises every path
   it hands to ts-morph (and every value stored as a `functionId`
   component) to forward slashes via a `toPosixPath()` helper. A
-  static-scanner test in `libs/openant-core/tests/test_windows_path_handling.py`
+  static-scanner test in `libs/vulnfounder-core/tests/test_windows_path_handling.py`
   enforces the contract on every commit.
 - **`--files-from` no longer drops every path on Windows.** File lists
   written with CRLF line endings used to leave a trailing `\r` on each
@@ -379,11 +379,11 @@ All notable changes to OpenAnt are documented in this file.
   the prettier output.
 - **`'charmap' codec can't decode byte ...` errors on Windows.** Bare
   `open()` calls and `subprocess.run(..., text=True)` invocations
-  across `libs/openant-core/` defaulted to the system locale encoding
+  across `libs/vulnfounder-core/` defaulted to the system locale encoding
   (cp1252 on Windows), crashing on any source code containing non-ASCII
   characters (curly quotes U+2019, accented characters, CJK). All ~190
   call sites now go through new helpers in
-  `libs/openant-core/utilities/file_io.py` (`open_utf8`, `read_json`,
+  `libs/vulnfounder-core/utilities/file_io.py` (`open_utf8`, `read_json`,
   `write_json`, `run_utf8`) that pin UTF-8 explicitly. Four regression
   scanners in `tests/test_file_io.py` prevent reintroduction by failing
   CI on any new bare `open(`, `.read_text(`/`.write_text(`, `.open(`,
@@ -396,7 +396,7 @@ All notable changes to OpenAnt are documented in this file.
   uncovered by the new lint step. Now uses `get_global_tracker()` to
   match the existing pattern in the same function.
 - **Managed venv path is wrong on Windows.** `venvPython()` in
-  `apps/openant-cli/internal/python/runtime.go` hard-coded
+  `apps/vulnfounder-cli/internal/python/runtime.go` hard-coded
   `bin/python`, which doesn't exist in a Windows venv (the layout there
   is `Scripts\python.exe`). The CLI now branches on `runtime.GOOS` and
   returns the OS-correct path, so `~/.openant/venv/` is usable on
@@ -422,8 +422,8 @@ All notable changes to OpenAnt are documented in this file.
   raw `latin-1` bytes via `sys.stdout.buffer.write(...)` so the
   encoding-override path is the thing under test on every platform.
 - **`withTempHome` test helper didn't work on Windows.** Both copies
-  (`apps/openant-cli/cmd/mode_test.go` and
-  `apps/openant-cli/internal/config/scan_meta_test.go`) only set
+  (`apps/vulnfounder-cli/cmd/mode_test.go` and
+  `apps/vulnfounder-cli/internal/config/scan_meta_test.go`) only set
   `HOME`, but `os.UserHomeDir()` on Windows reads `USERPROFILE`. The
   helpers now branch on `runtime.GOOS` and set the correct env var.
 
@@ -584,10 +584,10 @@ This release synced a large body of work from internal development. Highlights:
 - **Parallelization** across all pipeline stages:
   - Stage 1 analysis (Detect), Stage 2 verification, Enhance, and Dynamic Test now run units concurrently via worker pools.
   - Thread-safe `TokenTracker` and `ProgressReporter` for correct aggregate metrics under parallel execution.
-  - Shared HTTP client and a token-bucket `RateLimiter` (`libs/openant-core/utilities/rate_limiter.py`) to stay within Anthropic API rate limits.
-- **Checkpoint / resume system** (`libs/openant-core/core/checkpoint.py`): every phase persists per-unit progress so interrupted scans can resume without re-running completed work.
-- **Zig parser** (`libs/openant-core/parsers/zig/`): repository scanner, unit generator, and test pipeline.
-- **HTML report improvements** (`apps/openant-cli/internal/report/`):
+  - Shared HTTP client and a token-bucket `RateLimiter` (`libs/vulnfounder-core/utilities/rate_limiter.py`) to stay within Anthropic API rate limits.
+- **Checkpoint / resume system** (`libs/vulnfounder-core/core/checkpoint.py`): every phase persists per-unit progress so interrupted scans can resume without re-running completed work.
+- **Zig parser** (`libs/vulnfounder-core/parsers/zig/`): repository scanner, unit generator, and test pipeline.
+- **HTML report improvements** (`apps/vulnfounder-cli/internal/report/`):
   - Two themes: dark (`overview.gohtml`) and Knostic-branded light (`report-reskin.gohtml`).
   - Report header shows repo name, commit SHA, language, total scan duration (formatted `Xd Xh Xm Xs`), and cost.
   - Findings are numbered (`#N`), have anchor IDs, and are grouped into collapsible sections by verdict (vulnerable / bypassable open by default; inconclusive / protected / safe closed).

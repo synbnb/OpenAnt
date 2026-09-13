@@ -1,0 +1,28 @@
+$schema: "https://moonrepo.dev/schemas/project.json"
+
+id: "vulnfounder-cli"
+type: "application"
+language: "go"
+tags: ["cli", "go"]
+
+tasks:
+  build:
+    command: "go build -o bin/vulnfounder ./main.go"
+    inputs:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+    outputs:
+      - "bin/vulnfounder"
+
+  test:
+    command: "go test ./..."
+    inputs:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+
+  lint:
+    command: "go vet ./..."
+    inputs:
+      - "**/*.go"

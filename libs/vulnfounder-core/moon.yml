@@ -1,0 +1,38 @@
+$schema: "https://moonrepo.dev/schemas/project.json"
+
+id: "vulnfounder-core"
+type: "library"
+language: "python"
+tags: ["core", "python"]
+
+tasks:
+  # Install dependencies
+  install:
+    command: "pip install -e ."
+    inputs:
+      - "pyproject.toml"
+
+  # Run analysis on a dataset (path-based)
+  analyze:
+    command: "python -m vulnfounder analyze"
+    inputs:
+      - "vulnfounder/**/*"
+
+  # Parse a repository
+  parse:
+    command: "python -m vulnfounder parse"
+    inputs:
+      - "vulnfounder/**/*"
+
+  # Generate report
+  report:
+    command: "python -m vulnfounder report"
+    inputs:
+      - "vulnfounder/**/*"
+
+  # Run tests
+  test:
+    command: "pytest"
+    inputs:
+      - "vulnfounder/**/*"
+      - "tests/**/*"

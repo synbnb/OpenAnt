@@ -1,0 +1,101 @@
+[project]
+name = "vulnfounder"
+version = "0.1.0"
+description = "Two-stage SAST tool using Claude for vulnerability analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # The ``[bedrock]`` extra pulls boto3, which ``anthropic.AnthropicBedrock``
+    # needs to resolve AWS credentials and SigV4-sign requests (the Bedrock
+    # adapter constructs fine without it, but a real call fails without boto3).
+    "anthropic[bedrock]>=0.40.0",
+    # openai adapter uses the Responses API (``client.responses.create`` with
+    # ``reasoning``/``max_output_tokens``/``store``) for the gpt-5+ path AND
+    # ``max_completion_tokens`` for o-series on Chat Completions. Both are 2.x
+    # SDK surface; pin the floor to a version that ships a stable Responses API.
+    "openai>=2.2.0",
+    # google adapter uses keyword-only ``Part.from_text(text=...)`` and
+    # ``HttpOptions(base_url=...)``, both stabilised in google-genai 1.0.0.
+    "google-genai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.24.0",
+    "PyYAML>=6.0",
+    "requests>=2.31.0",
+    "tree-sitter>=0.21.0",
+    "tree-sitter-c>=0.21.0",
+    "tree-sitter-cpp>=0.21.0",
+    "tree-sitter-ruby>=0.21.0",
+    "tree-sitter-php>=0.22.0",
+    "tree-sitter-zig>=1.1.2",
+    "tree-sitter-swift>=0.7.3",
+    "tree-sitter-rust>=0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.8.0",
+]
+
+[project.scripts]
+vulnfounder = "vulnfounder.cli:main"
+openant = "vulnfounder.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Only rules that catch actual bugs (will break at runtime)
+# F821: undefined name, F811: redefined unused name, F823: local var referenced before assignment
+select = ["F821", "F811", "F823"]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "vulnfounder",
+    "openant",
+    "core",
+    "utilities",
+    "parsers",
+    "prompts",
+    "context",
+    "report",
+]
+
+# Keep test scaffolding and generated outputs out of the distribution. These are
+# regenerable artifacts, not product: report/test_output shipped a third-party
+# exploit writeup (paperless-ngx, CWE-639) and a stale sample report, and
+# report/test_data shipped a captured pipeline. None is referenced by production.
+exclude = [
+    "**/test_output",
+    "**/test_data",
+    "**/test_output/**",
+    "**/test_data/**",
+]
+
+# config/languages.json is the single source of truth for the language set, read
+# by BOTH the Python engine and the Go CLI. It lives at the monorepo root, two
+# levels above this project root, so `packages` above cannot reach it and the
+# wheel shipped without it: the registry then resolved to {} and every language
+# silently disappeared (`-l python` became "invalid choice", detection found zero
+# files in any repository). force-include is what makes an installed layout work,
+# and it must land at `config/` so the upward search from the installed package
+# finds it the same way it does in a checkout.
+[tool.hatch.build.targets.wheel.force-include]
+"../../config/languages.json" = "config/languages.json"
+# config/models.json is the shared provider-model registry (IDs, status,
+# pricing), read by both runtimes exactly like languages.json. Without this
+# stanza it would not ship in the wheel and core/model_registry.require_models()
+# would fail loud — the same defect class that made every language vanish.
+"../../config/models.json" = "config/models.json"
+# Package data under ``core`` and ``utilities`` is included by Hatchling through
+# the package list above.  Only files outside those packages need explicit
+# force-inclusion below; listing package data again would add duplicate archive
+# members and make wheel builds fail.
+# The exposure-surface Agentic Loop uses one local Markdown command guide for
+# deterministic, offline RAG retrieval. Ship it as data with the wheel.
+"knowledge/openharmony_exposure_surface_command_guide.zh-CN.md" = "knowledge/openharmony_exposure_surface_command_guide.zh-CN.md"

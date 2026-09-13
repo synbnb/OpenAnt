@@ -12,14 +12,14 @@
 
 ## 1. 文档目的
 
-OpenAnt 当前已经能够对 OpenHarmony 源码执行解析、入口识别、调用图构建、上下文增强、漏洞分析、二次验证和报告生成，但现有动态测试功能面向 Docker 内的通用软件漏洞复现，不能直接验证真实 OpenHarmony 开发板上的 HAP、SA、IPC、HDF/HDI 或 Native socket 行为。
+VulnFounder 当前已经能够对 OpenHarmony 源码执行解析、入口识别、调用图构建、上下文增强、漏洞分析、二次验证和报告生成，但现有动态测试功能面向 Docker 内的通用软件漏洞复现，不能直接验证真实 OpenHarmony 开发板上的 HAP、SA、IPC、HDF/HDI 或 Native socket 行为。
 
 本文定义一套新的 OpenHarmony 开发板动态验证方案，目标是把静态扫描结果安全地转换为可以审计、可以分阶段执行、可以重复、可以回滚的真实设备验证流程。
 
 本方案同时参考以下内容：
 
-- 当前 OpenAnt 动态测试实现；
-- OpenAnt 已生成的 OpenHarmony 静态扫描产物；
+- 当前 VulnFounder 动态测试实现；
+- VulnFounder 已生成的 OpenHarmony 静态扫描产物；
 - 本地 OpenHarmony 源码仓库；
 - `/Users/shiyu/学习/hyl/new/openharmony-dynamic-verify.zip` 经验交付包；
 - 当前连接开发板所使用的 HDC 工具。
@@ -52,14 +52,14 @@ NAPI 是 ArkTS/JavaScript 调用 Native C/C++ 能力的一种桥梁。如果 Ope
 
 HDF 是 OpenHarmony 驱动框架，HDI 是硬件设备接口。HDF/HDI 入口通常不能简单地用随机 socket 数据测试，需要使用生成的接口代码、设备节点协议或已有测试 client。
 
-## 3. 当前 OpenAnt 动态测试的原始逻辑
+## 3. 当前 VulnFounder 动态测试的原始逻辑
 
 当前实现位于：
 
-- `libs/openant-core/core/dynamic_tester.py`
-- `libs/openant-core/utilities/dynamic_tester/`
-- `libs/openant-core/core/scanner.py`
-- `apps/openant-cli/cmd/dynamictest.go`
+- `libs/vulnfounder-core/core/dynamic_tester.py`
+- `libs/vulnfounder-core/utilities/dynamic_tester/`
+- `libs/vulnfounder-core/core/scanner.py`
+- `apps/vulnfounder-cli/cmd/dynamictest.go`
 
 现有流程如下：
 
@@ -136,9 +136,9 @@ SHA-256：
 
 ### 4.3 不能直接采纳的问题
 
-| 问题 | 实际影响 | OpenAnt 中的处理方式 |
+| 问题 | 实际影响 | VulnFounder 中的处理方式 |
 |---|---|---|
-| 文档声称存在 `02_hap_app`、`04_automation`、`project/`，压缩包实际缺少这些内容 | 不能直接完成 HAP 构建和自动化部署 | 在 OpenAnt 内重新实现最小 HAP harness 和自动化状态机 |
+| 文档声称存在 `02_hap_app`、`04_automation`、`project/`，压缩包实际缺少这些内容 | 不能直接完成 HAP 构建和自动化部署 | 在 VulnFounder 内重新实现最小 HAP harness 和自动化状态机 |
 | 部分脚本调用未带 `-t <设备序列号>` 的 `hdc` | 多设备时可能误操作 | 统一 HDC client 强制指定设备 |
 | 脚本使用 GNU `timeout` | macOS 默认不可用 | 使用 Python `subprocess` 超时和进程组回收 |
 | 多处使用 `|| true` | 命令失败被吞掉 | 每条命令记录 stdout、stderr、exit code、timeout |
@@ -161,7 +161,7 @@ SHA-256：
 
 经验包不适合作为：
 
-- OpenAnt 可直接调用的完整动态后端；
+- VulnFounder 可直接调用的完整动态后端；
 - 普通 HAP 可达性的证明；
 - 自动漏洞确认器；
 - OpenHarmony IPC 通用 fuzz 引擎。
@@ -193,7 +193,7 @@ hdc list targets -v
 hdc -t <设备序列号> shell id
 ```
 
-如果仍然失败，应先诊断 HDC server 和 USB 连接。OpenAnt 不应自动删除 PID 文件，也不应自动重启开发板。
+如果仍然失败，应先诊断 HDC server 和 USB 连接。VulnFounder 不应自动删除 PID 文件，也不应自动重启开发板。
 
 ## 6. 核心架构决策
 
@@ -222,7 +222,7 @@ utilities/openharmony_dynamic/
 
 ### 6.2 决策二：开发板验证不会由普通 scan 自动触发
 
-当前 `openant scan` 可以运行通用 Docker 动态测试。开发板动态验证具有安装 HAP、推送 ELF、调用系统服务和改变设备运行状态等副作用，因此必须显式选择设备、身份、候选和风险等级。
+当前 `vulnfounder scan` 可以运行通用 Docker 动态测试。开发板动态验证具有安装 HAP、推送 ELF、调用系统服务和改变设备运行状态等副作用，因此必须显式选择设备、身份、候选和风险等级。
 
 开发板动态验证默认关闭，不能因为 `--platform openharmony` 就自动启用。
 
@@ -513,7 +513,7 @@ HAP artifact 必须记录：
 每次运行使用唯一目录：
 
 ```text
-/data/local/tmp/openant/<run_id>/<attempt_id>/
+/data/local/tmp/vulnfounder/<run_id>/<attempt_id>/
 ```
 
 清理时只删除本轮明确创建的文件，不使用通配符删除其他文件。
@@ -692,7 +692,7 @@ IRemoteObject remoteObject
 
 ### 15.1 默认不清空 HiLog
 
-OpenAnt 不默认执行 `hilog -r`。运行前先探测当前设备支持的 `hilog` 参数，再选择时间窗口或流式采集方式。
+VulnFounder 不默认执行 `hilog -r`。运行前先探测当前设备支持的 `hilog` 参数，再选择时间窗口或流式采集方式。
 
 ### 15.2 Run Marker
 
@@ -905,7 +905,7 @@ LLM 输出无法被源码验证时，候选状态为 `REQUIRES_PROTOCOL_REVIEW`�
 ## 19. 建议模块结构
 
 ```text
-libs/openant-core/
+libs/vulnfounder-core/
 ├── core/
 │   └── openharmony_dynamic_tester.py
 └── utilities/
@@ -931,7 +931,7 @@ libs/openant-core/
             ├── hdf_hdi.py
             └── sa_lifecycle.py
 
-apps/openant-cli/
+apps/vulnfounder-cli/
 ├── cmd/
 │   └── ohosdynamic.go
 └── internal/server/
@@ -945,34 +945,34 @@ apps/openant-cli/
 建议提供分阶段命令：
 
 ```bash
-openant ohos-dynamic preflight \
+vulnfounder ohos-dynamic preflight \
   --device <serial> \
   --output <run-dir>
 
-openant ohos-dynamic plan \
+vulnfounder ohos-dynamic plan \
   <pipeline_output.json> \
   --repo <repo-path> \
   --output <run-dir>
 
-openant ohos-dynamic build \
+vulnfounder ohos-dynamic build \
   --plan <candidate_plan.json> \
   --candidate OH-CAND-001
 
-openant ohos-dynamic baseline \
+vulnfounder ohos-dynamic baseline \
   --device <serial> \
   --run <run-dir>
 
-openant ohos-dynamic run \
+vulnfounder ohos-dynamic run \
   --device <serial> \
   --run <run-dir> \
   --candidate OH-CAND-001 \
   --identity normal_hap \
   --risk benign
 
-openant ohos-dynamic analyze \
+vulnfounder ohos-dynamic analyze \
   --run <run-dir>
 
-openant ohos-dynamic cleanup \
+vulnfounder ohos-dynamic cleanup \
   --device <serial> \
   --run <run-dir>
 ```
@@ -1407,4 +1407,3 @@ test_records/ohos-dynamic/
 - LLM 只作为受约束的计划顾问；
 - 每个阶段单独修改、单独测试、单独记录；
 - 先完成可运行的低风险闭环，再考虑高风险优化。
-

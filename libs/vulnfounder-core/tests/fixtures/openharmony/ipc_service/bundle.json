@@ -1,0 +1,25 @@
+{
+  "name": "@ohos/openant_ipc_fixture",
+  "version": "1.0",
+  "component": {
+    "name": "openant_ipc_fixture",
+    "subsystem": "security",
+    "syscap": [
+      "SystemCapability.Security.VulnFounderFixture"
+    ],
+    "adapted_system_type": [
+      "standard"
+    ],
+    "deps": {
+      "components": [
+        "access_token",
+        "ipc"
+      ]
+    },
+    "build": {
+      "sub_component": [
+        "//test/openharmony/ipc_service:openant_ipc_service"
+      ]
+    }
+  }
+}

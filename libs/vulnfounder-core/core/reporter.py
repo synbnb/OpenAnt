@@ -1,0 +1,1402 @@
+"""
+Report generation wrapper.
+
+Wraps the existing report generators:
+- report/html_report.py — HTML report with Chart.js
+- report/csv_export.py  — CSV export
+- report/generator.py  — LLM-based summary and disclosure documents
+
+Also provides ``build_pipeline_output()`` which assembles analysis results
+into the ``pipeline_output.json`` format consumed by ``python -m report``
+and ``run_dynamic_tests()``.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+
+from core.schemas import ReportResult
+from core.language_registry import fence_for_path
+from core.report_context import build_disclosure_context, load_report_context_index
+from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
+from core.finding_records import ensure_primary_record, normalize_findings
+from utilities.file_io import normalize_results, open_utf8, read_json, write_json
+
+# Root of vulnfounder-core
+_CORE_ROOT = Path(__file__).parent.parent
+
+
+def _load_diff_metadata(scan_dir: str) -> dict | None:
+    """Return a summary dict if this scan dir contains a diff_manifest.json.
+
+    Combines fields from diff_manifest.json and diff_filter.report.json so the
+    HTML/report consumers have one place to read PR/incremental metadata.
+    """
+    manifest_path = os.path.join(scan_dir, "diff_manifest.json")
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        manifest = read_json(manifest_path)
+    except (json.JSONDecodeError, OSError):
+        return None
+    out = {
+        "mode": "incremental",
+        "base_ref": manifest.get("base_ref"),
+        "base_sha": manifest.get("base_sha"),
+        "head_sha": manifest.get("head_sha"),
+        "scope": manifest.get("scope"),
+        "pr_number": manifest.get("pr_number") or None,
+        "changed_files": len(manifest.get("changed_files") or []),
+    }
+    filter_report = os.path.join(scan_dir, "diff_filter.report.json")
+    if os.path.exists(filter_report):
+        try:
+            stats = read_json(filter_report)
+            out["units_in_diff"] = stats.get("selected")
+            out["units_total_parsed"] = stats.get("total")
+            out["callers_added"] = stats.get("callers_added") or 0
+            out["fallback_file_match"] = stats.get("fallback_file_match") or 0
+        except (json.JSONDecodeError, OSError):
+            pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Map language hints to the code-fence language tag used in Markdown.
+# Fence tags come from the language registry, resolved per FILE. The old
+# module-level map was keyed by the SCAN-WIDE language, which mislabelled every
+# file whose extension implied a different tag than the scan's primary
+# language — a `.ts` file in a "javascript" scan was fenced as ```javascript
+# even before multi-language scanning existed.
+
+
+def _coerce_to_str(value) -> str:
+    """Convert a model-returned field to a plain string.
+
+    Pipeline prompts (``prompts/vulnerability_analysis.py``,
+    ``prompts/verification_prompts.py``) request string-typed fields
+    like ``attack_vector`` and ``verification_explanation``. Different
+    providers honor that schema with varying fidelity — Claude
+    reliably returns strings, while GPT-4o sometimes structures the
+    same field as a dict (``{"type": "...", "description": "..."}``)
+    or a nested object.
+
+    Rather than crash on the next ``.join`` or string concatenation
+    when a model strays, coerce defensively at every consumption
+    site. Strings pass through. ``None`` becomes ``""``. Dicts/lists
+    get ``json.dumps``-serialised. Anything else falls back to
+    ``str()``. The result is always safe to feed into ``.join`` or
+    concatenation.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        return json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _source_code_from_value(value) -> str:
+    """Extract source text from a parser/model record.
+
+    ``code_by_route`` is written by several parser generations.  Older
+    versions stored a string directly while call-graph artifacts store a
+    function record (whose source is under ``code``).  Reports must accept
+    both forms without ever rendering a Python representation of a dict as
+    if it were source code.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        for key in ("code", "source_code", "source", "snippet", "primary_code"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+    return ""
+
+
+def _normalise_code_by_route(value) -> dict[str, str]:
+    """Return a safe route-to-source map from an artifact field."""
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, str] = {}
+    for route, record in value.items():
+        if not isinstance(route, str) or not route:
+            continue
+        code = _source_code_from_value(record)
+        if code:
+            result[route] = code
+    return result
+
+
+def _extract_code_by_route(payload) -> dict[str, str]:
+    """Extract source snippets from a results or call-graph JSON payload."""
+    if not isinstance(payload, Mapping):
+        return {}
+
+    direct = _normalise_code_by_route(payload.get("code_by_route"))
+    if direct:
+        return direct
+
+    # ``call_graph.json`` keeps source in functions[route].code.  Supporting
+    # this fallback makes report generation robust for scans produced before
+    # results.json started carrying code_by_route.
+    functions = payload.get("functions")
+    if isinstance(functions, Mapping):
+        extracted = _normalise_code_by_route(functions)
+        if extracted:
+            return extracted
+
+    # A few intermediate artifacts put the same records under ``units``.
+    units = payload.get("units")
+    if isinstance(units, Mapping):
+        return _normalise_code_by_route(units)
+    return {}
+
+
+def _load_code_by_route(results_path: str, experiment: Mapping) -> dict[str, str]:
+    """Load source snippets, recovering them from sibling scan artifacts.
+
+    Stage 2 historically wrote ``results_verified.json`` without copying the
+    Stage-1 ``code_by_route`` map.  When reading such an artifact, first use a
+    map embedded in the selected file, then consult the sibling results and
+    call-graph files in the same scan directory.  All failures are treated as
+    missing optional evidence; report generation should still produce a
+    disclosure with an explicit "source unavailable" note.
+    """
+    scan_dir = Path(results_path).resolve().parent
+    candidates = []
+    selected = Path(results_path).name
+    # Effective graph is the audited relation view used by reachability and
+    # enhancement.  Keep the immutable native graph as a compatibility
+    # fallback for scans produced before the facts stage.
+    candidates.append(scan_dir / "effective_call_graph.json")
+    candidates.append(scan_dir / "call_graph.json")
+    # A sibling Stage-1 results file can fill routes missing from the graph,
+    # but it is deliberately consulted after graph-backed exact source. Its
+    # ``code_by_route`` may be the expanded model context bundle rather than a
+    # single function body.
+    if selected != "results.json":
+        candidates.append(scan_dir / "results.json")
+
+    # ``results.json.code_by_route`` is often the model-facing context bundle.
+    # For Stage 1 it may intentionally contain the target plus neighbouring
+    # functions separated by ``File Boundary`` markers.  That is useful as
+    # analysis context, but it is not the exact vulnerable-function source.
+    # Prefer the audited/effective graph's function record, whose ``code`` is
+    # bounded by the function's own start/end range.  The selected result map
+    # remains a fallback for old scans whose graph artifacts did not preserve
+    # source.  This keeps the trigger snippet separate from the ordered call
+    # chain source bundle and prevents cross-function source duplication.
+    merged: dict[str, str] = {}
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            recovered = _extract_code_by_route(read_json(candidate))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        for route, code in recovered.items():
+            merged.setdefault(route, code)
+
+    # Do not stop at a partial map.  A resumed/partially written scan can have
+    # some routes in the selected artifact and the remaining routes in the
+    # sibling Stage-1 or call-graph artifact; merge them without replacing the
+    # exact graph-backed values above.
+    for route, code in _extract_code_by_route(experiment).items():
+        merged.setdefault(route, code)
+    return merged
+
+
+def _build_vulnerable_code_section(file_path: str, code: str, language: str | None) -> str:
+    """Build a pre-rendered Markdown `## Vulnerable Code` section.
+
+    The disclosure generator splices this verbatim into the LLM prompt so the
+    model cannot rewrite the snippet. Prior behaviour (asking the LLM for a
+    "minimal code snippet") produced fabricated code in DISCLOSURE_01/05.
+    """
+    code = _source_code_from_value(code)
+    if not code:
+        return ""
+    # Resolve by the finding's own file; fall back to the scan language only
+    # when the path carries no recognizable extension.
+    fence_lang = fence_for_path(file_path, fallback=language)
+    return (
+        "## Vulnerable Code\n\n"
+        f"`{file_path}`:\n\n"
+        f"```{fence_lang}\n{code}\n```"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deduplication — collapse caller/callee pairs
+# ---------------------------------------------------------------------------
+
+def _dedup_caller_callee(
+    confirmed: list[dict],
+    all_results: list[dict],
+    call_graph_path: str,
+) -> list[dict]:
+    """Remove callee findings that are only reachable via a single caller
+    with the same CWE.
+
+    This prevents the same vulnerability from being reported twice when
+    a function like ``get_user()`` is the only caller of ``run_query()``
+    and both share the same vulnerability class.
+
+    Matches on CWE (integer) instead of attack_vector (LLM free text)
+    because CWE is stable across runs while attack_vector varies.
+    CWE-0 (unknown) never matches — two unknowns shouldn't collapse.
+    """
+    # FAM-ROBUST: `confirmed` and `all_results` are model-supplied lists. A
+    # non-Anthropic model can emit a bare string/number where a finding dict
+    # is expected; drop non-dict elements up front so every `.get()` below —
+    # and this helper when called standalone — is safe.
+    confirmed = [f for f in confirmed if isinstance(f, dict)]
+    all_results = [r for r in all_results if isinstance(r, dict)]
+
+    if not os.path.isfile(call_graph_path):
+        return confirmed
+
+    try:
+        cg_data = read_json(call_graph_path)
+    except (json.JSONDecodeError, OSError):
+        return confirmed
+
+    reverse_cg = cg_data.get("reverse_call_graph", {})
+
+    # Build a lookup: route_key → cwe_id for confirmed findings.
+    cwe_by_key: dict[str, int] = {}
+    for f in confirmed:
+        rk = f.get("route_key") or f.get("unit_id", "")
+        cwe = f.get("cwe_id")
+        if cwe is None:
+            full = next(
+                (r for r in all_results
+                 if (r.get("route_key") or r.get("unit_id")) == rk),
+                None,
+            )
+            cwe = full.get("cwe_id", 0) if full else 0
+        cwe_by_key[rk] = cwe
+
+    # Identify callees to remove.
+    remove_keys: set[str] = set()
+    for callee_key, callers in reverse_cg.items():
+        if len(callers) != 1:
+            continue  # multiple callers — not safe to collapse
+        caller_key = callers[0]
+        if caller_key not in cwe_by_key or callee_key not in cwe_by_key:
+            continue  # one of them wasn't confirmed — skip
+        caller_cwe = cwe_by_key[caller_key]
+        callee_cwe = cwe_by_key[callee_key]
+        if caller_cwe and caller_cwe != 0 and caller_cwe == callee_cwe:
+            remove_keys.add(callee_key)
+
+    if not remove_keys:
+        return confirmed
+
+    deduped = [
+        f for f in confirmed
+        if (f.get("route_key") or f.get("unit_id", "")) not in remove_keys
+    ]
+    removed = len(confirmed) - len(deduped)
+    print(f"[Report] Deduplicated {removed} caller/callee finding(s)", file=sys.stderr)
+    return deduped
+
+
+# ---------------------------------------------------------------------------
+# Pipeline output builder
+# ---------------------------------------------------------------------------
+
+def _load_reachability_metadata(scan_dir: str) -> dict | None:
+    """Return the reachability-filter record for this scan, if one exists.
+
+    The parse step (``core/parser_adapter.apply_reachability_filter``) stamps
+    the true kept-unit count onto ``<scan_dir>/dataset.json`` under
+    ``metadata.reachability_filter``. The reporter reads it so
+    ``pipeline_stats.reachable_units`` reflects reality instead of assuming
+    every analyzed unit is reachable. Returns ``None`` when the dataset or the
+    record is absent/unreadable (an unfiltered scan, or a parser that recorded
+    none). NOTE: on a multi-language scan the merged ``dataset.json`` currently
+    carries only the first-parsed language's record (see ``dataset_merge`` /
+    BUG-2b); this reader surfaces that record and warns — full per-language
+    accounting is deferred to a follow-up.
+    """
+    dataset_path = os.path.join(scan_dir, "dataset.json")
+    if not os.path.exists(dataset_path):
+        return None
+    try:
+        dataset = read_json(dataset_path)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(dataset, dict):
+        return None
+    metadata = dataset.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    rf = metadata.get("reachability_filter")
+    return rf if isinstance(rf, dict) else None
+
+
+def build_pipeline_output(
+    results_path: str,
+    output_path: str,
+    repo_name: str | None = None,
+    repo_url: str | None = None,
+    language: str | None = None,
+    commit_sha: str | None = None,
+    application_type: str = "web_app",
+    processing_level: str | None = None,
+    step_reports: list[dict] | None = None,
+    context_source: str = "none",
+    threat_model_sha256: str | None = None,
+    threat_model_warnings: list | None = None,
+    application_context_provenance: dict | None = None,
+    skipped_steps: list | None = None,
+    skipped_step_reasons: dict | None = None,
+) -> tuple[str, int]:
+    """Build ``pipeline_output.json`` from analysis results.
+
+    Reads ``results.json`` or ``results_verified.json`` and transforms
+    confirmed vulnerable/bypassable findings into the schema expected by
+    ``report/generator.py`` and ``utilities/dynamic_tester``.
+
+    Args:
+        results_path: Path to ``results.json`` or ``results_verified.json``.
+        output_path: Where to write ``pipeline_output.json``.
+        repo_name: Repository name (e.g. ``"langchain-ai/langchain"``).
+        repo_url: Repository URL.
+        language: Primary language.
+        commit_sha: Commit SHA being analyzed.
+        application_type: App type for context (default ``"web_app"``).
+        processing_level: Processing level used (``"reachable"``, etc.).
+        step_reports: Optional list of step report dicts for duration/cost info.
+        context_source: Which path supplied the security model —
+            ``"threat_model"`` (a file in the scanned repo), ``"generated"``
+            (built-in generator), or ``"none"``. Recorded so a scan run under
+            the wrong model is distinguishable from a correct one.
+        threat_model_sha256: sha256 over the raw threat-model file bytes when
+            one was loaded; ``None`` (key omitted) otherwise — never the empty
+            hash.
+        threat_model_warnings: over-permissive-model warnings to surface in the
+            artifact + report header; ``None``/empty when there are none.
+        application_context_provenance: effective application-context provenance,
+            including the immutable OpenHarmony baseline and merge conflicts.
+
+    Returns:
+        A ``(output_path, findings_count)`` tuple: the *output_path* written
+        to and the number of findings emitted into ``pipeline_output.json``.
+    """
+    print(f"[Report] Building pipeline_output.json...", file=sys.stderr)
+
+    experiment = read_json(results_path)
+    # fa17 TRUST BOUNDARY: normalize model-supplied `results` to dicts-only once
+    # at load so every downstream count/iterator sees the same filtered list.
+    normalize_results(experiment)
+    # fa18 TRUST BOUNDARY: `confirmed_findings` shares this same
+    # results_verified.json trust boundary and is iterated with `finding.get(...)`
+    # below (and inside _dedup_caller_callee). Normalize it to dicts-only at the
+    # same load point so a non-list value (which fa15's `[c for c in confirmed]`
+    # guard would raise TypeError on) or non-dict elements can't crash the build.
+    # Guard on presence: an ABSENT key must stay absent so the `confirmed is None`
+    # fallback below (manual filter from `results`) still fires -- materializing
+    # it to [] would silently skip that fallback.
+    if "confirmed_findings" in experiment:
+        normalize_results(experiment, "confirmed_findings")
+    # Stage 2 keeps unresolved high-risk candidates separately from strict
+    # confirmed findings.  Load that additive collection here so evidence
+    # gaps are visible in the report instead of looking like the candidate was
+    # silently filtered out.  It is deliberately not merged into the strict
+    # ``confirmed_findings`` artifact used by dynamic testing.
+    if "review_findings" in experiment:
+        normalize_results(experiment, "review_findings")
+    # FAM-ROBUST (fa15/fa16, kept as defense-in-depth): `results` is
+    # model-supplied; a non-Anthropic model can emit a bare string/number where a
+    # result dict is expected. Drop non-dict elements once at the entry so the
+    # confirmed filter and the full_result `next(...)` lookup below never call
+    # `.get()` on a non-dict.
+    all_results = [r for r in experiment.get("results", []) if isinstance(r, dict)]
+    # Verified results produced by older runs did not carry the Stage-1 source
+    # map.  Recover it from the sibling results/call-graph artifact before
+    # building findings so disclosures remain source-faithful even when the
+    # scan itself predates the verifier fix.
+    code_by_route = _load_code_by_route(results_path, experiment)
+    # Join the optional dataset/call-graph artifacts once.  The resulting
+    # index is bounded per finding by ``build_disclosure_context`` and is kept
+    # additive so older consumers can ignore the report context safely.
+    report_context_index = load_report_context_index(
+        os.path.dirname(os.path.abspath(results_path))
+    )
+    metrics = experiment.get("metrics", {})
+
+    # Use confirmed_findings if present (verified results), else filter manually
+    confirmed = experiment.get("confirmed_findings")
+    if confirmed is None:
+        # Filter on the FINAL verdict, not the `agree` flag. Stage 2 may
+        # disagree on reason/CWE but still confirm vulnerable — those must
+        # not be dropped. Unverified findings are included (no verification
+        # dict = assumed confirmed).
+        confirmed = [
+            r for r in all_results
+            if str(r.get("finding") or r.get("verdict", "")).lower() in ("vulnerable", "bypassable")
+        ]
+
+    # FAM-ROBUST: the `confirmed_findings` (verified-results) path comes straight
+    # from model output and may contain non-dict elements; drop them before the
+    # top-level `for finding in confirmed` loop `.get()`s each element.
+    confirmed = [c for c in confirmed if isinstance(c, dict)]
+
+    review = experiment.get("review_findings") or []
+    review = [r for r in review if isinstance(r, dict)]
+
+    # ---------------------------------------------------------------
+    # Dedup: collapse caller/callee pairs that share the same attack
+    # vector. The call graph records A→B edges; if B is only reachable
+    # through A and both have the same attack_vector, keep only A.
+    # ---------------------------------------------------------------
+    scan_dir = os.path.dirname(os.path.abspath(results_path))
+    effective_graph_path = os.path.join(scan_dir, "effective_call_graph.json")
+    call_graph_path = (
+        effective_graph_path
+        if os.path.isfile(effective_graph_path)
+        else os.path.join(scan_dir, "call_graph.json")
+    )
+    # Deduplicate only the strict findings.  An unresolved Stage-2 candidate
+    # is a separate review record and must not disappear merely because it
+    # shares a CWE with a caller/callee that was confirmed elsewhere.
+    confirmed = _dedup_caller_callee(confirmed, all_results, call_graph_path)
+    if review:
+        # Preserve strict findings first, then append unresolved candidates in
+        # stable order. A route can appear in both collections when an older
+        # artifact was resumed; do not duplicate it in the human report.
+        seen_routes = {
+            r.get("route_key") or r.get("unit_id")
+            for r in confirmed
+            if r.get("route_key") or r.get("unit_id")
+        }
+        for candidate in review:
+            key = candidate.get("route_key") or candidate.get("unit_id")
+            if key and key in seen_routes:
+                continue
+            confirmed.append(candidate)
+            if key:
+                seen_routes.add(key)
+
+    # Build findings in PipelineOutput schema
+    findings_data = []
+    for i, finding in enumerate(confirmed):
+        route_key = finding.get("route_key") or finding.get("unit_id", "unknown")
+
+        # Look up full result for extra fields
+        full_result = next(
+            (r for r in all_results
+             if (r.get("route_key") or r.get("unit_id")) == route_key),
+            finding,
+        )
+
+        # Extract vulnerability details from nested structure if present
+        vulns = finding.get("vulnerabilities", [])
+        # Truthiness only proves the list is non-empty, not that its first
+        # element is a dict. A model can return vulnerabilities=["str"]; guard
+        # the element with isinstance so the vuln.get(...) reads below can't
+        # raise AttributeError. Same defensive-coercion class as _coerce_to_str.
+        vuln = vulns[0] if vulns and isinstance(vulns[0], dict) else {}
+
+        description = (
+            vuln.get("description")
+            or finding.get("reasoning")
+            or full_result.get("reasoning")
+        )
+        if not description:
+            description = (
+                "The analysis marked this function as a security finding, but "
+                "did not provide a detailed description. Manual source review "
+                "is required before disclosure."
+            )
+
+        vulnerable_code = _source_code_from_value(
+            vuln.get("vulnerable_code") or code_by_route.get(route_key)
+        )
+        file_path = route_key.split(":")[0] if ":" in route_key else "unknown"
+        vulnerable_code_section = _build_vulnerable_code_section(
+            file_path=file_path,
+            code=vulnerable_code,
+            language=language,
+        )
+        if not vulnerable_code_section:
+            # Never silently omit the heading.  A missing snippet is an
+            # artifact-quality problem, not evidence that the vulnerability
+            # has no source location; make the limitation explicit for both
+            # the LLM and the human reviewer.
+            vulnerable_code_section = (
+                "## Vulnerable Code\n\n"
+                f"`{file_path}` / `{route_key.split(':', 1)[1] if ':' in route_key else route_key}`\n\n"
+                "> Source code was not preserved in the available scan artifacts. "
+                "Review this function in the repository before disclosure."
+            )
+
+        impact = vuln.get("impact") or finding.get("attack_vector")
+        if not impact:
+            impact = (
+                "The security impact could not be determined from the available "
+                "analysis fields; confirm the affected operation manually."
+            )
+
+        steps_to_reproduce = vuln.get("steps_to_reproduce")
+        if not steps_to_reproduce:
+            # Some non-Anthropic models return structured objects where the
+            # prompt asked for strings. Coerce defensively so a stray dict
+            # in attack_vector / verification_explanation / data_flow
+            # doesn't crash report generation. See ``_coerce_to_str``.
+            parts = []
+            if finding.get("attack_vector"):
+                parts.append(_coerce_to_str(finding["attack_vector"]))
+            # ``or {}`` only substitutes for FALSY values; a truthy non-dict
+            # exploit_path (a string/list, which non-Anthropic models emit)
+            # would slip through and crash ``.get``. Guard the type too.
+            exploit_path = finding.get("exploit_path")
+            if not isinstance(exploit_path, dict):
+                exploit_path = {}
+            data_flow = exploit_path.get("data_flow")
+            if data_flow:
+                # ``data_flow`` is meant to be ``list[str]`` (verify
+                # schema), but a model can violate that. Coerce the
+                # CONTAINER first — only join step-by-step when it really
+                # is a sequence; otherwise coerce the whole value. A bare
+                # iterate-and-join here would crash on a scalar, char-walk
+                # a bare string, and drop a dict's values. See M3.
+                if isinstance(data_flow, (list, tuple)):
+                    flow_str = " -> ".join(_coerce_to_str(step) for step in data_flow)
+                else:
+                    flow_str = _coerce_to_str(data_flow)
+                parts.append("Data flow: " + flow_str)
+            if finding.get("verification_explanation"):
+                parts.append("Verification: " + _coerce_to_str(finding["verification_explanation"]))
+            steps_to_reproduce = "\n\n".join(parts) if parts else None
+        if not steps_to_reproduce:
+            steps_to_reproduce = (
+                "[REQUIRES DYNAMIC TESTING] Reproduce the call with a controlled "
+                "local harness and record the input, caller identity, and result."
+            )
+
+        suggested_fix = vuln.get("suggested_fix")
+        if not suggested_fix:
+            suggested_fix = (
+                "[MANUAL REVIEW REQUIRED] Add the missing validation, authorization, "
+                "or bounds check at the identified trust boundary after confirming "
+                "the intended behavior."
+            )
+
+        # Determine stage2 verdict.
+        #
+        # PR #69 F4: distinguish an INCOMPLETE verification from a genuine
+        # rejection. R4-7 made the verifier fail-safe — on its four degenerate
+        # paths (unparseable text / no tool calls / max iterations / finish
+        # without `agree`) and on an adapter raise it returns ``agree=False``
+        # but preserves the Stage-1 verdict and flags ``incomplete=True``.
+        # ``agree=False`` alone is ambiguous: it can mean "Stage 2 disagreed"
+        # OR "Stage 2 could not complete". Mapping the latter to "rejected" is
+        # wrong (verify never rejected) and silently drops it from disclosures.
+        # Map incomplete → "unverified" so it renders distinctly and stays
+        # disclosure-eligible (surfaced for manual review).
+        verification = finding.get("verification")
+        if not isinstance(verification, dict) or not verification:
+            # ``confirmed_findings`` in older artifacts sometimes contains a
+            # compact copy without the verifier payload while the matching
+            # entry in ``results`` still has it. Prefer that full evidence
+            # before falling back to an empty mapping.
+            verification = full_result.get("verification")
+        # A non-Anthropic model can return ``verification`` as a truthy
+        # non-dict (e.g. the string "agreed"); the ``.get`` calls below
+        # would raise AttributeError and crash report generation. Coerce
+        # to an empty dict — same read-side guard as exploit_path / M3.
+        if not isinstance(verification, dict):
+            verification = {}
+        raw_agree = verification.get("agree", False)
+        agree = (
+            raw_agree if isinstance(raw_agree, bool)
+            else isinstance(raw_agree, str) and raw_agree.strip().lower() == "true"
+        )
+        raw_incomplete = verification.get("incomplete", False)
+        incomplete = (
+            raw_incomplete if isinstance(raw_incomplete, bool)
+            else isinstance(raw_incomplete, str) and raw_incomplete.strip().lower() == "true"
+        )
+        if agree:
+            # ``agree`` means agreement with Stage 1, not that the finding is
+            # necessarily a confirmed vulnerability.  In particular, Stage 2
+            # may agree that Stage 1 is INCONCLUSIVE.  The old mapping turned
+            # that into ``agreed`` (and therefore disclosure-eligible), which
+            # made an unresolved route look like a completed verification.
+            # Keep only a conclusive vulnerable/bypassable agreement as a
+            # normal Stage-2 verdict; an agreement on safe/protected is a
+            # resolved non-finding and an agreement on inconclusive remains
+            # explicitly unverified.
+            agreed_finding = str(
+                verification.get("correct_finding")
+                or finding.get("finding")
+                or finding.get("verdict")
+                or ""
+            ).strip().lower()
+            if agreed_finding in ("vulnerable", "bypassable"):
+                agreed_path = finding.get("exploit_path") or verification.get("exploit_path")
+                stage2_verdict = "confirmed" if isinstance(agreed_path, dict) and agreed_path else "agreed"
+            elif agreed_finding == "inconclusive" or not agreed_finding:
+                stage2_verdict = "unverified"
+            else:
+                stage2_verdict = "rejected"
+        elif incomplete:
+            stage2_verdict = "unverified"
+        elif verification:
+            # A Stage-2 disagreement can still *promote* an inconclusive
+            # result, or refine vulnerable -> bypassable.  Treat the final
+            # finding as authoritative instead of labeling every agree=False
+            # result "rejected" (which would drop a real vulnerability from
+            # disclosure).  Only a conclusive non-vulnerable final finding is
+            # a rejection.
+            stage1_finding = str(
+                verification.get("stage1_finding")
+                or finding.get("stage1_finding")
+                or finding.get("finding")
+                or finding.get("verdict")
+                or ""
+            ).strip().lower()
+            recorded_finding = str(finding.get("finding") or "").strip().lower()
+            corrected_finding = str(
+                verification.get("correct_finding") or ""
+            ).strip().lower()
+            # A current verifier writes the corrected verdict back to
+            # ``finding``.  Historical artifacts may not have done so; when
+            # the field still equals the recorded Stage-1 verdict, prefer the
+            # verifier's explicit correction instead of accidentally treating
+            # a vulnerable->safe disagreement as vulnerable.
+            if corrected_finding and recorded_finding in ("", stage1_finding):
+                final_finding = corrected_finding
+            else:
+                final_finding = recorded_finding or str(
+                    finding.get("verdict") or corrected_finding or ""
+                ).strip().lower()
+            if final_finding in ("vulnerable", "bypassable"):
+                exploit_path = verification.get("exploit_path")
+                complete_path = (
+                    isinstance(exploit_path, dict)
+                    and bool(exploit_path.get("sink_reached"))
+                    and exploit_path.get("attacker_control_at_sink") in ("full", "partial")
+                    and not exploit_path.get("path_broken_at")
+                )
+                stage2_verdict = "confirmed" if complete_path else final_finding
+            elif final_finding == "inconclusive":
+                # Still unresolved after the recovery attempt: surface it for
+                # manual review rather than treating it as a clean rejection.
+                stage2_verdict = "unverified"
+            else:
+                stage2_verdict = "rejected"
+        else:
+            stage2_verdict = finding.get("finding", "vulnerable")
+
+        assessment = verification.get("assessment")
+        if not isinstance(assessment, dict) or not assessment:
+            # New artifacts normally keep the assessment under the verifier
+            # payload.  Keep the additive field readable for resumed/legacy
+            # artifacts where the verifier payload was flattened onto the
+            # result or finding record.
+            assessment = (
+                full_result.get("verification_assessment")
+                or finding.get("verification_assessment")
+                or {}
+            )
+        if not isinstance(assessment, dict):
+            assessment = {}
+        primary_for_inventory = finding.get("finding") or finding.get("verdict")
+        if verification.get("correct_finding"):
+            primary_for_inventory = verification.get("correct_finding")
+        independent_findings = normalize_findings(
+            verification.get("findings")
+            or full_result.get("findings")
+            or finding.get("findings"),
+            primary_finding=primary_for_inventory,
+            synthesize_primary=True,
+        )
+        independent_findings = ensure_primary_record(
+            independent_findings, primary_for_inventory
+        )
+        context_findings = [
+            item for item in independent_findings
+            if item.get("scope") == "context" or item.get("target_match") is False
+        ]
+        if stage2_verdict in ("unverified", "inconclusive"):
+            review_status = "needs_review"
+        elif stage2_verdict in ("confirmed", "agreed", "vulnerable", "bypassable"):
+            review_status = "confirmed_or_stage1_candidate"
+        else:
+            review_status = "resolved"
+
+        report_context = build_disclosure_context(
+            report_context_index,
+            route_key,
+            finding=finding,
+            full_result=full_result,
+            source_code=vulnerable_code,
+        )
+        target_location = report_context.get("target", {}).get("source_location", {})
+
+        findings_data.append({
+            "id": f"VULN-{i+1:03d}",
+            "route_key": route_key,
+            "name": vuln.get("name", finding.get("finding", "Unknown Vulnerability")),
+            "short_name": vuln.get("short_name", finding.get("verdict", "vuln")),
+            "location": {
+                # function is the exact complement of file so that
+                # file + ":" + function == route_key round-trips (the cli.py
+                # dynamic-test bridge reconstructs route_key from these two).
+                # This drops the redundant file prefix that used to duplicate
+                # ``file`` inside ``function`` (D3b).
+                "file": route_key.split(":")[0] if ":" in route_key else "unknown",
+                "function": route_key.split(":", 1)[1] if ":" in route_key else route_key,
+                "start_line": target_location.get("start_line"),
+                "end_line": target_location.get("end_line"),
+            },
+            "cwe_id": vuln.get("cwe_id") or finding.get("cwe_id") or full_result.get("cwe_id", 0),
+            "cwe_name": vuln.get("cwe_name") or finding.get("cwe_name") or full_result.get("cwe_name", "Unknown"),
+            "stage1_verdict": finding.get("verdict", finding.get("finding", "vulnerable")),
+            "stage2_verdict": stage2_verdict,
+            # Keep phase ownership visible in the disclosure artifact.  The
+            # structural Stage-1 context is not a proof of source-to-sink
+            # control; parameter data-flow status belongs to Stage 2.
+            "stage_context": full_result.get("stage_context") or finding.get("stage_context") or {},
+            "stage1_context_status": full_result.get(
+                "stage1_context_status", finding.get("stage1_context_status", "unknown")
+            ),
+            "stage2_dataflow_status": (
+                assessment.get("parameter_dataflow_status")
+                or full_result.get("stage2_dataflow_status")
+                or finding.get("stage2_dataflow_status", "not_evaluated")
+            ),
+            # Additive status fields make a Stage-2 downgrade explainable in
+            # the UI/report.  They do not change the strict dynamic-testing
+            # filter or the confirmed_findings artifact.
+            "review_status": review_status,
+            "verification_assessment": assessment,
+            # Preserve independent target/context issues without turning a
+            # neighboring context risk into a second disclosure automatically.
+            # Consumers can inspect this inventory or run a separate policy;
+            # the legacy finding remains the primary target record.
+            "independent_findings": independent_findings,
+            "context_findings": context_findings,
+            "description": description,
+            # Preserve the structured Stage-1 claims needed by the reviewer-
+            # first disclosure block.  These additive fields keep the raw
+            # reasoning/guards/attack preconditions available without making
+            # the report generator reconstruct them from prose.
+            "reasoning": finding.get("reasoning") or full_result.get("reasoning"),
+            "root_cause": (
+                vuln.get("root_cause")
+                or finding.get("root_cause")
+                or full_result.get("root_cause")
+            ),
+            "guard_analysis": (
+                vuln.get("guard_analysis")
+                or finding.get("guard_analysis")
+                or full_result.get("guard_analysis")
+            ),
+            "attack_scenario": (
+                vuln.get("attack_scenario")
+                or finding.get("attack_scenario")
+                or full_result.get("attack_scenario")
+            ),
+            "attack_vector": finding.get("attack_vector") or full_result.get("attack_vector"),
+            "preconditions": finding.get("preconditions") or full_result.get("preconditions"),
+            "vulnerability_categories": (
+                vuln.get("vulnerability_categories")
+                or finding.get("vulnerability_categories")
+                or full_result.get("vulnerability_categories")
+                or []
+            ),
+            "counterevidence": finding.get("counterevidence") or full_result.get("counterevidence") or [],
+            "missing_evidence": finding.get("missing_evidence") or full_result.get("missing_evidence") or [],
+            "vulnerable_code": vulnerable_code,
+            "vulnerable_code_section": vulnerable_code_section,
+            "impact": impact,
+            "suggested_fix": suggested_fix,
+            "steps_to_reproduce": steps_to_reproduce,
+            # Evidence-rich, additive context used by the disclosure model and
+            # by the Web/UI viewers.  Existing report consumers only read the
+            # baseline fields above, so this remains backwards compatible.
+            "report_context": report_context,
+        })
+
+    # Compute costs and durations from step reports
+    costs = {}
+    durations = {}
+    if step_reports:
+        for sr in step_reports:
+            step = sr.get("step", "unknown")
+            stage_costs = sr.get("costs_by_currency") or {}
+            if not stage_costs and sr.get("cost_usd"):
+                stage_costs = {"USD": sr["cost_usd"]}
+            if stage_costs:
+                costs[step] = {
+                    "actual": stage_costs.get("USD", 0.0),
+                    "by_currency": stage_costs,
+                }
+            if sr.get("duration_seconds"):
+                durations[step] = sr["duration_seconds"]
+
+    # Populate skipped_steps from the authoritative ScanResult skip data. The
+    # reporter is otherwise blind to skips (it reads only cost/duration above),
+    # so pipeline_stats.skipped_steps was always [] — a crashed/skipped step
+    # (most importantly a non-aborting Stage-2 verify failure) then rendered in
+    # the human summary as "No steps were skipped", indistinguishable from a
+    # clean fully-verified scan. Report-fidelity only: per-finding disclosure is
+    # unchanged (unverified findings stay included, labeled stage2_verdict
+    # 'vulnerable' vs 'confirmed'); this does NOT gate disclosure.
+    _skip_reasons = skipped_step_reasons or {}
+    skipped_steps_detail = [
+        {"step": s, "reason": _skip_reasons.get(s, "")}
+        for s in (skipped_steps or [])
+    ]
+
+    # Count the additive independent-issue inventory separately from the
+    # legacy one-finding result count.  This makes alternate/context risks
+    # measurable without promoting them to disclosure records or changing the
+    # vulnerable/safe bucket semantics.
+    independent_issue_count = 0
+    target_issue_count = 0
+    context_issue_count = 0
+    for item in findings_data:
+        inventory = item.get("independent_findings") or []
+        if not isinstance(inventory, list):
+            continue
+        independent_issue_count += len(inventory)
+        for record in inventory:
+            if not isinstance(record, dict):
+                continue
+            if record.get("scope") == "context" or record.get("target_match") is False:
+                context_issue_count += 1
+            else:
+                target_issue_count += 1
+
+    total_units = metrics.get("total", len(all_results))
+
+    # F1: report the TRUE reachable count from the reachability filter's record
+    # (persisted to <scan_dir>/dataset.json by the parse step) instead of
+    # fabricating reachable_units = total_units. Surfacing original_units +
+    # the reduction makes the pruning visible (a report that showed only the
+    # kept count gave no hint units were pruned — the neqo misdiagnosis vector).
+    # When no record exists but a filtering level was requested, warn rather
+    # than silently assert full reachability (the free-function-parser /
+    # not-recorded blind spot); also surface any blackout warning the filter
+    # recorded (previously written to metadata only, with no report consumer).
+    _reach = _load_reachability_metadata(
+        os.path.dirname(os.path.abspath(results_path))
+    )
+    reachability_warnings: list[str] = []
+    reachability_filter_applied = _reach is not None
+    reachable_units = total_units
+    original_units = total_units
+    reachability_reduction_percentage = None
+    if _reach is not None:
+        if isinstance(_reach.get("reachable_units"), int):
+            reachable_units = _reach["reachable_units"]
+        if isinstance(_reach.get("original_units"), int):
+            original_units = _reach["original_units"]
+        if isinstance(_reach.get("reduction_percentage"), (int, float)):
+            reachability_reduction_percentage = _reach["reduction_percentage"]
+        _rf_warning = _reach.get("warning")
+        if isinstance(_rf_warning, str) and _rf_warning:
+            reachability_warnings.append(_rf_warning)
+    elif total_units > 0 and (processing_level or "").lower() not in ("", "all", "none"):
+        reachability_warnings.append(
+            f"Reachability filtering was requested (level={processing_level!r}) "
+            "but no reachability_filter record was found; reachable_units falls "
+            "back to total_units and may overstate reachability."
+        )
+
+    # reachable_units is a parse-stage count (units the filter kept); total_units
+    # is the analyze-stage total (which --limit / subset runs can truncate below
+    # the kept set). Guard the cross-stage case so the report never silently
+    # shows reachable_units > total_units without explanation.
+    if isinstance(reachable_units, int) and reachable_units > total_units:
+        reachability_warnings.append(
+            f"reachable_units ({reachable_units}) exceeds analyzed total_units "
+            f"({total_units}): analysis covered a subset of the reachable units "
+            "(e.g. --limit). reachable_units is the reachability filter's kept "
+            "count; units_analyzed reflects what was actually analyzed."
+        )
+
+    pipeline_output = {
+        "repository": {
+            "name": repo_name or experiment.get("dataset", "unknown"),
+            "url": repo_url or "",
+            "language": language or "",
+            "commit_sha": commit_sha,
+        },
+        "analysis_date": datetime.now(timezone.utc).isoformat(),
+        "application_type": application_type,
+        # Which path supplied the security model (Plan DoD #9). Additive key;
+        # Go consumers use comma-ok access so it is safe to add.
+        "context_source": context_source,
+        **(
+            {"threat_model_sha256": threat_model_sha256}
+            if threat_model_sha256
+            else {}
+        ),
+        # Over-permissive-model warnings (previously stderr-only). Emitted as a
+        # list so the report header can render them; empty list when none.
+        "threat_model_warnings": list(threat_model_warnings or []),
+        **(
+            {"application_context_provenance": application_context_provenance}
+            if application_context_provenance
+            else {}
+        ),
+        "pipeline_stats": {
+            "total_units": total_units,
+            "reachable_units": reachable_units,
+            # Additive reachability provenance (all tolerated by the untyped
+            # pipeline_stats dict in report/schema.py):
+            "original_units": original_units,
+            "reachability_filter_applied": reachability_filter_applied,
+            "reachability_reduction_percentage": reachability_reduction_percentage,
+            "reachability_warnings": reachability_warnings,
+            "units_analyzed": total_units - metrics.get("errors", 0),
+            "independent_issue_count": independent_issue_count,
+            "target_issue_count": target_issue_count,
+            "context_issue_count": context_issue_count,
+            "processing_level": processing_level,
+            "costs": costs,
+            "durations": durations,
+            "skipped_steps": skipped_steps_detail,
+        },
+        "results": {
+            "vulnerable": metrics.get("vulnerable", 0) + metrics.get("bypassable", 0),
+            "safe": metrics.get("safe", 0) + metrics.get("protected", 0),
+            "inconclusive": metrics.get("inconclusive", 0),
+            # F13: errored units are part of `total` (see units_analyzed above), so the
+            # results buckets must include them or they cannot reconcile to `total`.
+            "errors": metrics.get("errors", 0),
+            "total": total_units,
+        },
+        "findings": findings_data,
+    }
+
+    # If this scan ran in diff mode, attach the manifest + filter stats so the
+    # HTML report can show a PR / incremental scan header.
+    scan_dir = os.path.dirname(os.path.abspath(results_path))
+    diff_meta = _load_diff_metadata(scan_dir)
+    if diff_meta is not None:
+        pipeline_output["diff"] = diff_meta
+        _banner = (
+            f"[Report] Incremental scan: base={diff_meta.get('base_ref')}, "
+            f"scope={diff_meta.get('scope')}, "
+            f"{diff_meta.get('units_in_diff', '?')}/{diff_meta.get('units_total_parsed', '?')} units"
+        )
+        if diff_meta.get("pr_number"):
+            _banner += f", PR #{diff_meta['pr_number']}"
+        print(_banner, file=sys.stderr)
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    write_json(output_path, pipeline_output, ensure_ascii=False)
+    print(f"  pipeline_output.json: {len(findings_data)} findings", file=sys.stderr)
+    print(f"  Written to {output_path}", file=sys.stderr)
+
+    return output_path, len(findings_data)
+
+
+def generate_html_report(
+    results_path: str,
+    dataset_path: str,
+    output_path: str,
+) -> ReportResult:
+    """Generate an interactive HTML report with Chart.js.
+
+    Wraps generate_report.py via subprocess.
+
+    Args:
+        results_path: Path to experiment/results JSON.
+        dataset_path: Path to dataset JSON.
+        output_path: Path for the output HTML file.
+
+    Returns:
+        ReportResult with the output path.
+    """
+    print("[Report] Generating HTML report...", file=sys.stderr)
+
+    # Pass step reports dir so the HTML report can include cost/time breakdown
+    step_reports_dir = os.path.dirname(os.path.abspath(results_path))
+
+    cmd = [
+        # -P: no CWD on sys.path. `-m` prepends the process CWD to sys.path[0],
+        # and the engine inherits the user's shell CWD — which, in the standard
+        # `git clone X && cd X && vulnfounder report` flow, is INSIDE the scanned
+        # untrusted repo. Without -P, a hostile ``report/`` package in that repo
+        # shadows this one and its __init__ executes. This dropped when cwd=
+        # _CORE_ROOT was removed to fix the wheel; -P restores the containment
+        # the cwd pin held by accident.
+        sys.executable, "-P", "-m", "report.html_report", results_path, dataset_path, output_path,
+        "--step-reports-dir", step_reports_dir,
+    ]
+
+    # No cwd=_CORE_ROOT: these are now `-m` package invocations resolved through
+    # the installed distribution, not source-tree-relative scripts. Depending on
+    # cwd is what made them unrunnable from an installed wheel.
+    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"HTML report generation failed (exit code {result.returncode})")
+
+    print(f"  HTML report: {output_path}", file=sys.stderr)
+    return ReportResult(output_path=output_path, format="html")
+
+
+def generate_csv_report(
+    results_path: str,
+    dataset_path: str,
+    output_path: str,
+) -> ReportResult:
+    """Export results to CSV.
+
+    Wraps export_csv.py via subprocess.
+
+    Args:
+        results_path: Path to experiment/results JSON.
+        dataset_path: Path to dataset JSON.
+        output_path: Path for the output CSV file.
+
+    Returns:
+        ReportResult with the output path.
+    """
+    print("[Report] Generating CSV report...", file=sys.stderr)
+
+    # -P: keep the untrusted CWD off sys.path so a hostile report/ package in the
+    # scanned repo cannot shadow this one. See the html path above for the full note.
+    cmd = [sys.executable, "-P", "-m", "report.csv_export", results_path, dataset_path, output_path]
+
+    # No cwd=_CORE_ROOT: these are now `-m` package invocations resolved through
+    # the installed distribution, not source-tree-relative scripts. Depending on
+    # cwd is what made them unrunnable from an installed wheel.
+    result = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"CSV export failed (exit code {result.returncode})")
+
+    print(f"  CSV report: {output_path}", file=sys.stderr)
+    return ReportResult(output_path=output_path, format="csv")
+
+
+def generate_summary_report(
+    results_path: str,
+    output_path: str,
+    llm_config_name: str | None = None,
+    language: str = "en",
+) -> ReportResult:
+    """Generate LLM-based summary report (Markdown).
+
+    Calls report/generator.py directly (in-process) for proper cost tracking.
+
+    Args:
+        results_path: Path to pipeline_output.json or results JSON.
+        output_path: Path for the output Markdown file.
+        llm_config_name: Name of the llm-config to use. ``None`` falls
+            through to the file's ``default_llm`` (or the built-in
+            ``vulnfounder-default``).
+        language: Report language. ``en`` keeps the existing English output;
+            ``zh-CN`` uses the Chinese summary prompt.
+
+    Returns:
+        ReportResult with the output path and usage info.
+    """
+    import json
+    from report.generator import generate_summary_report as _generate_summary, merge_dynamic_results
+    from report.schema import validate_pipeline_output, ValidationError
+    from utilities.llm import (
+        build_phase_registry,
+        load_config_file,
+        probe_registry_or_raise,
+        resolve_llm_config,
+    )
+
+    print("[Report] Generating summary report (LLM)...", file=sys.stderr)
+
+    pipeline_data = read_json(results_path)
+    # fa18 TRUST BOUNDARY: `findings` is a model array-of-dict read back from
+    # pipeline_output.json; merge_dynamic_results (below) and the summary
+    # compaction iterate it with `finding.get(...)`. Normalize to dicts-only
+    # once at this load, BEFORE the merge, so a non-dict element can't crash.
+    # Guard on presence so an absent `findings` still trips validation's
+    # "missing required field" check rather than silently validating as empty.
+    if "findings" in pipeline_data:
+        normalize_results(pipeline_data, "findings")
+    # Merge dynamic test results if available
+    pipeline_data = merge_dynamic_results(pipeline_data, results_path)
+
+    try:
+        validate_pipeline_output(pipeline_data)
+    except ValidationError as e:
+        raise RuntimeError(f"Invalid pipeline output: {e}")
+
+    # Resolve the report-phase binding once and pass it through.
+    # ``generate_summary_report`` is always invoked standalone via
+    # ``vulnfounder report -f summary`` — no upstream scanner has
+    # pre-validated the registry, so probe it here.
+    cf = load_config_file()
+    registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+    probe_registry_or_raise(registry)
+    report_binding = registry.get("report")
+    # Keep the historical two-argument call for English so downstream test
+    # doubles and integrations that wrap the generator remain source
+    # compatible. The optional language is only forwarded when requested.
+    if language == "en":
+        report_text, usage = _generate_summary(pipeline_data, report_binding)
+    else:
+        report_text, usage = _generate_summary(
+            pipeline_data, report_binding, language=language
+        )
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open_utf8(output_path, "w") as f:
+        f.write(report_text)
+
+    print(f"  Summary report: {output_path}", file=sys.stderr)
+    print(f"  Cost: {_format_usage_cost(usage)} ({usage['total_tokens']:,} tokens)", file=sys.stderr)
+
+    # Record in global tracker so step_context picks it up
+    _record_usage_in_tracker(usage, report_binding)
+
+    return ReportResult(output_path=output_path, format="summary", usage=_usage_to_info(usage))
+
+
+def safe_disclosure_filename(short_name: str) -> str:
+    """Reduce a model-supplied name to a single safe path component.
+
+    ``short_name`` is LLM output (``vuln.get("short_name")``), and it used to reach
+    ``os.path.join`` through only ``.replace(" ", "_").upper()``. That is not
+    sanitisation: ``/`` and ``..`` pass through untouched, so a name like
+    ``../../../etc/pwned`` escaped the output directory and turned report generation
+    into an arbitrary-write primitive.
+
+    This matters more than a typical output-escaping bug because the threat model
+    file is repository-authored and unfenced — the accepted prompt-injection gap is
+    precisely a channel for steering model output, so treating that output as
+    trusted compounds one accepted risk into an unaccepted one.
+
+    Allowlist rather than blocklist: enumerate what may appear, so novel separators,
+    unicode lookalikes and encoding tricks are excluded by construction instead of
+    by remembering to ban them.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "_", (short_name or "").strip())
+    cleaned = cleaned.strip("._-")[:64]
+    return cleaned.upper() or "UNNAMED"
+
+
+def generate_disclosure_docs(
+    results_path: str,
+    output_dir: str,
+    llm_config_name: str | None = None,
+) -> ReportResult:
+    """Generate per-vulnerability disclosure documents.
+
+    Calls report/generator.py directly (in-process) for proper cost tracking.
+
+    Args:
+        results_path: Path to pipeline_output.json or results JSON.
+        output_dir: Directory for disclosure Markdown files.
+        llm_config_name: Name of the llm-config to use. ``None`` falls
+            through to the file's ``default_llm``.
+
+    Returns:
+        ReportResult with the output directory path and usage info.
+    """
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from report.generator import (
+        generate_disclosure as _generate_disclosure,
+        _hydrate_pipeline_findings,
+        _merge_usage,
+        merge_dynamic_results,
+    )
+    from report.schema import validate_pipeline_output, ValidationError
+    from utilities.llm import (
+        build_phase_registry,
+        load_config_file,
+        probe_registry_or_raise,
+        resolve_llm_config,
+    )
+
+    print("[Report] Generating disclosure documents (LLM)...", file=sys.stderr)
+
+    pipeline_data = read_json(results_path)
+    # Repair report input from old scans in memory.  Before the verifier kept
+    # code_by_route, pipeline_output.json had no source section; the sibling
+    # results/call-graph artifact still contains enough evidence to regenerate
+    # a complete disclosure without rerunning analysis.
+    pipeline_data = _hydrate_pipeline_findings(results_path, pipeline_data)
+    # fa18 TRUST BOUNDARY: normalize model `findings` to dicts-only at load,
+    # BEFORE merge_dynamic_results / the disclosure-eligibility enumerate below,
+    # so a non-dict element can't crash `finding.get("stage2_verdict")`.
+    # Presence-guarded (see generate_summary_report for rationale).
+    if "findings" in pipeline_data:
+        normalize_results(pipeline_data, "findings")
+    # Merge dynamic test results if available
+    pipeline_data = merge_dynamic_results(pipeline_data, results_path)
+
+    try:
+        validate_pipeline_output(pipeline_data)
+    except ValidationError as e:
+        raise RuntimeError(f"Invalid pipeline output: {e}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    # Keep the historical English directory and place the Chinese variant
+    # beside it so existing consumers remain compatible while reviewers get a
+    # predictable localized artifact directory.
+    output_path = Path(output_dir)
+    chinese_output_dir = output_path.with_name(output_path.name + ".zh-CN")
+
+    # Resolve the report-phase binding once and reuse across the
+    # ThreadPoolExecutor — adapters are stateless dispatchers, safe
+    # to share. Probe the registry upfront (standalone-invocation
+    # path; same rationale as generate_summary_report).
+    cf = load_config_file()
+    registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+    probe_registry_or_raise(registry)
+    report_binding = registry.get("report")
+
+    product_name = pipeline_data["repository"]["name"]
+    all_usages = []
+    count = 0
+
+    # Collect findings eligible for a disclosure document.
+    #
+    # Eligibility is defined once in core.verdict_taxonomy.DISCLOSURE_ELIGIBLE
+    # (shared with report/generator.py and report/__main__.py) so the producer
+    # (this module's stage2_verdict mapping) and every disclosure filter stay in
+    # lock-step -- a verdict the producer can emit but no filter accepts is a
+    # silently-dropped finding. "unverified" (Stage-2 could not COMPLETE) stays
+    # eligible; "rejected" (Stage 2 actively downgraded) stays excluded.
+    confirmed = [
+        (i, finding) for i, finding in enumerate(pipeline_data["findings"], 1)
+        if finding.get("stage2_verdict") in DISCLOSURE_ELIGIBLE
+    ]
+
+    if not confirmed:
+        print("  No confirmed vulnerabilities to generate disclosures for.", file=sys.stderr)
+    else:
+        print(f"  Generating {len(confirmed)} disclosures in parallel (8 workers)...",
+              file=sys.stderr)
+
+        def _one(args):
+            i, finding = args
+            filename = f"DISCLOSURE_{i:02d}_{safe_disclosure_filename(finding['short_name'])}.md"
+            written = []
+            usages = []
+            for locale, target_dir in (("en", output_path), ("zh-CN", chinese_output_dir)):
+                target_dir.mkdir(parents=True, exist_ok=True)
+                kwargs = {"pipeline_data": pipeline_data}
+                # Keep the legacy English invocation shape for wrappers and
+                # third-party integrations that still accept only the old
+                # arguments; the locale is explicit for the new Chinese call.
+                if locale == "zh-CN":
+                    kwargs["language"] = locale
+                disclosure_text, usage = _generate_disclosure(
+                    finding,
+                    product_name,
+                    report_binding,
+                    **kwargs,
+                )
+                filepath = target_dir / filename
+                with open_utf8(filepath, "w") as f:
+                    f.write(disclosure_text)
+                written.append(str(filepath))
+                usages.append(usage)
+            from report.generator import _merge_usage
+            return finding["short_name"], written, _merge_usage(usages)
+
+        executor = ThreadPoolExecutor(max_workers=8)
+        futures = {executor.submit(_one, item): item for item in confirmed}
+        try:
+            for future in as_completed(futures):
+                name, filepaths, usage = future.result()
+                all_usages.append(usage)
+                count += 1
+                print(f"  [{count}/{len(confirmed)}] {name} -> {filepaths[0]}",
+                      file=sys.stderr)
+                print(f"      中文版本 -> {filepaths[1]}", file=sys.stderr)
+        except KeyboardInterrupt:
+            print("\n[Report] Interrupted — cancelling pending disclosures...",
+                  file=sys.stderr, flush=True)
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        executor.shutdown(wait=False)
+
+    merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+
+    print(f"  Disclosures: {count} English + {count} Chinese files", file=sys.stderr)
+    if count:
+        print(f"  Chinese disclosures: {chinese_output_dir}", file=sys.stderr)
+    print(f"  Cost: {_format_usage_cost(merged_usage)} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)
+
+    # Record in global tracker so step_context picks it up
+    _record_usage_in_tracker(merged_usage, report_binding)
+
+    return ReportResult(output_path=output_dir, format="disclosure", usage=_usage_to_info(merged_usage))
+
+
+def _record_usage_in_tracker(usage: dict, binding):
+    """Record usage in the global TokenTracker so step_context captures it.
+
+    The ``binding`` is the report-phase :class:`PhaseBinding` that
+    produced the tokens. Both the recorded ``model`` and the cost
+    rate must come from it — hardcoding either would lie when the
+    report phase is configured against anything other than opus.
+    """
+    try:
+        from utilities.llm import lookup_pricing
+        from utilities.llm_client import get_global_tracker
+        tracker = get_global_tracker()
+        # Record as a single aggregated call
+        if usage.get("total_tokens", 0) > 0:
+            tracker.record_call(
+                model=binding.model,
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                pricing=lookup_pricing(binding),
+            )
+    except Exception:
+        pass  # Best effort — don't break report generation
+
+
+def _usage_to_info(usage: dict):
+    """Convert a usage dict to a UsageInfo dataclass."""
+    from core.schemas import UsageInfo
+    return UsageInfo(
+        total_calls=1,
+        total_input_tokens=usage.get("input_tokens", 0),
+        total_output_tokens=usage.get("output_tokens", 0),
+        total_tokens=usage.get("total_tokens", 0),
+        total_cost_usd=usage.get("cost_usd", 0.0),
+        total_cost_cny=usage.get("cost_cny", 0.0),
+        costs_by_currency=usage.get("costs_by_currency", {}),
+    )
+
+
+def _format_usage_cost(usage: dict) -> str:
+    """Format usage costs by declared currency for CLI stderr."""
+    costs = usage.get("costs_by_currency") or {}
+    if not costs and usage.get("cost_usd"):
+        costs = {"USD": usage["cost_usd"]}
+    if not costs:
+        return "$0.0000"
+    symbols = {"USD": "$", "CNY": "¥"}
+    return " / ".join(
+        f"{symbols.get(currency, currency + ' ')}{float(amount):.4f}"
+        for currency, amount in sorted(costs.items())
+    )
