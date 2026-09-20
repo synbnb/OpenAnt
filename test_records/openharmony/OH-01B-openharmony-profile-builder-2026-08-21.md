@@ -6,14 +6,14 @@
 |---|---|
 | 阶段 | OH-01B：最小 OpenHarmony 静态信号 Profile Builder |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 开发分支 | `feature/openharmony-adaptation` |
 | Python | 3.11.15，项目 `.venv` |
 | pytest | 9.1.1 |
 
 ## 2. 原逻辑与本阶段目标
 
-OH-01A 已提供平台无关的 `RepositoryProfile`、`CoverageReport` 和语义图契约，但没有任意平台 adapter 能构造该 profile。OpenAnt 仍不能从平台线索获得可版本化的 OpenHarmony 描述。
+OH-01A 已提供平台无关的 `RepositoryProfile`、`CoverageReport` 和语义图契约，但没有任意平台 adapter 能构造该 profile。VulnFounder 仍不能从平台线索获得可版本化的 OpenHarmony 描述。
 
 OH-01B 新增 `OpenHarmonyProfileBuilder`，但范围严格限制为：将调用方**已经收集**的静态信号归一化为 `RepositoryProfile`。它不遍历仓库、不读取源码、不解析 `bundle.json`、不解析 GN/IDL、不运行 shell、也不接入 scanner 或 CLI。
 
@@ -119,6 +119,6 @@ git diff --check
 
 ## 9. 阶段结论
 
-OH-01B 已完成。OpenAnt 现在可以在不执行或信任目标仓文本的前提下，将明确的 OpenHarmony 静态信号构造成版本化 profile，并对证据不足情形保持 fail-safe。
+OH-01B 已完成。VulnFounder 现在可以在不执行或信任目标仓文本的前提下，将明确的 OpenHarmony 静态信号构造成版本化 profile，并对证据不足情形保持 fail-safe。
 
 下一小阶段建议为 OH-01C：增加 profile 输入/输出的严格 schema 验证和 coverage 一致性检查；仍不接入 scanner，用户批准前不修改代码。

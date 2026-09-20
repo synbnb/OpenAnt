@@ -11,7 +11,7 @@
 并把脚本输出当作高置信结论。
 
 旧逻辑没有统一的规则 schema/loader，规则文件的版本、适用平台和来源无法被
-OpenAnt 确定性记录。新逻辑新增：
+VulnFounder 确定性记录。新逻辑新增：
 
 - `core/rules/schema.py`：严格校验规则 ID、版本、标题、平台、严重级别、
   detector 和 JSON-like config；
@@ -58,7 +58,7 @@ rules:
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/rules/test_rule_loader.py
+  libs/vulnfounder-core/tests/rules/test_rule_loader.py
 ```
 
 结果：收集阶段失败：
@@ -77,7 +77,7 @@ list/dict，`yaml.safe_dump` 自动生成了 anchor/alias；loader 正确拒绝 
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/rules/test_rule_loader.py
+  libs/vulnfounder-core/tests/rules/test_rule_loader.py
 
 11 passed in 0.04s
 ```
@@ -97,9 +97,9 @@ list/dict，`yaml.safe_dump` 自动生成了 anchor/alias；loader 正确拒绝 
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/rules \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/test_installed_layout.py -m 'not slow'
+  libs/vulnfounder-core/tests/rules \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/test_installed_layout.py -m 'not slow'
 
 60 passed, 2 skipped, 2 deselected in 0.58s
 ```
@@ -107,8 +107,8 @@ list/dict，`yaml.safe_dump` 自动生成了 anchor/alias；loader 正确拒绝 
 静态质量检查：
 
 ```text
-.venv/bin/ruff check libs/openant-core/core/rules \
-  libs/openant-core/tests/rules
+.venv/bin/ruff check libs/vulnfounder-core/core/rules \
+  libs/vulnfounder-core/tests/rules
 
 All checks passed!
 ```

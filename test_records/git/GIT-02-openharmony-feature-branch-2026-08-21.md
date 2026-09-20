@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | GIT-02：创建 OpenHarmony 本地功能分支 |
 | 日期 | 2026-08-21 |
-| 本地仓库 | `/Users/shiyu/学习/hyl/new/OpenAnt` |
+| 本地仓库 | `/Users/shiyu/学习/hyl/new/VulnFounder` |
 | 操作前分支 | `master` |
 | 操作后分支 | `feature/openharmony-adaptation` |
 | 分支起点 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
@@ -57,8 +57,8 @@ branch: master
  M .gitignore
 ?? OPENANT_COMPLETE_PIPELINE_GUIDE.zh-CN.md
 ?? OPENHARMONY_ADAPTATION_IMPLEMENTATION_PLAN.zh-CN.md
-?? libs/openant-core/tests/fixtures/openharmony/
-?? libs/openant-core/tests/openharmony/
+?? libs/vulnfounder-core/tests/fixtures/openharmony/
+?? libs/vulnfounder-core/tests/openharmony/
 ?? test_records/
 ```
 
@@ -108,8 +108,8 @@ feature/openharmony-adaptation  2476527b9d6f929a5c987bd3d5df414da04f1eaf
  M .gitignore
 ?? OPENANT_COMPLETE_PIPELINE_GUIDE.zh-CN.md
 ?? OPENHARMONY_ADAPTATION_IMPLEMENTATION_PLAN.zh-CN.md
-?? libs/openant-core/tests/fixtures/openharmony/
-?? libs/openant-core/tests/openharmony/
+?? libs/vulnfounder-core/tests/fixtures/openharmony/
+?? libs/vulnfounder-core/tests/openharmony/
 ?? test_records/
 ```
 

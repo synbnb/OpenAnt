@@ -67,7 +67,7 @@
 go test ./...
 ```
 
-工作目录：`apps/openant-cli`
+工作目录：`apps/vulnfounder-cli`
 
 结果：通过；`internal/server`（含新增接口、CSRF、参数和模板测试）通过。
 
@@ -82,7 +82,7 @@ go vet ./...
 命令：
 
 ```text
-node -e 'const fs=require("fs");const s=fs.readFileSync("apps/openant-cli/ui/source-locator.html","utf8").split("<script>\n")[1].split("</script>")[0];new Function(s);console.log("source-locator JS syntax ok")'
+node -e 'const fs=require("fs");const s=fs.readFileSync("apps/vulnfounder-cli/ui/source-locator.html","utf8").split("<script>\n")[1].split("</script>")[0];new Function(s);console.log("source-locator JS syntax ok")'
 ```
 
 结果：`source-locator JS syntax ok`

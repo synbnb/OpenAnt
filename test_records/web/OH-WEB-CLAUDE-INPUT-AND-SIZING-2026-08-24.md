@@ -21,7 +21,7 @@
 
 ### 3.1 Claude 消息提交
 
-`apps/openant-cli/internal/server/claude_session.go` 的 PTY 写入改为：
+`apps/vulnfounder-cli/internal/server/claude_session.go` 的 PTY 写入改为：
 
 ```text
 message + "\r"
@@ -43,7 +43,7 @@ Claude Code 启动后设置 PTY 尺寸为 160 列、48 行，避免默认小终�
 
 ## 4. 测试记录
 
-执行目录：`/Users/shiyu/学习/hyl/new/OpenAnt/apps/openant-cli`
+执行目录：`/Users/shiyu/学习/hyl/new/VulnFounder/apps/vulnfounder-cli`
 
 ```text
 GOCACHE=/private/tmp/openant-go-cache \
@@ -62,7 +62,7 @@ GOMODCACHE=/private/tmp/openant-go-modcache \
 结果：通过。新增测试验证 PTY 写入内容以 `\r` 结尾。
 
 ```text
-node --check <(awk 'BEGIN{p=0} /<script>/{p=1;next} /<\\/script>/{p=0} p' apps/openant-cli/ui/scan.html)
+node --check <(awk 'BEGIN{p=0} /<script>/{p=1;next} /<\\/script>/{p=0} p' apps/vulnfounder-cli/ui/scan.html)
 ```
 
 结果：通过。

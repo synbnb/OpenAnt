@@ -1,7 +1,7 @@
 # OH-22A：sensors_medical_sensor 的 LLM 可达性复核实测记录
 
 - 日期：2026-08-26
-- 项目：OpenAnt
+- 项目：VulnFounder
 - 平台：OpenHarmony
 - 仓库：`source_code_base/sensors_medical_sensor`
 - 目的：验证 `--llm-reachability` 能否发现结构化入口检测遗漏的 OpenHarmony IPC、N-API、HDI 和异步回调入口
@@ -33,7 +33,7 @@
 项目中已经存在一次真实成功运行，避免为了重复验证再次产生 API 费用：
 
 - 运行目录：`/Users/shiyu/.openant/webui/ecad4bdd3d5f9ae8`
-- 仓库：`/Users/shiyu/学习/hyl/new/OpenAnt/source_code_base/sensors_medical_sensor`
+- 仓库：`/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/sensors_medical_sensor`
 - Provider：`autodl-openai`
 - Model：`gpt-5.6-luna`
 - LLM 可达性代码上限：1536 字节/单元

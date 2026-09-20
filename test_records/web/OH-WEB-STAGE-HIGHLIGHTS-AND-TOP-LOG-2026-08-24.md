@@ -33,7 +33,7 @@
 
 ## 测试
 
-执行目录：`/Users/shiyu/学习/hyl/new/OpenAnt/apps/openant-cli`
+执行目录：`/Users/shiyu/学习/hyl/new/VulnFounder/apps/vulnfounder-cli`
 
 ```text
 GOCACHE=/private/tmp/openant-go-cache \

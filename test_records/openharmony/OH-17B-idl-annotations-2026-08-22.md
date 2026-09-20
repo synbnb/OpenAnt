@@ -35,14 +35,14 @@ OpenHarmony 生成的 IDL 经常在返回类型前增加方括号注解，例如
 新增测试：
 
 ```text
-libs/openant-core/tests/platforms/test_openharmony_idl.py::test_parser_extracts_method_annotations_and_ipccode_metadata
+libs/vulnfounder-core/tests/platforms/test_openharmony_idl.py::test_parser_extracts_method_annotations_and_ipccode_metadata
 ```
 
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_idl.py \
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_idl.py \
   -k 'annotations_and_ipccode'
 ```
 
@@ -55,7 +55,7 @@ assert [] == ['GetSession', 'NotifyChange']
 同时新增 transaction 元数据测试：
 
 ```text
-libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py::test_resolver_preserves_ipccode_metadata_on_transaction
+libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py::test_resolver_preserves_ipccode_metadata_on_transaction
 ```
 
 它在解析器缺少方法时无法得到对应 transaction，作为端到端的失败约束。
@@ -64,7 +64,7 @@ libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py::test_resolver_p
 
 ### 3.1 `IDLMethod` 增加元数据
 
-文件：`libs/openant-core/core/platforms/openharmony/idl.py`
+文件：`libs/vulnfounder-core/core/platforms/openharmony/idl.py`
 
 新增字段：
 
@@ -88,7 +88,7 @@ ipc_code: int | None = None
 
 ### 3.3 IPC semantic graph 传递元数据
 
-文件：`libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+文件：`libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
 
 `_method_records()` 读取 dataclass 或字典形式的 `annotations`、`ipc_code`。创建 `ipc_transaction` 节点时，只有字段存在时才写入对应属性，避免改变没有注解的旧节点结构；`interface_to_transaction` 的 IDL evidence 也同步保留这些字段。
 
@@ -97,9 +97,9 @@ ipc_code: int | None = None
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_idl.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_idl.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：
@@ -119,11 +119,11 @@ OpenAnt/.venv/bin/python -m pytest -q \
 语法检查：
 
 ```text
-OpenAnt/.venv/bin/python -m py_compile \
-  OpenAnt/libs/openant-core/core/platforms/openharmony/idl.py \
-  OpenAnt/libs/openant-core/core/platforms/openharmony/ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_idl.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+VulnFounder/.venv/bin/python -m py_compile \
+  VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/idl.py \
+  VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_idl.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：通过。
@@ -133,10 +133,10 @@ OpenAnt/.venv/bin/python -m py_compile \
 使用解析器只读扫描：
 
 ```text
-OpenAnt/.venv/bin/python - <<'PY'
+VulnFounder/.venv/bin/python - <<'PY'
 from pathlib import Path
 import sys
-sys.path.insert(0, 'OpenAnt/libs/openant-core')
+sys.path.insert(0, 'VulnFounder/libs/vulnfounder-core')
 from core.platforms.openharmony.idl import OpenHarmonyIDLParser
 ...
 PY
@@ -172,11 +172,11 @@ window_window_manager:
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_*.py \
-  OpenAnt/libs/openant-core/tests/test_c_pipeline.py \
-  OpenAnt/libs/openant-core/tests/report/test_build_pipeline_output_return_contract.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_*.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_c_pipeline.py \
+  VulnFounder/libs/vulnfounder-core/tests/report/test_build_pipeline_output_return_contract.py
 ```
 
 结果：

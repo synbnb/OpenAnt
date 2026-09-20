@@ -41,53 +41,73 @@ const (
 	StatusError   = "error"
 )
 
+func nonZeroOr(value, fallback int) int {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
 // jobMeta is the on-disk metadata written immediately on job creation.
 type jobMeta struct {
-	ID                          string    `json:"id"`
-	Repo                        string    `json:"repo"`
-	StartedAt                   time.Time `json:"started_at"`
-	Platform                    string    `json:"platform,omitempty"`
-	Languages                   []string  `json:"languages,omitempty"`
-	Level                       string    `json:"level,omitempty"`
-	NoContext                   bool      `json:"no_context,omitempty"`
-	ScopeManifest               string    `json:"scope_manifest,omitempty"`
-	NoEnhance                   bool      `json:"no_enhance,omitempty"`
-	EnhanceMode                 string    `json:"enhance_mode,omitempty"`
-	NoReport                    bool      `json:"no_report,omitempty"`
-	NoSkipTests                 bool      `json:"no_skip_tests,omitempty"`
-	AllLanguages                bool      `json:"all_languages,omitempty"`
-	MultiLanguage               bool      `json:"multi_language,omitempty"`
-	MinLanguageFiles            int       `json:"min_language_files,omitempty"`
-	MinLanguageShare            float64   `json:"min_language_share,omitempty"`
-	StrictLanguages             bool      `json:"strict_languages,omitempty"`
-	Limit                       int       `json:"limit,omitempty"`
-	Verify                      bool      `json:"verify,omitempty"`
-	LibraryMode                 bool      `json:"library_mode,omitempty"`
-	LLMConfig                   string    `json:"llm_config,omitempty"`
-	Workers                     int       `json:"workers,omitempty"`
-	Backoff                     int       `json:"backoff,omitempty"`
-	LLMReachability             bool      `json:"llm_reachability,omitempty"`
-	LLMReachabilityMaxCodeBytes int       `json:"llm_reachability_max_code_bytes,omitempty"`
-	LLMCallGraphRecovery        bool      `json:"llm_call_graph_recovery,omitempty"`
-	LLMCallGraphIterative       bool      `json:"llm_call_graph_iterative_recovery,omitempty"`
-	LLMCallGraphCandidateReview bool      `json:"llm_call_graph_candidate_review,omitempty"`
-	LLMCallGraphProjection      bool      `json:"llm_call_graph_projection,omitempty"`
-	DispatchCodeEvidence        bool      `json:"openharmony_dispatch_code_evidence,omitempty"`
-	ClangSemantic               bool      `json:"clang_semantic,omitempty"`
-	ClangBuildStatus            string    `json:"clang_build_status,omitempty"`
-	ClangMaxFiles               int       `json:"clang_max_files,omitempty"`
-	ClangTimeoutSeconds         int       `json:"clang_timeout_seconds,omitempty"`
-	ClangBatchSize              int       `json:"clang_batch_size,omitempty"`
-	ClangDependencyRetries      int       `json:"clang_dependency_retries,omitempty"`
-	ClangDefinitionLoadMaxFiles int       `json:"clang_definition_load_max_files,omitempty"`
-	DynamicTest                 bool      `json:"dynamic_test,omitempty"`
-	DynamicTestMode             string    `json:"dynamic_test_mode,omitempty"`
-	TaskWorkspace               string    `json:"task_workspace,omitempty"`
-	PublicToolLibrary           string    `json:"public_tool_library,omitempty"`
-	TaskManifestPath            string    `json:"task_manifest_path,omitempty"`
-	CandidateManifest           string    `json:"candidate_manifest,omitempty"`
-	LaunchCommand               string    `json:"launch_command,omitempty"`
-	CandidateCount              int       `json:"candidate_count,omitempty"`
+	ID                            string    `json:"id"`
+	Repo                          string    `json:"repo"`
+	StartedAt                     time.Time `json:"started_at"`
+	Platform                      string    `json:"platform,omitempty"`
+	Languages                     []string  `json:"languages,omitempty"`
+	Level                         string    `json:"level,omitempty"`
+	NoContext                     bool      `json:"no_context,omitempty"`
+	ScopeManifest                 string    `json:"scope_manifest,omitempty"`
+	NoEnhance                     bool      `json:"no_enhance,omitempty"`
+	EnhanceMode                   string    `json:"enhance_mode,omitempty"`
+	NoReport                      bool      `json:"no_report,omitempty"`
+	NoSkipTests                   bool      `json:"no_skip_tests,omitempty"`
+	AllLanguages                  bool      `json:"all_languages,omitempty"`
+	MultiLanguage                 bool      `json:"multi_language,omitempty"`
+	MinLanguageFiles              int       `json:"min_language_files,omitempty"`
+	MinLanguageShare              float64   `json:"min_language_share,omitempty"`
+	StrictLanguages               bool      `json:"strict_languages,omitempty"`
+	Limit                         int       `json:"limit,omitempty"`
+	Verify                        bool      `json:"verify,omitempty"`
+	LibraryMode                   bool      `json:"library_mode,omitempty"`
+	LLMConfig                     string    `json:"llm_config,omitempty"`
+	Workers                       int       `json:"workers,omitempty"`
+	Backoff                       int       `json:"backoff,omitempty"`
+	LLMReachability               bool      `json:"llm_reachability,omitempty"`
+	LLMReachabilityMaxCodeBytes   int       `json:"llm_reachability_max_code_bytes,omitempty"`
+	LLMCallGraphRecovery          bool      `json:"llm_call_graph_recovery,omitempty"`
+	LLMCallGraphIterative         bool      `json:"llm_call_graph_iterative_recovery,omitempty"`
+	LLMCallGraphCandidateReview   bool      `json:"llm_call_graph_candidate_review,omitempty"`
+	LLMCallGraphProjection        bool      `json:"llm_call_graph_projection,omitempty"`
+	DispatchCodeEvidence          bool      `json:"openharmony_dispatch_code_evidence,omitempty"`
+	ClangSemantic                 bool      `json:"clang_semantic,omitempty"`
+	ClangBuildStatus              string    `json:"clang_build_status,omitempty"`
+	ClangMaxFiles                 int       `json:"clang_max_files,omitempty"`
+	ClangTimeoutSeconds           int       `json:"clang_timeout_seconds,omitempty"`
+	ClangBatchSize                int       `json:"clang_batch_size,omitempty"`
+	ClangDependencyRetries        int       `json:"clang_dependency_retries,omitempty"`
+	ClangDefinitionLoadMaxFiles   int       `json:"clang_definition_load_max_files,omitempty"`
+	DynamicTest                   bool      `json:"dynamic_test,omitempty"`
+	DynamicTestMode               string    `json:"dynamic_test_mode,omitempty"`
+	DynamicDeviceSerial           string    `json:"dynamic_device_serial,omitempty"`
+	DynamicDeviceHDC              string    `json:"dynamic_device_hdc,omitempty"`
+	DynamicDeviceMaxRounds        int       `json:"dynamic_device_max_rounds,omitempty"`
+	DynamicDeviceMaxCommands      int       `json:"dynamic_device_max_commands,omitempty"`
+	DynamicDeviceTimeout          int       `json:"dynamic_device_timeout,omitempty"`
+	DynamicDeviceWallTimeout      int       `json:"dynamic_device_wall_timeout,omitempty"`
+	DynamicDeviceAllowStateChange bool      `json:"dynamic_device_allow_state_change,omitempty"`
+	DynamicDeviceCanaryPath       string    `json:"dynamic_device_canary_path,omitempty"`
+	DynamicDeviceCarrierRoot      string    `json:"dynamic_device_carrier_root,omitempty"`
+	DynamicDeviceCarrierID        string    `json:"dynamic_device_carrier_id,omitempty"`
+	DynamicDeviceCarrierBundle    string    `json:"dynamic_device_carrier_bundle,omitempty"`
+	DynamicDeviceCarrierAbility   string    `json:"dynamic_device_carrier_ability,omitempty"`
+	DynamicDeviceExecuteCarrier   bool      `json:"dynamic_device_execute_carrier,omitempty"`
+	TaskWorkspace                 string    `json:"task_workspace,omitempty"`
+	PublicToolLibrary             string    `json:"public_tool_library,omitempty"`
+	TaskManifestPath              string    `json:"task_manifest_path,omitempty"`
+	CandidateManifest             string    `json:"candidate_manifest,omitempty"`
+	LaunchCommand                 string    `json:"launch_command,omitempty"`
+	CandidateCount                int       `json:"candidate_count,omitempty"`
 }
 
 // Job represents a single scan job.
@@ -108,47 +128,60 @@ type Job struct {
 	Cancel          context.CancelFunc
 
 	// Internal scan parameters (not exposed via API)
-	apiKey                      string
-	languages                   []string
-	platform                    string
-	level                       string
-	noContext                   bool
-	scopeManifest               string
-	noEnhance                   bool
-	enhanceMode                 string
-	noReport                    bool
-	noSkipTests                 bool
-	allLanguages                bool
-	multiLanguage               bool
-	minLanguageFiles            int
-	minLanguageShare            float64
-	strictLanguages             bool
-	limit                       int
-	llmConfig                   string
-	workers                     int
-	backoff                     int
-	libraryMode                 bool
-	verify                      bool
-	llmReachability             bool
-	llmReachabilityMaxCodeBytes int
-	llmCallGraphRecovery        bool
-	llmCallGraphIterative       bool
-	llmCallGraphCandidateReview bool
-	llmCallGraphProjection      bool
-	dispatchCodeEvidence        bool
-	clangSemantic               bool
-	clangBuildStatus            string
-	clangMaxFiles               int
-	clangTimeoutSeconds         int
-	clangBatchSize              int
-	clangDependencyRetries      int
-	clangDefinitionLoadMaxFiles int
-	dynamicTest                 bool
-	dynamicTestMode             string
-	claudeTask                  *claudeTaskInfo
-	claude                      *claudeSession
-	ctx                         context.Context
-	done                        chan struct{} // closed by runJob after it stops touching the job dir
+	apiKey                        string
+	languages                     []string
+	platform                      string
+	level                         string
+	noContext                     bool
+	scopeManifest                 string
+	noEnhance                     bool
+	enhanceMode                   string
+	noReport                      bool
+	noSkipTests                   bool
+	allLanguages                  bool
+	multiLanguage                 bool
+	minLanguageFiles              int
+	minLanguageShare              float64
+	strictLanguages               bool
+	limit                         int
+	llmConfig                     string
+	workers                       int
+	backoff                       int
+	libraryMode                   bool
+	verify                        bool
+	llmReachability               bool
+	llmReachabilityMaxCodeBytes   int
+	llmCallGraphRecovery          bool
+	llmCallGraphIterative         bool
+	llmCallGraphCandidateReview   bool
+	llmCallGraphProjection        bool
+	dispatchCodeEvidence          bool
+	clangSemantic                 bool
+	clangBuildStatus              string
+	clangMaxFiles                 int
+	clangTimeoutSeconds           int
+	clangBatchSize                int
+	clangDependencyRetries        int
+	clangDefinitionLoadMaxFiles   int
+	dynamicTest                   bool
+	dynamicTestMode               string
+	dynamicDeviceSerial           string
+	dynamicDeviceHDC              string
+	dynamicDeviceMaxRounds        int
+	dynamicDeviceMaxCommands      int
+	dynamicDeviceTimeout          int
+	dynamicDeviceWallTimeout      int
+	dynamicDeviceAllowStateChange bool
+	dynamicDeviceCanaryPath       string
+	dynamicDeviceCarrierRoot      string
+	dynamicDeviceCarrierID        string
+	dynamicDeviceCarrierBundle    string
+	dynamicDeviceCarrierAbility   string
+	dynamicDeviceExecuteCarrier   bool
+	claudeTask                    *claudeTaskInfo
+	claude                        *claudeSession
+	ctx                           context.Context
+	done                          chan struct{} // closed by runJob after it stops touching the job dir
 }
 
 func (j *Job) addLog(line string) {
@@ -262,6 +295,7 @@ type Server struct {
 	tmplExposureLocator    *template.Template
 	tmplDeviceSocketAssets *template.Template
 	tmplSocketScope        *template.Template
+	tmplScanArtifact       *template.Template
 	sem                    chan struct{}
 	csrfToken              string
 	sourceLocatorMu        sync.Mutex     // serializes Web source-locator mutations, including deletion
@@ -272,6 +306,8 @@ type Server struct {
 	draining               bool           // set at shutdown so no new job is added after Wait starts
 	deviceSocketJobsMu     sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
 	deviceSocketJobs       map[string]*deviceSocketAssetJob
+	scanArtifactJobsMu     sync.RWMutex   // protects scan-artifact dynamic-test runs observed by the Web UI
+	scanArtifactJobs       map[string]*scanArtifactJob
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
@@ -317,6 +353,10 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse socket-scope.html: %w", err)
 	}
+	tmplScanArtifact, err := template.ParseFS(uifiles.FS, "dynamic-test.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse dynamic-test.html: %w", err)
+	}
 
 	// Per-instance CSRF synchronizer token: 32 hex chars from crypto/rand,
 	// stable for the server's lifetime and embedded in served pages.
@@ -339,10 +379,12 @@ func New(pythonPath, outDir string) (*Server, error) {
 		tmplExposureLocator:    tmplExposureLocator,
 		tmplDeviceSocketAssets: tmplDeviceSocketAssets,
 		tmplSocketScope:        tmplSocketScope,
+		tmplScanArtifact:       tmplScanArtifact,
 		sem:                    make(chan struct{}, 4),
 		csrfToken:              hex.EncodeToString(tokBytes),
 		shutdownDone:           make(chan struct{}),
 		deviceSocketJobs:       make(map[string]*deviceSocketAssetJob),
+		scanArtifactJobs:       make(map[string]*scanArtifactJob),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -452,6 +494,40 @@ func (s *Server) recoverJobs() {
 				if job.dynamicTestMode == "" && job.dynamicTest {
 					job.dynamicTestMode = "docker"
 				}
+				job.dynamicDeviceSerial = m.DynamicDeviceSerial
+				job.dynamicDeviceHDC = m.DynamicDeviceHDC
+				job.dynamicDeviceMaxRounds = m.DynamicDeviceMaxRounds
+				if job.dynamicDeviceMaxRounds == 0 {
+					job.dynamicDeviceMaxRounds = defaultDynamicDeviceMaxRounds
+				}
+				job.dynamicDeviceMaxCommands = m.DynamicDeviceMaxCommands
+				if job.dynamicDeviceMaxCommands == 0 {
+					job.dynamicDeviceMaxCommands = defaultDynamicDeviceMaxCommands
+				}
+				job.dynamicDeviceTimeout = m.DynamicDeviceTimeout
+				if job.dynamicDeviceTimeout == 0 {
+					job.dynamicDeviceTimeout = defaultDynamicDeviceTimeout
+				}
+				job.dynamicDeviceWallTimeout = m.DynamicDeviceWallTimeout
+				if job.dynamicDeviceWallTimeout == 0 {
+					job.dynamicDeviceWallTimeout = defaultDynamicDeviceWallTimeout
+				}
+				job.dynamicDeviceAllowStateChange = m.DynamicDeviceAllowStateChange
+				job.dynamicDeviceCanaryPath = m.DynamicDeviceCanaryPath
+				if job.dynamicDeviceCanaryPath == "" {
+					job.dynamicDeviceCanaryPath = defaultDynamicDeviceCanaryPath
+				}
+				job.dynamicDeviceCarrierRoot = m.DynamicDeviceCarrierRoot
+				job.dynamicDeviceCarrierID = m.DynamicDeviceCarrierID
+				job.dynamicDeviceCarrierBundle = m.DynamicDeviceCarrierBundle
+				if job.dynamicDeviceCarrierBundle == "" {
+					job.dynamicDeviceCarrierBundle = defaultDynamicDeviceCarrierBundle
+				}
+				job.dynamicDeviceCarrierAbility = m.DynamicDeviceCarrierAbility
+				if job.dynamicDeviceCarrierAbility == "" {
+					job.dynamicDeviceCarrierAbility = defaultDynamicDeviceCarrierAbility
+				}
+				job.dynamicDeviceExecuteCarrier = m.DynamicDeviceExecuteCarrier
 				if m.TaskWorkspace != "" {
 					job.claudeTask = &claudeTaskInfo{
 						Mode:              job.dynamicTestMode,
@@ -768,6 +844,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /socket-scope", s.handleSocketScopeIndex)
 	mux.HandleFunc("POST /socket-scope/discover", s.handleSocketScopeDiscover)
 	mux.HandleFunc("POST /socket-scope/select", s.handleSocketScopeSelect)
+	// Device dynamic testing driven by scan intermediates. Listing is
+	// read-only; the run route is a mutation (CSRF + same-origin) and pins
+	// its ledger inside the server-owned scan-artifact output directory.
+	mux.HandleFunc("GET /dynamic-test", s.handleScanArtifactIndex)
+	mux.HandleFunc("GET /scan-artifact/rounds", s.handleScanArtifactRounds)
+	mux.HandleFunc("GET /scan-artifact/entries", s.handleScanArtifactEntries)
+	mux.HandleFunc("GET /scan-artifact/devices", s.handleScanArtifactDevices)
+	mux.HandleFunc("POST /scan-artifact/run", s.handleScanArtifactRun)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/events", s.handleScanArtifactRunEvents)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/result", s.handleScanArtifactRunResult)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables", s.handleScanArtifactRunDeliverables)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables/{name}", s.handleScanArtifactRunDeliverable)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}", s.handleScanArtifactRunStatus)
 	return securityHeaders(mux)
 }
 
@@ -828,6 +917,17 @@ const (
 	defaultClangBatchSize              = 16
 	defaultClangDependencyRetries      = 1
 	defaultClangDefinitionLoadMaxFiles = 16
+	defaultDynamicDeviceMaxRounds      = 16
+	// A complete reviewed-carrier evaluation may contain more than 16
+	// candidates.  512 leaves room for per-sample baseline, transport, log,
+	// impact and cleanup observations while the Python runner still enforces
+	// its 1024 hard ceiling and wall-clock budget.
+	defaultDynamicDeviceMaxCommands    = 512
+	defaultDynamicDeviceTimeout        = 30
+	defaultDynamicDeviceWallTimeout    = 1200
+	defaultDynamicDeviceCanaryPath     = "/data/local/tmp/vulnfounder-canary"
+	defaultDynamicDeviceCarrierBundle  = "com.security.research.trigger"
+	defaultDynamicDeviceCarrierAbility = "EntryAbility"
 	maxClangMaxFiles                   = 10000
 	maxClangTimeoutSeconds             = 600
 	maxClangBatchSize                  = 256
@@ -859,6 +959,13 @@ func normalizeBoundedInt(raw string, fallback, min, max int) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func nonEmptyOr(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func normalizeScanLevel(raw string) (string, bool) {
@@ -1167,6 +1274,7 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 		s.drainMu.Unlock()
 		s.mgr.cancelAll() // cancel job ctxs -> killer goroutines SIGKILL process groups
 		s.cancelDeviceSocketAssetJobs()
+	s.cancelScanArtifactJobs()
 		_ = srv.Close() // stop listening + drop conns immediately (an open SSE stream
 		//                   would make graceful Shutdown block forever)
 		// Wait for in-flight runJob goroutines to finish their kill+cleanup, bounded
@@ -1626,6 +1734,14 @@ var scanArtifactSpecs = []artifactSpec{
 	{Name: "results_verified.json", Label: "Stage 2 verified results", Category: "results", Stage: "verify", Description: "Candidate findings annotated with verification verdicts, exploit paths, confidence, and rejection reasons."},
 	{Name: "dynamic_test_results.json", Label: "Dynamic-test results", Category: "dynamic-test", Stage: "dynamic-test", Description: "Structured observations from isolated runtime checks for selected findings."},
 	{Name: "dynamic_test_results.md", Label: "Dynamic-test report", Category: "dynamic-test", Stage: "dynamic-test", Description: "Human-readable account of dynamic-test setup, execution, observations, and limitations."},
+	{Name: "DYNAMIC_TEST_RESULTS.md", Label: "OpenHarmony device dynamic-test report", Category: "dynamic-test", Stage: "dynamic-test", Description: "Human-readable OpenHarmony device Agentic Loop results, evidence references, and limitations."},
+	{Name: "device_preflight.json", Label: "OpenHarmony device preflight", Category: "dynamic-test", Stage: "dynamic-test", Description: "Read-only HDC preflight and device version/security evidence."},
+	{Name: "task_tree.json", Label: "Dynamic verification task tree", Category: "dynamic-test", Stage: "dynamic-test", Description: "Agentic Loop task tree and per-node progress."},
+	{Name: "device_evidence.json", Label: "OpenHarmony device evidence", Category: "dynamic-test", Stage: "dynamic-test", Description: "Audited device command outputs and evidence identifiers."},
+	{Name: "device_decisions.json", Label: "OpenHarmony device decisions", Category: "dynamic-test", Stage: "dynamic-test", Description: "Per-finding device-mode verdicts and limitations."},
+	{Name: "device_run_manifest.json", Label: "OpenHarmony device run manifest", Category: "dynamic-test", Stage: "dynamic-test", Description: "Device serial, mode, budgets, pipeline hash and artifact references."},
+	{Name: "device_commands.jsonl", Label: "OpenHarmony device command log", Category: "dynamic-test", Stage: "dynamic-test", Description: "Chronological HDC command and result audit log."},
+	{Name: "agent_trace.json", Label: "OpenHarmony Agent trace", Category: "dynamic-test", Stage: "dynamic-test", Description: "Agentic Loop turns, tool calls and task-tree decisions."},
 	{Name: "pipeline_results.json", Label: "Pipeline stage results", Category: "results", Stage: "build-output", Description: "Intermediate pipeline result containing stage success and stage-level outputs."},
 	{Name: "scan_results.json", Label: "Raw scan results", Category: "results", Stage: "parse", Description: "Raw scan result containing scanned files, scope, counters, and scan time."},
 	{Name: "scan_scope_applied.json", Label: "Applied socket scan scope", Category: "scope", Stage: "parse", Description: "The confirmed socket target, repository identity, selected scan root, and the evidence manifest used for this scan."},
@@ -3013,14 +3129,62 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if dynamicTestMode == "" {
 		dynamicTestMode = "docker"
 	}
-	if dynamicTestMode != "docker" && dynamicTestMode != "claude-code" {
+	if dynamicTestMode != "docker" && dynamicTestMode != "claude-code" && dynamicTestMode != "openharmony-device" {
 		http.Error(w, "unsupported dynamic test mode", http.StatusBadRequest)
 		return
 	}
+	dynamicDeviceSerial := strings.TrimSpace(r.FormValue("dynamic_device"))
+	dynamicDeviceHDC := strings.TrimSpace(r.FormValue("dynamic_hdc"))
+	dynamicDeviceMaxRounds, ok := normalizeBoundedInt(r.FormValue("dynamic_device_max_rounds"), defaultDynamicDeviceMaxRounds, 1, 32)
+	if !ok {
+		http.Error(w, "dynamic device max rounds must be between 1 and 32", http.StatusBadRequest)
+		return
+	}
+	dynamicDeviceMaxCommands, ok := normalizeBoundedInt(r.FormValue("dynamic_device_max_commands"), defaultDynamicDeviceMaxCommands, 1, 1024)
+	if !ok {
+		http.Error(w, "dynamic device max commands must be between 1 and 1024", http.StatusBadRequest)
+		return
+	}
+	dynamicDeviceTimeout, ok := normalizeBoundedInt(r.FormValue("dynamic_device_timeout"), defaultDynamicDeviceTimeout, 1, 300)
+	if !ok {
+		http.Error(w, "dynamic device timeout must be between 1 and 300", http.StatusBadRequest)
+		return
+	}
+	dynamicDeviceWallTimeout, ok := normalizeBoundedInt(r.FormValue("dynamic_device_wall_timeout"), defaultDynamicDeviceWallTimeout, 1, 7200)
+	if !ok {
+		http.Error(w, "dynamic device wall timeout must be between 1 and 7200", http.StatusBadRequest)
+		return
+	}
+	dynamicDeviceAllowStateChange := r.FormValue("dynamic_device_allow_state_change") == "on"
+	dynamicDeviceCanaryPath := strings.TrimSpace(r.FormValue("dynamic_device_canary_path"))
+	if dynamicDeviceCanaryPath == "" {
+		dynamicDeviceCanaryPath = defaultDynamicDeviceCanaryPath
+	}
+	dynamicDeviceCarrierRoot := strings.TrimSpace(r.FormValue("dynamic_device_carrier_root"))
+	dynamicDeviceCarrierID := strings.TrimSpace(r.FormValue("dynamic_device_carrier_id"))
+	dynamicDeviceCarrierBundle := strings.TrimSpace(r.FormValue("dynamic_device_carrier_bundle"))
+	if dynamicDeviceCarrierBundle == "" {
+		dynamicDeviceCarrierBundle = defaultDynamicDeviceCarrierBundle
+	}
+	dynamicDeviceCarrierAbility := strings.TrimSpace(r.FormValue("dynamic_device_carrier_ability"))
+	if dynamicDeviceCarrierAbility == "" {
+		dynamicDeviceCarrierAbility = defaultDynamicDeviceCarrierAbility
+	}
+	dynamicDeviceExecuteCarrier := r.FormValue("dynamic_device_execute_carrier") == "on"
 	if !dynamicTest {
 		// The selector is only meaningful when the dynamic stage is enabled. A
 		// stale browser value must not alter the normal static pipeline.
 		dynamicTestMode = "docker"
+		dynamicDeviceAllowStateChange = false
+		dynamicDeviceExecuteCarrier = false
+	}
+	if dynamicTest && dynamicTestMode == "openharmony-device" && dynamicDeviceSerial == "" {
+		http.Error(w, "openharmony-device requires dynamic_device", http.StatusBadRequest)
+		return
+	}
+	if dynamicTest && dynamicTestMode == "openharmony-device" && dynamicDeviceExecuteCarrier && !dynamicDeviceAllowStateChange {
+		http.Error(w, "dynamic carrier execution requires dynamic_device_allow_state_change", http.StatusBadRequest)
+		return
 	}
 	llmCallGraphRecovery := r.FormValue("llm_call_graph_recovery") == "on"
 	llmCallGraphIterative := r.FormValue("llm_call_graph_iterative_recovery") == "on"
@@ -3100,6 +3264,13 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		ClangBatchSize: clangBatchSize, ClangDependencyRetries: clangDependencyRetries,
 		ClangDefinitionLoadMaxFiles: clangDefinitionLoadMaxFiles,
 		DynamicTest:                 dynamicTest, DynamicTestMode: dynamicTestMode,
+		DynamicDeviceSerial: dynamicDeviceSerial, DynamicDeviceHDC: dynamicDeviceHDC,
+		DynamicDeviceMaxRounds: dynamicDeviceMaxRounds, DynamicDeviceMaxCommands: dynamicDeviceMaxCommands,
+		DynamicDeviceTimeout: dynamicDeviceTimeout, DynamicDeviceWallTimeout: dynamicDeviceWallTimeout,
+		DynamicDeviceAllowStateChange: dynamicDeviceAllowStateChange, DynamicDeviceCanaryPath: dynamicDeviceCanaryPath,
+		DynamicDeviceCarrierRoot: dynamicDeviceCarrierRoot, DynamicDeviceCarrierID: dynamicDeviceCarrierID,
+		DynamicDeviceCarrierBundle: dynamicDeviceCarrierBundle, DynamicDeviceCarrierAbility: dynamicDeviceCarrierAbility,
+		DynamicDeviceExecuteCarrier: dynamicDeviceExecuteCarrier,
 	}
 	if llmReachability {
 		meta.LLMReachability = true
@@ -3111,50 +3282,63 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &Job{
-		ID:                          id,
-		Repo:                        repo,
-		StartedAt:                   meta.StartedAt,
-		Status:                      StatusRunning,
-		Cancel:                      cancel,
-		ctx:                         ctx,
-		apiKey:                      apiKey,
-		languages:                   languages,
-		platform:                    platform,
-		level:                       level,
-		noContext:                   noContext,
-		scopeManifest:               scopeManifest,
-		noEnhance:                   noEnhance,
-		enhanceMode:                 enhanceMode,
-		noReport:                    noReport,
-		noSkipTests:                 noSkipTests,
-		allLanguages:                allLanguages,
-		multiLanguage:               multiLanguage,
-		minLanguageFiles:            minLanguageFiles,
-		minLanguageShare:            minLanguageShare,
-		strictLanguages:             strictLanguages,
-		limit:                       limit,
-		llmConfig:                   llmConfig,
-		workers:                     workers,
-		backoff:                     backoff,
-		libraryMode:                 libraryMode,
-		verify:                      verify,
-		llmReachability:             llmReachability,
-		llmReachabilityMaxCodeBytes: llmReachabilityMaxCodeBytes,
-		llmCallGraphRecovery:        llmCallGraphRecovery,
-		llmCallGraphIterative:       llmCallGraphIterative,
-		llmCallGraphCandidateReview: llmCallGraphCandidateReview,
-		llmCallGraphProjection:      llmCallGraphProjection,
-		dispatchCodeEvidence:        dispatchCodeEvidence,
-		clangSemantic:               clangSemantic,
-		clangBuildStatus:            defaultClangBuildStatus,
-		clangMaxFiles:               clangMaxFiles,
-		clangTimeoutSeconds:         clangTimeoutSeconds,
-		clangBatchSize:              clangBatchSize,
-		clangDependencyRetries:      clangDependencyRetries,
-		clangDefinitionLoadMaxFiles: clangDefinitionLoadMaxFiles,
-		dynamicTest:                 dynamicTest,
-		dynamicTestMode:             dynamicTestMode,
-		done:                        make(chan struct{}),
+		ID:                            id,
+		Repo:                          repo,
+		StartedAt:                     meta.StartedAt,
+		Status:                        StatusRunning,
+		Cancel:                        cancel,
+		ctx:                           ctx,
+		apiKey:                        apiKey,
+		languages:                     languages,
+		platform:                      platform,
+		level:                         level,
+		noContext:                     noContext,
+		scopeManifest:                 scopeManifest,
+		noEnhance:                     noEnhance,
+		enhanceMode:                   enhanceMode,
+		noReport:                      noReport,
+		noSkipTests:                   noSkipTests,
+		allLanguages:                  allLanguages,
+		multiLanguage:                 multiLanguage,
+		minLanguageFiles:              minLanguageFiles,
+		minLanguageShare:              minLanguageShare,
+		strictLanguages:               strictLanguages,
+		limit:                         limit,
+		llmConfig:                     llmConfig,
+		workers:                       workers,
+		backoff:                       backoff,
+		libraryMode:                   libraryMode,
+		verify:                        verify,
+		llmReachability:               llmReachability,
+		llmReachabilityMaxCodeBytes:   llmReachabilityMaxCodeBytes,
+		llmCallGraphRecovery:          llmCallGraphRecovery,
+		llmCallGraphIterative:         llmCallGraphIterative,
+		llmCallGraphCandidateReview:   llmCallGraphCandidateReview,
+		llmCallGraphProjection:        llmCallGraphProjection,
+		dispatchCodeEvidence:          dispatchCodeEvidence,
+		clangSemantic:                 clangSemantic,
+		clangBuildStatus:              defaultClangBuildStatus,
+		clangMaxFiles:                 clangMaxFiles,
+		clangTimeoutSeconds:           clangTimeoutSeconds,
+		clangBatchSize:                clangBatchSize,
+		clangDependencyRetries:        clangDependencyRetries,
+		clangDefinitionLoadMaxFiles:   clangDefinitionLoadMaxFiles,
+		dynamicTest:                   dynamicTest,
+		dynamicTestMode:               dynamicTestMode,
+		dynamicDeviceSerial:           dynamicDeviceSerial,
+		dynamicDeviceHDC:              dynamicDeviceHDC,
+		dynamicDeviceMaxRounds:        dynamicDeviceMaxRounds,
+		dynamicDeviceMaxCommands:      dynamicDeviceMaxCommands,
+		dynamicDeviceTimeout:          dynamicDeviceTimeout,
+		dynamicDeviceWallTimeout:      dynamicDeviceWallTimeout,
+		dynamicDeviceAllowStateChange: dynamicDeviceAllowStateChange,
+		dynamicDeviceCanaryPath:       dynamicDeviceCanaryPath,
+		dynamicDeviceCarrierRoot:      dynamicDeviceCarrierRoot,
+		dynamicDeviceCarrierID:        dynamicDeviceCarrierID,
+		dynamicDeviceCarrierBundle:    dynamicDeviceCarrierBundle,
+		dynamicDeviceCarrierAbility:   dynamicDeviceCarrierAbility,
+		dynamicDeviceExecuteCarrier:   dynamicDeviceExecuteCarrier,
+		done:                          make(chan struct{}),
 	}
 	s.mgr.add(job)
 	go s.runJob(job)
@@ -4213,6 +4397,34 @@ func buildScanArgs(job *Job, outDir, localPath string, isURL bool) []string {
 			}
 		} else {
 			args = append(args, "--dynamic-test")
+		}
+		if job.dynamicTestMode == "openharmony-device" {
+			args = append(args,
+				"--dynamic-test-mode", "openharmony-device",
+				"--dynamic-device", job.dynamicDeviceSerial,
+				"--dynamic-device-max-rounds", strconv.Itoa(nonZeroOr(job.dynamicDeviceMaxRounds, defaultDynamicDeviceMaxRounds)),
+				"--dynamic-device-max-commands", strconv.Itoa(nonZeroOr(job.dynamicDeviceMaxCommands, defaultDynamicDeviceMaxCommands)),
+				"--dynamic-device-timeout", strconv.Itoa(nonZeroOr(job.dynamicDeviceTimeout, defaultDynamicDeviceTimeout)),
+				"--dynamic-device-wall-timeout", strconv.Itoa(nonZeroOr(job.dynamicDeviceWallTimeout, defaultDynamicDeviceWallTimeout)),
+				"--dynamic-device-canary-path", job.dynamicDeviceCanaryPath,
+				"--dynamic-device-carrier-bundle", nonEmptyOr(job.dynamicDeviceCarrierBundle, defaultDynamicDeviceCarrierBundle),
+				"--dynamic-device-carrier-ability", nonEmptyOr(job.dynamicDeviceCarrierAbility, defaultDynamicDeviceCarrierAbility),
+			)
+			if job.dynamicDeviceCarrierRoot != "" {
+				args = append(args, "--dynamic-device-carrier-root", job.dynamicDeviceCarrierRoot)
+			}
+			if job.dynamicDeviceCarrierID != "" {
+				args = append(args, "--dynamic-device-carrier-id", job.dynamicDeviceCarrierID)
+			}
+			if job.dynamicDeviceHDC != "" {
+				args = append(args, "--dynamic-hdc", job.dynamicDeviceHDC)
+			}
+			if job.dynamicDeviceAllowStateChange {
+				args = append(args, "--dynamic-device-allow-state-change")
+			}
+			if job.dynamicDeviceExecuteCarrier {
+				args = append(args, "--dynamic-device-execute-carrier")
+			}
 		}
 	}
 	if job.libraryMode {

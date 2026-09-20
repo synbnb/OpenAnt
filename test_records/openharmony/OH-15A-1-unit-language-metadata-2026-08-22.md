@@ -18,13 +18,13 @@
 
 ## 2. 修改文件
 
-- `libs/openant-core/parsers/c/unit_generator.py`
+- `libs/vulnfounder-core/parsers/c/unit_generator.py`
   - 增加 C/C++ 扩展名和语言归一化逻辑；
   - 在 unit、metadata 和 analyzer output 中写入语言。
-- `libs/openant-core/core/analysis_core.py`
+- `libs/vulnfounder-core/core/analysis_core.py`
   - 增加兼容读取 helper；
   - Prompt 代码块从固定 `code` 改为 unit 语言，旧数据仍回退 `code`。
-- `libs/openant-core/tests/test_unit_language_metadata.py`
+- `libs/vulnfounder-core/tests/test_unit_language_metadata.py`
   - 覆盖 C/C++/头文件推断、analyzer output、真实 Prompt 代码围栏和旧 unit 回退。
 
 ## 3. TDD 与专项测试

@@ -2,7 +2,7 @@
 
 日期：2026-08-27  
 平台：OpenHarmony  
-仓库：`/Users/shiyu/学习/hyl/new/OpenAnt`  
+仓库：`/Users/shiyu/学习/hyl/new/VulnFounder`  
 真实验证仓库：`source_code_base/sensors_medical_sensor`
 
 ## 1. 本阶段目标
@@ -23,7 +23,7 @@
 
 ### 修改后逻辑
 
-修改 `libs/openant-core/parsers/c/test_pipeline.py`：
+修改 `libs/vulnfounder-core/parsers/c/test_pipeline.py`：
 
 1. `CPipelineTest` 新增 `dispatch_recovery_diff_file` 产物路径；
 2. OpenHarmony parser 阶段在原生调用图、诊断和语义图准备完成后写入初始
@@ -43,7 +43,7 @@
 
 ```bash
 ./.venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_dispatch_recovery_pipeline.py
+  libs/vulnfounder-core/tests/openharmony/test_dispatch_recovery_pipeline.py
 ```
 
 结果：2 个测试失败，原因都是旧流水线没有生成
@@ -63,7 +63,7 @@
 ### 回归
 
 ```bash
-./.venv/bin/pytest -q libs/openant-core/tests/openharmony
+./.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -73,7 +73,7 @@
 ```
 
 ```bash
-./.venv/bin/pytest -q libs/openant-core/tests/parsers/c
+./.venv/bin/pytest -q libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：
@@ -84,9 +84,9 @@
 
 ```bash
 ./.venv/bin/ruff check \
-  libs/openant-core/parsers/c/test_pipeline.py \
-  libs/openant-core/core/platforms/openharmony/dispatch_recovery_diff.py \
-  libs/openant-core/tests/openharmony/test_dispatch_recovery_pipeline.py
+  libs/vulnfounder-core/parsers/c/test_pipeline.py \
+  libs/vulnfounder-core/core/platforms/openharmony/dispatch_recovery_diff.py \
+  libs/vulnfounder-core/tests/openharmony/test_dispatch_recovery_pipeline.py
 git diff --check
 ```
 
@@ -101,7 +101,7 @@ git diff --check
 命令：
 
 ```bash
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22E-2-sensors-all-20260827 \
   --processing-level all --platform openharmony --skip-tests
@@ -125,18 +125,18 @@ git diff --check
 
 产物：
 
-- [dispatch_recovery_diff.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-all-20260827/dispatch_recovery_diff.json)
-- [call_graph.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-all-20260827/call_graph.json)
-- [semantic_graph.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-all-20260827/semantic_graph.json)
-- [call_graph_residuals.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-all-20260827/call_graph_residuals.json)
-- [run.log](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-all-20260827/run.log)
+- [dispatch_recovery_diff.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-all-20260827/dispatch_recovery_diff.json)
+- [call_graph.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-all-20260827/call_graph.json)
+- [semantic_graph.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-all-20260827/semantic_graph.json)
+- [call_graph_residuals.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-all-20260827/call_graph_residuals.json)
+- [run.log](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-all-20260827/run.log)
 
 ### 4.2 REACHABLE 级别
 
 命令：
 
 ```bash
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22E-2-sensors-reachable-20260827 \
   --processing-level reachable --platform openharmony --skip-tests
@@ -157,10 +157,10 @@ git diff --check
 
 产物：
 
-- [dispatch_recovery_diff.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-reachable-20260827/dispatch_recovery_diff.json)
-- [dataset.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-reachable-20260827/dataset.json)
-- [pipeline_results.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-reachable-20260827/pipeline_results.json)
-- [run.log](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-2-sensors-reachable-20260827/run.log)
+- [dispatch_recovery_diff.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-reachable-20260827/dispatch_recovery_diff.json)
+- [dataset.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-reachable-20260827/dataset.json)
+- [pipeline_results.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-reachable-20260827/pipeline_results.json)
+- [run.log](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-2-sensors-reachable-20260827/run.log)
 
 ### 4.3 源码证据抽查
 

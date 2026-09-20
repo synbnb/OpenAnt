@@ -91,15 +91,15 @@ openharmony_component
 
 ## 4. 修改文件
 
-- `libs/openant-core/context/application_context.py`
+- `libs/vulnfounder-core/context/application_context.py`
   - 新增平台画像到 `PlatformPromptContext` 的安全投影；
   - 增加可选 `platform_profile` 参数；
   - 修正 OpenHarmony 类型和攻击模型 Prompt。
-- `libs/openant-core/core/scanner.py`
+- `libs/vulnfounder-core/core/scanner.py`
   - 将已检测画像或显式平台的最小标记转发给应用上下文生成器。
-- `libs/openant-core/tests/openharmony/test_application_context_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_application_context_platform_context.py`
   - 新增应用上下文 Prompt、注入防护和 generic 兼容测试。
-- `libs/openant-core/tests/test_scanner_platform_profile.py`
+- `libs/vulnfounder-core/tests/test_scanner_platform_profile.py`
   - 新增 scanner 到应用上下文的 profile 转发测试。
 
 ## 5. TDD 和测试记录

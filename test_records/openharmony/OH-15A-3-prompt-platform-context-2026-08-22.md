@@ -28,14 +28,14 @@ Prompt 中只消费当前 Unit 的有限字段：component、build target、sour
 
 ## 3. 修改文件
 
-- `libs/openant-core/core/analysis_core.py`
+- `libs/vulnfounder-core/core/analysis_core.py`
   - 转发 Unit `platform_context`。
-- `libs/openant-core/prompts/prompt_selector.py`
+- `libs/vulnfounder-core/prompts/prompt_selector.py`
   - 增加可选 `platform_context` 参数并继续向下转发。
-- `libs/openant-core/prompts/vulnerability_analysis.py`
+- `libs/vulnfounder-core/prompts/vulnerability_analysis.py`
   - 新增受限 OpenHarmony 上下文渲染器和注入防护；
   - 无上下文时保留原 `context_section` 组装逻辑。
-- `libs/openant-core/tests/openharmony/test_prompt_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_prompt_platform_context.py`
   - 新增 Prompt 传递、限长、换行注入和 generic 兼容测试。
 
 ## 4. TDD 记录
@@ -45,8 +45,8 @@ Prompt 中只消费当前 Unit 的有限字段：component、build target、sour
 先新增测试后运行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_prompt_platform_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_prompt_platform_context.py
 ```
 
 结果：`3 failed, 1 passed`。失败分别证明 Prompt API 尚未接收平台上下文、`analysis_core` 尚未转发上下文、以及上下文限长/注入防护尚未生效；generic 无上下文测试先通过。
@@ -56,8 +56,8 @@ OpenAnt/.venv/bin/pytest -q \
 实现后运行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_prompt_platform_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_prompt_platform_context.py
 ```
 
 结果：`4 passed`。
@@ -74,12 +74,12 @@ OpenAnt/.venv/bin/pytest -q \
 Prompt、语言和威胁模型回归：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_prompt_platform_context.py \
-  OpenAnt/libs/openant-core/tests/test_unit_language_metadata.py \
-  OpenAnt/libs/openant-core/tests/test_analysis_prompt_injection.py \
-  OpenAnt/libs/openant-core/tests/test_threat_model_prompts.py \
-  OpenAnt/libs/openant-core/tests/test_threat_model_untrusted_input_gate.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_prompt_platform_context.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_unit_language_metadata.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_analysis_prompt_injection.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_threat_model_prompts.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_threat_model_untrusted_input_gate.py
 ```
 
 结果：`43 passed`。
@@ -89,10 +89,10 @@ Prompt 注入、CWE、Stage-2 相关兼容测试：`48 passed`。
 OpenHarmony/C parser 回归：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_entry_points.py \
-  OpenAnt/libs/openant-core/tests/parsers/c
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py \
+  VulnFounder/libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`137 passed, 2 skipped`。

@@ -31,17 +31,17 @@ OpenGrok 常见的 `/openharmony/` 项目前缀会被识别，但不会写入 Ma
 
 ## 2. 实现文件
 
-- `libs/openant-core/core/source_locator/manifest_resolver.py`
+- `libs/vulnfounder-core/core/source_locator/manifest_resolver.py`
   - `ManifestRemote`、`ManifestProject`、`ManifestDocument`；
   - `parse_manifest()` / `load_manifest()`；
   - `resolve_project()` 的最长前缀匹配；
   - `ManifestResolver.resolve()` 和 `RepositoryMapping`；
   - Manifest 内容 SHA-256 与 `revision:hash` 缓存键。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出 Manifest 解析和映射公共接口。
-- `libs/openant-core/tests/source_locator/fixtures/manifests/ohos.xml`
+- `libs/vulnfounder-core/tests/source_locator/fixtures/manifests/ohos.xml`
   - 脱敏、可审阅的最小 Manifest 夹具。
-- `libs/openant-core/tests/source_locator/test_manifest_resolver.py`
+- `libs/vulnfounder-core/tests/source_locator/test_manifest_resolver.py`
   - 21 项 Manifest、路径、版本和安全边界测试。
 
 ## 3. 具体映射例子
@@ -85,7 +85,7 @@ foundation/communication/netmanager_base
 执行：
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/pytest -q tests/source_locator/test_manifest_resolver.py
 21 passed in 0.03s
 ```

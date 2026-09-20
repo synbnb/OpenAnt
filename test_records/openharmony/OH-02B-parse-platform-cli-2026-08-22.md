@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-02B：Go/Python `parse --platform` 参数契约与 ParseResult 记录 |
 | 日期 | 2026-08-22 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | Python | 3.11.15，项目 `.venv` |
 | Go | 项目 `.devtools/go1.25.7/go` |
 
@@ -88,7 +88,7 @@ GOPATH=/private/tmp/openant-go \
 ../../.devtools/go1.25.7/go/bin/go test ./cmd -v
 ```
 
-结果：退出码 `0`，`ok github.com/knostic/open-ant-cli/cmd 0.533s`。
+结果：退出码 `0`，`ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd 0.533s`。
 
 Go 既有 httptest 用例需要本地回环监听；最终回归在受控环境中运行，未连接外部服务。缓存位于 `/private/tmp`。
 

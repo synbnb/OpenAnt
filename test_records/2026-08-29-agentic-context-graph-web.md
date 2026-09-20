@@ -45,7 +45,7 @@ node -e '读取 artifact-view.html 的 script 并交给 new Function 校验'
 
 ### 4. Go 服务端测试
 
-未能在当前执行环境运行 `go test ./apps/openant-cli/internal/server`：当前环境没有安装 `go` 命令（`command not found: go`）。该测试需要在安装 Go 的开发环境中补跑。
+未能在当前执行环境运行 `go test ./apps/vulnfounder-cli/internal/server`：当前环境没有安装 `go` 命令（`command not found: go`）。该测试需要在安装 Go 的开发环境中补跑。
 
 ## 使用方式
 

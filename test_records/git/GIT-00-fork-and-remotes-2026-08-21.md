@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | GIT-00：个人 Fork 与 `origin`/`upstream` 配置 |
 | 日期 | 2026-08-21 |
-| 本地仓库 | `/Users/shiyu/学习/hyl/new/OpenAnt` |
+| 本地仓库 | `/Users/shiyu/学习/hyl/new/VulnFounder` |
 | 操作前本地提交 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 当前分支 | `master` |
 | GitHub 账号 | `synbnb` |
@@ -16,7 +16,7 @@
 操作前只有一个远程：
 
 ```text
-origin -> https://github.com/knostic/OpenAnt.git
+origin -> https://github.com/knostic/VulnFounder.git
 ```
 
 读取和推送均指向原作者仓库，本地账号通常无权向该仓库直接推送。
@@ -24,8 +24,8 @@ origin -> https://github.com/knostic/OpenAnt.git
 本阶段目标：
 
 ```text
-origin   -> https://github.com/synbnb/OpenAnt.git
-upstream -> https://github.com/knostic/OpenAnt.git
+origin   -> https://github.com/synbnb/VulnFounder.git
+upstream -> https://github.com/knostic/VulnFounder.git
 ```
 
 - `origin` 用于后续推送个人开发分支。
@@ -47,13 +47,13 @@ name: NJUsy
 
 创建前只读查询结果：
 
-- `knostic/OpenAnt` 存在，是公开的非 Fork 仓库，默认分支为 `master`。
-- `synbnb/OpenAnt` 返回 HTTP 404，说明个人仓库当时不存在。
+- `knostic/VulnFounder` 存在，是公开的非 Fork 仓库，默认分支为 `master`。
+- `synbnb/VulnFounder` 返回 HTTP 404，说明个人仓库当时不存在。
 
 第一次尝试：
 
 ```bash
-gh repo fork knostic/OpenAnt --clone=false --remote=false
+gh repo fork knostic/VulnFounder --clone=false --remote=false
 ```
 
 当前 `gh 2.92.0` 在显式提供仓库参数时不支持 `--remote`，命令在参数解析阶段退出，未创建 Fork，也未修改本地 remote。
@@ -61,13 +61,13 @@ gh repo fork knostic/OpenAnt --clone=false --remote=false
 依据 CLI 帮助，省略 `--remote` 即不会添加本地 remote，随后执行：
 
 ```bash
-gh repo fork knostic/OpenAnt --clone=false
+gh repo fork knostic/VulnFounder --clone=false
 ```
 
 结果：成功创建：
 
 ```text
-https://github.com/synbnb/OpenAnt
+https://github.com/synbnb/VulnFounder
 ```
 
 GitHub API 复验：
@@ -75,8 +75,8 @@ GitHub API 复验：
 | 字段 | 结果 |
 |---|---|
 | `fork` | `true` |
-| `parent` | `knostic/OpenAnt` |
-| `source` | `knostic/OpenAnt` |
+| `parent` | `knostic/VulnFounder` |
+| `source` | `knostic/VulnFounder` |
 | 默认分支 | `master` |
 | 可见性 | public |
 | 当前账号 `push` 权限 | `true` |
@@ -88,14 +88,14 @@ GitHub API 复验：
 
 ```bash
 git remote rename origin upstream
-git remote add origin https://github.com/synbnb/OpenAnt.git
+git remote add origin https://github.com/synbnb/VulnFounder.git
 ```
 
 调整结果：
 
 ```text
-origin   https://github.com/synbnb/OpenAnt.git (fetch/push)
-upstream https://github.com/knostic/OpenAnt.git (fetch/push)
+origin   https://github.com/synbnb/VulnFounder.git (fetch/push)
+upstream https://github.com/knostic/VulnFounder.git (fetch/push)
 ```
 
 该操作只修改 `.git/config`，没有修改工作区文件、提交对象或当前分支内容。
@@ -159,7 +159,7 @@ branch.master.merge refs/heads/master
 该命令运行在禁止外网 DNS 的受限环境中，在建立 GitHub 连接前即失败：
 
 ```text
-fatal: unable to access 'https://github.com/knostic/OpenAnt.git/':
+fatal: unable to access 'https://github.com/knostic/VulnFounder.git/':
 Could not resolve host: github.com
 ```
 

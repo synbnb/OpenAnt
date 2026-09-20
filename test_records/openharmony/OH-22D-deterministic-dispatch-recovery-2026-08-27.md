@@ -4,9 +4,9 @@
 范围：OpenHarmony C/C++ 间接调用诊断、注册辅助函数传播、Lambda/函数引用分派候选  
 实现文件：
 
-- `libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py`
-- `libs/openant-core/core/platforms/openharmony/native_dispatch.py`
-- `libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py`
+- `libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py`
 
 ## 1. 阶段目标
 
@@ -91,20 +91,20 @@ fixture，验证两个新增分支。
 ```bash
 source .venv/bin/activate
 pytest -q \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py
 # 34 passed
 
-pytest -q libs/openant-core/tests/openharmony/test_c_pipeline_platform.py
+pytest -q libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py
 # 2 passed
 
-pytest -q libs/openant-core/tests/openharmony
+pytest -q libs/vulnfounder-core/tests/openharmony
 # 122 passed, 2 skipped
 
 ruff check \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/core/platforms/openharmony/native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 # All checks passed!
 ```
 

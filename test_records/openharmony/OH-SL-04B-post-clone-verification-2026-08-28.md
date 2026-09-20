@@ -43,18 +43,18 @@ SL-04A 的 `RepositoryManager` 已经能够在用户确认后安全拉取或复�
 
 ## 3. 涉及文件
 
-- `libs/openant-core/core/source_locator/repository_manager.py`
+- `libs/vulnfounder-core/core/source_locator/repository_manager.py`
   - 记录拉取/复用后的 commit 和 mapping；所有失败路径继续返回结构化结果。
-- `libs/openant-core/core/source_locator/post_clone_verifier.py`
+- `libs/vulnfounder-core/core/source_locator/post_clone_verifier.py`
   - 新增请求、检查项、验证结果、源码交接对象和只读验证器。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出验证器及其结果类型，供后续 worker/Web 流程使用。
-- `libs/openant-core/tests/source_locator/test_post_clone_verifier.py`
+- `libs/vulnfounder-core/tests/source_locator/test_post_clone_verifier.py`
   - 新增 20 项边界、成功和失败闭环测试。
 
 ## 4. 独立测试记录
 
-工作目录：`libs/openant-core`
+工作目录：`libs/vulnfounder-core`
 Python 环境：项目独立环境 `.venv`
 
 ### 4.1 验证器单独测试
@@ -88,10 +88,10 @@ Python 环境：项目独立环境 `.venv`
 ../../.venv/bin/ruff check core/source_locator tests/source_locator
 ../../.venv/bin/python -m compileall -q core/source_locator tests/source_locator
 git diff --check -- \
-  libs/openant-core/core/source_locator/repository_manager.py \
-  libs/openant-core/core/source_locator/post_clone_verifier.py \
-  libs/openant-core/core/source_locator/__init__.py \
-  libs/openant-core/tests/source_locator/test_post_clone_verifier.py
+  libs/vulnfounder-core/core/source_locator/repository_manager.py \
+  libs/vulnfounder-core/core/source_locator/post_clone_verifier.py \
+  libs/vulnfounder-core/core/source_locator/__init__.py \
+  libs/vulnfounder-core/tests/source_locator/test_post_clone_verifier.py
 ```
 
 结果：Ruff `All checks passed`；Python 编译无输出即成功；Git diff 空白检查通过。

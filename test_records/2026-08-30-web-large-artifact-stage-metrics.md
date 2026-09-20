@@ -23,7 +23,7 @@
 执行：
 
 ```text
-cd apps/openant-cli && go test ./internal/server
+cd apps/vulnfounder-cli && go test ./internal/server
 ```
 
 结果：通过。覆盖大型数据集流式分页、Symlink/超限保护、普通 JSON 结构化查看和 UI 模板回归检查。

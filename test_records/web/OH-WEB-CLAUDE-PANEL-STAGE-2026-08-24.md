@@ -9,7 +9,7 @@ Claude Code 对话区块原本是阶段详情区下方的独立区块。只要�
 
 ## 修改
 
-文件：`apps/openant-cli/ui/scan.html`
+文件：`apps/vulnfounder-cli/ui/scan.html`
 
 - Claude 面板增加 `data-stage-panel="dynamic-test"` 标识。
 - 新增 `syncClaudePanelVisibility()`：只有 `selectedStage === "dynamic-test"` 且动态测试已启用时显示面板。
@@ -22,7 +22,7 @@ Claude Code 对话区块原本是阶段详情区下方的独立区块。只要�
 ### 前端语法
 
 ```text
-node --check <(awk 'BEGIN{p=0} /<script>/{p=1;next} /<\/script>/{p=0} p' apps/openant-cli/ui/scan.html)
+node --check <(awk 'BEGIN{p=0} /<script>/{p=1;next} /<\/script>/{p=0} p' apps/vulnfounder-cli/ui/scan.html)
 ```
 
 结果：通过。

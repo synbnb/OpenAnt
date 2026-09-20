@@ -23,7 +23,7 @@ OH-18A 已将 semantic graph 以“只增不减”的方式接入 reachable。�
 三个仓库均执行：
 
 ```text
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py <repo> \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py <repo> \
   --output <tmp-output> --processing-level reachable \
   --platform openharmony --skip-tests
 ```

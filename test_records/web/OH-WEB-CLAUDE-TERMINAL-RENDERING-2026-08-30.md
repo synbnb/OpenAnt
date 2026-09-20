@@ -13,11 +13,11 @@
 
 ## 自动化验证
 
-执行目录：`apps/openant-cli`
+执行目录：`apps/vulnfounder-cli`
 
 ```text
 go test ./...
-ok   github.com/knostic/open-ant-cli/internal/server
+ok   github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 其余包均通过（无失败测试）
 ```
 
@@ -35,9 +35,9 @@ ok   github.com/knostic/open-ant-cli/internal/server
 同时执行：
 
 ```text
-sed -n '/<script>/,/<\\/script>/p' apps/openant-cli/ui/scan.html | sed '1d;$d' | node --check
-git diff --check -- apps/openant-cli/internal/server/claude_session.go \
-  apps/openant-cli/internal/server/claude_web_test.go apps/openant-cli/ui/scan.html
+sed -n '/<script>/,/<\\/script>/p' apps/vulnfounder-cli/ui/scan.html | sed '1d;$d' | node --check
+git diff --check -- apps/vulnfounder-cli/internal/server/claude_session.go \
+  apps/vulnfounder-cli/internal/server/claude_web_test.go apps/vulnfounder-cli/ui/scan.html
 ```
 
 两项均无输出，表示页面脚本语法和补丁格式检查通过。
@@ -46,7 +46,7 @@ git diff --check -- apps/openant-cli/internal/server/claude_session.go \
 
 检查现场进程时发现 `127.0.0.1:18080` 由较早启动的 PID 9275 提供，当前 Claude 子进程 PID 98626 仍在该会话中运行；旧进程响应中没有本次新增的 `claude-output-stream` 标记，而新二进制已包含该标记。因此验证页面改动前应先在 Web 中停止当前 Claude 会话，确认 PID 98626 消失，再重启 PID 9275 对应的 Web 服务并强制刷新浏览器。
 
-已执行 `go build -o bin/openant .`，新的 Web 二进制已写入项目现有 `apps/openant-cli/bin/openant`。由于 Web 页面通过 Go `embed` 内嵌到启动时的进程，已有旧进程必须在当前 Claude 会话结束后重启，浏览器强制刷新后才会加载本次页面改动。
+已执行 `go build -o bin/openant .`，新的 Web 二进制已写入项目现有 `apps/vulnfounder-cli/bin/openant`。由于 Web 页面通过 Go `embed` 内嵌到启动时的进程，已有旧进程必须在当前 Claude 会话结束后重启，浏览器强制刷新后才会加载本次页面改动。
 
 ## 预期 Web 效果
 

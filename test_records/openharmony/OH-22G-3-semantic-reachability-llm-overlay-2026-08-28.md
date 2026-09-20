@@ -34,9 +34,9 @@
 
 ```text
 .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py
 ```
 
 结果：`26 passed`。

@@ -7,7 +7,7 @@
 候选函数索引和仓库根目录，能否在有限预算内找回分发表初始化、注册函数和跨文件
 构造函数信息。
 
-实现文件：`libs/openant-core/core/platforms/openharmony/registration_context.py`
+实现文件：`libs/vulnfounder-core/core/platforms/openharmony/registration_context.py`
 
 ## 当前逻辑
 
@@ -26,8 +26,8 @@
 命令：
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_registration_context.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_registration_context.py
 ```
 
 结果：`3 passed`。
@@ -61,11 +61,11 @@ PYTHONPATH=libs/openant-core .venv/bin/python -m pytest -q \
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_rounds.py \
-  libs/openant-core/tests/openharmony/test_registration_context.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_rounds.py \
+  libs/vulnfounder-core/tests/openharmony/test_registration_context.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：`36 passed in 0.70s`；Ruff 检查通过。

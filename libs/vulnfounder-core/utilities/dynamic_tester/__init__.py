@@ -1,8 +1,9 @@
 """Dynamic testing module for VulnFounder.
 
 Takes pipeline_output.json from the static analysis pipeline and dynamically
-tests all detected vulnerabilities using Docker containers, or prepares a
-Claude Code task workspace when the ``claude-code`` mode is selected.
+tests all detected vulnerabilities using Docker containers, prepares a Claude
+Code task workspace, or runs the bounded OpenHarmony device Agentic Loop when
+the corresponding mode is selected.
 
 Supports checkpoint/resume: each completed finding is saved to a per-unit
 checkpoint file so interrupted runs can resume automatically.
@@ -22,6 +23,12 @@ from utilities.dynamic_tester.docker_executor import run_single_container
 from utilities.dynamic_tester.result_collector import collect_result
 from utilities.dynamic_tester.reporter import generate_report
 from utilities.dynamic_tester.claude_code import create_claude_code_task
+from utilities.dynamic_tester.openharmony_device import (
+    OpenHarmonyDeviceConfig,
+    OpenHarmonyDeviceRunner,
+    materialize_dynamic_results,
+    run_openharmony_device,
+)
 from utilities.llm_client import get_global_tracker
 from utilities.llm import (
     PhaseRegistry,

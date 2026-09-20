@@ -25,15 +25,15 @@
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 注册 `/scan/{id}/pipeline`；
   - 增加阶段报告读取、状态投影和安全校验；
   - 保存/恢复平台字段；
   - 保持动态测试显式 opt-in。
-- `apps/openant-cli/ui/scan.html`
+- `apps/vulnfounder-cli/ui/scan.html`
   - 扩展九阶段时间线；
   - 增加状态轮询和阶段报告详情面板。
-- `apps/openant-cli/internal/server/pipeline_test.go`
+- `apps/vulnfounder-cli/internal/server/pipeline_test.go`
   - 增加阶段报告读取、可选阶段、运行中状态、接口 JSON、404、符号链接/超大文件拒绝和日志阶段识别测试。
 
 ## 4. 测试环境
@@ -42,7 +42,7 @@
 |---|---|
 | 系统 | macOS arm64 |
 | Go | 项目内 `.devtools/go1.25.7` |
-| 模块 | `apps/openant-cli` |
+| 模块 | `apps/vulnfounder-cli` |
 | Node.js | `/opt/homebrew/bin/node` |
 
 ## 5. 测试命令与结果
@@ -60,7 +60,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。新增用例全部通过，服务端包结果为：
 
 ```text
-ok github.com/knostic/open-ant-cli/internal/server 1.888s
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server 1.888s
 ```
 
 ### 5.2 Go 全量回归
@@ -80,7 +80,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 ### 5.3 前端 JavaScript 语法检查
 
 ```bash
-python3 -c 'from pathlib import Path; import re; s=Path("apps/openant-cli/ui/scan.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
+python3 -c 'from pathlib import Path; import re; s=Path("apps/vulnfounder-cli/ui/scan.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
 ```
 
 结果：通过，无语法错误。

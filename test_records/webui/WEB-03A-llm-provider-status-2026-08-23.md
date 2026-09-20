@@ -22,16 +22,16 @@
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/config/config.go`
+- `apps/vulnfounder-cli/internal/config/config.go`
   - 增加默认 LLM 配置名和非敏感 phase 摘要读取接口。
-- `apps/openant-cli/internal/config/config_test.go`
+- `apps/vulnfounder-cli/internal/config/config_test.go`
   - 增加默认配置回退和 phase 摘要测试。
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 增加 provider-aware LLM 状态构建逻辑。
   - 只向模板传递非敏感状态。
-- `apps/openant-cli/internal/server/llm_status_test.go`
+- `apps/vulnfounder-cli/internal/server/llm_status_test.go`
   - 覆盖 OpenAI-compatible v2 配置和旧版配置两种页面渲染路径。
-- `apps/openant-cli/ui/index.html`
+- `apps/vulnfounder-cli/ui/index.html`
   - 替换固定 Anthropic 字段，增加配置状态和 phase 模型绑定展示。
 
 ## 4. 测试环境
@@ -41,7 +41,7 @@
 | 系统 | macOS arm64 |
 | Go | 项目内 `.devtools/go1.25.7` |
 | Node.js | 系统 Node.js |
-| 模块 | `apps/openant-cli` |
+| 模块 | `apps/vulnfounder-cli` |
 | 测试配置 | 临时 XDG 配置目录，包含 `autodl-openai` / `gpt-5.6-luna`，密钥使用测试哨兵值 |
 
 ## 5. 测试命令与结果
@@ -59,8 +59,8 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。
 
 ```text
-ok  github.com/knostic/open-ant-cli/internal/config  1.380s
-ok  github.com/knostic/open-ant-cli/internal/server  1.868s
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config  1.380s
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server  1.868s
 ```
 
 覆盖内容：
@@ -74,8 +74,8 @@ ok  github.com/knostic/open-ant-cli/internal/server  1.868s
 ### 5.2 Web 页面 JavaScript 和静态契约检查
 
 ```bash
-python3 -c 'from pathlib import Path; import re; s=Path("apps/openant-cli/ui/index.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
-python3 -c 'from pathlib import Path; s=Path("apps/openant-cli/ui/index.html").read_text(); checks={"llm_status": "LLM configuration" in s, "provider_summary": ".LLM.Providers" in s, "legacy_gate": ".LLM.ShowLegacyKey" in s, "credential_status": "CredentialStatus" in s, "phase_bindings": "Phase model bindings" in s}; assert all(checks.values()), checks; print("WEB_03A_UI_STATIC_OK", " ".join(f"{k}={int(v)}" for k,v in checks.items()))'
+python3 -c 'from pathlib import Path; import re; s=Path("apps/vulnfounder-cli/ui/index.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
+python3 -c 'from pathlib import Path; s=Path("apps/vulnfounder-cli/ui/index.html").read_text(); checks={"llm_status": "LLM configuration" in s, "provider_summary": ".LLM.Providers" in s, "legacy_gate": ".LLM.ShowLegacyKey" in s, "credential_status": "CredentialStatus" in s, "phase_bindings": "Phase model bindings" in s}; assert all(checks.values()), checks; print("WEB_03A_UI_STATIC_OK", " ".join(f"{k}={int(v)}" for k,v in checks.items()))'
 ```
 
 结果：通过。
@@ -97,16 +97,16 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。第一次在受限沙箱中运行时，既有 `httptest` 临时端口监听被系统拒绝；申请本机回环测试权限后全量通过：
 
 ```text
-ok  github.com/knostic/open-ant-cli/cmd
-ok  github.com/knostic/open-ant-cli/internal/checkpoint
-ok  github.com/knostic/open-ant-cli/internal/config
-ok  github.com/knostic/open-ant-cli/internal/git
-ok  github.com/knostic/open-ant-cli/internal/languages
-ok  github.com/knostic/open-ant-cli/internal/models
-ok  github.com/knostic/open-ant-cli/internal/output
-ok  github.com/knostic/open-ant-cli/internal/python
-ok  github.com/knostic/open-ant-cli/internal/report
-ok  github.com/knostic/open-ant-cli/internal/server
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 ```
 
 ### 5.4 二进制构建和真实 Web 页面检查
@@ -117,7 +117,7 @@ GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
 GOCACHE="$PWD/../../.devtools/gocache" \
 ../../.devtools/go1.25.7/go/bin/go build \
-  -ldflags "-X github.com/knostic/open-ant-cli/cmd.version=web-03a" \
+  -ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=web-03a" \
   -o bin/openant ./main.go
 ./bin/openant version
 ```

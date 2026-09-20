@@ -1,7 +1,7 @@
 # OH-22A Socket 验收语料基线测试记录
 
 - 日期：2026-08-26
-- 项目：OpenAnt
+- 项目：VulnFounder
 - 平台：OpenHarmony
 - 数据集：`/Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code`
 - 测试状态：**静态前端全量完成；LLM 漏洞判定未执行**
@@ -39,7 +39,7 @@
 每个仓库使用相同命令，`<repo>` 和 `<name>` 分别替换为仓库绝对路径和仓库名：
 
 ```bash
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   <repo> \
   --output debug_outputs/OH-22A-socket-corpus/<name> \
   --platform openharmony \

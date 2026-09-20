@@ -29,7 +29,7 @@ LLM 结构化决策和 OpenGrok 工具执行结果，而不必打开终端或手
 - `go test ./internal/server ./internal/python`：**通过**；新增测试覆盖 LLM 参数传递、
   CSRF 保护和不安全模型配置名拒绝；
 - `go test ./...`：**通过**（全部 Go 包）；
-- 使用项目自带 Go 1.25.7 构建 `apps/openant-cli/bin/openant`，并在
+- 使用项目自带 Go 1.25.7 构建 `apps/vulnfounder-cli/bin/openant`，并在
   `127.0.0.1:18080` 启动 Web；首页和 `/source-locator` 均返回 HTTP 200，页面包含
   `llm-search`、`llm-config`、`llm.search.round` 和隐藏思维链边界提示。
 
@@ -109,7 +109,7 @@ http://127.0.0.1:18080/source-locator
 
 - `tests/source_locator`：**247 passed**；包含恢复状态转换、缺失 `socket_acquire_or_bind` 的 LLM 补证闭环、“重复后选择新动作”和“同一检索词不同语义动作”测试。
 - `py_compile`：`worker.py`、`llm_search_planner.py`、`state_machine.py` 通过。
-- Go：`apps/openant-cli` 执行 `go test ./...`，**全部通过**。
+- Go：`apps/vulnfounder-cli` 执行 `go test ./...`，**全部通过**。
 - 页面脚本：`node --check` 通过。
 
 ### 真实 OpenGrok 复测
@@ -166,7 +166,7 @@ http://127.0.0.1:18080/source-locator
 - `tests/source_locator`：**247 passed**。
 - `ruff check core/source_locator tests/source_locator`：**通过**。
 - `node --check`（内嵌 source-locator 页面脚本）：**通过**。
-- `go test ./...`（`apps/openant-cli`）：**全部通过**。
+- `go test ./...`（`apps/vulnfounder-cli`）：**全部通过**。
 - 重建并重启 Web 后，`GET /source-locator` 返回 **HTTP 200**，页面包含确认摘要卡；实际
   历史会话 `loc_JdYWaUhbGqAtc7B7` 的 `verification.json`、`evidence.json` 返回 **200**，
   新摘要文件按预期返回 **404**，可验证前端兼容分支会被使用。
@@ -200,7 +200,7 @@ http://127.0.0.1:18080/source-locator
   CLI 删除后的 JSON 信封和目录消失。
 - `ruff check core/source_locator tests/source_locator openant/cli.py`：**通过**。
 - 内嵌 `source-locator.html` 提取后执行 `node --check`：**通过**。
-- `apps/openant-cli` 执行 `go test ./...`：**全部通过**，包含 CSRF 拒绝、合法删除请求
+- `apps/vulnfounder-cli` 执行 `go test ./...`：**全部通过**，包含 CSRF 拒绝、合法删除请求
   以及传递 `source-locator delete` 参数的 HTTP 回归测试。
 
 ### 删除边界
@@ -239,7 +239,7 @@ http://127.0.0.1:18080/source-locator
 - `tests/source_locator/test_repository_manager.py`：**15 passed**，回归断言 clone
   使用 `.git` 传输地址且原有 Git 安全参数保持不变。
 - 全套 `tests/source_locator`：**249 passed**；Ruff 检查通过。
-- `apps/openant-cli`：`go test ./...` 全部通过；重建并重启 Web 后
+- `apps/vulnfounder-cli`：`go test ./...` 全部通过；重建并重启 Web 后
   `GET /source-locator` 返回 HTTP 200。
 
 ## 12. 初始检索可视化面板（2026-08-29）
@@ -263,7 +263,7 @@ http://127.0.0.1:18080/source-locator
 ### 单独测试
 
 - 内嵌 `source-locator.html` 脚本执行 `node --check`：**通过**。
-- `apps/openant-cli` 执行 `go test ./...`：**全部通过**；模板测试增加了可视化面板、
+- `apps/vulnfounder-cli` 执行 `go test ./...`：**全部通过**；模板测试增加了可视化面板、
   图交互、筛选器和产物读取标记断言。
 - `tests/source_locator`：**249 passed**。
 - 重建并重启 Web 后，`GET /source-locator` 返回 **HTTP 200**；真实历史会话

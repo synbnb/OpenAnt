@@ -85,7 +85,7 @@ prompt 改为要求：
 测试文件：
 
 ```text
-libs/openant-core/tests/openharmony/test_llm_candidate_edge_review.py
+libs/vulnfounder-core/tests/openharmony/test_llm_candidate_edge_review.py
 ```
 
 ### RED
@@ -93,8 +93,8 @@ libs/openant-core/tests/openharmony/test_llm_candidate_edge_review.py
 生产代码修改前运行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_llm_candidate_edge_review.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_llm_candidate_edge_review.py
 ```
 
 结果：
@@ -129,10 +129,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 候选协议、既有协议和执行器测试：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_llm_candidate_edge_review.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_recovery_execution.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_llm_candidate_edge_review.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_recovery_execution.py
 ```
 
 结果：
@@ -144,8 +144,8 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 OpenHarmony 全量回归：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -158,8 +158,8 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 
 ```bash
 .venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_candidate_edge_review.py
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_candidate_edge_review.py
 git diff --check
 ```
 

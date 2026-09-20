@@ -91,20 +91,20 @@ OpenHarmony local IPC/SA caller; Parcel, caller identity, and device-facing inpu
 
 ## 4. 修改文件
 
-- `libs/openant-core/report/generator.py`
+- `libs/vulnfounder-core/report/generator.py`
   - 新增报告阶段 OpenHarmony baseline 投影；
   - 新增报告平台上下文长度限制；
   - 根据平台选择攻击者模型；
   - 增加无 provenance 的 OpenHarmony 最小降级上下文。
-- `libs/openant-core/report/prompts/summary.txt`
+- `libs/vulnfounder-core/report/prompts/summary.txt`
   - 增加 `{platform_context}` 和 `{attacker_model}`；
   - 删除固定的 OpenHarmony 不适用远程攻击模型。
-- `libs/openant-core/core/scanner.py`
+- `libs/vulnfounder-core/core/scanner.py`
   - 显式 OpenHarmony 且没有应用上下文时，pipeline output 的应用类型仍写为
     `openharmony_component`。
-- `libs/openant-core/tests/openharmony/test_report_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_report_platform_context.py`
   - 新增 OpenHarmony、generic、降级和 Prompt 注入测试。
-- `libs/openant-core/tests/test_scanner_platform_profile.py`
+- `libs/vulnfounder-core/tests/test_scanner_platform_profile.py`
   - 新增显式 OpenHarmony 无上下文时的报告类型测试。
 
 ## 5. TDD 和阶段测试记录

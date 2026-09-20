@@ -25,13 +25,13 @@
 
 ## 自动化测试
 
-执行环境：OpenAnt `.venv`（Python 3.13，含 tree-sitter 依赖）。
+执行环境：VulnFounder `.venv`（Python 3.13，含 tree-sitter 依赖）。
 
 ### 扫描器和 CLI 回归
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：`17 passed`。
@@ -47,7 +47,7 @@
 ### OpenHarmony 全套回归
 
 ```text
-.venv/bin/python -m pytest -q libs/openant-core/tests/openharmony
+.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：`156 passed, 2 skipped`。
@@ -60,18 +60,18 @@
 
 ```text
 .venv/bin/python -m py_compile \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/core/schemas.py \
-  libs/openant-core/openant/cli.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/core/schemas.py \
+  libs/vulnfounder-core/openant/cli.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py
 .venv/bin/ruff check \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/core/schemas.py \
-  libs/openant-core/openant/cli.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_projection.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/core/schemas.py \
+  libs/vulnfounder-core/openant/cli.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_projection.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 git diff --check
 ```
 

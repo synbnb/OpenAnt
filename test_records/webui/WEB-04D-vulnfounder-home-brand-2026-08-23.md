@@ -6,7 +6,7 @@
 
 ## 修改内容
 
-- 首页 `<title>`、品牌名称由 `OpenAnt` 改为 `vulnfounder`。
+- 首页 `<title>`、品牌名称由 `VulnFounder` 改为 `vulnfounder`。
 - 品牌标识由 `OA` 调整为 `VF`。
 - 删除“从源码入口追踪安全风险”标题及其英文翻译键。
 - 首页说明文案中的产品名同步改为 `vulnfounder`。

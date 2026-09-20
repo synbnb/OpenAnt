@@ -21,12 +21,12 @@ OH-14A-1～OH-14A-3 已能表达 IDL interface、IPC transaction、Proxy、Stub 
 
 ## 2. 修改文件
 
-- `libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
   - 增加 SA 记录归一化、SA 节点属性和接口匹配辅助逻辑；
   - `OpenHarmonyIPCResolver.resolve`/`resolve_dict` 增加可选 `sa_result` 参数；
   - 增加 SA 节点、`system_ability_to_interface` 边和三类 SA/interface orphan；
   - 保持原有 IDL→transaction、Proxy、Stub、handler 解析行为。
-- `libs/openant-core/tests/platforms/test_openharmony_sa_ipc_graph.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_sa_ipc_graph.py`
   - 覆盖 libpath/process 正例、权限/生命周期元数据保留、native 路径次级证据、歧义/未匹配 orphan、序列化字典输入。
 
 ## 3. 定向测试结果

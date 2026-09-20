@@ -31,26 +31,26 @@
 先按 TDD 写入回归测试，旧实现下 3 项均失败；完成修改后新增完整性测试全部通过。
 
 ```text
-.venv/bin/python -m pytest -q libs/openant-core/tests/report
+.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/report
 62 passed in 0.11s
 
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/report \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/test_reporter_coercion.py \
-  libs/openant-core/tests/test_reporter_exploit_path_shape.py \
-  libs/openant-core/tests/test_reporter_status_fidelity.py \
-  libs/openant-core/tests/test_verifier_verdictonly_confirmed_drop.py
+  libs/vulnfounder-core/tests/report \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/test_reporter_coercion.py \
+  libs/vulnfounder-core/tests/test_reporter_exploit_path_shape.py \
+  libs/vulnfounder-core/tests/test_reporter_status_fidelity.py \
+  libs/vulnfounder-core/tests/test_verifier_verdictonly_confirmed_drop.py
 261 passed, 2 skipped in 0.74s
 
 .venv/bin/python -m py_compile \
-  libs/openant-core/core/reporter.py \
-  libs/openant-core/core/verifier.py \
-  libs/openant-core/report/generator.py
+  libs/vulnfounder-core/core/reporter.py \
+  libs/vulnfounder-core/core/verifier.py \
+  libs/vulnfounder-core/report/generator.py
 通过
 ```
 
-全量 `libs/openant-core/tests` 未作为本阶段通过依据：该集合包含需要 Go 工具链的 conformance 测试，当前环境在第一个失败处报 `FileNotFoundError: go`；这与本次 Python 报告修改无关。仓库根目录全量收集还会进入 `source_code_base` 中的 OpenHarmony 自带测试，并因缺少 `distributed`、`selenium`、`CppHeaderParser` 及同名测试模块冲突而停止。
+全量 `libs/vulnfounder-core/tests` 未作为本阶段通过依据：该集合包含需要 Go 工具链的 conformance 测试，当前环境在第一个失败处报 `FileNotFoundError: go`；这与本次 Python 报告修改无关。仓库根目录全量收集还会进入 `source_code_base` 中的 OpenHarmony 自带测试，并因缺少 `distributed`、`selenium`、`CppHeaderParser` 及同名测试模块冲突而停止。
 
 ## 5. 真实扫描产物回归
 

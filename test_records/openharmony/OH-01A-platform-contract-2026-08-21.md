@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-01A：平台无关协议、schema 版本与结果挂载位 |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 开发分支 | `feature/openharmony-adaptation` |
 | Python | 3.11.15，项目 `.venv` |
 | pytest | 9.1.1 |
@@ -121,6 +121,6 @@ git diff --check
 
 ## 9. 阶段结论
 
-OH-01A 已完成。OpenAnt 现在拥有可版本化、可序列化、默认不改变旧输出的平台数据协议；这为后续 OpenHarmony Profile Builder、GN/IDL/IP C 语义图和覆盖报告提供了公共输入/输出边界。
+OH-01A 已完成。VulnFounder 现在拥有可版本化、可序列化、默认不改变旧输出的平台数据协议；这为后续 OpenHarmony Profile Builder、GN/IDL/IP C 语义图和覆盖报告提供了公共输入/输出边界。
 
 下一小阶段建议为 OH-01B：只实现 OpenHarmony Profile Builder 的最小工厂与静态样例 profile，不接入 scanner，也不扫描真实仓。用户批准前不修改代码。

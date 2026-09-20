@@ -34,16 +34,16 @@
 
 ## 3. 文件变更
 
-- `libs/openant-core/core/source_locator/search_planner.py`
-- `libs/openant-core/core/source_locator/__init__.py`
-- `libs/openant-core/tests/source_locator/test_search_planner.py`
+- `libs/vulnfounder-core/core/source_locator/search_planner.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/tests/source_locator/test_search_planner.py`
 
 ## 4. 独立测试
 
 执行：
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest -q \
   tests/source_locator/test_search_planner.py \
   tests/source_locator/test_target_normalizer.py \
@@ -70,9 +70,9 @@ cd libs/openant-core
 
 ```text
 .venv/bin/ruff check \
-  libs/openant-core/core/source_locator/search_planner.py \
-  libs/openant-core/core/source_locator/__init__.py \
-  libs/openant-core/tests/source_locator/test_search_planner.py
+  libs/vulnfounder-core/core/source_locator/search_planner.py \
+  libs/vulnfounder-core/core/source_locator/__init__.py \
+  libs/vulnfounder-core/tests/source_locator/test_search_planner.py
 ```
 
 结果：`All checks passed!`；Python `compileall` 和 `git diff --check` 均通过。

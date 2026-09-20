@@ -1,7 +1,7 @@
 # OH 动态测试空候选与 JSON 响应修复测试记录
 
 日期：2026-08-24  
-范围：OpenAnt Web 动态测试准备阶段  
+范围：VulnFounder Web 动态测试准备阶段  
 目标：修复动态准备命令成功但 Web 误报失败的问题，并确保 0 个动态候选时能够正常结束。
 
 ## 原始故障
@@ -30,7 +30,7 @@ Web 最终报错：
   /Users/shiyu/.openant/webui/e66b949543d7ef8e/pipeline_output.json \
   --output <temporary-directory> \
   --mode claude-code \
-  --repo-path /Users/shiyu/学习/hyl/new/OpenAnt/source_code_base/systemabilitymgr_samgr
+  --repo-path /Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/systemabilitymgr_samgr
 ```
 
 实际结果：
@@ -47,8 +47,8 @@ Python 输出的是格式化多行 JSON，而旧 Web 解析器只按单行 JSON 
 
 修改文件：
 
-- `apps/openant-cli/internal/server/claude_web.go`
-- `apps/openant-cli/internal/server/claude_web_test.go`
+- `apps/vulnfounder-cli/internal/server/claude_web.go`
+- `apps/vulnfounder-cli/internal/server/claude_web_test.go`
 
 具体行为：
 
@@ -88,8 +88,8 @@ GOMODCACHE=/private/tmp/openant-go-modcache \
 
 ```text
 .venv/bin/pytest -q \
-  libs/openant-core/tests/test_claude_code_task.py \
-  libs/openant-core/tests/test_scanner.py
+  libs/vulnfounder-core/tests/test_claude_code_task.py \
+  libs/vulnfounder-core/tests/test_scanner.py
 ```
 
 结果：`16 passed`。

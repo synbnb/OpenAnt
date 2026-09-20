@@ -19,7 +19,7 @@ config/openant/config.json
 实际执行参数：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli scan \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli scan \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22F-2-real-sensors-20260827 \
   --platform openharmony \

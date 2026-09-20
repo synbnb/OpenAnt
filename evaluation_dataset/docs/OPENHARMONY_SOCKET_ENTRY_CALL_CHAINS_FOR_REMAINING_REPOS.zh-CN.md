@@ -10,7 +10,7 @@
 本次研究针对以下目录中的源码完成：
 
 ~~~text
-/Users/shiyu/学习/hyl/new/OpenAnt/evaluation_dataset/
+/Users/shiyu/学习/hyl/new/VulnFounder/evaluation_dataset/
 └── vulnerability/vulnerable_source_code_base/
     ├── communication_netmanager_base
     ├── hiviewdfx_faultloggerd

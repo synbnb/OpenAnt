@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-为动态测试增加第二种运行模式：不使用 Docker，也不由 OpenAnt 内部 LLM 生成或执行载荷，而是生成一个可直接交给 Claude Code 的任务工作区。
+为动态测试增加第二种运行模式：不使用 Docker，也不由 VulnFounder 内部 LLM 生成或执行载荷，而是生成一个可直接交给 Claude Code 的任务工作区。
 
 本阶段只验证任务包的目录合同和上下文完整性，不启动真实 Claude Code，不连接开发板，不把任务包生成误认为漏洞验证。
 
@@ -12,7 +12,7 @@
 
 ```text
 pipeline_output.json
-  → OpenAnt 内部 LLM 生成 Docker 测试
+  → VulnFounder 内部 LLM 生成 Docker 测试
   → Docker build/run
   → dynamic_test_results.json
 ```
@@ -42,7 +42,7 @@ Docker 模式仍然保留，并且是默认模式；Claude Code 模式通过 `--
 - 建立 `task/source_code` 到真实源码目录的相对链接，并保存绝对路径元数据；
 - 公开项目内工具链路径，但不复制 `.p12`、私钥、密码或 API key；
 - 扩展 Python/Go CLI 的 `--mode docker|claude-code`；
-- Claude Code 模式不检查 Docker，不要求 OpenAnt 动态测试 API key；
+- Claude Code 模式不检查 Docker，不要求 VulnFounder 动态测试 API key；
 - 全扫描支持 `--dynamic-test-mode claude-code`，默认 Docker 行为保持不变。
 
 ## 4. 任务包结构
@@ -77,10 +77,10 @@ Docker 模式仍然保留，并且是默认模式；Claude Code 模式通过 `--
 执行命令：
 
 ```text
-PYTHONPATH=libs/openant-core python -m pytest -q \
-  libs/openant-core/tests/test_claude_code_task.py \
-  libs/openant-core/tests/test_scanner.py \
-  libs/openant-core/tests/test_dynamic_tester_language.py
+PYTHONPATH=libs/vulnfounder-core python -m pytest -q \
+  libs/vulnfounder-core/tests/test_claude_code_task.py \
+  libs/vulnfounder-core/tests/test_scanner.py \
+  libs/vulnfounder-core/tests/test_dynamic_tester_language.py
 ```
 
 结果：
@@ -108,19 +108,19 @@ PYTHONPATH=libs/openant-core python -m pytest -q \
 /private/tmp/openant-claude-code-task-test-2/run-20260824T101223Z-d5fafadc/task/
 ```
 
-结果：候选 2 个、静态产物 207 个、项目内 HDC/Hvigor/Node/签名工具链接均存在；OpenAnt 未启动 Claude Code，也未连接设备，因此这次记录只证明任务包准备正确，不代表动态漏洞结论。
+结果：候选 2 个、静态产物 207 个、项目内 HDC/Hvigor/Node/签名工具链接均存在；VulnFounder 未启动 Claude Code，也未连接设备，因此这次记录只证明任务包准备正确，不代表动态漏洞结论。
 
 项目内提供 `.devtools/go1.25.7/go/bin/go` 和 `gofmt`，本阶段已用该 `gofmt` 格式化 Go 修改；尝试执行 Go 测试时，当前沙箱没有 Go 模块缓存且无法访问 `proxy.golang.org`，因此依赖下载失败，未完成 Go 编译测试。网络和依赖可用的交付环境应运行：
 
 ```text
-cd apps/openant-cli && gofmt -w cmd/dynamictest.go cmd/dynamictest_test.go internal/output/formatter.go
-cd apps/openant-cli && go test ./...
+cd apps/vulnfounder-cli && gofmt -w cmd/dynamictest.go cmd/dynamictest_test.go internal/output/formatter.go
+cd apps/vulnfounder-cli && go test ./...
 ```
 
 ## 6. 使用方式
 
 ```bash
-./apps/openant-cli/bin/openant dynamic-test \
+./apps/vulnfounder-cli/bin/openant dynamic-test \
   /path/to/scan/pipeline_output.json \
   --mode claude-code \
   --repo-path /path/to/source_code \
@@ -134,7 +134,7 @@ cd <run-root>/task
 claude --dangerously-skip-permissions
 ```
 
-本阶段 Claude Code 负责把结论和证据写入 `task/results/`；OpenAnt 尚未实现结果摄取和自动合并到 `dynamic_test_results.json`。
+本阶段 Claude Code 负责把结论和证据写入 `task/results/`；VulnFounder 尚未实现结果摄取和自动合并到 `dynamic_test_results.json`。
 
 ## 7. 限制
 

@@ -8,7 +8,7 @@
 
 ### 修改前
 
-OpenAnt 中没有 OpenGrok 客户端实现。源码定位方案只有文档设计，现有扫描流程仍要求用户提供本地源码目录。
+VulnFounder 中没有 OpenGrok 客户端实现。源码定位方案只有文档设计，现有扫描流程仍要求用户提供本地源码目录。
 
 ### 修改后
 
@@ -28,10 +28,10 @@ OpenAnt 中没有 OpenGrok 客户端实现。源码定位方案只有文档设�
 
 ## 2. 修改文件
 
-- `libs/openant-core/core/source_locator/__init__.py`
-- `libs/openant-core/core/source_locator/opengrok_client.py`
-- `libs/openant-core/tests/test_opengrok_protocol_models.py`
-- `libs/openant-core/tests/test_opengrok_client.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/opengrok_client.py`
+- `libs/vulnfounder-core/tests/test_opengrok_protocol_models.py`
+- `libs/vulnfounder-core/tests/test_opengrok_client.py`
 
 ## 3. 自动化测试
 
@@ -67,8 +67,8 @@ OpenAnt 中没有 OpenGrok 客户端实现。源码定位方案只有文档设�
 
 ```text
 .venv/bin/ruff check \
-  libs/openant-core/core/source_locator \
-  libs/openant-core/tests/test_opengrok*
+  libs/vulnfounder-core/core/source_locator \
+  libs/vulnfounder-core/tests/test_opengrok*
 python -m compileall -q core/source_locator
 ```
 

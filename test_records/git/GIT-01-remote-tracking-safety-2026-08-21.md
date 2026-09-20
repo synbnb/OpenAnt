@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | GIT-01：远程引用获取、分支跟踪与 upstream 推送保护 |
 | 日期 | 2026-08-21 |
-| 本地仓库 | `/Users/shiyu/学习/hyl/new/OpenAnt` |
+| 本地仓库 | `/Users/shiyu/学习/hyl/new/VulnFounder` |
 | 操作前后 HEAD | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 当前分支 | `master` |
 
@@ -15,8 +15,8 @@
 GIT-00 完成后的配置是：
 
 ```text
-origin   -> https://github.com/synbnb/OpenAnt.git
-upstream -> https://github.com/knostic/OpenAnt.git
+origin   -> https://github.com/synbnb/VulnFounder.git
+upstream -> https://github.com/knostic/VulnFounder.git
 master   -> upstream/master
 ```
 
@@ -28,8 +28,8 @@ master   -> upstream/master
 本阶段调整为：
 
 ```text
-origin fetch/push   -> https://github.com/synbnb/OpenAnt.git
-upstream fetch      -> https://github.com/knostic/OpenAnt.git
+origin fetch/push   -> https://github.com/synbnb/VulnFounder.git
+upstream fetch      -> https://github.com/knostic/VulnFounder.git
 upstream push       -> DISABLED
 master tracks       -> origin/master
 ```
@@ -44,7 +44,7 @@ master tracks       -> origin/master
 | 分支 | `master` |
 | 暂存区 | 空 |
 | `branch.master.remote` | `upstream` |
-| `upstream` push URL | `https://github.com/knostic/OpenAnt.git` |
+| `upstream` push URL | `https://github.com/knostic/VulnFounder.git` |
 | 本地 `upstream/master` | `2476527b9d6f929a5c987bd3d5df414da04f1eaf`（旧引用） |
 | 本地 `origin/master` | 不存在 |
 
@@ -82,9 +82,9 @@ git branch --set-upstream-to=origin/master master
 最终配置：
 
 ```text
-origin   https://github.com/synbnb/OpenAnt.git (fetch)
-origin   https://github.com/synbnb/OpenAnt.git (push)
-upstream https://github.com/knostic/OpenAnt.git (fetch)
+origin   https://github.com/synbnb/VulnFounder.git (fetch)
+origin   https://github.com/synbnb/VulnFounder.git (push)
+upstream https://github.com/knostic/VulnFounder.git (fetch)
 upstream DISABLED                              (push)
 ```
 

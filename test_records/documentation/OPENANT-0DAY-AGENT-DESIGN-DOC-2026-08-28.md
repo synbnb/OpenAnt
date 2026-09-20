@@ -6,7 +6,7 @@
 
 ## 检查环境
 
-- OpenAnt 工作目录：`/Users/shiyu/学习/hyl/new/OpenAnt`
+- VulnFounder 工作目录：`/Users/shiyu/学习/hyl/new/VulnFounder`
 - 检查日期：2026-08-28
 - 本次未修改 Python/Go/前端业务代码，仅新增设计与运行文档及本记录。
 
@@ -25,8 +25,8 @@ for p in \
   OPENANT_COMPLETE_PIPELINE_GUIDE_OH17A.zh-CN.md \
   ADR-001-OPENHARMONY-LLM-CALL-GRAPH-RECOVERY.zh-CN.md \
   docs/decisions/ADR-003-OPENHARMONY-DYNAMIC-TEST-EXECUTION.zh-CN.md \
-  libs/openant-core/utilities/dynamic_tester/README.md \
-  libs/openant-core/utilities/dynamic_tester/templates/claude_code/PUBLIC_TOOLS_README.zh-CN.md \
+  libs/vulnfounder-core/utilities/dynamic_tester/README.md \
+  libs/vulnfounder-core/utilities/dynamic_tester/templates/claude_code/PUBLIC_TOOLS_README.zh-CN.md \
   config/openant/config.example.json config/openant/README.md \
   test_records/openharmony/OH-22F-3D-real-netmanager-batch1-2026-08-28.md \
   test_records/dynamic/OH-DYN-12-hap-system-service-probe-2026-08-24.md

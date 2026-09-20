@@ -27,9 +27,9 @@
 
 ## 3. 修改文件
 
-- \`apps/openant-cli/ui/index.html\`
-- \`apps/openant-cli/ui/scan.html\`
-- \`apps/openant-cli/internal/server/ui_i18n_test.go\`
+- \`apps/vulnfounder-cli/ui/index.html\`
+- \`apps/vulnfounder-cli/ui/scan.html\`
+- \`apps/vulnfounder-cli/internal/server/ui_i18n_test.go\`
 
 ## 4. 自动化测试
 
@@ -38,15 +38,15 @@
 命令：
 
 \`\`\`bash
-env GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache \
-  GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./internal/server
+env GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache \
+  GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath \
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./internal/server
 \`\`\`
 
 结果：
 
 \`\`\`text
-ok github.com/knostic/open-ant-cli/internal/server
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 \`\`\`
 
 专项测试覆盖：
@@ -61,7 +61,7 @@ ok github.com/knostic/open-ant-cli/internal/server
 - 响应式和 reduced-motion 样式存在。
 - 可见页面源码不包含长破折号字符。
 
-### 4.2 OpenAnt CLI 全量 Go 测试
+### 4.2 VulnFounder CLI 全量 Go 测试
 
 首次在受限沙箱运行时，\`cmd/llm_probe_test.go\` 的 \`httptest\` 临时监听被操作系统拒绝，错误为：
 
@@ -72,24 +72,24 @@ listen tcp6 [::1]:0: bind: operation not permitted
 随后在允许本机回环监听的执行环境中运行同一命令：
 
 \`\`\`bash
-env GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache \
-  GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+env GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache \
+  GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath \
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 \`\`\`
 
 结果：全部通过。
 
 \`\`\`text
-ok github.com/knostic/open-ant-cli/cmd
-ok github.com/knostic/open-ant-cli/internal/checkpoint
-ok github.com/knostic/open-ant-cli/internal/config
-ok github.com/knostic/open-ant-cli/internal/git
-ok github.com/knostic/open-ant-cli/internal/languages
-ok github.com/knostic/open-ant-cli/internal/models
-ok github.com/knostic/open-ant-cli/internal/output
-ok github.com/knostic/open-ant-cli/internal/python
-ok github.com/knostic/open-ant-cli/internal/report
-ok github.com/knostic/open-ant-cli/internal/server
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 \`\`\`
 
 ### 4.3 JavaScript 与差异检查

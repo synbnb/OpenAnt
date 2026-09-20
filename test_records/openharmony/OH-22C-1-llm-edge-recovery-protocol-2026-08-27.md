@@ -53,7 +53,7 @@ SystemAbility、socket、request 等边界信号的残余；它是优先级筛�
 新增测试文件：
 
 ```text
-libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
+libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py
 ```
 
 覆盖以下行为：
@@ -70,12 +70,12 @@ libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
 
 ```bash
 source .venv/bin/activate
-pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
+pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py
 # 4 passed
 
 ruff check \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py
 # All checks passed!
 ```
 
@@ -111,7 +111,7 @@ ruff check \
 
 ```bash
 source .venv/bin/activate
-pytest -q libs/openant-core/tests/openharmony
+pytest -q libs/vulnfounder-core/tests/openharmony
 # 116 passed, 2 skipped
 ```
 

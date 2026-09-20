@@ -2,7 +2,7 @@
 
 日期：2026-08-28
 阶段：源码定位器 SL-04A：确认门禁、目录边界与安全 Git 拉取
-代码目录：`OpenAnt/libs/openant-core`
+代码目录：`VulnFounder/libs/vulnfounder-core`
 对应提交：待本阶段验收后提交
 
 ## 1. 本阶段解决的问题
@@ -29,7 +29,7 @@ Go 侧已有 `cloneRepo`，可以为一个扫描任务临时执行浅克隆，�
 
 1. 接收 `RepositoryMapping`，用 `RepositoryPolicy` 再校验一次 URL、remote、来源和 revision；
 2. 没有 `RepositoryConfirmation`、确认未接受或确认的项目/URL/revision 与策略结果不完全一致时，立即返回 `rejected`，不执行任何 Git 命令；
-3. 将 `GitCodeConfig.destination_root` 解析为项目根目录内的路径，默认是 `OpenAnt/source_code_base`；
+3. 将 `GitCodeConfig.destination_root` 解析为项目根目录内的路径，默认是 `VulnFounder/source_code_base`；
 4. 拒绝绝对路径、越界路径和任意一级符号链接；
 5. 目标项目目录已存在时，只读检查 Git 工作树、origin 和目标 revision：完全一致则 `reused`，否则 `conflict`，不覆盖用户文件；
 6. 新目录使用临时 staging 路径，执行浅克隆、目标 revision fetch、读取 `FETCH_HEAD`、分离 checkout 和 HEAD 比对；
@@ -57,7 +57,7 @@ accepted      = true
 对 `base/startup/init/param_service.c` 的 Manifest 映射通过 SL-03B 后，用户确认 `startup_init`。RepositoryManager 在项目内创建：
 
 ```text
-OpenAnt/source_code_base/startup_init/
+VulnFounder/source_code_base/startup_init/
 ```
 
 结果为：
@@ -89,14 +89,14 @@ revision 不一致         → rejected，Git 调用数为 0
 
 ## 5. 实现文件
 
-- `libs/openant-core/core/source_locator/repository_manager.py`
+- `libs/vulnfounder-core/core/source_locator/repository_manager.py`
   - `RepositoryConfirmation`：显式用户批准对象；
   - `RepositoryManager`：策略复核、目录边界、冲突检测和安全 Git 命令；
   - `CommandResult`/`CommandRecord`：可注入的命令执行适配器与有界审计记录；
   - `RepositoryAcquisitionResult`：`cloned`/`reused`/`conflict`/`rejected`/`failed` 结果。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出 SL-04A 公共接口。
-- `libs/openant-core/tests/source_locator/test_repository_manager.py`
+- `libs/vulnfounder-core/tests/source_locator/test_repository_manager.py`
   - 使用完全可控的脚本化 runner，不启动真实 Git 进程。
 
 ## 6. 测试命令与结果
@@ -106,7 +106,7 @@ revision 不一致         → rejected，Git 调用数为 0
 ### SL-04A 专项及 source-locator 回归
 
 ```bash
-cd OpenAnt/libs/openant-core
+cd VulnFounder/libs/vulnfounder-core
 ../../.venv/bin/pytest -q tests/source_locator/test_repository_manager.py
 ../../.venv/bin/pytest -q tests/source_locator
 ```

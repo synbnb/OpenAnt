@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-00A：外部 OpenHarmony corpus manifest 契约 |
 | 日期 | 2026-08-21 |
-| OpenAnt 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 平台 | macOS（Darwin） |
 | Python | 3.13.13，`/Users/shiyu/miniconda3/bin/python` |
 | pytest | 9.0.3 |
@@ -14,12 +14,12 @@
 
 ## 2. 本阶段范围
 
-本阶段只建立外部五仓的版本、Git 跟踪文件数量和关键文件特征基线，不修改 OpenAnt 生产代码、语言配置、parser 或 CLI。
+本阶段只建立外部五仓的版本、Git 跟踪文件数量和关键文件特征基线，不修改 VulnFounder 生产代码、语言配置、parser 或 CLI。
 
 新增文件：
 
-- `libs/openant-core/tests/openharmony/test_corpus_manifest.py`
-- `libs/openant-core/tests/fixtures/openharmony/corpus_manifest.json`
+- `libs/vulnfounder-core/tests/openharmony/test_corpus_manifest.py`
+- `libs/vulnfounder-core/tests/fixtures/openharmony/corpus_manifest.json`
 - `test_records/openharmony/OH-00A-corpus-manifest-2026-08-21.md`
 
 ## 3. TDD RED 记录
@@ -112,7 +112,7 @@ python -m pytest tests/test_language_registry.py tests/test_parser_adapter.py -v
 | 新增测试和 JSON 尾随空白检查 | 通过 |
 | `python -m ruff check tests/openharmony/test_corpus_manifest.py` | 未执行：当前环境未安装 `ruff`，报错 `No module named ruff` |
 
-没有为通过测试而安装或修改环境依赖。Ruff 检查需在安装 OpenAnt dev dependencies 的环境或现有 CI 中补跑。
+没有为通过测试而安装或修改环境依赖。Ruff 检查需在安装 VulnFounder dev dependencies 的环境或现有 CI 中补跑。
 
 ## 9. 结论
 
@@ -123,4 +123,4 @@ OH-00A 的功能与相关回归均通过。当前已具备：
 - 不依赖用户绝对路径的 CI 契约测试。
 - 后续各阶段可以复用的 commit 和文件数量比较基准。
 
-本阶段没有改变 OpenAnt 的实际扫描行为。下一小阶段开始前，需要重新说明原有测试/fixture 逻辑和拟新增的最小 OpenHarmony IPC fixture，并获得用户批准。
+本阶段没有改变 VulnFounder 的实际扫描行为。下一小阶段开始前，需要重新说明原有测试/fixture 逻辑和拟新增的最小 OpenHarmony IPC fixture，并获得用户批准。

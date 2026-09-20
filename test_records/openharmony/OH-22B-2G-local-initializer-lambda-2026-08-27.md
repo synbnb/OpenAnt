@@ -48,8 +48,8 @@ it->second(args);
 
 代码位置：
 
-- [局部 Lambda 诊断与作用域匹配](../../libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py)
-- [语义投影作用域保护](../../libs/openant-core/core/platforms/openharmony/native_dispatch.py)
+- [局部 Lambda 诊断与作用域匹配](../../libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py)
+- [语义投影作用域保护](../../libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py)
 
 ## 3. 先失败、后通过的测试过程
 
@@ -65,7 +65,7 @@ it->second(args);
 错误候选边；修复后结果为：
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/openharmony
+.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony
 106 passed, 2 skipped
 
 .venv/bin/ruff check …
@@ -77,7 +77,7 @@ All checks passed!
 ### All 模式
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2G-all-20260827/<repo> \
   --platform openharmony --language c --level all --fresh
@@ -86,7 +86,7 @@ PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
 ### Reachable 模式
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2G-reachable-20260827/<repo> \
   --platform openharmony --language c --level reachable --fresh

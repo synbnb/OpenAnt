@@ -1,4 +1,4 @@
-# ENV-00 OpenAnt 项目独立开发环境记录
+# ENV-00 VulnFounder 项目独立开发环境记录
 
 > 后续状态：ENV-00 记录的 Go 缺失项已在 `ENV-01-project-local-go-1.25.7-2026-08-21.md` 中补齐并完成全量回归；本文件保留当时的原始测试结论。
 
@@ -8,9 +8,9 @@
 |---|---|
 | 阶段 | ENV-00：项目独立开发环境 |
 | 日期 | 2026-08-21 |
-| OpenAnt 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 操作系统 | macOS（Darwin，Apple Silicon） |
-| 环境位置 | `/Users/shiyu/学习/hyl/new/OpenAnt/.venv` |
+| 环境位置 | `/Users/shiyu/学习/hyl/new/VulnFounder/.venv` |
 | 安装策略 | Python 3.11 venv；不复用 Conda base 或 `~/.openant/venv` |
 
 ## 2. 原项目环境逻辑
@@ -43,7 +43,7 @@
 命令：
 
 ```bash
-cd /Users/shiyu/学习/hyl/new/OpenAnt
+cd /Users/shiyu/学习/hyl/new/VulnFounder
 /Users/shiyu/.local/bin/python3.11 -m venv .venv
 ```
 
@@ -63,7 +63,7 @@ pip 24.0
 命令：
 
 ```bash
-.venv/bin/python -m pip install -r libs/openant-core/requirements.txt
+.venv/bin/python -m pip install -r libs/vulnfounder-core/requirements.txt
 ```
 
 第一次在受限网络环境中执行失败，错误为无法解析 PyPI 地址：
@@ -80,7 +80,7 @@ No matching distribution found for annotated-types==0.7.0
 命令：
 
 ```bash
-.venv/bin/python -m pip install -e "libs/openant-core[dev]"
+.venv/bin/python -m pip install -e "libs/vulnfounder-core[dev]"
 ```
 
 结果：成功安装 `openant 0.1.0`、pytest 和 Ruff；运行依赖满足项目声明。
@@ -93,7 +93,7 @@ No matching distribution found for annotated-types==0.7.0
 | `.venv/bin/python -m pytest --version` | pytest 9.1.1 |
 | `.venv/bin/python -m ruff --version` | ruff 0.16.4 |
 | `.venv/bin/openant --version` | openant 0.1.0 |
-| `import openant` | 指向当前 `libs/openant-core/openant/__init__.py` |
+| `import openant` | 指向当前 `libs/vulnfounder-core/openant/__init__.py` |
 | `.venv/bin/python -m pip check` | `No broken requirements found` |
 
 ## 6. JavaScript parser 依赖
@@ -101,7 +101,7 @@ No matching distribution found for annotated-types==0.7.0
 命令：
 
 ```bash
-cd libs/openant-core/parsers/javascript
+cd libs/vulnfounder-core/parsers/javascript
 npm ci
 ```
 
@@ -119,15 +119,15 @@ found 0 vulnerabilities
 - `ts-morph@27.0.2`
 - `typescript@5.9.3`
 
-`package.json` 中的 `npm test` 是占位脚本，会固定返回 `Error: no test specified`；因此没有把它当作有效测试。JavaScript parser 由 OpenAnt Python 测试套件覆盖。
+`package.json` 中的 `npm test` 是占位脚本，会固定返回 `Error: no test specified`；因此没有把它当作有效测试。JavaScript parser 由 VulnFounder Python 测试套件覆盖。
 
 ## 7. 环境占用与 Git 隔离
 
 | 路径 | 大小 | Git 状态 |
 |---|---:|---|
 | `.venv` | 179 MiB | 被 `.gitignore:5` 排除 |
-| `libs/openant-core/parsers/javascript/node_modules` | 38 MiB | 被 `.gitignore:6` 排除 |
-| `libs/openant-core/parsers/go/go_parser/go_parser` | 未生成 | 已有忽略规则 |
+| `libs/vulnfounder-core/parsers/javascript/node_modules` | 38 MiB | 被 `.gitignore:6` 排除 |
+| `libs/vulnfounder-core/parsers/go/go_parser/go_parser` | 未生成 | 已有忽略规则 |
 
 环境安装没有修改 lockfile、requirements、pyproject 或生产代码。
 
@@ -138,7 +138,7 @@ found 0 vulnerabilities
 命令：
 
 ```bash
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m ruff check .
 ```
 
@@ -195,15 +195,15 @@ FileNotFoundError: [Errno 2] No such file or directory: 'go'
 
 ## 9. 未完成项与下一门禁
 
-OpenAnt 有两个 Go 版本要求：
+VulnFounder 有两个 Go 版本要求：
 
-- Go CLI：`apps/openant-cli/go.mod` 要求 Go 1.25.7。
-- Go parser：`libs/openant-core/parsers/go/go_parser/go.mod` 声明 Go 1.21。
+- Go CLI：`apps/vulnfounder-cli/go.mod` 要求 Go 1.25.7。
+- Go parser：`libs/vulnfounder-core/parsers/go/go_parser/go.mod` 声明 Go 1.21。
 
 当前 PATH 中没有 Go，因此尚未：
 
-- 构建 `libs/openant-core/parsers/go/go_parser/go_parser`。
-- 构建 `apps/openant-cli/bin/openant`。
+- 构建 `libs/vulnfounder-core/parsers/go/go_parser/go_parser`。
+- 构建 `apps/vulnfounder-cli/bin/openant`。
 - 运行完整 Go 测试。
 - 使完整 Python 测试套件全绿。
 

@@ -1,7 +1,7 @@
 # OH-22C-2：OpenHarmony 残余调用点去重与机制分类测试记录
 
 日期：2026-08-27  
-范围：`libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py` 及其单元测试  
+范围：`libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py` 及其单元测试  
 数据集：`debug_outputs/OH-22B-2I-all-20260827/` 下 9 个 OpenHarmony 仓库的 `call_graph_residuals.json` 与 `dataset.json`
 
 ## 1. 本阶段目标
@@ -62,7 +62,7 @@ ImportError: cannot import name 'classify_recovery_site'
 
 ```text
 source .venv/bin/activate
-pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
+pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py
 ......                                                                   [100%]
 6 passed in 0.03s
 ```
@@ -70,7 +70,7 @@ pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
 随后运行全部 OpenHarmony 专项测试：
 
 ```text
-pytest -q libs/openant-core/tests/openharmony
+pytest -q libs/vulnfounder-core/tests/openharmony
 118 passed, 2 skipped in 0.61s
 ```
 
@@ -78,8 +78,8 @@ pytest -q libs/openant-core/tests/openharmony
 
 ```text
 ruff check \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py
 All checks passed!
 ```
 
@@ -116,7 +116,7 @@ All checks passed!
 尝试运行整个 Python 测试目录时，首个失败来自 conformance 测试依赖未安装的 Go 工具链，而非本阶段文件：
 
 ```text
-libs/openant-core/tests/conformance/test_F1_receiver_type_contract.py::test_go
+libs/vulnfounder-core/tests/conformance/test_F1_receiver_type_contract.py::test_go
 FileNotFoundError: [Errno 2] No such file or directory: 'go'
 ```
 

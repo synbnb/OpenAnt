@@ -31,7 +31,7 @@
 
 ## 自动化测试
 
-执行目录：`libs/openant-core`
+执行目录：`libs/vulnfounder-core`
 
 ```text
 ../../.venv/bin/pytest -q \

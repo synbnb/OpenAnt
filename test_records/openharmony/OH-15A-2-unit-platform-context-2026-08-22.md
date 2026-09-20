@@ -45,15 +45,15 @@
 
 ## 3. 修改文件
 
-- `libs/openant-core/parsers/c/unit_generator.py`
+- `libs/vulnfounder-core/parsers/c/unit_generator.py`
   - 新增 OpenHarmony 上下文归一化、component/target 匹配、boundary/guard 信号和证据输出；
   - 新增 C/C++ 注释/字面量屏蔽；
   - Unit 增加 `platform_context`，analyzer function 增加 `platformContext`。
-- `libs/openant-core/parsers/c/test_pipeline.py`
+- `libs/vulnfounder-core/parsers/c/test_pipeline.py`
   - 将 scanner scope/build metadata 适配为 UnitGenerator 上下文；
   - dataset metadata 增加简短 `openharmony_unit_context` 摘要，原 `openharmony_scope` 保持；
   - generic pipeline 行为保持不变。
-- `libs/openant-core/tests/openharmony/test_unit_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_unit_platform_context.py`
   - 新增本阶段 5 项契约测试。
 
 ## 4. TDD 记录
@@ -63,8 +63,8 @@
 先加入契约测试后运行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_platform_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_platform_context.py
 ```
 
 结果：`3 failed, 1 passed`。失败点为 Unit 缺少 `platform_context`、analyzer 缺少 `platformContext`，以及 C pipeline 生成的 unit 没有上下文；generic 不增加字段的兼容测试先通过。
@@ -74,8 +74,8 @@ OpenAnt/.venv/bin/pytest -q \
 实现后运行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_platform_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_platform_context.py
 ```
 
 结果：`5 passed`。
@@ -91,21 +91,21 @@ OpenAnt/.venv/bin/pytest -q \
 ## 5. 回归与质量检查
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_entry_points.py \
-  OpenAnt/libs/openant-core/tests/test_unit_language_metadata.py \
-  OpenAnt/libs/openant-core/tests/parsers/c/test_c_schema_completeness.py \
-  OpenAnt/libs/openant-core/tests/parsers/c
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_unit_language_metadata.py \
+  VulnFounder/libs/vulnfounder-core/tests/parsers/c/test_c_schema_completeness.py \
+  VulnFounder/libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`137 passed, 2 skipped`。
 
 ```text
-OpenAnt/.venv/bin/ruff check \
-  OpenAnt/libs/openant-core/parsers/c/unit_generator.py \
-  OpenAnt/libs/openant-core/parsers/c/test_pipeline.py \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_platform_context.py
+VulnFounder/.venv/bin/ruff check \
+  VulnFounder/libs/vulnfounder-core/parsers/c/unit_generator.py \
+  VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_platform_context.py
 ```
 
 结果：`All checks passed!`。另外执行 `py_compile` 和 `git diff --check`，均通过。
@@ -121,8 +121,8 @@ OpenAnt/.venv/bin/ruff check \
 命令：
 
 ```text
-OpenAnt/.venv/bin/python \
-  OpenAnt/libs/openant-core/parsers/c/test_pipeline.py \
+VulnFounder/.venv/bin/python \
+  VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/communication_wifi \
   --output /private/tmp/openant-oh15a2-communication_wifi-final \
   --platform openharmony --skip-tests --processing-level all

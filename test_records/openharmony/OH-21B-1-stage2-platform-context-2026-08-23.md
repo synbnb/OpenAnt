@@ -57,17 +57,17 @@ reasoning、文件列表和 `ApplicationContext` 传给
 
 ## 3. 修改文件
 
-- `libs/openant-core/prompts/verification_prompts.py`
+- `libs/vulnfounder-core/prompts/verification_prompts.py`
   - 新增 `format_platform_context_for_verification()`；
   - `get_verification_prompt()` 增加可选 `platform_context` 参数；
   - 仅在存在 OpenHarmony 上下文时插入上下文区块。
-- `libs/openant-core/utilities/finding_verifier.py`
+- `libs/vulnfounder-core/utilities/finding_verifier.py`
   - 增加按 route key 获取静态平台上下文的逻辑；
   - 将上下文传递给 Stage 2 Prompt；
   - 保持原有 verification verdict 和错误处理流程。
-- `libs/openant-core/core/platforms/prompt_context.py`
+- `libs/vulnfounder-core/core/platforms/prompt_context.py`
   - 增加单数/复数及 camelCase 字段别名读取，支持稳定 round-trip。
-- `libs/openant-core/tests/openharmony/test_stage2_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_stage2_platform_context.py`
   - 新增 Stage 2 Prompt、FindingVerifier 转发、generic 隔离、注入清理和 round-trip
     测试；fake adapter 全程离线运行。
 

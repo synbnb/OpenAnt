@@ -2,7 +2,7 @@
 
 日期：2026-08-27  
 平台：OpenHarmony  
-仓库：`/Users/shiyu/学习/hyl/new/OpenAnt`
+仓库：`/Users/shiyu/学习/hyl/new/VulnFounder`
 
 ## 1. 本阶段目的
 
@@ -32,7 +32,7 @@ SemanticGraph 恢复边，但原流水线没有单独的产物回答以下问题
 
 新增：
 
-`libs/openant-core/core/platforms/openharmony/dispatch_recovery_diff.py`
+`libs/vulnfounder-core/core/platforms/openharmony/dispatch_recovery_diff.py`
 
 公开函数：
 
@@ -84,7 +84,7 @@ build_dispatch_recovery_diff(
 
 先新增测试：
 
-`libs/openant-core/tests/openharmony/test_dispatch_recovery_diff.py`
+`libs/vulnfounder-core/tests/openharmony/test_dispatch_recovery_diff.py`
 
 执行：
 
@@ -129,8 +129,8 @@ pytest -q tests/openharmony/test_dispatch_recovery_diff.py
 
 ```bash
 ./.venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/dispatch_recovery_diff.py \
-  libs/openant-core/tests/openharmony/test_dispatch_recovery_diff.py
+  libs/vulnfounder-core/core/platforms/openharmony/dispatch_recovery_diff.py \
+  libs/vulnfounder-core/tests/openharmony/test_dispatch_recovery_diff.py
 git diff --check
 ```
 
@@ -147,7 +147,7 @@ All checks passed!
 执行：
 
 ```bash
-./.venv/bin/pytest -q libs/openant-core/tests/openharmony
+./.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：

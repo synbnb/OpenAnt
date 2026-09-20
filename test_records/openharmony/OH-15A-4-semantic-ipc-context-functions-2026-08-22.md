@@ -41,14 +41,14 @@ native handler function
 
 ## 3. 修改文件
 
-- `libs/openant-core/parsers/c/unit_generator.py`
+- `libs/vulnfounder-core/parsers/c/unit_generator.py`
   - semantic graph overlay 归一化；
   - IPC context function 路径解析和代码内联；
   - context metadata/statistics。
-- `libs/openant-core/parsers/c/test_pipeline.py`
+- `libs/vulnfounder-core/parsers/c/test_pipeline.py`
   - OpenHarmony IDL 收集、IPC resolver 调用和 `semantic_graph.json` 产物；
   - dataset metadata 增加 semantic graph 摘要。
-- `libs/openant-core/tests/openharmony/test_unit_semantic_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py`
   - Unit overlay、Prompt context section、resolver→Unit 和真实 pipeline 临时仓库集成测试。
 
 ## 4. TDD 记录
@@ -58,8 +58,8 @@ native handler function
 先加入 Unit semantic context 测试后运行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py
 ```
 
 结果：`2 failed`。Unit 尚没有 `semantic_context_inlined` 和 semantic context metadata。
@@ -71,8 +71,8 @@ OpenAnt/.venv/bin/pytest -q \
 实现 Unit overlay 和 pipeline wiring 后：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py
 ```
 
 结果：`5 passed`。
@@ -91,12 +91,12 @@ OpenAnt/.venv/bin/pytest -q \
 OpenHarmony、IPC resolver、C parser：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_entry_points.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_sa_ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/parsers/c
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_sa_ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`153 passed, 2 skipped`。
@@ -116,8 +116,8 @@ Prompt、语言、注入和多语言兼容回归：`69 passed`。
 命令：
 
 ```text
-OpenAnt/.venv/bin/python \
-  OpenAnt/libs/openant-core/parsers/c/test_pipeline.py \
+VulnFounder/.venv/bin/python \
+  VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/communication_wifi \
   --output /private/tmp/openant-oh15a4-communication_wifi-final \
   --platform openharmony --skip-tests --processing-level all

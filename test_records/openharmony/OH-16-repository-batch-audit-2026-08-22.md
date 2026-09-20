@@ -2,7 +2,7 @@
 
 ## 1. 审计结论
 
-本轮没有修改 OpenAnt 源码，只对用户提供的 16 个仓库执行静态验证。
+本轮没有修改 VulnFounder 源码，只对用户提供的 16 个仓库执行静态验证。
 
 - 15 个原始仓库完成了 OpenHarmony C/C++ pipeline：扫描、tree-sitter 函数提取、调用图、数据集生成和 `reachable` 入口过滤均成功。
 - `arkui_ace_engine` 的全量尝试完成了 OpenHarmony 扫描、tree-sitter 提取、调用图和语义图构建，但在生成 143,121 个函数对应的数据集阶段耗时过长，人工中断；因此不能计为全量 pipeline 成功。
@@ -14,7 +14,7 @@
 15 个全量仓库使用同一命令（仓库名按表格替换）：
 
 ```bash
-OpenAnt/.venv/bin/python OpenAnt/libs/openant-core/parsers/c/test_pipeline.py \
+VulnFounder/.venv/bin/python VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output /private/tmp/openant-oh16-repo-audit/<repo> \
   --platform openharmony --skip-tests --processing-level reachable

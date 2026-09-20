@@ -44,15 +44,15 @@ Stage 2、报告或其它 LLM 调用点也使用平台证据，各模块容易�
 
 ## 3. 修改文件
 
-- `libs/openant-core/core/platforms/prompt_context.py`
+- `libs/vulnfounder-core/core/platforms/prompt_context.py`
   - 新增版本化、限长、单行化的共享上下文对象；
   - 新增 guard、证据和 semantic edge 的受控结构化表示；
   - 提供 JSON 序列化和按 LLM 阶段渲染接口。
-- `libs/openant-core/prompts/vulnerability_analysis.py`
+- `libs/vulnfounder-core/prompts/vulnerability_analysis.py`
   - 删除重复的 OpenHarmony 字段渲染实现；
   - 保留兼容函数并委托 `PlatformPromptContext`；
   - Stage 1 Prompt 接收共享上下文。
-- `libs/openant-core/tests/openharmony/test_prompt_context_contract.py`
+- `libs/vulnfounder-core/tests/openharmony/test_prompt_context_contract.py`
   - 新增共享契约的 generic 隔离、字段白名单、Prompt 注入防护、阶段渲染和长度
     限制测试。
 
@@ -61,8 +61,8 @@ Stage 2、报告或其它 LLM 调用点也使用平台证据，各模块容易�
 | 项目 | 值 |
 |---|---|
 | 系统 | macOS arm64 |
-| Python | OpenAnt `.venv` Python 3.11 |
-| 工作目录 | `libs/openant-core` |
+| Python | VulnFounder `.venv` Python 3.11 |
+| 工作目录 | `libs/vulnfounder-core` |
 | 真实远程 LLM | 未调用 |
 
 ## 5. 阶段级测试结果

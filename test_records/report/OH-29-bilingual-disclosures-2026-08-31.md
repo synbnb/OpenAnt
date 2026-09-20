@@ -18,7 +18,7 @@
 ### 1. 双语报告定向回归
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest -q \
   tests/report/test_bilingual_disclosures.py \
   tests/report \
@@ -41,22 +41,22 @@ cd libs/openant-core
 
 ```text
 python -m py_compile \
-  libs/openant-core/report/generator.py \
-  libs/openant-core/core/reporter.py \
-  libs/openant-core/report/__main__.py \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/tests/report/test_bilingual_disclosures.py
+  libs/vulnfounder-core/report/generator.py \
+  libs/vulnfounder-core/core/reporter.py \
+  libs/vulnfounder-core/report/__main__.py \
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/tests/report/test_bilingual_disclosures.py
 ```
 
 结果：通过。
 
 ```text
 ./.venv/bin/ruff check \
-  libs/openant-core/report/generator.py \
-  libs/openant-core/core/reporter.py \
-  libs/openant-core/report/__main__.py \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/tests/report/test_bilingual_disclosures.py
+  libs/vulnfounder-core/report/generator.py \
+  libs/vulnfounder-core/core/reporter.py \
+  libs/vulnfounder-core/report/__main__.py \
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/tests/report/test_bilingual_disclosures.py
 ```
 
 结果：`All checks passed!`。

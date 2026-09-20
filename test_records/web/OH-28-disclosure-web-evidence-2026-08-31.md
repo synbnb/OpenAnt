@@ -30,7 +30,7 @@
 
 ## 自动化测试
 
-1. `go test ./...`（目录：`apps/openant-cli`）
+1. `go test ./...`（目录：`apps/vulnfounder-cli`）
    - 结果：通过；服务端、报告、配置、SSE、模板等测试全部通过。
 2. 新增 `TestDisclosureListIncludesEvidenceContext`
    - 使用带 `pipeline_output.json`、`report_context` 和披露 Markdown 的临时扫描目录；

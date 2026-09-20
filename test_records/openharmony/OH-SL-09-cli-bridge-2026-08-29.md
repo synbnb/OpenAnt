@@ -21,7 +21,7 @@
 
 ## 自动化测试
 
-在 `libs/openant-core` 执行：
+在 `libs/vulnfounder-core` 执行：
 
 ```text
 ../../.venv/bin/python -m pytest -q tests/source_locator
@@ -39,7 +39,7 @@ All checks passed
 另外通过实际命令验证：
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant source-locator create \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant source-locator create \
   /dev/unix/socket/paramservice --root /tmp/openant-sl-cli-test \
   --session-id loc_cli12345678
 ```

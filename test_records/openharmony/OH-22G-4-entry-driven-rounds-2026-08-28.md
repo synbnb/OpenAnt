@@ -37,9 +37,9 @@
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_rounds.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py \
-  libs/openant-core/tests/openharmony/test_llm_recovery_execution.py
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_rounds.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_recovery_execution.py
 ```
 
 结果：`12 passed`。
@@ -57,7 +57,7 @@
 ### OpenHarmony 回归套件
 
 ```text
-.venv/bin/python -m pytest -q libs/openant-core/tests/openharmony
+.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：`156 passed, 2 skipped`。
@@ -66,7 +66,7 @@
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：`17 passed`。
@@ -78,15 +78,15 @@ OpenHarmony 平台安全跳过。
 
 ```text
 .venv/bin/python -m py_compile \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_projection.py
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_projection.py
 .venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_recovery.py \
-  libs/openant-core/core/platforms/openharmony/llm_call_graph_projection.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_rounds.py \
-  libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_recovery.py \
+  libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_projection.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_rounds.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py
 git diff --check
 ```
 

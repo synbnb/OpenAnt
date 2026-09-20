@@ -1,4 +1,4 @@
-# OH-00C OpenAnt 当前行为基线测试记录
+# OH-00C VulnFounder 当前行为基线测试记录
 
 ## 1. 基本信息
 
@@ -6,14 +6,14 @@
 |---|---|
 | 阶段 | OH-00C：OpenHarmony 适配前的发现、C 解析与入口行为基线 |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 开发分支 | `feature/openharmony-adaptation` |
 | Python | 3.11.15，项目 `.venv` |
 | pytest | 9.1.1 |
 
 ## 2. 原逻辑与本阶段目标
 
-当前 OpenAnt 没有 OpenHarmony 平台画像，主要沿用三类通用逻辑：
+当前 VulnFounder 没有 OpenHarmony 平台画像，主要沿用三类通用逻辑：
 
 1. `core/parser_adapter.detect_languages()` 只统计语言注册表中已经注册的扩展名。
 2. C/C++ 流水线只扫描 C/C++ 扩展名，通过 tree-sitter 抽取函数，再以名称匹配方式构建调用边。
@@ -36,7 +36,7 @@ tests/fixtures/openharmony/current_behavior_baseline.json
 
 - `schema_version: 1`，便于后续显式演进契约。
 - `mode: observed_current_behavior`，表明它是现状记录，不是目标行为规范。
-- 固定 OpenAnt 基线提交，但不包含用户绝对路径。
+- 固定 VulnFounder 基线提交，但不包含用户绝对路径。
 - 保存五个外部语料仓的当前语言发现结果。
 - 保存合成 IPC fixture 的扫描文件、函数、unit 类型、调用边和入口结果。
 - 显式列出已知缺口，防止当前限制被误解为正确的 OpenHarmony 语义。
@@ -208,6 +208,6 @@ git diff --check
 
 ## 13. 阶段结论
 
-OH-00C 已完成。OpenAnt 适配前对 OpenHarmony 语料的“能发现什么、会忽略什么、C parser 会生成什么、入口和调用边如何退化”已经形成可执行基线。
+OH-00C 已完成。VulnFounder 适配前对 OpenHarmony 语料的“能发现什么、会忽略什么、C parser 会生成什么、入口和调用边如何退化”已经形成可执行基线。
 
 OH-00 至此完成。下一小阶段是 OH-01：建立 OpenHarmony 平台协议与 schema；在用户批准前不修改生产代码。

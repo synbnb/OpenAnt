@@ -24,9 +24,9 @@
 
 ## 2. 修改文件
 
-- `libs/openant-core/core/platforms/graph.py`
+- `libs/vulnfounder-core/core/platforms/graph.py`
   - 新增 `SemanticGraph`、证据合并、确定性序列化和反序列化逻辑。
-- `libs/openant-core/tests/platforms/test_semantic_graph.py`
+- `libs/vulnfounder-core/tests/platforms/test_semantic_graph.py`
   - 覆盖重复边合并、证据保留、orphan、round-trip、悬空端点和非法置信度。
 
 本阶段没有修改 generic scanner、C/C++ 调用图、入口检测器或 reachability 过滤逻辑。

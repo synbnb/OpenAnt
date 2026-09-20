@@ -32,25 +32,25 @@
 
 ## 代码产物
 
-- `apps/openant-cli/internal/server/claude_session.go`：PTY 会话、ANSI 清理、事件缓存、停止和状态机。
-- `apps/openant-cli/internal/server/claude_web.go`：任务准备、Web API、文件树、结果归档和 pipeline 回写。
-- `apps/openant-cli/ui/index.html`：动态测试模式选择器。
-- `apps/openant-cli/ui/scan.html`：Claude 对话工作台、SSE transcript、任务文件树和文件预览。
-- `libs/openant-core/core/schemas.py`、`core/dynamic_tester.py`、`openant/cli.py`：暴露候选清单路径，便于 Web 侧归档。
-- `libs/openant-core/utilities/dynamic_tester/claude_code.py`：支持扫描输出目录本身作为任务包父目录，并避免复制已有 `run-*` 任务。
+- `apps/vulnfounder-cli/internal/server/claude_session.go`：PTY 会话、ANSI 清理、事件缓存、停止和状态机。
+- `apps/vulnfounder-cli/internal/server/claude_web.go`：任务准备、Web API、文件树、结果归档和 pipeline 回写。
+- `apps/vulnfounder-cli/ui/index.html`：动态测试模式选择器。
+- `apps/vulnfounder-cli/ui/scan.html`：Claude 对话工作台、SSE transcript、任务文件树和文件预览。
+- `libs/vulnfounder-core/core/schemas.py`、`core/dynamic_tester.py`、`openant/cli.py`：暴露候选清单路径，便于 Web 侧归档。
+- `libs/vulnfounder-core/utilities/dynamic_tester/claude_code.py`：支持扫描输出目录本身作为任务包父目录，并避免复制已有 `run-*` 任务。
 
 ## 测试记录
 
 ### Python
 
 ```text
-./.venv/bin/pytest -q libs/openant-core/tests/test_claude_code_task.py
+./.venv/bin/pytest -q libs/vulnfounder-core/tests/test_claude_code_task.py
 4 passed
 
 ./.venv/bin/pytest -q \\
-  libs/openant-core/tests/test_claude_code_task.py \\
-  libs/openant-core/tests/test_cli_platform_flags.py \\
-  libs/openant-core/tests/test_scanner.py
+  libs/vulnfounder-core/tests/test_claude_code_task.py \\
+  libs/vulnfounder-core/tests/test_cli_platform_flags.py \\
+  libs/vulnfounder-core/tests/test_scanner.py
 20 passed
 ```
 
@@ -92,7 +92,7 @@ go build -o /private/tmp/openant-web-test .
 ## 使用前提
 
 - Web 进程所在机器必须能找到 Claude Code；默认查找 PATH 中的 `claude`，也可以用 `OPENANT_CLAUDE_BIN=/绝对路径/claude` 指定。
-- Claude Code 的认证由 Claude Code 自己读取；OpenAnt 不复制 Claude 凭据到任务目录。
-- 静态扫描阶段仍然需要当前 OpenAnt 配置的大模型凭据；Claude Code 动态阶段本身不调用 OpenAnt 的 LLM API。
+- Claude Code 的认证由 Claude Code 自己读取；VulnFounder 不复制 Claude 凭据到任务目录。
+- 静态扫描阶段仍然需要当前 VulnFounder 配置的大模型凭据；Claude Code 动态阶段本身不调用 VulnFounder 的 LLM API。
 - 页面当前使用轮询刷新文件树（约 1.4 秒）和 SSE 刷新会话输出，不是文件系统原生推送。
 - 本阶段完成了 Web 编排和结果归档，但没有替用户选择具体 exploit payload，也不会因单条日志自动把结果标为 `CONFIRMED`；Claude 必须按 Skill 写入带设备因果证据的 verdict。

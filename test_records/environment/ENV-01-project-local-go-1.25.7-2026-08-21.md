@@ -6,18 +6,18 @@
 |---|---|
 | 阶段 | ENV-01：项目本地 Go 1.25.7 |
 | 日期 | 2026-08-21 |
-| OpenAnt 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 操作系统 | macOS 26.5.1（Darwin，Apple Silicon/arm64） |
-| Go 安装位置 | `/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go` |
-| Go 缓存位置 | `/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath`、`.devtools/gocache` |
+| Go 安装位置 | `/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go` |
+| Go 缓存位置 | `/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath`、`.devtools/gocache` |
 | 安装策略 | 项目本地归档；不修改 Homebrew、系统 PATH 或 shell 配置 |
 
 ## 2. 原项目逻辑与本阶段逻辑
 
 原项目存在两个相互独立的 Go 模块：
 
-- `libs/openant-core/parsers/go/go_parser` 是由 Python 核心调用的 Go 源码解析器，`go.mod` 声明最低 Go 1.21。
-- `apps/openant-cli` 是 OpenAnt 命令行入口，`go.mod` 精确声明 Go 1.25.7；Makefile 将 Git 版本写入二进制并输出到 `apps/openant-cli/bin/openant`。
+- `libs/vulnfounder-core/parsers/go/go_parser` 是由 Python 核心调用的 Go 源码解析器，`go.mod` 声明最低 Go 1.21。
+- `apps/vulnfounder-cli` 是 VulnFounder 命令行入口，`go.mod` 精确声明 Go 1.25.7；Makefile 将 Git 版本写入二进制并输出到 `apps/vulnfounder-cli/bin/openant`。
 
 ENV-00 没有发现系统 Go，因此完整 Python 测试中唯一失败是 `test_F1_receiver_type_contract.py::test_go` 找不到 `go`。
 
@@ -54,7 +54,7 @@ go version go1.25.7 darwin/arm64
 GOVERSION=go1.25.7
 GOOS=darwin
 GOARCH=arm64
-GOROOT=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go
+GOROOT=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go
 ```
 
 仓库根 `.gitignore` 新增：
@@ -80,9 +80,9 @@ GOROOT=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go
 ```text
 GOTOOLCHAIN=local
 GOTELEMETRY=off
-GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath
-GOMODCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath/pkg/mod
-GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache
+GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath
+GOMODCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath/pkg/mod
+GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache
 ```
 
 - Go parser 执行 `go mod download`：成功，模块无外部依赖。
@@ -90,7 +90,7 @@ GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache
 
 ## 6. Go parser 独立测试与构建
 
-目录：`libs/openant-core/parsers/go/go_parser`
+目录：`libs/vulnfounder-core/parsers/go/go_parser`
 
 测试命令：
 
@@ -114,7 +114,7 @@ go build -o go_parser .
 
 ## 7. CLI 独立测试与构建
 
-目录：`apps/openant-cli`
+目录：`apps/vulnfounder-cli`
 
 ### 7.1 首次受限测试
 
@@ -145,10 +145,10 @@ make build
 结果：退出码 `0`。
 
 ```text
-go build -ldflags "-X github.com/knostic/open-ant-cli/cmd.version=2476527-dirty" -o bin/openant ./main.go
+go build -ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=2476527-dirty" -o bin/openant ./main.go
 ```
 
-生成 16 MiB 的 macOS arm64 Mach-O 可执行文件，位于原项目约定的 `apps/openant-cli/bin/openant`，并由原有 `.gitignore` 排除。
+生成 16 MiB 的 macOS arm64 Mach-O 可执行文件，位于原项目约定的 `apps/vulnfounder-cli/bin/openant`，并由原有 `.gitignore` 排除。
 
 在项目 Python venv 与本地 Go 同时进入 PATH 时：
 
@@ -165,7 +165,7 @@ openant 2476527-dirty
 命令：
 
 ```bash
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest \
   tests/conformance/test_F1_receiver_type_contract.py::test_go -v
 ```
@@ -174,19 +174,19 @@ PATH 显式加入项目本地 Go，其余 Go 环境变量仍指向 `.devtools/`�
 
 结果：退出码 `0`，`1 passed in 0.91s`。ENV-00 中唯一失败已被直接复验并消除。
 
-诊断命令前半段曾从 `libs/openant-core` 误用仓库根相对路径检查两个二进制，产生两条无效的“文件不存在”输出；同一命令中的契约测试仍通过。随后从仓库根重新检查，两个文件均存在且均为 arm64 Mach-O。该操作失误不代表构建失败，也没有修改文件。
+诊断命令前半段曾从 `libs/vulnfounder-core` 误用仓库根相对路径检查两个二进制，产生两条无效的“文件不存在”输出；同一命令中的契约测试仍通过。随后从仓库根重新检查，两个文件均存在且均为 arm64 Mach-O。该操作失误不代表构建失败，也没有修改文件。
 
 ## 9. 完整 Python 回归
 
 命令：
 
 ```bash
-cd libs/openant-core
-PATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin:... \
+cd libs/vulnfounder-core
+PATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin:... \
 GOTOOLCHAIN=local \
-GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath \
-GOMODCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath/pkg/mod \
-GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache \
+GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath \
+GOMODCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath/pkg/mod \
+GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache \
 OPENHARMONY_CORPUS_ROOT=/Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code \
 ../../.venv/bin/python -m pytest tests/ -q
 ```

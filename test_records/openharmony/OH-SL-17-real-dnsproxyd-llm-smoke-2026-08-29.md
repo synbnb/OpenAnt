@@ -9,7 +9,7 @@ OpenGrok 项目：`openharmony`
 ## 1. 执行命令
 
 ```bash
-cd /Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core
+cd /Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core
 
 ../../.venv/bin/python -m openant.cli source-locator create /dev/unix/socket/dnsproxyd \
   --root /private/tmp/openant-live-source-locator/dnsproxyd-llm-r10 \
@@ -19,8 +19,8 @@ cd /Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core
 
 ../../.venv/bin/python -m openant.cli source-locator run loc_dnsproxydllmr10 \
   --root /private/tmp/openant-live-source-locator/dnsproxyd-llm-r10 \
-  --config-path /Users/shiyu/学习/hyl/new/OpenAnt/config/openant/config.json \
-  --project-root /Users/shiyu/学习/hyl/new/OpenAnt --max-steps 32 --max-paths 32 \
+  --config-path /Users/shiyu/学习/hyl/new/VulnFounder/config/openant/config.json \
+  --project-root /Users/shiyu/学习/hyl/new/VulnFounder --max-steps 32 --max-paths 32 \
   --llm-search --llm-config openharmony-live-gpt
 ```
 

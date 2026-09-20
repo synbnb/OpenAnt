@@ -1,0 +1,1016 @@
+"""扫描中间产物 → 真机动态测试的桥接层。
+
+输入只来自项目扫描的中间产物（不再依赖人工整理的数据集）：
+
+* ``evaluation_dataset/vulnerability/result/N.json`` — 聚合行（sample /
+  repository / target_id / location / finding / result_file），finding 限定
+  ``vulnerable`` / ``inconclusive``；
+* ``result_file`` 指向的 ``stage1_runs_N/outputs/<repo>/results.json`` —
+  原始英文键条目（function_analyzed / findings[file,line_start,line_end] /
+  attack_scenario / dataflow_summary / attack_vector / preconditions /
+  reasoning / unit_id）。
+
+桥接分三步，语义判断全部复用现有适配器/编译器，本模块只做机械转换：
+
+1. ``list_scan_artifacts``：枚举聚合行，按 finding 过滤（机械读文件）；
+2. ``bridge_scan_entry``：英文键 → 中文键 Stage1 dict（字段一一映射，
+   裸文件名用仓库内唯一命中解析成相对路径，零语义改写）；
+3. ``run_dynamic_from_scan``：中文键 → adapt_stage_finding（LLM 语义转换 +
+   确定性校验）→ compile_contract（侦查 loop + 硬校验）→ Runner.run（真机）。
+
+入口线索缺口：扫描产物的攻击链常描述 "UDP datagram" 但不带端口，适配器的
+严格 hint 形态要求端口。此时依据 repo → 描述符标准端点映射确定性补充
+（非编造：端点会由侦查 loop/编译校验在设备上复核），补充依据随桥接产物落盘。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# repo（扫描中间产物的 repository 字段）→ 描述符标准端点。
+# 只登记有已注册描述符协议族、且端点在真机上有稳定监听的仓库。
+_REPO_UDP_ENDPOINTS: dict[str, str] = {
+    # SP_daemon 文本协议 UDP 端口（sp_daemon_text 描述符标准端点）
+    "developtools_profiler": "127.0.0.1:8283",
+}
+
+# 聚合行 finding → 可动态测试集合（与用户要求一致：inconclusive / vulnerable）
+_DYNC_TESTABLE_FINDINGS = {"vulnerable", "inconclusive"}
+
+# P0-1 缺口签名失败计数（进程级缓存）：每次 run spawn 新 Python 进程（Web 模式），
+# 该缓存天然按进程隔离；CLI 批量跑多条时同一进程内跨 run 累积。
+_COMPILE_FAILURE_LOG: dict[str, int] = {}
+
+# webui 扫描目录名白名单（与 Go 侧 jobIDRe 一致：hex，8-64 位）
+_WEBUI_SCAN_ID_RE = re.compile(r"^[a-f0-9]{8,64}$")
+
+
+class ScanBridgeError(ValueError):
+    """扫描产物桥接失败（路径缺失、条目不存在、转换被拒等）。"""
+
+
+# ---------------------------------------------------------------------------
+# webui 扫描目录（~/.openant/webui/<scan_id>/results.json）桥接输入
+# ---------------------------------------------------------------------------
+
+def _webui_root(webui_dir: str | Path | None) -> Path:
+    if webui_dir is not None:
+        root = Path(webui_dir).expanduser().resolve()
+    else:
+        home = Path.home()
+        primary = home / ".vulnfounder" / "webui"
+        legacy = home / ".openant" / "webui"
+        root = primary if primary.is_dir() else legacy
+    if not root.is_dir():
+        raise ScanBridgeError(f"webui 扫描目录不存在：{root}")
+    return root
+
+
+def _webui_scan_dir(webui_dir: str | Path | None, scan_id: str) -> Path:
+    if not _WEBUI_SCAN_ID_RE.match(scan_id):
+        raise ScanBridgeError(f"scan_id 形态非法：{scan_id!r}")
+    scan_dir = _webui_root(webui_dir) / scan_id
+    if not scan_dir.is_dir():
+        raise ScanBridgeError(f"扫描目录不存在：{scan_dir}")
+    return scan_dir
+
+
+def _webui_result_payload(scan_dir: Path) -> dict[str, Any]:
+    path = scan_dir / "results.json"
+    if not path.is_file():
+        raise ScanBridgeError(f"扫描产物缺失：{path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ScanBridgeError(f"扫描产物不可读：{exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise ScanBridgeError(f"扫描产物结构不符（缺 results 列表）：{path}")
+    return data
+
+
+def _webui_entry_lines(entry: dict[str, Any], scan_dir: Path) -> tuple[str, int, int]:
+    """条目位置：新扫描取 primary finding 的 file/line；老扫描（无 findings）
+    兜底 analyzer_output.json 的 functions[unit_id]（filePath/startLine/endLine）。"""
+    findings = entry.get("findings") or []
+    primary = next(
+        (x for x in findings
+         if isinstance(x, dict) and x.get("scope") == "target" and x.get("relation") == "primary"),
+        None,
+    ) or next((x for x in findings if isinstance(x, dict) and x.get("file")), None)
+    if isinstance(primary, dict) and primary.get("file"):
+        start = primary.get("line_start") if isinstance(primary.get("line_start"), int) else 1
+        end = primary.get("line_end") if isinstance(primary.get("line_end"), int) else start
+        return str(primary["file"]), start, end
+    unit_id = str(entry.get("unit_id", ""))
+    analyzer = scan_dir / "analyzer_output.json"
+    if unit_id and analyzer.is_file():
+        try:
+            fn = (json.loads(analyzer.read_text(encoding="utf-8")).get("functions") or {}).get(unit_id)
+            if isinstance(fn, dict) and fn.get("filePath"):
+                start = fn.get("startLine") if isinstance(fn.get("startLine"), int) else 1
+                end = fn.get("endLine") if isinstance(fn.get("endLine"), int) else start
+                return str(fn["filePath"]), start, end
+        except (OSError, json.JSONDecodeError):
+            pass
+    return "", 1, 1
+
+
+def list_webui_scans(webui_dir: str | Path | None = None) -> list[dict[str, Any]]:
+    """列出 webui 下全部扫描（供前端选择表单；新扫描在前）。"""
+    root = _webui_root(webui_dir)
+    scans: list[dict[str, Any]] = []
+    for path in sorted(root.iterdir()):
+        if not path.is_dir() or not _WEBUI_SCAN_ID_RE.match(path.name):
+            continue
+        meta_path = path / "meta.json"
+        if not (path / "results.json").is_file() or not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        try:
+            payload = _webui_result_payload(path)
+        except ScanBridgeError:
+            continue
+        metrics = payload.get("metrics") or {}
+        scans.append({
+            "scan_id": path.name,
+            "started_at": str(meta.get("started_at", "")),
+            "platform": str(meta.get("platform", "")),
+            "repo": str(meta.get("repo", "")),
+            "repo_name": Path(str(meta.get("repo", ""))).name,
+            "languages": meta.get("languages") or [],
+            "model": str(payload.get("model", "")),
+            "provider": str(payload.get("provider", "")),
+            "total": metrics.get("total"),
+            "vulnerable": metrics.get("vulnerable"),
+            "inconclusive": metrics.get("inconclusive"),
+            "protected": metrics.get("protected"),
+            "safe": metrics.get("safe"),
+            "bypassable": metrics.get("bypassable"),
+            "errors": metrics.get("errors"),
+        })
+    scans.sort(key=lambda s: s["started_at"], reverse=True)
+    return scans
+
+
+def list_webui_entries(
+    webui_dir: str | Path | None,
+    scan_id: str,
+    *,
+    finding: str | None = None,
+) -> list[ScanEntry]:
+    """列出一次 webui 扫描中 finding ∈ {vulnerable, inconclusive} 的条目。"""
+    scan_dir = _webui_scan_dir(webui_dir, scan_id)
+    payload = _webui_result_payload(scan_dir)
+    entries: list[ScanEntry] = []
+    for row in payload["results"]:
+        if not isinstance(row, dict):
+            continue
+        f = str(row.get("finding", ""))
+        if f not in _DYNC_TESTABLE_FINDINGS:
+            continue
+        if finding and f != finding:
+            continue
+        file_rel, line_start, line_end = _webui_entry_lines(row, scan_dir)
+        location = f"{file_rel}:{line_start}-{line_end}" if file_rel else ""
+        entry = ScanEntry(
+            round_n=0,
+            sample=str(row.get("primary_finding_id") or row.get("unit_id") or ""),
+            repository=str(row.get("unit_id", "")),
+            target_id=str(row.get("unit_id", "")),
+            location=location,
+            finding=f,
+            confusion_outcome=str(row.get("security_classification", "")),
+            confidence=row.get("confidence") if isinstance(row.get("confidence"), (int, float)) else None,
+            result_file=str(scan_dir / "results.json"),
+            unit_id=str(row.get("unit_id", "")),
+            function_analyzed=str(row.get("function_analyzed", "")),
+            attack_vector=str(row.get("attack_vector", "")),
+            reasoning=str(row.get("reasoning", "")),
+        )
+        # 前端展示用的附加语义字段（results.json 原始字段透传，零改写）
+        entry.extra = {
+            "cwe_id": row.get("cwe_id"),
+            "cwe_name": row.get("cwe_name", ""),
+            "vulnerability_categories": row.get("vulnerability_categories") or [],
+            "impact": row.get("impact") or [],
+            "attack_scenario": str(row.get("attack_scenario", "")),
+            "preconditions": str(row.get("preconditions", "")),
+            "dataflow_summary": str(row.get("dataflow_summary", "")),
+            "guard_analysis": str(row.get("guard_analysis", "")),
+            "evidence": [str(x) for x in (row.get("evidence") or [])],
+            "counterevidence": [str(x) for x in (row.get("counterevidence") or [])],
+            "missing_evidence": [str(x) for x in (row.get("missing_evidence") or [])],
+            "verdict": str(row.get("verdict", "")),
+            "code_excerpt": (src_code := (payload.get("code_by_route") or {}).get(str(row.get("route_key", "")), ""))
+                            and src_code[:4000] or "",
+        }
+        entries.append(entry)
+    return entries
+
+
+def bridge_webui_entry(
+    webui_dir: str | Path | None,
+    *,
+    scan_id: str,
+    sample: str,
+    repo_root: str | Path | None = None,
+) -> tuple[dict[str, Any], ScanEntry]:
+    """webui results.json 条目 → 中文键 Stage1 dict（机械映射）。"""
+    scan_dir = _webui_scan_dir(webui_dir, scan_id)
+    payload = _webui_result_payload(scan_dir)
+    entry = next(
+        (r for r in payload["results"]
+         if isinstance(r, dict)
+         and (str(r.get("primary_finding_id") or "") == sample or str(r.get("unit_id") or "") == sample)),
+        None,
+    )
+    if entry is None:
+        raise ScanBridgeError(f"扫描 {scan_id} 无 sample={sample}")
+    f = str(entry.get("finding", ""))
+    if f not in _DYNC_TESTABLE_FINDINGS:
+        raise ScanBridgeError(
+            f"finding={f} 不可动态测试（允许 {'、'.join(sorted(_DYNC_TESTABLE_FINDINGS))}）"
+        )
+    meta: dict[str, Any] = {}
+    meta_path = scan_dir / "meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+    repo_path = str(meta.get("repo", ""))
+    if repo_root is not None:
+        resolved_root = Path(repo_root).expanduser().resolve()
+    elif repo_path and Path(repo_path).is_dir():
+        resolved_root = Path(repo_path)
+    else:
+        raise ScanBridgeError(f"扫描仓库根目录不可用：{repo_path!r}（可用 --repo-root 指定）")
+
+    file_rel, line_start, line_end = _webui_entry_lines(entry, scan_dir)
+    findings = entry.get("findings") or []
+    primary = next(
+        (x for x in findings
+         if isinstance(x, dict) and x.get("scope") == "target" and x.get("relation") == "primary"),
+        None,
+    ) or next((x for x in findings if isinstance(x, dict) and x.get("file")), None) or {}
+    primary_reasoning = str(primary.get("reasoning", "")) if isinstance(primary, dict) else ""
+
+    chain_parts = [
+        str(entry.get("attack_scenario", "") or ""),
+        "Dataflow: " + str(entry.get("dataflow_summary", "")) if entry.get("dataflow_summary") else "",
+        "Attack vector: " + str(entry.get("attack_vector", "")) if entry.get("attack_vector") else "",
+        "Preconditions: " + str(entry.get("preconditions", "")) if entry.get("preconditions") else "",
+    ]
+    bridge = {
+        "函数名称": str(entry.get("function_analyzed", "")),
+        "起止位置": f"{Path(file_rel).name}:{line_start}-{line_end}" if file_rel else f"unknown:{line_start}-{line_end}",
+        "所处文件路径": file_rel,
+        "具体漏洞源码与漏洞描述": str(entry.get("reasoning", "")),
+        "完整攻击链": "\n\n".join(p for p in chain_parts if p),
+        "根因分析": primary_reasoning or str(entry.get("reasoning", "")),
+        # 入口发现 Agent Loop 需要看到原始证据，而不是只有一段压缩后的
+        # reasoning。以下字段仍是 Stage 1 产物的只读副本，不被适配器当作
+        # 已验证事实；它们用于指导后续 read_file/grep/hdc 取证。
+        "证据": [str(x) for x in (entry.get("evidence") or [])],
+        "反证": [str(x) for x in (entry.get("counterevidence") or [])],
+        "缺失证据": [str(x) for x in (entry.get("missing_evidence") or [])],
+        "防护分析": str(entry.get("guard_analysis", "")),
+        "漏洞类别": entry.get("vulnerability_categories") or [],
+        "影响": entry.get("impact") or [],
+        "目标源码片段": str(entry.get("code_excerpt", "")),
+    }
+
+    # 入口线索确定性补充：与 N.json 桥接同一规则（repo → 描述符标准端点）。
+    # webui 输入下 repo 来自 meta.repo 路径名；developtools_profiler 系匹配 UDP 映射。
+    # 触发条件：攻击链含 UDP/datagram，或（profiler repo 且攻击链描述 socket 接收
+    # 路径——SP_daemon 服务本质是 UDP 文本协议端口，socket 词是该协议族的泛称）。
+    chain_text = bridge["完整攻击链"]
+    has_endpoint = re.search(r"\d+\.\d+\.\d+\.\d+:\d+", chain_text)
+    repo_key = next((k for k in _REPO_UDP_ENDPOINTS
+                     if k in resolved_root.name or k in repo_path), "")
+    is_udp = bool(re.search(r"\bUDP\b|\budp\b|datagram", chain_text))
+    is_profiler_socket = (
+        repo_key == "developtools_profiler"
+        and re.search(r"socket", chain_text, re.IGNORECASE)
+        and re.search(r"SP_daemon|sp_daemon|SmartPerf|smartperf|LoadCmd|SPUtils", chain_text)
+    )
+    endpoint = ""
+    source_desc = ""
+    if not has_endpoint and (is_udp or is_profiler_socket):
+        if repo_key:
+            endpoint = _REPO_UDP_ENDPOINTS[repo_key]
+            source_desc = f"{repo_key} 对应描述符 sp_daemon_text 标准端点"
+        else:
+            # 映射表未命中 → repo 源码确定性预扫兜底（P0-3）
+            candidates = _scan_repo_endpoints(resolved_root, chain_text)
+            if candidates:
+                endpoint = candidates[0]
+                source_desc = f"{resolved_root.name} 源码确定性预扫（共现 socket 语义的端口常量，候选 {len(candidates)} 个取首个）"
+    if endpoint:
+        bridge["完整攻击链"] += (
+            f"\n\n[bridge] 入口线索（确定性补充，来源：{source_desc}，需设备复核）: hap_udp {endpoint}"
+        )
+
+    scan_entry = ScanEntry(
+        round_n=0,
+        sample=sample,
+        repository=str(resolved_root),
+        target_id=str(entry.get("unit_id", "")),
+        location=bridge["起止位置"],
+        finding=f,
+        confusion_outcome=str(entry.get("security_classification", "")),
+        confidence=entry.get("confidence") if isinstance(entry.get("confidence"), (int, float)) else None,
+        result_file=str(scan_dir / "results.json"),
+        unit_id=str(entry.get("unit_id", "")),
+        function_analyzed=str(entry.get("function_analyzed", "")),
+        attack_vector=str(entry.get("attack_vector", "")),
+        reasoning=str(entry.get("reasoning", "")),
+    )
+    return bridge, scan_entry
+
+
+@dataclass
+class ScanEntry:
+    """一条可动态测试的扫描中间产物条目。"""
+
+    round_n: int
+    sample: str
+    repository: str
+    target_id: str
+    location: str
+    finding: str
+    confusion_outcome: str
+    confidence: float | None
+    result_file: str
+    unit_id: str = ""
+    function_analyzed: str = ""
+    attack_vector: str = ""
+    reasoning: str = ""
+    # 前端展示附加字段（results.json 原始语义字段透传；非 dataclass 字段避免
+    # 影响 to_dict 契约，动态挂载后由 __dict__ 一并序列化）
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = dict(self.__dict__)
+        d.pop("extra", None)
+        if self.extra:
+            d.update(self.extra)
+        return d
+
+
+def _result_dir(result_dir: str | Path) -> Path:
+    root = Path(result_dir).expanduser().resolve()
+    if not root.is_dir():
+        raise ScanBridgeError(f"扫描结果目录不存在：{root}")
+    return root
+
+
+def _agg_rows(result_root: Path, round_n: int) -> list[dict[str, Any]]:
+    path = result_root / f"{round_n}.json"
+    if not path.is_file():
+        raise ScanBridgeError(f"聚合产物不存在：{path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ScanBridgeError(f"聚合产物不可读：{exc}") from exc
+    rows = data if isinstance(data, list) else data.get("rows", [])
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def list_scan_rounds(result_dir: str | Path) -> list[dict[str, Any]]:
+    """列出全部历史扫描轮次及其中可动态测试条目的计数。"""
+    root = _result_dir(result_dir)
+    rounds: list[dict[str, Any]] = []
+    for path in sorted(
+        root.glob("[0-9]*.json"),
+        key=lambda p: int(p.stem) if p.stem.isdigit() else 10**9,
+    ):
+        if not path.stem.isdigit():
+            continue
+        try:
+            rows = _agg_rows(root, int(path.stem))
+        except ScanBridgeError:
+            continue
+        findings: dict[str, int] = {}
+        for row in rows:
+            f = str(row.get("finding", ""))
+            if f in _DYNC_TESTABLE_FINDINGS:
+                findings[f] = findings.get(f, 0) + 1
+        repos = sorted({str(row.get("repository", "")) for row in rows if row.get("repository")})
+        rounds.append({
+            "round": int(path.stem),
+            "total_rows": len(rows),
+            "testable_counts": findings,
+            "repositories": repos,
+        })
+    return rounds
+
+
+def list_scan_entries(
+    result_dir: str | Path,
+    *,
+    round_n: int,
+    finding: str | None = None,
+    repository: str | None = None,
+) -> list[ScanEntry]:
+    """列出某一轮扫描中 finding ∈ {vulnerable, inconclusive} 的条目。"""
+    root = _result_dir(result_dir)
+    rows = _agg_rows(root, round_n)
+    entries: list[ScanEntry] = []
+    for row in rows:
+        f = str(row.get("finding", ""))
+        if f not in _DYNC_TESTABLE_FINDINGS:
+            continue
+        if finding and f != finding:
+            continue
+        repo = str(row.get("repository", ""))
+        if repository and repo != repository:
+            continue
+        entries.append(ScanEntry(
+            round_n=round_n,
+            sample=str(row.get("sample", "")),
+            repository=repo,
+            target_id=str(row.get("target_id", "")),
+            location=str(row.get("location", "")),
+            finding=f,
+            confusion_outcome=str(row.get("confusion_outcome", "")),
+            confidence=row.get("confidence") if isinstance(row.get("confidence"), (int, float)) else None,
+            result_file=str(row.get("result_file", "")),
+        ))
+    return entries
+
+
+
+# ---------------------------------------------------------------------------
+# repo 端点确定性预扫（全自动化收敛 P0-3）：静态扫描产物的攻击链常不带端口，
+# 映射表又只登记了少数 repo。此处在 repo 源码内做确定性 rglob 预扫，提取
+# socket 端点常量（htons/inetAddress/port 字面量），作为映射表缺位时的
+# 兜底入口线索——非编造：补充值随后由 L2 侦查 loop 与 V4/描述符在设备上复核。
+# ---------------------------------------------------------------------------
+
+_PORT_CONST_RE = re.compile(r"htons\((\d{2,5})\)|inet_addr\(.*?(\d{2,5})\)|PORT\s*=\s*(\d{2,5})\b|port\s*=\s*(\d{2,5})\b|(\d{2,5})\);\s*//\s*[Uu][Dd][Pp]")
+_SOCKET_HINT_RE = re.compile(r"socket\(|bind\(|recvfrom\(|recv\(|udp|UDP")
+_MAX_SCAN_FILES = 400          # rglob 上限（防大仓库失控）
+_SCANABLE_SUFFIXES = {".cpp", ".c", ".cc", ".h", ".hpp", ".ets", ".ts"}
+
+
+def _scan_repo_endpoints(repo_root: str | Path, chain_text: str) -> list[str]:
+    """确定性预扫 repo 源码，返回候选端点 "ip:port" 列表（去重保序，最多 3 个）。
+
+    触发条件（与映射表补充同一逻辑）：攻击链含 UDP/datagram 且不含 ip:port。
+    只提取与 socket 语义共现的端口常量（同文件含 socket/bind/recvfrom/udp
+    关键词才收），避免把无关数字常量误报为端点。
+    """
+    if not re.search(r"\bUDP\b|\budp\b|datagram", chain_text or ""):
+        return []
+    if re.search(r"\d+\.\d+\.\d+\.\d+:\d+", chain_text or ""):
+        return []   # 攻击链已带端点，无需预扫
+    root = Path(repo_root)
+    if not root.is_dir():
+        return []
+    ports: list[str] = []
+    files = sorted(p for p in root.rglob("*")
+                   if p.is_file() and p.suffix in _SCANABLE_SUFFIXES)[:_MAX_SCAN_FILES]
+    for path in files:
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not _SOCKET_HINT_RE.search(text):
+            continue   # 无 socket 语义的文件不提端口
+        for m in _PORT_CONST_RE.finditer(text):
+            port = next((g for g in m.groups() if g), "")
+            if port and 1024 <= int(port) <= 65535 and f"127.0.0.1:{port}" not in ports:
+                ports.append(f"127.0.0.1:{port}")
+                if len(ports) >= 3:
+                    return ports
+    return ports
+
+
+def _resolve_repo_path(repo_root: Path, bare_name: str) -> str:
+    """扫描产物的 file 是裸文件名；仓库内唯一命中才解析，否则原样返回。"""
+    if not bare_name or "/" in bare_name:
+        return bare_name
+    hits = [p for p in repo_root.rglob(bare_name) if p.is_file()]
+    if len(hits) == 1:
+        return hits[0].relative_to(repo_root).as_posix()
+    return bare_name
+
+
+def bridge_scan_entry(
+    result_dir: str | Path,
+    *,
+    round_n: int,
+    sample: str,
+    repo_root: str | Path | None = None,
+) -> tuple[dict[str, Any], ScanEntry]:
+    """聚合行 + stage1 原始条目 → 中文键 Stage1 dict（机械映射）。
+
+    返回 (bridge_dict, entry)。bridge_dict 的键与
+    ``adapt_stage_finding`` 的要求一致：函数名称 / 起止位置 / 所处文件路径 /
+    具体漏洞源码与漏洞描述 / 完整攻击链 / 根因分析。
+    """
+    root = _result_dir(result_dir)
+    rows = _agg_rows(root, round_n)
+    row = next((r for r in rows if str(r.get("sample", "")) == sample), None)
+    if row is None:
+        raise ScanBridgeError(f"第 {round_n} 轮无 sample={sample}")
+    f = str(row.get("finding", ""))
+    if f not in _DYNC_TESTABLE_FINDINGS:
+        raise ScanBridgeError(
+            f"finding={f} 不可动态测试（允许 {'、'.join(sorted(_DYNC_TESTABLE_FINDINGS))}）"
+        )
+    repo = str(row.get("repository", ""))
+    target_id = str(row.get("target_id", ""))
+    result_file = Path(str(row.get("result_file", "")))
+    if not result_file.is_file():
+        raise ScanBridgeError(f"result_file 不存在：{result_file}")
+
+    try:
+        data = json.loads(result_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ScanBridgeError(f"stage1 产物不可读：{exc}") from exc
+    entry = next(
+        (r for r in data.get("results", [])
+         if isinstance(r, dict) and str(r.get("unit_id", "")) == target_id),
+        None,
+    )
+    if entry is None:
+        raise ScanBridgeError(f"{result_file} 无 unit_id={target_id} 的条目")
+
+    findings = entry.get("findings") or []
+    primary = next(
+        (x for x in findings
+         if isinstance(x, dict) and x.get("scope") == "target" and x.get("relation") == "primary"),
+        None,
+    ) or next((x for x in findings if isinstance(x, dict) and x.get("file")), None) or {}
+    line_start = primary.get("line_start") if isinstance(primary.get("line_start"), int) else 1
+    line_end = primary.get("line_end") if isinstance(primary.get("line_end"), int) else line_start
+
+    if repo_root is not None:
+        resolved_root = Path(repo_root).expanduser().resolve()
+    else:
+        # 缺省：项目内 socket_scope 仓库（与扫描产物路径约定一致）。
+        # 本模块位于 <project>/libs/vulnfounder-core/core/，项目根在 parents[3]。
+        resolved_root = (
+            Path(__file__).resolve().parents[3]
+            / "evaluation_dataset" / "vulnerability" / "service_scopes" / f"{repo}_socket_scope"
+        )
+    if not resolved_root.is_dir():
+        raise ScanBridgeError(f"仓库根目录不存在：{resolved_root}")
+
+    file_rel = _resolve_repo_path(resolved_root, str(primary.get("file", "")))
+    chain_parts = [
+        str(entry.get("attack_scenario", "") or ""),
+        "Dataflow: " + str(entry.get("dataflow_summary", "")) if entry.get("dataflow_summary") else "",
+        "Attack vector: " + str(entry.get("attack_vector", "")) if entry.get("attack_vector") else "",
+        "Preconditions: " + str(entry.get("preconditions", "")) if entry.get("preconditions") else "",
+    ]
+    bridge = {
+        "函数名称": str(entry.get("function_analyzed", "")),
+        "起止位置": f"{Path(file_rel).name}:{line_start}-{line_end}",
+        "所处文件路径": file_rel,
+        "具体漏洞源码与漏洞描述": str(entry.get("reasoning", "")),
+        "完整攻击链": "\n\n".join(p for p in chain_parts if p),
+        "根因分析": str(primary.get("reasoning") or entry.get("reasoning", "")),
+    }
+
+    # 入口线索确定性补充：攻击链描述 UDP/datagram 但适配器严格形态要求端口。
+    # 端点来源两级：① repo → 描述符标准端点映射表；② 映射表未命中时 repo 源码
+    # 确定性预扫（htons/bind 共现的端口常量，P0-3 全自动化收敛）。侦查 loop 与
+    # 编译校验会在设备上复核，预扫值只是线索不是结论。
+    if not re.search(r"\d+\.\d+\.\d+\.\d+:\d+", bridge["完整攻击链"]) and \
+            re.search(r"\bUDP\b|\budp\b|datagram", bridge["完整攻击链"]):
+        endpoint = _REPO_UDP_ENDPOINTS.get(repo, "")
+        source_desc = f"{repo} 对应描述符 sp_daemon_text 标准端点"
+        if not endpoint:
+            candidates = _scan_repo_endpoints(resolved_root, bridge["完整攻击链"])
+            if candidates:
+                endpoint = candidates[0]
+                source_desc = f"{repo} 源码确定性预扫（共现 socket 语义的端口常量，候选 {len(candidates)} 个取首个）"
+        if endpoint:
+            bridge["完整攻击链"] += (
+                f"\n\n[bridge] 入口线索（确定性补充，来源：{source_desc}，需设备复核）: hap_udp {endpoint}"
+            )
+
+    scan_entry = ScanEntry(
+        round_n=round_n,
+        sample=sample,
+        repository=repo,
+        target_id=target_id,
+        location=str(row.get("location", "")),
+        finding=f,
+        confusion_outcome=str(row.get("confusion_outcome", "")),
+        confidence=row.get("confidence") if isinstance(row.get("confidence"), (int, float)) else None,
+        result_file=str(result_file),
+        unit_id=str(entry.get("unit_id", "")),
+        function_analyzed=str(entry.get("function_analyzed", "")),
+        attack_vector=str(entry.get("attack_vector", "")),
+        reasoning=str(entry.get("reasoning", "")),
+    )
+    return bridge, scan_entry
+
+
+@dataclass
+class ScanDynamicResult:
+    """一次扫描产物动态测试的完整结果。"""
+
+    entry: ScanEntry
+    bridge: dict[str, Any]
+    adapter_status: str = ""
+    adapter_errors: list[str] = field(default_factory=list)
+    adapter_warnings: list[str] = field(default_factory=list)
+    vuln_class: str = ""
+    sink: str = ""
+    entry_hints: list[str] = field(default_factory=list)
+    compile_status: str = ""
+    compile_errors: list[str] = field(default_factory=list)
+    compile_notes: list[str] = field(default_factory=list)
+    entry_discovery: dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""
+    pattern: str = ""
+    status: str = ""
+    evidence_grade: str = ""
+    verdict: dict[str, Any] = field(default_factory=dict)
+    record_path: str = ""
+    record: dict[str, Any] = field(default_factory=dict)
+    contract: dict[str, Any] = field(default_factory=dict)
+    deliverables: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entry": self.entry.to_dict(),
+            "bridge": self.bridge,
+            "adapter_status": self.adapter_status,
+            "adapter_errors": self.adapter_errors,
+            "adapter_warnings": self.adapter_warnings,
+            "vuln_class": self.vuln_class,
+            "sink": self.sink,
+            "entry_hints": self.entry_hints,
+            "compile_status": self.compile_status,
+            "compile_errors": self.compile_errors,
+            "compile_notes": self.compile_notes,
+            "entry_discovery": self.entry_discovery,
+            "run_id": self.run_id,
+            "pattern": self.pattern,
+            "status": self.status,
+            "evidence_grade": self.evidence_grade,
+            "verdict": self.verdict,
+            "record_path": self.record_path,
+            "record": self.record,
+            "contract": self.contract,
+            "deliverables": self.deliverables,
+        }
+
+
+def _progress_emitter(progress_path: str | Path | None):
+    """进度事件发射器（--progress-file）：每事件一行 JSONL 追加落盘。
+
+    Go 桥接层为每次 run 建独立目录并轮询该文件做 SSE 实时推送；写失败
+    静默忽略（进度展示绝不影响执行本体）。
+    """
+    if not progress_path:
+        return None
+    path = Path(progress_path)
+    import threading as _threading
+
+    lock = _threading.Lock()
+
+    def emit(event: dict[str, Any]) -> None:
+        import time as _time
+
+        row = {"ts": _time.time(), **event}
+        try:
+            line = json.dumps(row, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return
+        try:
+            with lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+        except OSError:
+            pass
+
+    return emit
+
+
+def _maybe_build_deliverables(result: ScanDynamicResult, *, progress_path: str | Path | None,
+                              finding: Any, hdc, progress_emit) -> None:
+    """CONFIRMED 后打包 PoC+Exp 交付物（runs/<run_id>/deliverables/）。
+
+    run 目录由 progress_path 的父目录推导（Go 端 runs/<run_id>/ 布局，零新增参数）。
+    打包失败绝不影响主测试结果：异常折叠进 result.deliverables 的 status 字段。
+    """
+    if str(result.status) != "CONFIRMED" or not result.contract:
+        return
+    if progress_path is None:
+        return
+    try:
+        run_dir = Path(progress_path).expanduser().resolve().parent
+        if run_dir.name == "deliverables" or not run_dir.is_dir():
+            return
+        # PoC HAP 路径：Runner 执行时 HapTransport build 的签名产物
+        # （record.observations[].transport.hap）。
+        poc_hap: Path | None = None
+        for o in (result.record or {}).get("observations", []):
+            hap = (o.get("transport") or {}).get("hap", "")
+            if hap and Path(hap).is_file():
+                poc_hap = Path(hap)
+                break
+        from core.exp_package import build_deliverables  # noqa: PLC0415
+
+        # LLM binding：复用 contract_compiler 的动态测试 phase 绑定（失败即模板默认）
+        binding_pair = None
+        try:
+            from openharmony_dynamic.contract_compiler import _llm_binding  # noqa: PLC0415
+
+            binding_pair = _llm_binding()
+        except Exception:  # noqa: BLE001 — LLM 增强是可选路径
+            binding_pair = None
+        pkg = build_deliverables(
+            run_dir=run_dir, poc_contract=result.contract, poc_hap=poc_hap,
+            vuln_class=result.vuln_class, finding=finding, hdc=hdc,
+            binding_pair=binding_pair, progress_emit=progress_emit,
+        )
+        result.deliverables = pkg.to_dict()
+    except Exception as exc:  # noqa: BLE001 — 打包绝不影响主测试
+        try:
+            from core.exp_package import ExpPackage  # noqa: PLC0415
+
+            result.deliverables = ExpPackage(status="failed", reason=f"{type(exc).__name__}: {exc}").to_dict()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def run_dynamic_from_scan(
+    result_dir: str | Path,
+    *,
+    round_n: int,
+    sample: str,
+    serial: str,
+    hdc_path: str | None = None,
+    repo_root: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+    unit_id: str | None = None,
+    progress_path: str | Path | None = None,
+) -> ScanDynamicResult:
+    """扫描中间产物条目 → 适配 → 编译契约 → 真机执行，全链一气呵成。
+
+    serial 必须显式给出（沿用动态测试约束：绝不隐式选择板卡）。
+    """
+    # 惰性导入：保持本模块可被只读列表操作独立使用
+    import sys as _sys
+
+    core_dir = Path(__file__).resolve().parents[1]
+    utilities_dir = core_dir / "utilities"
+    for p in (str(core_dir), str(utilities_dir)):
+        if p not in _sys.path:
+            _sys.path.insert(0, p)
+
+    from openharmony_dynamic.contract_compiler import compile_contract  # noqa: PLC0415
+    from openharmony_dynamic.hdc_client import HDCClient  # noqa: PLC0415
+    from openharmony_dynamic.runner import Runner  # noqa: PLC0415
+    from openharmony_dynamic.stage_finding_adapter import adapt_stage_finding  # noqa: PLC0415
+
+    bridge, entry = bridge_scan_entry(result_dir, round_n=round_n, sample=sample,
+                                      repo_root=repo_root)
+    result = ScanDynamicResult(entry=entry, bridge=bridge)
+
+    if repo_root is not None:
+        resolved_repo_root = str(Path(repo_root).expanduser().resolve())
+    else:
+        resolved_repo_root = str(
+            Path(__file__).resolve().parents[3]
+            / "evaluation_dataset" / "vulnerability" / "service_scopes"
+            / f"{entry.repository}_socket_scope"
+        )
+    adapter = adapt_stage_finding(
+        bridge,
+        finding_id=sample,
+        unit_id=unit_id or f"{entry.repository.replace('_', '')}_{sample.lower()}",
+        repo_root=resolved_repo_root,
+    )
+    result.adapter_status = adapter.status
+    result.adapter_errors = list(adapter.errors)
+    result.adapter_warnings = list(adapter.warnings)
+    if adapter.status != "CONVERTED" or adapter.finding is None:
+        raise ScanBridgeError(
+            f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
+        )
+    finding = adapter.finding
+    result.vuln_class = finding.vuln_class
+    result.sink = finding.sink
+    result.entry_hints = list(finding.entry_hints)
+
+    emit = _progress_emitter(progress_path)
+    cmd_emit = (lambda rec: emit({"event": "device_cmd", "detail": rec.get("purpose", ""),
+                                  "record": rec})) if emit else None
+    hdc = HDCClient(
+        hdc_path=hdc_path or "hdc",
+        serial=serial,
+        ledger_path=Path(ledger_path) if ledger_path else None,
+        on_command=cmd_emit,
+    )
+    # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
+    # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。
+    try:
+        from openharmony_dynamic.contract_compiler import compile_contract_with_retry  # noqa: PLC0415
+
+        compile_result = compile_contract_with_retry(finding, hdc=hdc, on_event=emit,
+                                                     failure_log=_COMPILE_FAILURE_LOG)
+    except ImportError:
+        compile_result = compile_contract(finding, hdc=hdc, on_event=emit)
+    result.compile_status = compile_result.compile_status
+    result.compile_errors = list(compile_result.errors)
+    result.compile_notes = list(compile_result.notes)
+    result.entry_discovery = dict(compile_result.entry_discovery)
+    if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
+        raise ScanBridgeError(
+            f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
+            f"{'；'.join(compile_result.errors) or '未知原因'}"
+        )
+
+    contract = compile_result.contract
+    result.contract = contract.to_dict()
+    rec = Runner(hdc, on_event=emit).run(contract)
+    result.run_id = rec.run_id
+    result.pattern = rec.pattern
+    verdict = rec.verdict if isinstance(rec.verdict, dict) else {}
+    result.verdict = verdict
+    result.status = str(verdict.get("status", ""))
+    result.evidence_grade = str(verdict.get("evidence_grade", ""))
+    # CONFIRMED 契约自动晋升 exemplar（P0-2 全自动化收敛）：该 vuln_class 首个
+    # 真机 CONFIRMED 契约沉淀为 L2 few-shot 参考；第一代钉死不可变。失败静默。
+    try:
+        from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
+
+        promotion = promote_exemplar_if_absent(contract, result.status)
+        if promotion != "skipped:非 CONFIRMED":
+            result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
+    except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
+        pass
+    # 回填 record（RunRecord 落盘 JSON）路径与内容：前端展示证据细节
+    # （transport / 文件系统快照含 marker 内容与 stat / hilog 命中 / 命令计数）。
+    # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
+    runner_name = f"{rec.run_id}-{rec.contract_id}.json"
+    runner_out = next(
+        (c for c in (Path("test_records/ohos-dynamic-v2/runs") / runner_name,
+                     Path.cwd() / "test_records/ohos-dynamic-v2/runs" / runner_name)
+         if c.is_file()),
+        None,
+    )
+    if runner_out is not None:
+        result.record_path = str(runner_out)
+        try:
+            result.record = json.loads(runner_out.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            result.record = {}
+    _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
+                              hdc=hdc, progress_emit=emit)
+    return result
+
+
+def run_dynamic_from_webui(
+    scan_id: str,
+    *,
+    sample: str,
+    serial: str,
+    webui_dir: str | Path | None = None,
+    hdc_path: str | None = None,
+    repo_root: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+    unit_id: str | None = None,
+    progress_path: str | Path | None = None,
+) -> ScanDynamicResult:
+    """webui 扫描条目（~/.openant/webui/<scan_id>/results.json）→ 适配 →
+    编译契约 → 真机执行。serial 必须显式给出（绝不隐式选择板卡）。"""
+    bridge, entry = bridge_webui_entry(
+        webui_dir, scan_id=scan_id, sample=sample, repo_root=repo_root,
+    )
+
+    # 惰性导入：与 run_dynamic_from_scan 相同的复用路径
+    import sys as _sys
+
+    core_dir = Path(__file__).resolve().parents[1]
+    utilities_dir = core_dir / "utilities"
+    for p in (str(core_dir), str(utilities_dir)):
+        if p not in _sys.path:
+            _sys.path.insert(0, p)
+
+    from openharmony_dynamic.contract_compiler import compile_contract  # noqa: PLC0415
+    from openharmony_dynamic.hdc_client import HDCClient  # noqa: PLC0415
+    from openharmony_dynamic.runner import Runner  # noqa: PLC0415
+    from openharmony_dynamic.stage_finding_adapter import adapt_stage_finding  # noqa: PLC0415
+
+    result = ScanDynamicResult(entry=entry, bridge=bridge)
+    # bridge_webui_entry 将 entry.repository 设为扫描 meta.repo（实际存在目录）。
+    # 条目 file 是相对该根的路径；若 file 不在该根下（老扫描 file 只有裸文件名，
+    # 或 repo 是深层子目录而 file 带仓库内前缀），逐级向上扩展根直到
+    # file 在 <root>/<file_rel> 真实存在——适配校验要求 source 相对 repo_root 存在。
+    resolved_repo_root = str(entry.repository)
+    file_rel = str(bridge["所处文件路径"])
+    if file_rel and not (Path(resolved_repo_root) / file_rel).is_file():
+        root = Path(resolved_repo_root)
+        parts_to_prepend: list[str] = []
+        while root.parent != root and len(root.parts) > 2:
+            parts_to_prepend.insert(0, root.name)
+            root = root.parent
+            candidate_rel = "/".join([*parts_to_prepend, file_rel])
+            if (root / candidate_rel).is_file():
+                resolved_repo_root = str(root)
+                bridge["所处文件路径"] = candidate_rel
+                break
+    adapter = adapt_stage_finding(
+        bridge,
+        finding_id=sample,
+        unit_id=unit_id or f"{entry.target_id.replace('/', '_').replace(':', '_')}_{sample.lower()}",
+        repo_root=resolved_repo_root,
+    )
+    result.adapter_status = adapter.status
+    result.adapter_errors = list(adapter.errors)
+    result.adapter_warnings = list(adapter.warnings)
+    if adapter.status != "CONVERTED" or adapter.finding is None:
+        raise ScanBridgeError(
+            f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
+        )
+    finding = adapter.finding
+    result.vuln_class = finding.vuln_class
+    result.sink = finding.sink
+    result.entry_hints = list(finding.entry_hints)
+
+    emit = _progress_emitter(progress_path)
+    cmd_emit = (lambda rec: emit({"event": "device_cmd", "detail": rec.get("purpose", ""),
+                                  "record": rec})) if emit else None
+    hdc = HDCClient(
+        hdc_path=hdc_path or "hdc",
+        serial=serial,
+        ledger_path=Path(ledger_path) if ledger_path else None,
+        on_command=cmd_emit,
+    )
+    # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
+    # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。
+    try:
+        from openharmony_dynamic.contract_compiler import compile_contract_with_retry  # noqa: PLC0415
+
+        compile_result = compile_contract_with_retry(finding, hdc=hdc, on_event=emit,
+                                                     failure_log=_COMPILE_FAILURE_LOG)
+    except ImportError:
+        compile_result = compile_contract(finding, hdc=hdc, on_event=emit)
+    result.compile_status = compile_result.compile_status
+    result.compile_errors = list(compile_result.errors)
+    result.compile_notes = list(compile_result.notes)
+    result.entry_discovery = dict(compile_result.entry_discovery)
+    if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
+        raise ScanBridgeError(
+            f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
+            f"{'；'.join(compile_result.errors) or '未知原因'}"
+        )
+
+    contract = compile_result.contract
+    result.contract = contract.to_dict()
+    rec = Runner(hdc, on_event=emit).run(contract)
+    result.run_id = rec.run_id
+    result.pattern = rec.pattern
+    verdict = rec.verdict if isinstance(rec.verdict, dict) else {}
+    result.verdict = verdict
+    result.status = str(verdict.get("status", ""))
+    result.evidence_grade = str(verdict.get("evidence_grade", ""))
+    # CONFIRMED 契约自动晋升 exemplar（P0-2 全自动化收敛）：该 vuln_class 首个
+    # 真机 CONFIRMED 契约沉淀为 L2 few-shot 参考；第一代钉死不可变。失败静默。
+    try:
+        from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
+
+        promotion = promote_exemplar_if_absent(contract, result.status)
+        if promotion != "skipped:非 CONFIRMED":
+            result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
+    except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
+        pass
+    # 回填 record（RunRecord 落盘 JSON）路径与内容：前端展示证据细节
+    # （transport / 文件系统快照含 marker 内容与 stat / hilog 命中 / 命令计数）。
+    # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
+    runner_name = f"{rec.run_id}-{rec.contract_id}.json"
+    runner_out = next(
+        (c for c in (Path("test_records/ohos-dynamic-v2/runs") / runner_name,
+                     Path.cwd() / "test_records/ohos-dynamic-v2/runs" / runner_name)
+         if c.is_file()),
+        None,
+    )
+    if runner_out is not None:
+        result.record_path = str(runner_out)
+        try:
+            result.record = json.loads(runner_out.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            result.record = {}
+    _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
+                              hdc=hdc, progress_emit=emit)
+    return result

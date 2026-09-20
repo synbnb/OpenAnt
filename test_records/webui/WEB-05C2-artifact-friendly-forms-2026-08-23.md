@@ -28,7 +28,7 @@
 
 ```text
 GOCACHE=/private/tmp/openant-gocache GOPATH=/private/tmp/openant-gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 ```
 
 结果：通过。服务端、命令行、报告、Python 桥接等全部 Go 包通过。

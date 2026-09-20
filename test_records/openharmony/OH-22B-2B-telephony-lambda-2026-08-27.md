@@ -42,8 +42,8 @@ return memberFunc(data, reply);
 定向测试：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 结果：`7 passed`。
@@ -59,9 +59,9 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 OpenHarmony/IPC 回归：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：`109 passed, 2 skipped`。
@@ -73,7 +73,7 @@ Ruff 检查：`All checks passed`。
 为避免大模型费用，使用只执行解析阶段的命令：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/telephony_core_service \
   --output debug_outputs/OH-22B-2B-telephony-lambda-20260827-parse-c \
   --platform openharmony --language c --level all --fresh

@@ -1,4 +1,4 @@
-# OpenAnt 评测数据集建设计划：暴露面识别（第一阶段）
+# VulnFounder 评测数据集建设计划：暴露面识别（第一阶段）
 
 版本：v0.1
 日期：2026-09-04
@@ -8,7 +8,7 @@
 ## 1. 目标与验收结果
 
 本阶段要建立一套可离线复现、可自动校验的暴露面识别数据集，用来评估
-OpenAnt 是否能够完成下面的完整任务：
+VulnFounder 是否能够完成下面的完整任务：
 
 1. 在真实 OpenHarmony 开发板上发现正在运行的 TCP、UDP 和命名 Unix Socket；
 2. 正确规范化套接字类型、协议、地址或路径、运行状态、关联进程和可观察权限；
@@ -242,7 +242,7 @@ raw 是不可变的原始快照，expected.json 和汇总报告属于可重建�
 记录以下信息到 capture_manifest.json：
 
 - 开发板序列号、系统版本、内核版本、构建标识；
-- 采集时间、HDC 版本和 OpenAnt 版本；
+- 采集时间、HDC 版本和 VulnFounder 版本；
 - 当前进程列表和网络工具是否可用；
 - SP_daemon 是否由本次采集启动；
 - 每条命令、参数、返回码、标准输出和标准错误的摘要。
@@ -583,7 +583,7 @@ captures/board-<serial>-<timestamp>/capture_manifest.json。
 每一份数据集交付都必须固定：
 
 - 开发板系统构建标识、序列号和采集时间；
-- OpenAnt、HDC 和采集脚本版本；
+- VulnFounder、HDC 和采集脚本版本；
 - 每个源码仓库的 Gitee URL、分支和 commit SHA；
 - 证据源文件的 SHA-256；
 - 原始设备输出的 SHA-256；

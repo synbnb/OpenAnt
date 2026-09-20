@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-00B：小型脱敏 OpenHarmony Binder IPC fixture |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 开发分支 | `feature/openharmony-adaptation` |
 | Python | 3.11.15，项目 `.venv` |
 | pytest | 9.1.1 |
@@ -31,7 +31,7 @@ VerifyAccessToken permission guard
 guarded EnableSensor sink
 ```
 
-本阶段不修改 OpenAnt 生产代码、CLI、语言注册或扫描结果。
+本阶段不修改 VulnFounder 生产代码、CLI、语言注册或扫描结果。
 
 ## 3. TDD RED
 
@@ -71,7 +71,7 @@ tests/fixtures/openharmony/ipc_service/
 └── services/health_sensor_service_stub.cpp
 ```
 
-所有名称、组件、权限和代码均为 OpenAnt 测试专用合成内容，没有复制外部真实仓源码。fixture 保留了真实 OpenHarmony 常见语义结构，但不代表实际产品组件，也不是漏洞样本。
+所有名称、组件、权限和代码均为 VulnFounder 测试专用合成内容，没有复制外部真实仓源码。fixture 保留了真实 OpenHarmony 常见语义结构，但不代表实际产品组件，也不是漏洞样本。
 
 `fixture_manifest.json` 包含：
 
@@ -159,6 +159,6 @@ fixture JSON 已在测试中使用 `json.loads` 解析；相对路径、目录�
 
 ## 10. 阶段结论
 
-OH-00B 已完成。OpenAnt 仓库现在具备一个不依赖用户本地路径、语义锚点稳定、同时覆盖平台清单与 Binder 权限边界的最小测试素材。
+OH-00B 已完成。VulnFounder 仓库现在具备一个不依赖用户本地路径、语义锚点稳定、同时覆盖平台清单与 Binder 权限边界的最小测试素材。
 
-下一小阶段应记录现有 OpenAnt 对该 fixture 和外部语料的发现、解析与入口识别基线，明确哪些 OpenHarmony 信号当前会被忽略；在用户批准前不修改生产扫描逻辑。
+下一小阶段应记录现有 VulnFounder 对该 fixture 和外部语料的发现、解析与入口识别基线，明确哪些 OpenHarmony 信号当前会被忽略；在用户批准前不修改生产扫描逻辑。

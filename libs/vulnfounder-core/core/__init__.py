@@ -12,7 +12,7 @@ Modules:
     enhancer        — Agentic / single-shot context enhancement
     analyzer        — Stage 1 vulnerability detection
     verifier        — Stage 2 attacker simulation verification
-    dynamic_tester  — Docker-isolated exploit testing
+    dynamic_tester  — Docker、Claude Code 与 OpenHarmony 真机动态验证
     reporter        — Report generation (pipeline output, HTML, CSV, summary, disclosure)
     scanner         — All-in-one orchestrator (parse → enhance → detect → verify → report → dynamic test)
 """

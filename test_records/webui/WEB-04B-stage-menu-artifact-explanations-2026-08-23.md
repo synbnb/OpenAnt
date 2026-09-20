@@ -56,11 +56,11 @@
 
 ## 4. 修改文件
 
-- \`apps/openant-cli/internal/server/server.go\`
-- \`apps/openant-cli/internal/server/pipeline_test.go\`
-- \`apps/openant-cli/internal/server/artifact_test.go\`
-- \`apps/openant-cli/internal/server/ui_i18n_test.go\`
-- \`apps/openant-cli/ui/scan.html\`
+- \`apps/vulnfounder-cli/internal/server/server.go\`
+- \`apps/vulnfounder-cli/internal/server/pipeline_test.go\`
+- \`apps/vulnfounder-cli/internal/server/artifact_test.go\`
+- \`apps/vulnfounder-cli/internal/server/ui_i18n_test.go\`
+- \`apps/vulnfounder-cli/ui/scan.html\`
 
 ## 5. 测试结果
 
@@ -69,15 +69,15 @@
 命令：
 
 \`\`\`bash
-env GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache \
-  GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./internal/server
+env GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache \
+  GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath \
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./internal/server
 \`\`\`
 
 结果：
 
 \`\`\`text
-ok github.com/knostic/open-ant-cli/internal/server
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 \`\`\`
 
 新增或扩展的断言包括：
@@ -91,29 +91,29 @@ ok github.com/knostic/open-ant-cli/internal/server
 - 页面具有 tablist、tab、tabpanel、aria-selected 和 aria-controls 语义。
 - 页面具有阶段点击、按键切换、产物阶段过滤和原始 JSON 入口。
 
-### 5.2 OpenAnt CLI 全量 Go 测试
+### 5.2 VulnFounder CLI 全量 Go 测试
 
 命令：
 
 \`\`\`bash
-env GOCACHE=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gocache \
-  GOPATH=/Users/shiyu/学习/hyl/new/OpenAnt/.devtools/gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+env GOCACHE=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gocache \
+  GOPATH=/Users/shiyu/学习/hyl/new/VulnFounder/.devtools/gopath \
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 \`\`\`
 
 结果：全部通过。
 
 \`\`\`text
-ok github.com/knostic/open-ant-cli/cmd
-ok github.com/knostic/open-ant-cli/internal/checkpoint
-ok github.com/knostic/open-ant-cli/internal/config
-ok github.com/knostic/open-ant-cli/internal/git
-ok github.com/knostic/open-ant-cli/internal/languages
-ok github.com/knostic/open-ant-cli/internal/models
-ok github.com/knostic/open-ant-cli/internal/output
-ok github.com/knostic/open-ant-cli/internal/python
-ok github.com/knostic/open-ant-cli/internal/report
-ok github.com/knostic/open-ant-cli/internal/server
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 \`\`\`
 
 ### 5.3 前端脚本与补丁检查

@@ -66,19 +66,19 @@ Tree-sitter 版本把 `this->*` 解析成 `ERROR` 子树的情况。
 
 ## 3. 修改文件
 
-- `libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py`
   - 支持局部成员函数数组声明；
   - 新增数组声明名提取、参数名提取、直接参数流和唯一来源校验；
   - 残余站点记录 `parameter_flow`、注册作用域和注册形式；
   - 对无唯一参数流的局部数组禁止跨函数按表名兜底匹配。
-- `libs/openant-core/core/platforms/openharmony/native_dispatch.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py`
   - 接受 `declaration_member_function_array` 作为同类非 IPC 分派证据；
   - 按 `registration_owner_function_id` 选择注册记录；
   - 在 SemanticGraph 边属性中记录参数流和局部注册函数。
-- `libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py`
+- `libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py`
   - 新增唯一参数流正例；
   - 新增两个调用者各自拥有同名局部数组时必须保持无候选的负例。
-- `libs/openant-core/tests/openharmony/test_native_dispatch.py`
+- `libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py`
   - 新增跨函数数组到 `Decode` 的 Native 语义边投影测试。
 
 ## 4. 测试驱动过程
@@ -104,11 +104,11 @@ graph is None  # 预期应产生 Decode → handler 语义边
 
 ```bash
 source .venv/bin/activate
-pytest -q libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
+pytest -q libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
   -k 'ambiguous_local_member_array_sources or local_member_function_array_flows'
 # 2 passed, 17 deselected
 
-pytest -q libs/openant-core/tests/openharmony/test_native_dispatch.py \
+pytest -q libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py \
   -k 'parameterized_decoder_projects_local_member_array or initializer_list_projects_same_class_non_remote_site'
 # 2 passed, 8 deselected
 ```
@@ -117,14 +117,14 @@ pytest -q libs/openant-core/tests/openharmony/test_native_dispatch.py \
 
 ```bash
 source .venv/bin/activate
-pytest -q libs/openant-core/tests/openharmony
+pytest -q libs/vulnfounder-core/tests/openharmony
 # 112 passed, 2 skipped
 
 ruff check \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/core/platforms/openharmony/native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py
 # All checks passed!
 ```
 
@@ -133,12 +133,12 @@ ruff check \
 ### 5.1 命令
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/hiviewdfx_faultloggerd \
   --output debug_outputs/OH-22B-2I-all-20260827/hiviewdfx_faultloggerd \
   --platform openharmony --language c --level all --fresh
 
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/hiviewdfx_faultloggerd \
   --output debug_outputs/OH-22B-2I-reachable-20260827/hiviewdfx_faultloggerd \
   --platform openharmony --language c --level reachable --fresh

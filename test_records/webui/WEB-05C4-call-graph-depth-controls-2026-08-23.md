@@ -24,11 +24,11 @@
 
 ## 修改文件
 
-- `apps/openant-cli/ui/artifact-view.html`
+- `apps/vulnfounder-cli/ui/artifact-view.html`
   - 增加深度选择控件和中英文文案；
   - 增加默认深度、最大深度和节点上限常量；
   - 入口切换和深度选择事件统一更新图状态。
-- `apps/openant-cli/internal/server/ui_i18n_test.go`
+- `apps/vulnfounder-cli/internal/server/ui_i18n_test.go`
   - 增加深度选择器和默认深度标记测试。
 
 ## 自动化测试
@@ -40,7 +40,7 @@
 ```text
 node - <<'NODE'
 const fs = require('fs');
-const html = fs.readFileSync('apps/openant-cli/ui/artifact-view.html', 'utf8');
+const html = fs.readFileSync('apps/vulnfounder-cli/ui/artifact-view.html', 'utf8');
 const match = html.match(/<script>([\\s\\S]*?)<\\/script>/);
 if (!match) throw new Error('artifact-view script missing');
 new Function(match[1]);
@@ -59,13 +59,13 @@ artifact-view depth control and script syntax: ok
 
 ### 2. Go 全量测试
 
-工作目录：`apps/openant-cli`
+工作目录：`apps/vulnfounder-cli`
 
 命令：
 
 ```text
 GOCACHE=/private/tmp/openant-gocache GOPATH=/private/tmp/openant-gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 ```
 
 结果：通过。`cmd`、`internal/server`、配置、报告、Python 调用和其他 Go 包均通过。

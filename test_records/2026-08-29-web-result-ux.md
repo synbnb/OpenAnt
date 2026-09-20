@@ -51,7 +51,7 @@
 
 ### 4. Go 服务端测试
 
-当前环境没有 `go` 命令，因此未能执行 `go test ./apps/openant-cli/internal/server`。需要在安装 Go 的开发环境中补跑模板测试。
+当前环境没有 `go` 命令，因此未能执行 `go test ./apps/vulnfounder-cli/internal/server`。需要在安装 Go 的开发环境中补跑模板测试。
 
 ## 回归修复（2026-08-30）
 
@@ -69,7 +69,7 @@
 
 ## 使用方式
 
-1. 在安装 Go 的环境执行 `cd apps/openant-cli && make build`，然后重启 Web 服务；页面模板通过 `go:embed` 嵌入二进制。
+1. 在安装 Go 的环境执行 `cd apps/vulnfounder-cli && make build`，然后重启 Web 服务；页面模板通过 `go:embed` 嵌入二进制。
 2. 在扫描详情页选择任意阶段，先查看“本阶段结论”和“关键结果”。
 3. 点击阶段产物的“独立查看”。
 4. 独立查看器先看“优先关注的信息”；需要审计全部内容时点击“展开全部字段”或打开“完整字段”。

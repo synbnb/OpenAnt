@@ -3,9 +3,9 @@
 - 执行日期：2026-08-22
 - 阶段：OH-12A（IDL/SA 解析器）
 - 状态：通过，可进入 OH-12B 评审
-- IDL 解析器：`libs/openant-core/core/platforms/openharmony/idl.py`
-- SA 解析器：`libs/openant-core/core/platforms/openharmony/sa_profile.py`
-- 测试：`libs/openant-core/tests/platforms/test_openharmony_idl.py`、`test_openharmony_sa_profile.py`
+- IDL 解析器：`libs/vulnfounder-core/core/platforms/openharmony/idl.py`
+- SA 解析器：`libs/vulnfounder-core/core/platforms/openharmony/sa_profile.py`
+- 测试：`libs/vulnfounder-core/tests/platforms/test_openharmony_idl.py`、`test_openharmony_sa_profile.py`
 
 ## 1. 原逻辑与本阶段目标
 

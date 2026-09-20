@@ -29,10 +29,10 @@ Web 只能读取阶段状态接口、SSE 日志、HTML 报告和 Summary；`data
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 注册产物列表和读取路由；
   - 增加产物白名单、元数据投影和安全读取逻辑。
-- `apps/openant-cli/internal/server/artifact_test.go`
+- `apps/vulnfounder-cli/internal/server/artifact_test.go`
   - 测试列表与读取接口、白名单、未知任务、符号链接和超大文件拒绝。
 
 ## 4. 测试环境
@@ -41,7 +41,7 @@ Web 只能读取阶段状态接口、SSE 日志、HTML 报告和 Summary；`data
 |---|---|
 | 系统 | macOS arm64 |
 | Go | 项目内 `.devtools/go1.25.7` |
-| 模块 | `apps/openant-cli` |
+| 模块 | `apps/vulnfounder-cli` |
 
 ## 5. 测试命令与结果
 
@@ -64,7 +64,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 - 超过 8 MiB 的产物返回 413。
 
 ```text
-ok github.com/knostic/open-ant-cli/internal/server 1.273s
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server 1.273s
 ```
 
 ### 5.2 Go 全量回归

@@ -46,10 +46,10 @@
 
 ## 2. 文件变更
 
-- `libs/openant-core/core/source_locator/config.py`
-- `libs/openant-core/core/source_locator/__init__.py`
-- `libs/openant-core/utilities/llm/config.py`
-- `libs/openant-core/tests/source_locator/test_config.py`
+- `libs/vulnfounder-core/core/source_locator/config.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/utilities/llm/config.py`
+- `libs/vulnfounder-core/tests/source_locator/test_config.py`
 
 没有修改 `config/openant/config.json`，因此当前项目默认不会自动启用源码定位流程，也不会触发新的网络访问。
 
@@ -60,7 +60,7 @@
 执行：
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest -q \
   tests/source_locator/test_config.py \
   tests/source_locator/test_opengrok_live_fixture_contract.py \
@@ -92,10 +92,10 @@ cd libs/openant-core
 
 ```text
 .venv/bin/ruff check \
-  libs/openant-core/core/source_locator/config.py \
-  libs/openant-core/core/source_locator/__init__.py \
-  libs/openant-core/utilities/llm/config.py \
-  libs/openant-core/tests/source_locator/test_config.py
+  libs/vulnfounder-core/core/source_locator/config.py \
+  libs/vulnfounder-core/core/source_locator/__init__.py \
+  libs/vulnfounder-core/utilities/llm/config.py \
+  libs/vulnfounder-core/tests/source_locator/test_config.py
 ```
 
 结果：`All checks passed!`；`git diff --check` 通过；Python `compileall` 通过。

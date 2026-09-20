@@ -59,12 +59,12 @@ cost_currency = CNY
 命令：
 
 ```bash
-PYTHONPATH=libs/openant-core \
+PYTHONPATH=libs/vulnfounder-core \
   /Users/shiyu/miniconda3/bin/pytest -q \
-  libs/openant-core/tests/test_model_registry.py \
-  libs/openant-core/tests/test_token_tracker.py \
-  libs/openant-core/tests/test_step_report_currency.py \
-  libs/openant-core/tests/test_llm_helpers_unit.py::TestLookupPricing
+  libs/vulnfounder-core/tests/test_model_registry.py \
+  libs/vulnfounder-core/tests/test_token_tracker.py \
+  libs/vulnfounder-core/tests/test_step_report_currency.py \
+  libs/vulnfounder-core/tests/test_llm_helpers_unit.py::TestLookupPricing
 ```
 
 结果：`23 passed`。
@@ -96,7 +96,7 @@ GOMODCACHE=/private/tmp/openant-go-mod \
 
 ### Web 现场检查
 
-已用新二进制重建并启动本地服务。第一次启动时发现旧的 OpenAnt Web 进程（PID `53344`）
+已用新二进制重建并启动本地服务。第一次启动时发现旧的 VulnFounder Web 进程（PID `53344`）
 仍占用 `127.0.0.1:18080`，已确认后停止；随后也停止了本次临时回退实例并重新绑定：
 
 ```text

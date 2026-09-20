@@ -22,7 +22,7 @@
 
 ## 3. 修改文件
 
-- `apps/openant-cli/ui/scan.html`
+- `apps/vulnfounder-cli/ui/scan.html`
   - 增加产物列表样式和 HTML 容器；
   - 增加产物轮询、格式化和安全渲染逻辑。
 
@@ -33,14 +33,14 @@
 | 系统 | macOS arm64 |
 | Go | 项目内 `.devtools/go1.25.7` |
 | Node.js | `/opt/homebrew/bin/node` |
-| 模块 | `apps/openant-cli` |
+| 模块 | `apps/vulnfounder-cli` |
 
 ## 5. 测试命令与结果
 
 ### 5.1 JavaScript 语法检查
 
 ```bash
-python3 -c 'from pathlib import Path; import re; s=Path("apps/openant-cli/ui/scan.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
+python3 -c 'from pathlib import Path; import re; s=Path("apps/vulnfounder-cli/ui/scan.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
 ```
 
 结果：通过，无 JavaScript 语法错误。
@@ -68,7 +68,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。嵌入 HTML 模板和后端产物接口相关测试均通过：
 
 ```text
-ok github.com/knostic/open-ant-cli/internal/server 2.225s
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server 2.225s
 ```
 
 ### 5.4 变更格式检查

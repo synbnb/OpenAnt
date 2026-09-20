@@ -85,14 +85,14 @@ dispatch_assignments == 0  # 预期为 2
 完整 OpenHarmony 单元测试和规范检查：
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/openharmony
+.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony
 109 passed, 2 skipped
 
 .venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/core/platforms/openharmony/native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py
 All checks passed!
 ```
 
@@ -104,12 +104,12 @@ All checks passed!
 `--fresh`：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2H-all-20260827/<repo> \
   --platform openharmony --language c --level all --fresh
 
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2H-reachable-20260827/<repo> \
   --platform openharmony --language c --level reachable --fresh

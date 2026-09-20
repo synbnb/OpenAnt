@@ -26,8 +26,8 @@ OpenGrok：用户提供的只读实例，项目 `openharmony`。
 python -m openant.cli source-locator create <socket> --root <session-root> \
   --target-revision OpenHarmony-6.1-LTS
 python -m openant.cli source-locator run <session-id> --root <session-root> \
-  --config-path OpenAnt/config/openant/config.json \
-  --project-root OpenAnt --max-steps 32 --max-paths 32
+  --config-path VulnFounder/config/openant/config.json \
+  --project-root VulnFounder --max-steps 32 --max-paths 32
 ```
 
 `run` 在 `AWAIT_USER_CONFIRMATION`、`PARTIAL` 或 `NEEDS_REVIEW` 停止；本次没有

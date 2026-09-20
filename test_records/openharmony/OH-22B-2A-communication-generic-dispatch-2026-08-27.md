@@ -30,9 +30,9 @@ return (this->*member)(data, reply);
 执行命令：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 结果：`10 passed`。
@@ -49,9 +49,9 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 完整 OpenHarmony/IPC 回归：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：`107 passed, 2 skipped`。
@@ -59,11 +59,11 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 静态检查：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/core/platforms/openharmony/native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/ruff check \
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/core/platforms/openharmony/native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py
 ```
 
 结果：`All checks passed`。
@@ -73,7 +73,7 @@ PYTHONPATH=libs/openant-core .venv/bin/ruff check \
 为避免调用大模型，使用只执行解析阶段的命令：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/communication_netmanager_base \
   --output debug_outputs/OH-22B-2A-communication-generic-dispatch-20260827-parse-c \
   --platform openharmony --language c --level all --fresh

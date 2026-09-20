@@ -2,7 +2,7 @@
 
 - 日期：2026-08-23
 - 阶段：项目内配置解析与 Go/Python/Web 统一
-- 目标：不设置 `XDG_CONFIG_HOME` 时，OpenAnt 仍从项目目录读取 LLM 配置；交付包不依赖 `/private/tmp`。
+- 目标：不设置 `XDG_CONFIG_HOME` 时，VulnFounder 仍从项目目录读取 LLM 配置；交付包不依赖 `/private/tmp`。
 
 ## 本阶段改动
 
@@ -60,7 +60,7 @@ openant config path
 结果：输出项目内路径：
 
 ```text
-/Users/shiyu/学习/hyl/new/OpenAnt/config/openant/config.json
+/Users/shiyu/学习/hyl/new/VulnFounder/config/openant/config.json
 ```
 
 配置摘要（不输出密钥）：
@@ -76,7 +76,7 @@ openant config path
 启动命令未设置 `XDG_CONFIG_HOME`：
 
 ```text
-./apps/openant-cli/bin/openant serve --addr 127.0.0.1:18080
+./apps/vulnfounder-cli/bin/openant serve --addr 127.0.0.1:18080
 ```
 
 由于测试环境中 `18080` 不可绑定，服务自动选择了回环临时端口；读取首页结果显示：

@@ -89,6 +89,22 @@ def cmd_scan(args):
             enhance_mode=args.enhance_mode,
             dynamic_test=args.dynamic_test,
             dynamic_test_mode=getattr(args, "dynamic_test_mode", "docker"),
+            dynamic_device_serial=getattr(args, "dynamic_device", None),
+            dynamic_device_hdc_path=getattr(args, "dynamic_hdc", None),
+            dynamic_device_max_rounds=getattr(args, "dynamic_device_max_rounds", 16),
+            dynamic_device_max_commands=getattr(args, "dynamic_device_max_commands", 512),
+            dynamic_device_max_wall_seconds=getattr(args, "dynamic_device_wall_timeout", 1200),
+            dynamic_device_command_timeout_seconds=getattr(args, "dynamic_device_timeout", 30),
+            dynamic_device_allow_state_change=getattr(args, "dynamic_device_allow_state_change", False),
+            dynamic_device_canary_path=getattr(args, "dynamic_device_canary_path", "/data/local/tmp/vulnfounder-canary"),
+            dynamic_device_carrier_root=getattr(args, "dynamic_device_carrier_root", None),
+            dynamic_device_carrier_id=getattr(args, "dynamic_device_carrier_id", None),
+            dynamic_device_carrier_bundle=getattr(args, "dynamic_device_carrier_bundle", "com.security.research.trigger"),
+            dynamic_device_carrier_ability=getattr(args, "dynamic_device_carrier_ability", "EntryAbility"),
+            dynamic_device_execute_carrier=getattr(args, "dynamic_device_execute_carrier", False),
+            dynamic_device_service_observation_delay_seconds=getattr(
+                args, "dynamic_device_service_observation_delay", 0.8
+            ),
             workers=args.workers,
             backoff_seconds=args.backoff,
             repo_name=getattr(args, "repo_name", None),
@@ -195,6 +211,77 @@ def cmd_socket_scope_select(args):
         return 0
     except Exception as exc:
         _output_json({"status": "error", "errors": [str(exc)]})
+        return 2
+
+
+def cmd_scan_artifact_list(args):
+    """List scan-artifact rounds or testable entries (read-only bridge input)."""
+    from core.scan_artifact_bridge import (
+        ScanBridgeError,
+        list_scan_entries,
+        list_scan_rounds,
+        list_webui_entries,
+        list_webui_scans,
+    )
+
+    try:
+        if getattr(args, "scan_id", None):
+            # webui 扫描目录模式
+            _output_json({"status": "success", "scan_id": args.scan_id,
+                          "entries": [e.to_dict() for e in list_webui_entries(
+                              args.webui_dir, args.scan_id, finding=args.finding)]})
+            return 0
+        if args.result_dir is None:
+            # 未给任何输入目录：列出 webui 下全部扫描（供前端选择表单）
+            _output_json({"status": "success", "scans": list_webui_scans(args.webui_dir)})
+            return 0
+        if args.round is None:
+            _output_json({"status": "success", "rounds": list_scan_rounds(args.result_dir)})
+            return 0
+        entries = list_scan_entries(
+            args.result_dir,
+            round_n=args.round,
+            finding=args.finding,
+            repository=args.repository,
+        )
+        _output_json({"status": "success", "round": args.round,
+                      "entries": [e.to_dict() for e in entries]})
+        return 0
+    except ScanBridgeError as exc:
+        _output_json({"status": "error", "errors": [str(exc)]})
+        return 2
+    except Exception as exc:
+        _output_json({"status": "error", "errors": [f"{type(exc).__name__}: {exc}"]})
+        return 2
+
+
+def cmd_scan_artifact_run(args):
+    """Run the device dynamic test for one scan-artifact entry."""
+    from core.scan_artifact_bridge import ScanBridgeError, run_dynamic_from_scan, run_dynamic_from_webui
+
+    try:
+        common = dict(
+            sample=args.sample,
+            serial=args.device,
+            hdc_path=args.hdc,
+            repo_root=args.repo_root,
+            ledger_path=args.ledger,
+            progress_path=getattr(args, "progress_file", None),
+        )
+        # --scan-id 提供时走 webui 扫描目录输入；否则走聚合产物目录输入。
+        if getattr(args, "scan_id", None):
+            result = run_dynamic_from_webui(args.scan_id, **common)
+        else:
+            result = run_dynamic_from_scan(args.result_dir, round_n=args.round, **common)
+        payload = result.to_dict()
+        _output_json({"status": "success", "result": payload})
+        # Exit 1 mirrors dynamic-test: a confirmed device effect is a finding.
+        return 1 if result.status == "CONFIRMED" else 0
+    except ScanBridgeError as exc:
+        _output_json({"status": "error", "errors": [str(exc)]})
+        return 2
+    except Exception as exc:
+        _output_json({"status": "error", "errors": [f"{type(exc).__name__}: {exc}"]})
         return 2
 
 
@@ -739,6 +826,22 @@ def cmd_dynamic_test(args):
                 repo_path=args.repo_path,
                 llm_config_name=args.llm_config,
                 mode=args.mode,
+                device_serial=getattr(args, "device", None),
+                device_hdc_path=getattr(args, "hdc", None),
+                dynamic_device_max_rounds=getattr(args, "max_rounds", 16),
+                dynamic_device_max_commands=getattr(args, "max_commands", 512),
+                dynamic_device_max_wall_seconds=getattr(args, "device_wall_timeout", 1200),
+                dynamic_device_command_timeout_seconds=getattr(args, "device_timeout", 30),
+                dynamic_device_allow_state_change=getattr(args, "allow_state_change", False),
+                dynamic_device_canary_path=getattr(args, "canary_path", "/data/local/tmp/vulnfounder-canary"),
+                dynamic_device_carrier_root=getattr(args, "carrier_root", None),
+                dynamic_device_carrier_id=getattr(args, "carrier_id", None),
+                dynamic_device_carrier_bundle=getattr(args, "carrier_bundle", "com.security.research.trigger"),
+                dynamic_device_carrier_ability=getattr(args, "carrier_ability", "EntryAbility"),
+                dynamic_device_execute_carrier=getattr(args, "execute_carrier", False),
+                dynamic_device_service_observation_delay_seconds=getattr(
+                    args, "service_observation_delay", 0.8
+                ),
             )
 
             ctx.summary = {
@@ -2494,12 +2597,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scan_p.add_argument("--no-report", action="store_true", help="Skip report generation")
     scan_p.add_argument("--dynamic-test", action="store_true",
-                        help="Enable Docker-isolated dynamic testing (off by default)")
+                        help="Enable the selected dynamic testing mode (off by default)")
     scan_p.add_argument(
         "--dynamic-test-mode",
-        choices=["docker", "claude-code"],
+        choices=["docker", "claude-code", "openharmony-device"],
         default="docker",
-        help="Dynamic-test mode when --dynamic-test is enabled: docker or claude-code",
+        help="Dynamic-test mode when --dynamic-test is enabled: docker, claude-code, or openharmony-device",
+    )
+    scan_p.add_argument("--dynamic-device", default=None, help="Explicit HDC serial for openharmony-device")
+    scan_p.add_argument("--dynamic-hdc", default=None, help="HDC executable path for openharmony-device")
+    scan_p.add_argument("--dynamic-device-max-rounds", type=int, default=16, help="OpenHarmony Agentic Loop maximum rounds")
+    scan_p.add_argument("--dynamic-device-max-commands", type=int, default=512, help="OpenHarmony maximum device commands")
+    scan_p.add_argument("--dynamic-device-timeout", type=int, default=30, help="OpenHarmony per-command timeout")
+    scan_p.add_argument("--dynamic-device-wall-timeout", type=int, default=1200, help="OpenHarmony total device timeout")
+    scan_p.add_argument("--dynamic-device-allow-state-change", action="store_true", help="Allow state-changing OpenHarmony device commands")
+    scan_p.add_argument("--dynamic-device-canary-path", default="/data/local/tmp/vulnfounder-canary", help="Safe OpenHarmony canary root")
+    scan_p.add_argument("--dynamic-device-carrier-root", default=None, help="Reviewed HAP carrier root")
+    scan_p.add_argument("--dynamic-device-carrier-id", default=None, help="Only execute reviewed carrier for this finding ID")
+    scan_p.add_argument("--dynamic-device-carrier-bundle", default="com.security.research.trigger", help="Reviewed HAP carrier bundle")
+    scan_p.add_argument("--dynamic-device-carrier-ability", default="EntryAbility", help="Reviewed HAP carrier Ability")
+    scan_p.add_argument("--dynamic-device-execute-carrier", action="store_true", help="Explicitly execute reviewed HAP carriers")
+    scan_p.add_argument(
+        "--dynamic-device-service-observation-delay",
+        type=float,
+        default=0.8,
+        help="载体发送后延迟日志采样的等待秒数（0-5，默认 0.8）",
     )
     scan_p.add_argument("--no-skip-tests", action="store_true", help="Include test files in parsing (default: tests are skipped)")
     scan_p.add_argument("--library-mode", action="store_true",
@@ -2937,20 +3059,39 @@ def build_parser() -> argparse.ArgumentParser:
     bo_p.set_defaults(func=cmd_build_output)
 
     # ---------------------------------------------------------------
-    # dynamic-test — Docker or Claude Code dynamic testing
+    # dynamic-test — Docker, Claude Code or OpenHarmony device dynamic testing
     # ---------------------------------------------------------------
     dt_p = subparsers.add_parser(
         "dynamic-test",
-        help="Run dynamic testing with Docker or prepare a Claude Code task workspace",
+        help="Run Docker/Claude Code dynamic testing or the OpenHarmony device Agentic Loop",
     )
     dt_p.add_argument("pipeline_output", help="Path to pipeline_output.json")
     dt_p.add_argument("--output", "-o", help="Output directory (default: temp dir)")
     dt_p.add_argument("--repo-path", help="Path to the repository root (required by claude-code mode)")
     dt_p.add_argument(
         "--mode",
-        choices=["docker", "claude-code"],
+        choices=["docker", "claude-code", "openharmony-device"],
         default="docker",
-        help="Execution mode: docker (default) or claude-code task workspace",
+        help="Execution mode: docker, claude-code task workspace, or openharmony-device",
+    )
+    dt_p.add_argument("--device", help="Explicit HDC serial (required by openharmony-device)")
+    dt_p.add_argument("--hdc", help="HDC executable path (optional)")
+    dt_p.add_argument("--max-rounds", type=int, default=16, help="OpenHarmony Agentic Loop maximum rounds")
+    dt_p.add_argument("--max-commands", type=int, default=64, help="Maximum OpenHarmony device commands")
+    dt_p.add_argument("--device-timeout", type=int, default=30, help="OpenHarmony per-command timeout")
+    dt_p.add_argument("--device-wall-timeout", type=int, default=1200, help="OpenHarmony total device timeout")
+    dt_p.add_argument("--allow-state-change", action="store_true", help="Allow state-changing OpenHarmony device commands")
+    dt_p.add_argument("--canary-path", default="/data/local/tmp/vulnfounder-canary", help="Safe OpenHarmony device canary root")
+    dt_p.add_argument("--carrier-root", default=None, help="Reviewed HAP carrier root")
+    dt_p.add_argument("--carrier-id", default=None, help="Only execute reviewed carrier for this finding ID")
+    dt_p.add_argument("--carrier-bundle", default="com.security.research.trigger", help="Reviewed HAP carrier bundle")
+    dt_p.add_argument("--carrier-ability", default="EntryAbility", help="Reviewed HAP carrier Ability")
+    dt_p.add_argument("--execute-carrier", action="store_true", help="Explicitly execute reviewed HAP carriers")
+    dt_p.add_argument(
+        "--service-observation-delay",
+        type=float,
+        default=0.8,
+        help="载体发送后延迟日志采样的等待秒数（0-5，默认 0.8）",
     )
     dt_p.add_argument("--max-retries", type=int, default=3,
                       help="Max retries per finding on error (default: 3)")
@@ -3098,6 +3239,50 @@ def build_parser() -> argparse.ArgumentParser:
     ss_select.add_argument("--candidate-id", required=True)
     ss_select.add_argument("--output", default=None, help="输出新 manifest；默认原地更新")
     ss_select.set_defaults(func=cmd_socket_scope_select)
+
+    # ---------------------------------------------------------------
+    # scan-artifact — bridge scan intermediates to device dynamic testing
+    # ---------------------------------------------------------------
+    sa_p = subparsers.add_parser(
+        "scan-artifact",
+        help="以扫描中间产物（result/N.json + stage1_runs_N）为输入的真机动态测试",
+    )
+    sa_sub = sa_p.add_subparsers(dest="scan_artifact_command", required=True)
+
+    sa_list = sa_sub.add_parser("list", help="列出历史扫描及可动态测试条目（只读）")
+    sa_list.add_argument("--result-dir", default=None,
+                         help="聚合产物目录（evaluation_dataset/vulnerability/result）；"
+                              "--scan-id 模式下不需要")
+    sa_list.add_argument("--scan-id", default=None,
+                         help="webui 扫描 ID（~/.openant/webui/<id>）；--webui-dir 配合使用")
+    sa_list.add_argument("--webui-dir", default=None,
+                         help="webui 根目录（缺省 ~/.vulnfounder/webui 或 ~/.openant/webui）")
+    sa_list.add_argument("--round", type=int, default=None,
+                         help="聚合产物模式：指定轮次列出该轮条目；缺省列出全部轮次摘要")
+    sa_list.add_argument("--finding", choices=["vulnerable", "inconclusive"], default=None,
+                         help="按 finding 过滤（两者都是可动态测试集合）")
+    sa_list.add_argument("--repository", default=None,
+                         help="聚合产物模式：按仓库过滤")
+    sa_list.set_defaults(func=cmd_scan_artifact_list)
+
+    sa_run = sa_sub.add_parser("run", help="对一条扫描产物条目执行真机动态测试")
+    sa_run.add_argument("--result-dir", default=None,
+                        help="聚合产物目录；--scan-id 模式下不需要")
+    sa_run.add_argument("--scan-id", default=None,
+                        help="webui 扫描 ID（提供后 --round 不需要）")
+    sa_run.add_argument("--webui-dir", default=None, help="webui 根目录（缺省自动发现）")
+    sa_run.add_argument("--round", type=int, default=None, help="聚合产物轮次 N")
+    sa_run.add_argument("--sample", required=True,
+                        help="条目标识：聚合产物为 sample（如 DP-02），webui 为 primary_finding_id 或 unit_id")
+    sa_run.add_argument("--device", required=True,
+                        help="显式 HDC 设备 serial（绝不隐式选择板卡）")
+    sa_run.add_argument("--hdc", default=None, help="HDC 可执行路径（缺省 hdc）")
+    sa_run.add_argument("--repo-root", default=None,
+                        help="仓库根目录（缺省项目内 service_scopes/<repo>_socket_scope）")
+    sa_run.add_argument("--ledger", default=None, help="命令账本 JSONL 落点")
+    sa_run.add_argument("--progress-file", default=None,
+                        help="进度事件 JSONL 落点（每事件一行；Web 桥接实时展示用）")
+    sa_run.set_defaults(func=cmd_scan_artifact_run)
 
     sl_sub = sl_p.add_subparsers(dest="source_locator_command", required=True)
 

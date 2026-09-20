@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-01C：Profile/Coverage 严格 schema 与一致性校验 |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | 开发分支 | `feature/openharmony-adaptation` |
 | Python | 3.11.15，项目 `.venv` |
 | pytest | 9.1.1 |

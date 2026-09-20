@@ -148,7 +148,7 @@ A00001/Index: Index aboutToAppear - auto testing
 
 本次安装成功只能说明当前设备接受该 debug HAP，不能把它解释为 API 兼容性或系统服务权限兼容性已经验证。
 
-## 7. 对 OpenAnt 动态阶段的影响
+## 7. 对 VulnFounder 动态阶段的影响
 
 已经验证的底座：
 

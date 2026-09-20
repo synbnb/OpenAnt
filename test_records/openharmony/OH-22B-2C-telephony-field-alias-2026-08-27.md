@@ -65,8 +65,8 @@ void SimFile::ProcessEvent(const Event &event)
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 结果：
@@ -85,9 +85,9 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：
@@ -101,9 +101,9 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/ruff check \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/ruff check \
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 git diff --check
 ```
 
@@ -114,7 +114,7 @@ git diff --check
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/telephony_core_service \
   --output debug_outputs/OH-22B-2C-telephony-field-alias-20260827-parse-c \
   --platform openharmony --language c --level all --fresh

@@ -667,8 +667,41 @@
                             <select id="dynamic_test_mode" name="dynamic_test_mode" disabled>
                               <option value="docker" data-i18n="scan.dynamicDocker">Docker 隔离执行</option>
                               <option value="claude-code" data-i18n="scan.dynamicClaude">Claude Code 交互工作台</option>
+                              <option value="openharmony-device" data-i18n="scan.dynamicOpenHarmonyDevice">OpenHarmony 真机 Agentic Loop</option>
                             </select>
                             <div class="hint" data-i18n="scan.dynamicModeHint">Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。</div>
+                            <div class="dynamic-device-fields" id="dynamic_device_fields" hidden>
+                              <label for="dynamic_device">开发板 serial</label>
+                              <input type="text" id="dynamic_device" name="dynamic_device" placeholder="例如 150100424a5444345209d945be14b900">
+                              <label for="dynamic_hdc">HDC 路径（可选）</label>
+                              <input type="text" id="dynamic_hdc" name="dynamic_hdc" placeholder="默认使用项目工具链或 PATH">
+                              <label for="dynamic_device_max_rounds">Agent 最大轮数</label>
+                              <input type="number" id="dynamic_device_max_rounds" name="dynamic_device_max_rounds" value="16" min="1" max="32">
+                              <label for="dynamic_device_max_commands">设备命令上限</label>
+                              <input type="number" id="dynamic_device_max_commands" name="dynamic_device_max_commands" value="512" min="1" max="1024">
+                              <label for="dynamic_device_timeout">单命令超时（秒）</label>
+                              <input type="number" id="dynamic_device_timeout" name="dynamic_device_timeout" value="30" min="1" max="300">
+                              <label for="dynamic_device_wall_timeout">总超时（秒）</label>
+                              <input type="number" id="dynamic_device_wall_timeout" name="dynamic_device_wall_timeout" value="1200" min="1" max="7200">
+                              <label for="dynamic_device_canary_path">安全 canary 根目录</label>
+                              <input type="text" id="dynamic_device_canary_path" name="dynamic_device_canary_path" value="/data/local/tmp/vulnfounder-canary">
+                              <label for="dynamic_device_carrier_root">受审查 HAP 载体目录（可选）</label>
+                              <input type="text" id="dynamic_device_carrier_root" name="dynamic_device_carrier_root" placeholder="例如 evaluation_dataset/.../hap_poc_suite/artifacts">
+                              <label for="dynamic_device_carrier_id">载体 finding ID（可选）</label>
+                              <input type="text" id="dynamic_device_carrier_id" name="dynamic_device_carrier_id" placeholder="例如 DP-02；为空时按候选 ID 查找">
+                              <label for="dynamic_device_carrier_bundle">载体 bundle</label>
+                              <input type="text" id="dynamic_device_carrier_bundle" name="dynamic_device_carrier_bundle" value="com.security.research.trigger">
+                              <label for="dynamic_device_carrier_ability">载体 Ability</label>
+                              <input type="text" id="dynamic_device_carrier_ability" name="dynamic_device_carrier_ability" value="EntryAbility">
+                              <label class="checkbox-inline" for="dynamic_device_allow_state_change">
+                                <input type="checkbox" id="dynamic_device_allow_state_change" name="dynamic_device_allow_state_change">
+                                允许设备状态改变（安装/启动/请求需人工授权）
+                              </label>
+                              <label class="checkbox-inline" for="dynamic_device_execute_carrier">
+                                <input type="checkbox" id="dynamic_device_execute_carrier" name="dynamic_device_execute_carrier">
+                                执行已审查 HAP 载体（必须同时允许状态改变）
+                              </label>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -831,6 +864,7 @@ const translations = {
     'scan.dynamicMode': '动态测试运行模式',
     'scan.dynamicDocker': 'Docker 隔离执行',
     'scan.dynamicClaude': 'Claude Code 交互工作台',
+    'scan.dynamicOpenHarmonyDevice': 'OpenHarmony 真机 Agentic Loop',
     'scan.dynamicModeHint': 'Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。',
     'scan.llmCallGraphRecovery': 'LLM 调用图恢复（--llm-call-graph-recovery）',
     'scan.llmCallGraphRecoveryHint': '复核没有确定候选目标的间接调用残余点。',
@@ -984,6 +1018,7 @@ const translations = {
     'scan.dynamicMode': 'Dynamic-test execution mode',
     'scan.dynamicDocker': 'Docker isolation',
     'scan.dynamicClaude': 'Claude Code interactive workbench',
+    'scan.dynamicOpenHarmonyDevice': 'OpenHarmony device Agentic Loop',
     'scan.dynamicModeHint': 'Claude Code pauses report generation at the dynamic-test stage and opens a chat plus task workspace in this page.',
     'scan.llmCallGraphRecovery': 'LLM call-graph recovery (--llm-call-graph-recovery)',
     'scan.llmCallGraphRecoveryHint': 'Review indirect-call residual sites without a deterministic candidate target.',
@@ -1033,6 +1068,7 @@ const repoIDInput = document.getElementById('repo_id');
 const repoInput = document.getElementById('repo');
 const dynamicTestCheckbox = document.getElementById('dynamic_test');
 const dynamicTestMode = document.getElementById('dynamic_test_mode');
+const dynamicDeviceFields = document.getElementById('dynamic_device_fields');
 const llmReachabilityCheckbox = document.getElementById('llm_reachability');
 const llmReachabilityMaxCodeBytes = document.getElementById('llm_reachability_max_code_bytes');
 const noEnhanceCheckbox = document.getElementById('no_enhance');
@@ -1176,8 +1212,14 @@ function syncDynamicTestMode() {
   if (!dynamicTestCheckbox || !dynamicTestMode) return;
   dynamicTestMode.disabled = !dynamicTestCheckbox.checked;
   dynamicTestMode.setAttribute('aria-disabled', String(!dynamicTestCheckbox.checked));
+  if (dynamicDeviceFields) {
+    const show = dynamicTestCheckbox.checked && dynamicTestMode.value === 'openharmony-device';
+    dynamicDeviceFields.hidden = !show;
+    dynamicDeviceFields.setAttribute('aria-hidden', String(!show));
+  }
 }
 if (dynamicTestCheckbox) dynamicTestCheckbox.addEventListener('change', syncDynamicTestMode);
+if (dynamicTestMode) dynamicTestMode.addEventListener('change', syncDynamicTestMode);
 
 function syncLLMReachability() {
   if (!llmReachabilityCheckbox || !llmReachabilityMaxCodeBytes) return;

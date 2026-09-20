@@ -2,7 +2,7 @@
 
 ## 1. 阶段目标
 
-将当前用于 OpenHarmony 分析的源码仓库从 OpenAnt 项目外的共享目录移动到项目内的 `source_code_base/`，使项目打包或交付时可以携带同一份源码库布局。
+将当前用于 OpenHarmony 分析的源码仓库从 VulnFounder 项目外的共享目录移动到项目内的 `source_code_base/`，使项目打包或交付时可以携带同一份源码库布局。
 
 本阶段只处理目录迁移和完整性验证，不修改解析器、调用图、LLM 流程或 Web 仓库发现逻辑。
 
@@ -10,13 +10,13 @@
 
 ### 修改前
 
-- OpenHarmony 仓库位于 OpenAnt 项目外：
+- OpenHarmony 仓库位于 VulnFounder 项目外：
 
   ```text
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/
   ```
 
-- OpenAnt 与这批源码在物理目录上分离，打包或复制 OpenAnt 时不会自然携带这些仓库。
+- VulnFounder 与这批源码在物理目录上分离，打包或复制 VulnFounder 时不会自然携带这些仓库。
 - 当前 Web-03B 的仓库下拉框仍主要读取 `~/.openant/projects/` 和 Web 最近扫描记录，尚未自动枚举这批源码仓库。
 
 ### 修改后
@@ -24,7 +24,7 @@
 - 22 个一级 OpenHarmony Git 仓库移动到：
 
   ```text
-  /Users/shiyu/学习/hyl/new/OpenAnt/source_code_base/
+  /Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/
   ```
 
 - 每个仓库仍保持独立的 `.git`、提交历史和 `origin` 远程地址。
@@ -68,7 +68,7 @@ window_window_manager
 目标目录：
 
 ```text
-/Users/shiyu/学习/hyl/new/OpenAnt/source_code_base
+/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base
 ```
 
 旧目录：
@@ -144,11 +144,11 @@ GIT_METADATA_OK=22 GIT_ROOTS_OK=22 ORIGINS_OK=22 OLD_ROOT_CHILDREN=0
 
 ## 6. 影响范围和未完成项
 
-- 本阶段没有修改 OpenAnt 的 Go、Python、前端或解析逻辑，因此不需要重复运行全量代码测试。
-- 已新增项目内目录说明文件，但 `source_code_base/` 下的 22 个子仓库仍由各自的 Git 管理，外层 OpenAnt 仓库不应把它们的全部源码当作普通文件纳入版本管理。
+- 本阶段没有修改 VulnFounder 的 Go、Python、前端或解析逻辑，因此不需要重复运行全量代码测试。
+- 已新增项目内目录说明文件，但 `source_code_base/` 下的 22 个子仓库仍由各自的 Git 管理，外层 VulnFounder 仓库不应把它们的全部源码当作普通文件纳入版本管理。
 - 文档和历史测试记录中可能仍出现旧的外部路径；它们是历史记录，不代表运行时已经完成路径适配。
-- 下一阶段需要改造源码根目录解析与 Web 仓库目录构建：默认读取 `OpenAnt/source_code_base/`，并保留显式配置覆盖能力。该阶段应在单独说明旧逻辑和新逻辑、获得确认后再修改。
+- 下一阶段需要改造源码根目录解析与 Web 仓库目录构建：默认读取 `VulnFounder/source_code_base/`，并保留显式配置覆盖能力。该阶段应在单独说明旧逻辑和新逻辑、获得确认后再修改。
 
 ## 7. 结论
 
-OH-00D 目录迁移完成。22 个 OpenHarmony 仓库已完整移动到 OpenAnt 项目内，Git 元数据和远程地址均保留，旧源码根目录为空，未修改分析代码。运行时自动发现项目内仓库属于下一阶段工作。
+OH-00D 目录迁移完成。22 个 OpenHarmony 仓库已完整移动到 VulnFounder 项目内，Git 元数据和远程地址均保留，旧源码根目录为空，未修改分析代码。运行时自动发现项目内仓库属于下一阶段工作。

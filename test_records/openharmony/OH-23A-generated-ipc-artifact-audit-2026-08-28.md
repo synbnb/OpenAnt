@@ -8,17 +8,17 @@
 ## 1. 核验目的
 
 确认 `IAudioPolicy::UnexcludeOutputDevices` 对应的 IPC Stub/Proxy 是否存在于当前
-扫描输入、OpenAnt 工作区或本机的 OpenHarmony 构建产物中，并确认
+扫描输入、VulnFounder 工作区或本机的 OpenHarmony 构建产物中，并确认
 `AudioPolicyStub::OnRemoteRequest` 是否能够作为已经观察到的源码符号使用。
 
 ## 2. 核验范围
 
 - OpenHarmony 参考源码：
   `/Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code`
-- OpenAnt 复制的源码：
-  `/Users/shiyu/学习/hyl/new/OpenAnt/source_code_base`
-- OpenAnt 工作区及本地构建缓存：
-  `/Users/shiyu/学习/hyl/new/OpenAnt`
+- VulnFounder 复制的源码：
+  `/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base`
+- VulnFounder 工作区及本地构建缓存：
+  `/Users/shiyu/学习/hyl/new/VulnFounder`
 - 本次扫描产物：
   `/Users/shiyu/.openant/webui/347d903282351b35`
 
@@ -67,7 +67,7 @@ void UnexcludeOutputDevices(
 
 ### 5.1 精确文件名搜索
 
-在参考源码、OpenAnt `source_code_base`、OpenAnt 工作区和相关本地缓存中搜索：
+在参考源码、VulnFounder `source_code_base`、VulnFounder 工作区和相关本地缓存中搜索：
 
 ```text
 audio_policy_stub.h
@@ -126,7 +126,7 @@ audio_policy_proxy.cpp
 
 ## 8. 阶段 0 验收
 
-- [x] 检查参考源码和 OpenAnt 复制源码；
+- [x] 检查参考源码和 VulnFounder 复制源码；
 - [x] 检查本地构建输出和生成目录；
 - [x] 检查 GN 的 IDL 生成配置；
 - [x] 对照扫描产物确认缺失边的具体表现；

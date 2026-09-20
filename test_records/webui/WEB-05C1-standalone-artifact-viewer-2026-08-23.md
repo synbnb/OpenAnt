@@ -9,7 +9,7 @@
 
 ## 修改内容
 
-- 新增 `apps/openant-cli/ui/artifact-view.html` 独立产物查看页面。
+- 新增 `apps/vulnfounder-cli/ui/artifact-view.html` 独立产物查看页面。
 - 将该页面加入 Go embed，并由服务端解析、渲染。
 - 新增 `GET /scan/{id}/artifact-view/{name}` 路由。
 - 路由复用扫描任务校验、产物白名单和禁止符号链接检查，不把大 JSON 直接嵌入 HTML。
@@ -25,7 +25,7 @@
 
 ```text
 GOCACHE=/private/tmp/openant-gocache GOPATH=/private/tmp/openant-gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 ```
 
 结果：通过。`cmd`、`internal/server`、`internal/report`、`internal/python` 等全部包通过。
@@ -41,7 +41,7 @@ GOCACHE=/private/tmp/openant-gocache GOPATH=/private/tmp/openant-gopath \
 
 ### 实际二进制验证
 
-已重新构建 `apps/openant-cli/bin/openant`，重启 `127.0.0.1:18080` Web 服务，并使用已有扫描任务 `9b7f539401760206` 的真实 `dataset.json` 验证：
+已重新构建 `apps/vulnfounder-cli/bin/openant`，重启 `127.0.0.1:18080` Web 服务，并使用已有扫描任务 `9b7f539401760206` 的真实 `dataset.json` 验证：
 
 - `/scan/9b7f539401760206/artifact-view/dataset.json?lang=zh-CN` 返回 200；
 - 返回页面包含 `data-artifact-name="dataset.json"`、`structured-view` 和 `raw-view`；

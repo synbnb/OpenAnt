@@ -1,12 +1,16 @@
 # Dynamic Tester
 
 Bridges VulnFounder's static analysis pipeline and dynamic verification. It now
-supports two explicitly selected modes:
+supports three explicitly selected modes:
 
 - `docker` — the original self-managed, Docker-isolated dynamic tester;
 - `claude-code` — a task-package mode that gives Claude Code the source tree,
   static artifacts, OpenHarmony tools and a reusable Skill. VulnFounder does not
   start Docker or Claude Code in this mode.
+- `openharmony-device` — OpenHarmony 真机 Agentic 动态验证模式。它运行 HDC
+  预检、记录设备证据、创建逐 finding 的 PoC/Exp 产物；默认只读。只有在
+  同时提供经过 SHA-256 校验的受审查 HAP 载体、`--allow-state-change` 和
+  `--execute-carrier` 时，才会进入安装/启动/触发阶段。
 
 ## Overview
 
@@ -107,6 +111,53 @@ for r in results:
     print(f"{r.finding_id}: {r.status} — {r.details}")
 ```
 
+### Standalone CLI — OpenHarmony device
+
+```bash
+PYTHONPATH=libs/vulnfounder-core python -m utilities.dynamic_tester \
+  /path/to/pipeline_output.json \
+  --mode openharmony-device \
+  --device 150100424a5444345209d945be14b900 \
+  --output /tmp/vulnfounder-openharmony-device
+```
+
+The serial is mandatory; the mode never selects an arbitrary connected board.
+The first run performs read-only `id`, SELinux, version, architecture and process
+preflight. Each candidate receives `poc/<finding>/` and `exp/<finding>/` files,
+including an executable `run_poc.py`/`run_exp.py` and a `probe_spec.json`. The
+runner executes these generated scripts against the selected board using a
+small read-only allowlist (`id`, `getenforce`, `ps -A`, `/proc/net/*` and
+validated Unix-socket metadata), and records every returned command as evidence.
+This is a carrier/readiness probe, not an exploit: it does not invent a HAP,
+signing profile, private protocol or shell payload, and a successful probe must
+never be reported as `CONFIRMED`. `device_commands.jsonl`,
+`device_evidence.json`, `task_tree.json`, `device_decisions.json` and each
+`poc/*/execution`/`exp/*/execution` directory preserve the audit trail. To
+permit an explicitly approved device-shell state-changing operation, add
+`--allow-state-change` and review the command log afterward; a reviewed carrier
+adapter must still be supplied before deployment or protocol triggering.
+
+### Reviewed HAP carrier execution
+
+载体接口按 finding 限定并且默认关闭：
+
+```bash
+PYTHONPATH=libs/vulnfounder-core python -m utilities.dynamic_tester \
+  /path/to/pipeline_output.json \
+  --mode openharmony-device \
+  --device <serial> \
+  --hdc <hdc> \
+  --carrier-root evaluation_dataset/vulnerability/result/hap_poc_suite/artifacts \
+  --carrier-id DP-02 \
+  --allow-state-change --execute-carrier
+```
+
+载体目录必须包含 `<finding-id>/manifest.txt` 和
+`entry-default-signed.hap`。执行器会核对清单 ID、回环端点、canary 路径和
+SHA-256，并记录安装、启动、日志、canary 前后状态及清理结果。只有 canary
+在执行前不存在、在成功安装/启动后出现且内容匹配清单预期值时才允许
+`CONFIRMED`；仅安装成功永远不足以确认。
+
 ### Autopilot Integration
 
 The dynamic tester runs automatically as part of the autopilot pipeline between the verify and report steps. It is budget-gated (default $5.00 per repo) and can be configured in `autopilot/config.py`.
@@ -124,6 +175,25 @@ After running, two files are written to the output directory (defaults to the sa
 |------|--------|----------|
 | `DYNAMIC_TEST_RESULTS.md` | Markdown | Human-readable report with summary table, per-finding details, evidence, and generated test code |
 | `dynamic_test_results.json` | JSON | Structured results for programmatic consumption |
+
+OpenHarmony device mode additionally writes a timestamped `ohdev_*` directory
+under the output directory. Its generated PoC/Exp scripts are executable but
+intentionally read-only; they verify endpoint/process readiness and preserve
+device facts. They do not silently turn a static finding into a confirmed
+result. A future reviewed HAP/Native/protocol adapter can be attached to the
+same task tree and evidence contract without weakening the default gate.
+
+真机载体结果还会区分 `target_reached`、`sink_reached`、`input_influence`、
+`effect_observed`、`verification_level` 和 `status_reason_code`，并在每个真机结果
+中直接提供结构化的 `observation` 字段。因此，日志证明服务路径已进入但没有证明
+危险参数受输入影响时，结果标记为 `INCONCLUSIVE`，同时保留
+`service_path_reached_input_unproven`；正常业务文件生成也不会被误写成安全影响
+确认。只有已经证明输入影响危险参数、但本轮没有出现预期安全影响时，才使用
+`NOT_REPRODUCED`。载体清单可以声明 `risk_type`、`expected_effect`、`precondition`、
+`required_service`、`required_socket_type` 和 `sink_log_tokens`，这些字段只构成
+经过校验的观测契约，不会成为模型任意执行命令的入口。连接/超时类错误只允许
+一次兼容载体重试；协议类型不匹配会切换独立的已审查载体，CLI 选项不支持则
+记录为能力缺口并停止重放。
 
 ### JSON Output Schema
 
@@ -144,7 +214,8 @@ After running, two files are written to the output directory (defaults to the sa
       "dockerfile": "...",
       "docker_compose": "",
       "elapsed_seconds": 45.2,
-      "generation_cost_usd": 0.0412
+      "generation_cost_usd": 0.0412,
+      "artifacts": {}
     }
   ]
 }

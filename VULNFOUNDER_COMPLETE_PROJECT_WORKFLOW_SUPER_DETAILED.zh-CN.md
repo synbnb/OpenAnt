@@ -1,14 +1,11 @@
-# VulnFounder 完整项目全流程说明（超级详细版）
+# VulnFounder 完整项目全流程说明
 
-> 文档定位：面向项目汇报、专家评审、研发维护、实验复现与新成员入门的统一总说明。<br>
-> 当前实现快照：2026-09-13。<br>
-> 覆盖范围：设备 Socket 资产发现、单目标暴露面识别、OpenHarmony 源码定位、仓库与服务范围确认、仓库静态扫描、调用关系补全、可达性筛选、上下文构造、Stage 1、Stage 2、动态验证、报告、Web 会话与评测闭环。<br>
+> 文档定位：面向项目汇报、专家评审、研发维护、实验复现与新成员入门的统一总说明。<br>覆盖范围：设备 Socket 资产发现、单目标暴露面识别、OpenHarmony 源码定位、仓库与服务范围确认、仓库静态扫描、调用关系补全、可达性筛选、上下文构造、Stage 1、Stage 2、动态验证、报告、Web 会话与评测闭环。<br>
 > 口径约束：本文尽量描述当前代码实际执行的逻辑；“可选”“候选”“未来闭环”均明确标注，不把设计愿景写成已证明能力。
-> 命名说明：本文使用项目正式名称 **VulnFounder**。CLI、Python 包、Go 模块、配置目录、数据目录和新文档统一使用 VulnFounder 命名；旧的 `openant` 命令、导入路径、环境变量和配置文件仍由兼容层读取。
 
 ---
 
-## 0. 如何阅读这份文档
+## 0. 文档总览
 
 VulnFounder 已经不是一个“把代码发给大模型并让它找问题”的单步骤工具，而是一套围绕证据组织的分阶段系统。不同读者可以按下面的顺序阅读：
 
@@ -54,9 +51,9 @@ VulnFounder 的目标是把一个模糊的安全分析需求逐步转化为可�
 
 ---
 
-## 2. 一张图看懂项目全流程
+## 2. 一张图：项目全流程
 
-![VulnFounder 完整项目总流程](figures/vulnfounder-complete-project-overall-flow.png)
+![VulnFounder 完整项目总流程](figures/vulnfounder-complete-project-overall-flow.svg)
 
 ```mermaid
 flowchart TB
@@ -239,7 +236,7 @@ Python 侧位于 `libs/vulnfounder-core`，负责分析语义：
 
 资产属于设备和时间快照。另一块开发板、另一个系统版本、服务启动状态变化后，都不应复用为“当前事实”。
 
-### 5.2 动态任务树，而不是固定七步脚本
+### 5.2 动态任务树
 
 资产 Agent 初始只有一个根任务：
 
@@ -282,7 +279,7 @@ Python 侧位于 `libs/vulnfounder-core`，负责分析语义：
 
 “命令不用写死”不等于“模型文字可以直接成为设备事实”。最终每个非未知字段仍应能回指真实命令输出。
 
-### 5.5 原始记录与最终资产必须区分
+### 5.5 原始记录与最终资产区分
 
 资产扫描保存两个视图：
 
@@ -391,7 +388,7 @@ Web 输出根下使用独立的 `device-socket-assets` 目录。每台设备按�
 
 ## 7. 暴露面识别与源码定位联合流程
 
-![暴露面识别与源码定位联合流程](figures/vulnfounder-exposure-location-integrated-flow.png)
+![暴露面识别与源码定位联合流程](figures/vulnfounder-exposure-location-integrated-flow.svg)
 
 ```mermaid
 flowchart TB
@@ -643,7 +640,7 @@ Web 表单把这些参数翻译为与 CLI 一致的 Python 扫描参数。参数
 
 ## 11. 仓库扫描详细总图
 
-![VulnFounder 仓库扫描详细流程](figures/vulnfounder-repository-scan-detailed-flow.png)
+![VulnFounder 仓库扫描详细流程](figures/vulnfounder-repository-scan-detailed-flow.svg)
 
 ```mermaid
 flowchart TB
@@ -820,7 +817,7 @@ Tree-sitter 适合：
 
 ## 15. 阶段 3：P0 统一调用事实与有效调用图
 
-![VulnFounder 证据与反馈闭环](figures/vulnfounder-evidence-and-feedback-loop.png)
+![VulnFounder 证据与反馈闭环](figures/vulnfounder-evidence-and-feedback-loop.svg)
 
 ```mermaid
 flowchart LR
@@ -1467,7 +1464,7 @@ Web 只允许查看白名单产物。小 JSON 可展开为对象/数组；大 da
 
 ---
 
-## 29. 这是多智能体项目吗
+## 29. 多智能体
 
 从软件形态看，它是“多个专职 Agent/模型循环 + 确定性控制平面”的多智能体式系统，但不是一群 Agent 无约束对话。主要角色：
 
@@ -1900,21 +1897,11 @@ Stage 1 的有序源码包应至少包含入口到目标的函数路径；Stage 
 | Stage 2 | 使用源码工具从攻击者视角复核和补证 |
 | disclosure | 面向维护者的单问题人类可读报告 |
 
----
-
-## 43. 相关文档
-
-- 仓库扫描的代码级极详基线：`VULNFOUNDER_REPOSITORY_SCAN_FULL_PIPELINE_DETAILED.zh-CN.md`
-- 当前较简短的流程：`VULNFOUNDER_CURRENT_PIPELINE_FLOW.zh-CN.md`
-- 智能体视角介绍：`VULNFOUNDER_AGENT_CENTRIC_PIPELINE_OVERVIEW.zh-CN.md`
-- 报告流程：`VULNFOUNDER_REPORT_PIPELINE_OVERVIEW.zh-CN.md`
-- 运行架构与边界：`ARCHITECTURE.md`
-- 图形索引：`figures/README.zh-CN.md`
-- 设备命令知识：`libs/vulnfounder-core/knowledge/openharmony_exposure_surface_command_guide.zh-CN.md`
+## 
 
 ---
 
-## 44. 最终总结
+## 43. 最终总结
 
 VulnFounder 的完整工作流可以概括为：
 

@@ -3,9 +3,9 @@
 - 执行日期：2026-08-22
 - 阶段：OH-12B（IDL/SA 元数据接入 `RepositoryProfile`）
 - 状态：通过，可进入下一阶段评审
-- 画像实现：`libs/openant-core/core/platforms/openharmony/profile.py`
-- 契约实现：`libs/openant-core/core/platforms/base.py`（OH-11B 已新增可选 `build_metadata`）
-- 测试：`libs/openant-core/tests/platforms/test_openharmony_manifest.py`
+- 画像实现：`libs/vulnfounder-core/core/platforms/openharmony/profile.py`
+- 契约实现：`libs/vulnfounder-core/core/platforms/base.py`（OH-11B 已新增可选 `build_metadata`）
+- 测试：`libs/vulnfounder-core/tests/platforms/test_openharmony_manifest.py`
 
 ## 1. 原逻辑与目标逻辑
 

@@ -54,20 +54,20 @@ OpenGrok 命中可能同时包含 init/socket 创建线索、服务端实现、�
 
 ## 3. 涉及文件
 
-- `libs/openant-core/core/source_locator/service_attributor.py`
+- `libs/vulnfounder-core/core/source_locator/service_attributor.py`
   - 新增服务端候选、源码位置、服务端结果和 server/client 汇总状态契约。
-- `libs/openant-core/core/source_locator/client_locator.py`
+- `libs/vulnfounder-core/core/source_locator/client_locator.py`
   - 新增客户端传输/协议/发送定位，以及业务 caller 动作门禁。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出两个定位器和结果类型。
-- `libs/openant-core/tests/source_locator/test_service_attributor.py`
+- `libs/vulnfounder-core/tests/source_locator/test_service_attributor.py`
   - 服务端 creator-only、fd→receive→dispatch、映射冲突和输入边界夹具。
-- `libs/openant-core/tests/source_locator/test_client_locator.py`
+- `libs/vulnfounder-core/tests/source_locator/test_client_locator.py`
   - 客户端完成、等价 endpoint、目标关系缺失、业务 caller 门禁和整体状态夹具。
 
 ## 4. 独立测试
 
-工作目录：`libs/openant-core`
+工作目录：`libs/vulnfounder-core`
 Python 环境：项目独立环境 `.venv`
 
 ### 4.1 SL-05 定向测试

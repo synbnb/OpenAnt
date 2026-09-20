@@ -26,16 +26,16 @@ OpenGrok SearchHit / SourceDocument
 
 ## 2. 实现文件
 
-- `libs/openant-core/core/source_locator/evidence_store.py`
+- `libs/vulnfounder-core/core/source_locator/evidence_store.py`
   - `Evidence`：保存路径、行号、原始/清洗片段、来源、哈希和查询 ID；
   - `EvidenceStore`：稳定去重、序列化、搜索命中/源码文档转换和反向查询；
   - `EvidenceEdge` / `EvidenceGraph`：强制图边引用已存在证据，支持边合并和反查。
-- `libs/openant-core/core/source_locator/evidence_scoring.py`
+- `libs/vulnfounder-core/core/source_locator/evidence_scoring.py`
   - 证据类型权重、分数明细和服务端强制谓词；
   - 重复 evidence ID 在聚合评分中只计算一次。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出上述公共类型和函数。
-- `libs/openant-core/tests/source_locator/test_evidence_store.py`
+- `libs/vulnfounder-core/tests/source_locator/test_evidence_store.py`
   - 专项测试和 `paramservice` 真实 OpenGrok 片段离线回放。
 
 ## 3. OpenHarmony 真实夹具回放
@@ -55,7 +55,7 @@ tests/source_locator/fixtures/opengrok/live_1_14_11/raw_param_service_excerpt.c
 ### 4.1 专项测试
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/pytest -q tests/source_locator/test_evidence_store.py
 17 passed in 0.03s
 ```

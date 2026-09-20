@@ -753,6 +753,20 @@ def scan_repository(
     enhance_mode: str = "agentic",
     dynamic_test: bool = False,
     dynamic_test_mode: str = "docker",
+    dynamic_device_serial: str | None = None,
+    dynamic_device_hdc_path: str | None = None,
+    dynamic_device_max_rounds: int = 16,
+    dynamic_device_max_commands: int = 512,
+    dynamic_device_max_wall_seconds: int = 20 * 60,
+    dynamic_device_command_timeout_seconds: int = 30,
+    dynamic_device_allow_state_change: bool = False,
+    dynamic_device_canary_path: str = "/data/local/tmp/vulnfounder-canary",
+    dynamic_device_carrier_root: str | None = None,
+    dynamic_device_carrier_id: str | None = None,
+    dynamic_device_carrier_bundle: str = "com.security.research.trigger",
+    dynamic_device_carrier_ability: str = "EntryAbility",
+    dynamic_device_execute_carrier: bool = False,
+    dynamic_device_service_observation_delay_seconds: float = 0.8,
     workers: int = 8,
     backoff_seconds: int = 30,
     repo_name: str | None = None,
@@ -822,8 +836,12 @@ def scan_repository(
         enhance: If True, run agentic/single-shot context enhancement.
         enhance_mode: ``"agentic"`` (thorough) or ``"single-shot"`` (fast).
         dynamic_test: If True, run dynamic testing or prepare a Claude Code task.
-        dynamic_test_mode: ``"docker"`` (default) or ``"claude-code"``. Claude
-            Code mode prepares a task workspace and does not require Docker.
+        dynamic_test_mode: ``"docker"`` (default), ``"claude-code"`` or
+            ``"openharmony-device"``. The latter uses an explicit HDC device
+            and writes auditable PoC/Exp evidence artifacts.
+        dynamic_device_serial: Explicit HDC serial for ``openharmony-device``.
+        dynamic_device_allow_state_change: Whether the device Agent may execute
+            state-changing commands. Defaults to read-only.
         llm_call_graph_recovery: If True, review OpenHarmony residual indirect
             call sites with the advisory LLM executor.  The resulting artifact
             is never projected into the persisted call graph in this stage.
@@ -936,11 +954,13 @@ def scan_repository(
         f"库模式={library_mode}。"
     )
 
-    if dynamic_test_mode not in {"docker", "claude-code"}:
+    if dynamic_test_mode not in {"docker", "claude-code", "openharmony-device"}:
         raise ValueError(
             f"Unsupported dynamic test mode: {dynamic_test_mode!r}; "
-            "choose docker or claude-code"
+            "choose docker, claude-code, or openharmony-device"
         )
+    if dynamic_test_mode == "openharmony-device" and not dynamic_device_serial:
+        raise ValueError("openharmony-device requires dynamic_device_serial")
 
     # Reset tracking
     tracking.reset_tracking()
@@ -3315,10 +3335,17 @@ def scan_repository(
                     "动态验证决策：使用 Claude Code 模式，只准备任务工作目录、工具库、"
                     "候选清单和前置产物，等待用户在 Web 对话窗口中驱动验证。"
                 )
-            else:
+            elif dynamic_test_mode == "docker":
                 print(_step_label("Running dynamic tests (Docker)..."), file=sys.stderr)
                 _print_chinese_log(
                     "动态验证决策：使用 Docker 隔离执行候选载荷；容器网络和权限边界由动态测试器负责。"
+                )
+            else:
+                print(_step_label("Running OpenHarmony device dynamic verification..."), file=sys.stderr)
+                _print_chinese_log(
+                    f"动态验证决策：使用 OpenHarmony 真机 Agentic Loop，设备={dynamic_device_serial}；"
+                    "先采集只读基线，再按任务树执行有界设备动作。设备状态改变默认关闭，"
+                    "只有显式授权后才会进入受控动作。"
                 )
 
             with step_context("dynamic-test", output_dir, inputs={
@@ -3335,6 +3362,20 @@ def scan_repository(
                         registry=registry,
                         repo_path=repo_path,
                         mode=dynamic_test_mode,
+                        device_serial=dynamic_device_serial,
+                        device_hdc_path=dynamic_device_hdc_path,
+                        dynamic_device_max_rounds=dynamic_device_max_rounds,
+                        dynamic_device_max_commands=dynamic_device_max_commands,
+                        dynamic_device_max_wall_seconds=dynamic_device_max_wall_seconds,
+                        dynamic_device_command_timeout_seconds=dynamic_device_command_timeout_seconds,
+                        dynamic_device_allow_state_change=dynamic_device_allow_state_change,
+                        dynamic_device_canary_path=dynamic_device_canary_path,
+                        dynamic_device_carrier_root=dynamic_device_carrier_root,
+                        dynamic_device_carrier_id=dynamic_device_carrier_id,
+                        dynamic_device_carrier_bundle=dynamic_device_carrier_bundle,
+                        dynamic_device_carrier_ability=dynamic_device_carrier_ability,
+                        dynamic_device_execute_carrier=dynamic_device_execute_carrier,
+                        dynamic_device_service_observation_delay_seconds=dynamic_device_service_observation_delay_seconds,
                     )
 
                     ctx.summary = {

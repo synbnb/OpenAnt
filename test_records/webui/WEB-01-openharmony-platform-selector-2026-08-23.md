@@ -28,13 +28,13 @@ Web 表单只提交语言、Stage 2、动态测试和 library mode。Go 服务�
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 增加平台白名单和输入校验；
   - 保存/恢复 Job 平台字段；
   - 将显式平台转换为 Python CLI 参数。
-- `apps/openant-cli/ui/index.html`
+- `apps/vulnfounder-cli/ui/index.html`
   - 增加 `auto`、`generic`、`openharmony` 选择框。
-- `apps/openant-cli/internal/server/platform_test.go`
+- `apps/vulnfounder-cli/internal/server/platform_test.go`
   - 增加平台规范化、参数生成和非法请求测试。
 
 ## 4. 测试环境
@@ -43,8 +43,8 @@ Web 表单只提交语言、Stage 2、动态测试和 library mode。Go 服务�
 |---|---|
 | 系统 | macOS arm64 |
 | Go | go1.25.7 |
-| 工具链 | `OpenAnt/.devtools/go1.25.7/go` |
-| 模块 | `apps/openant-cli` |
+| 工具链 | `VulnFounder/.devtools/go1.25.7/go` |
+| 模块 | `apps/vulnfounder-cli` |
 
 ## 5. 测试命令与结果
 
@@ -72,7 +72,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 最终结果：
 
 ```text
-ok github.com/knostic/open-ant-cli/internal/server 1.588s
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server 1.588s
 ```
 
 ### 5.2 Go CLI 全量回归
@@ -90,17 +90,17 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：全部通过。
 
 ```text
-ok github.com/knostic/open-ant-cli/cmd
-ok github.com/knostic/open-ant-cli/internal/checkpoint
-ok github.com/knostic/open-ant-cli/internal/config
-ok github.com/knostic/open-ant-cli/internal/git
-ok github.com/knostic/open-ant-cli/internal/languages
-ok github.com/knostic/open-ant-cli/internal/models
-ok github.com/knostic/open-ant-cli/internal/output
-ok github.com/knostic/open-ant-cli/internal/python
-ok github.com/knostic/open-ant-cli/internal/report
-ok github.com/knostic/open-ant-cli/internal/server
-ok github.com/knostic/open-ant-cli/ui [no test files]
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/ui [no test files]
 ```
 
 ### 5.3 CLI 构建验证
@@ -111,7 +111,7 @@ GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
 GOCACHE="$PWD/../../.devtools/gocache" \
 ../../.devtools/go1.25.7/go/bin/go build \
-  -ldflags "-X github.com/knostic/open-ant-cli/cmd.version=dev-platform-ui" \
+  -ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=dev-platform-ui" \
   -o bin/openant ./main.go
 ./bin/openant version
 ```

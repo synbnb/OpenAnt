@@ -3,7 +3,7 @@
 - 日期：2026-08-30
 - 阶段：漏洞分析提示词最小改造（Stage 1）
 - 状态：通过，可进入模型回归验证
-- 变更范围：仅 `libs/openant-core/prompts/vulnerability_analysis.py`；新增提示词契约测试
+- 变更范围：仅 `libs/vulnfounder-core/prompts/vulnerability_analysis.py`；新增提示词契约测试
 - 未修改：Stage 2、决策引擎、结果 schema 解析逻辑、Web 和动态测试
 
 ## 1. 改造目标

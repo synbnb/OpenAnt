@@ -31,12 +31,12 @@
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 增加仓库目录构建、opaque ID、目录接口和 `repo_id` 解析；
   - 保留手动 `repo` 输入兼容逻辑。
-- `apps/openant-cli/internal/server/repository_test.go`
+- `apps/vulnfounder-cli/internal/server/repository_test.go`
   - 覆盖项目/最近扫描目录、凭据 URL 过滤、opaque ID、非法 ID 和 ID 优先解析。
-- `apps/openant-cli/ui/index.html`
+- `apps/vulnfounder-cli/ui/index.html`
   - 增加保存仓库下拉框、隐藏 `repo_id` 字段和前端同步逻辑。
 
 ## 4. 测试环境
@@ -46,7 +46,7 @@
 | 系统 | macOS arm64 |
 | Go | 项目内 `.devtools/go1.25.7` |
 | Node.js | 系统 Node.js |
-| 模块 | `apps/openant-cli` |
+| 模块 | `apps/vulnfounder-cli` |
 | Web 配置 | `/private/tmp/openant-live-llm` |
 
 ## 5. 测试命令与结果
@@ -64,7 +64,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。
 
 ```text
-ok  github.com/knostic/open-ant-cli/internal/server  1.582s
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server  1.582s
 ```
 
 覆盖内容：
@@ -79,8 +79,8 @@ ok  github.com/knostic/open-ant-cli/internal/server  1.582s
 ### 5.2 Web UI JavaScript 和静态契约检查
 
 ```bash
-python3 -c 'from pathlib import Path; import re; s=Path("apps/openant-cli/ui/index.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
-python3 -c 'from pathlib import Path; s=Path("apps/openant-cli/ui/index.html").read_text(); checks={"repo_select": "id=\"repo-choice\"" in s, "opaque_field": "name=\"repo_id\"" in s, "sync_logic": "syncRepositoryChoice" in s, "custom_fallback": "Custom URL or local path" in s}; assert all(checks.values()), checks; print("WEB_03B_UI_STATIC_OK", " ".join(f"{k}={int(v)}" for k,v in checks.items()))'
+python3 -c 'from pathlib import Path; import re; s=Path("apps/vulnfounder-cli/ui/index.html").read_text(); print(re.search(r"<script>(.*?)</script>", s, re.S).group(1))' | node --check
+python3 -c 'from pathlib import Path; s=Path("apps/vulnfounder-cli/ui/index.html").read_text(); checks={"repo_select": "id=\"repo-choice\"" in s, "opaque_field": "name=\"repo_id\"" in s, "sync_logic": "syncRepositoryChoice" in s, "custom_fallback": "Custom URL or local path" in s}; assert all(checks.values()), checks; print("WEB_03B_UI_STATIC_OK", " ".join(f"{k}={int(v)}" for k,v in checks.items()))'
 ```
 
 结果：通过。
@@ -102,16 +102,16 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。
 
 ```text
-ok  github.com/knostic/open-ant-cli/cmd
-ok  github.com/knostic/open-ant-cli/internal/checkpoint
-ok  github.com/knostic/open-ant-cli/internal/config
-ok  github.com/knostic/open-ant-cli/internal/git
-ok  github.com/knostic/open-ant-cli/internal/languages
-ok  github.com/knostic/open-ant-cli/internal/models
-ok  github.com/knostic/open-ant-cli/internal/output
-ok  github.com/knostic/open-ant-cli/internal/python
-ok  github.com/knostic/open-ant-cli/internal/report
-ok  github.com/knostic/open-ant-cli/internal/server
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 ```
 
 ### 5.4 二进制构建和真实页面检查
@@ -122,7 +122,7 @@ GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
 GOCACHE="$PWD/../../.devtools/gocache" \
 ../../.devtools/go1.25.7/go/bin/go build \
-  -ldflags "-X github.com/knostic/open-ant-cli/cmd.version=web-03b" \
+  -ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=web-03b" \
   -o bin/openant ./main.go
 ./bin/openant version
 ```
@@ -173,7 +173,7 @@ git diff --check
 
 ## 6. 目录范围说明
 
-本阶段下拉框读取的是 OpenAnt 项目注册目录和 Web 扫描历史，不会自动递归扫描：
+本阶段下拉框读取的是 VulnFounder 项目注册目录和 Web 扫描历史，不会自动递归扫描：
 
 ```text
 /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code

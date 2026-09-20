@@ -36,9 +36,9 @@ Sec-Fetch-Site: same-origin
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 在 `sameOriginOK` 中增加受限的 opaque-origin 兼容分支。
-- `apps/openant-cli/internal/server/auth_test.go`
+- `apps/vulnfounder-cli/internal/server/auth_test.go`
   - 增加 `null + same-origin` 放行、`null + cross-site` 拒绝和缺少 Fetch Metadata 拒绝测试。
 
 ## 4. 测试结果
@@ -56,7 +56,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。
 
 ```text
-ok github.com/knostic/open-ant-cli/internal/server 1.652s
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server 1.652s
 ```
 
 ### 4.2 全量 Go 回归
@@ -64,19 +64,19 @@ ok github.com/knostic/open-ant-cli/internal/server 1.652s
 结果：通过。
 
 ```text
-?  github.com/knostic/open-ant-cli                 [no test files]
-ok github.com/knostic/open-ant-cli/cmd
-ok github.com/knostic/open-ant-cli/internal/checkpoint
-ok github.com/knostic/open-ant-cli/internal/config
-ok github.com/knostic/open-ant-cli/internal/git
-ok github.com/knostic/open-ant-cli/internal/languages
-ok github.com/knostic/open-ant-cli/internal/models
-ok github.com/knostic/open-ant-cli/internal/output
-ok github.com/knostic/open-ant-cli/internal/python
-ok github.com/knostic/open-ant-cli/internal/report
-ok github.com/knostic/open-ant-cli/internal/server
-?  github.com/knostic/open-ant-cli/internal/types [no test files]
-?  github.com/knostic/open-ant-cli/ui             [no test files]
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli                 [no test files]
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types [no test files]
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/ui             [no test files]
 ```
 
 ### 4.3 真实 Web 请求头验证

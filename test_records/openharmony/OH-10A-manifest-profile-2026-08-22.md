@@ -20,9 +20,9 @@
 
 ## 修改文件
 
-- [manifest.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/platforms/openharmony/manifest.py)：安全发现、解析和归一化 `bundle.json`。
-- [profile.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/platforms/openharmony/profile.py)：仓库证据扫描、置信度计算和 profile 构建。
-- [test_openharmony_manifest.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/platforms/test_openharmony_manifest.py)：清单字段、畸形 JSON、嵌套 group_type、自动识别和五仓检查。
+- [manifest.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/manifest.py)：安全发现、解析和归一化 `bundle.json`。
+- [profile.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/profile.py)：仓库证据扫描、置信度计算和 profile 构建。
+- [test_openharmony_manifest.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_manifest.py)：清单字段、畸形 JSON、嵌套 group_type、自动识别和五仓检查。
 
 ## TDD 结果
 
@@ -55,7 +55,7 @@
 - `platform=openharmony`，置信度 `1.0`。
 - 证据包含 `bundle_manifest`、`gn_target`、`namespace_ohos`。
 - 组件为 `openant_ipc_fixture`，subsystem 为 `security`。
-- 解析出 syscap `SystemCapability.Security.OpenAntFixture`、`standard` 系统类型、1 个构建 target 和 `access_token`/`ipc` 依赖。
+- 解析出 syscap `SystemCapability.Security.VulnFounderFixture`、`standard` 系统类型、1 个构建 target 和 `access_token`/`ipc` 依赖。
 - 仅有 `namespace OHOS` 的临时仓库置信度为 `0.25`，profile 返回 `None`，但 signals 中仍保留相对路径 `service.cpp`。
 - malformed JSON 和非 object JSON 均进入相对路径 `parse_failures`，不会阻断其他 manifest，也不会将绝对用户路径写入结果。
 

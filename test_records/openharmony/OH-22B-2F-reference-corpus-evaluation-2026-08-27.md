@@ -8,7 +8,7 @@
 
 ## 1. 评估范围和原逻辑
 
-本次评估使用当前工作树中的 OpenAnt 解析器，对参考目录下的 9 个仓库分别执行
+本次评估使用当前工作树中的 VulnFounder 解析器，对参考目录下的 9 个仓库分别执行
 `all` 和 `reachable` 两种解析。每个仓库都单独保存 `dataset.json`、
 `call_graph.json`、`call_graph_residuals.json`、`semantic_graph.json`（如果非空）、
 `parse.report.json` 和控制台日志。
@@ -29,7 +29,7 @@
 ### All 模式
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2F-all-20260827/<repo> \
   --platform openharmony --language c --level all --fresh
@@ -38,7 +38,7 @@ PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
 ### Reachable 模式
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/<repo> \
   --output debug_outputs/OH-22B-2F-reachable-20260827/<repo> \
   --platform openharmony --language c --level reachable --fresh

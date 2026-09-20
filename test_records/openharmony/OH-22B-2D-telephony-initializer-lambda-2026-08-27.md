@@ -70,8 +70,8 @@ const std::map<int, Handler> NetworkSearchHandler::memberFuncMap_ = {
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 本阶段新增并验证：
@@ -89,10 +89,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  libs/openant-core/tests/parsers/c
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`212 passed, 2 skipped`。
@@ -102,10 +102,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/ruff check \
-  libs/openant-core/parsers/c/function_extractor.py \
-  libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/ruff check \
+  libs/vulnfounder-core/parsers/c/function_extractor.py \
+  libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 结果：`All checks passed`。
@@ -115,7 +115,7 @@ PYTHONPATH=libs/openant-core .venv/bin/ruff check \
 为避免大模型费用，只执行解析阶段：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/telephony_core_service \
   --output debug_outputs/OH-22B-2D-telephony-initializer-lambda-20260827-parse-c \
   --platform openharmony --language c --level all --fresh

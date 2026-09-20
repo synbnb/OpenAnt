@@ -19,8 +19,8 @@
 
 ## 修改文件
 
-- [core/scanner.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/scanner.py)：自动 profile 检测、有效平台选择、profile 产物和 scan report 记录。
-- [test_scanner_platform_profile.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/test_scanner_platform_profile.py)：自动识别、低置信度回退、异常回退、显式 generic 隔离和真实 C parser 链路测试。
+- [core/scanner.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/scanner.py)：自动 profile 检测、有效平台选择、profile 产物和 scan report 记录。
+- [test_scanner_platform_profile.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/test_scanner_platform_profile.py)：自动识别、低置信度回退、异常回退、显式 generic 隔离和真实 C parser 链路测试。
 
 ## TDD 结果
 

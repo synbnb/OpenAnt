@@ -28,7 +28,7 @@ Stage 2 的 `exploit_path` 没有统一进入披露数据。
 
 ## 2. 自动化测试
 
-执行目录：`libs/openant-core`
+执行目录：`libs/vulnfounder-core`
 
 ```text
 pytest -q tests/report/test_report_context.py \

@@ -44,9 +44,9 @@ SemanticGraph 边，也不会进入 Unit 的语义上下文或 reachable 过滤�
 ### 定向回归测试
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_native_dispatch.py \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_native_dispatch.py \
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py
 ```
 
 结果：`18 passed in 0.04s`。
@@ -63,10 +63,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 ### 相关回归测试集
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  libs/openant-core/tests/parsers/c
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`214 passed, 2 skipped in 1.02s`。
@@ -83,7 +83,7 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 命令：
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   openharmony_reference/openharmony_source_code/telephony_core_service \
   --output debug_outputs/OH-22B-2E-telephony-semantic-lambda-20260827-parse-c \
   --platform openharmony --language c --level all --fresh
@@ -171,7 +171,7 @@ units_enhanced              = 4661
 命令：
 
 ```text
-PYTHONPATH=libs/openant-core .venv/bin/python -m openant.cli parse \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python -m openant.cli parse \
   openharmony_reference/openharmony_source_code/telephony_core_service \
   --output debug_outputs/OH-22B-2E-telephony-semantic-lambda-20260827-reachable \
   --platform openharmony --language c --level reachable --fresh

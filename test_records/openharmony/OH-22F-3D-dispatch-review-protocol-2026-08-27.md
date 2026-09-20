@@ -4,8 +4,8 @@
 
 本阶段新增一个独立的 OpenHarmony LLM selector/value 复核模块：
 
-- `libs/openant-core/core/platforms/openharmony/llm_dispatch_review.py`
-- `libs/openant-core/tests/openharmony/test_llm_dispatch_review.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/llm_dispatch_review.py`
+- `libs/vulnfounder-core/tests/openharmony/test_llm_dispatch_review.py`
 
 本阶段只建立上下文、协议、校验和重试边界，不接入 scanner，不修改 `call_graph.json`、`openharmony_dispatch_code_evidence.json`、reachable 或 dataset，也没有调用真实大模型 API。
 
@@ -29,7 +29,7 @@
 先添加测试，再运行：
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/openharmony/test_llm_dispatch_review.py
+.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_dispatch_review.py
 ```
 
 结果：测试收集失败，`ModuleNotFoundError: core.platforms.openharmony.llm_dispatch_review`。这确认测试确实约束了待实现模块。
@@ -56,7 +56,7 @@
 ## 4. OpenHarmony 定向回归
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/openharmony
+.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony
 145 passed, 2 skipped in 2.31s
 ```
 

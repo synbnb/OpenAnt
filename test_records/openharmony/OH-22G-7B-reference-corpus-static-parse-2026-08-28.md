@@ -6,7 +6,7 @@
 
 ## 执行范围
 
-本阶段只运行 OpenAnt 的 OpenHarmony C/C++ parser 和静态 reachable 过滤：
+本阶段只运行 VulnFounder 的 OpenHarmony C/C++ parser 和静态 reachable 过滤：
 
 - `language=c`（tree-sitter C/C++ 解析器）；
 - `platform=openharmony`；

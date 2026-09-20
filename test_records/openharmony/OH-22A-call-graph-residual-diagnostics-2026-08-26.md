@@ -48,10 +48,10 @@ call_graph_residuals.json
 
 ## 3. 修改文件
 
-- `libs/openant-core/core/platforms/openharmony/call_graph_diagnostics.py`
-- `libs/openant-core/parsers/c/test_pipeline.py`
-- `libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py`
-- `libs/openant-core/tests/openharmony/test_c_pipeline_platform.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/call_graph_diagnostics.py`
+- `libs/vulnfounder-core/parsers/c/test_pipeline.py`
+- `libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py`
+- `libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py`
 - `ADR-001-OPENHARMONY-LLM-CALL-GRAPH-RECOVERY.zh-CN.md`
 
 ## 4. TDD 记录
@@ -62,8 +62,8 @@ call_graph_residuals.json
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_call_graph_diagnostics.py \
-  libs/openant-core/tests/openharmony/test_c_pipeline_platform.py
+  libs/vulnfounder-core/tests/openharmony/test_call_graph_diagnostics.py \
+  libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py
 ```
 
 实现前结果：
@@ -94,7 +94,7 @@ No module named 'core.platforms.openharmony.call_graph_diagnostics'
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_c_pipeline_platform.py
+  libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py
 ```
 
 结果：
@@ -131,7 +131,7 @@ FileNotFoundError: call_graph_residuals.json
 执行命令：
 
 ```text
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22A/sensors_medical_sensor \
   --platform openharmony \
@@ -227,7 +227,7 @@ ab33181bdb13d9e2bd0ee4961dc8315f6ba618bc
 执行命令：
 
 ```text
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/systemabilitymgr_samgr \
   --output debug_outputs/OH-22A/systemabilitymgr_samgr \
   --platform openharmony \

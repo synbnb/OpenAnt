@@ -14,7 +14,7 @@
 
 - `tests/source_locator`：**249 passed**。
 - `PlannerBudget(max_actions=20, max_model_calls=21)` 实例化及 worker 默认/越界截断检查：**通过**。
-- `apps/openant-cli`：`go test ./...` **全部通过**。
+- `apps/vulnfounder-cli`：`go test ./...` **全部通过**。
 - `source-locator.html` 内嵌脚本：`node --check` **通过**。
 - Web 重建并重启后，页面可访问 `http://127.0.0.1:18080/source-locator`，提示显示“最多 20 轮”。
 

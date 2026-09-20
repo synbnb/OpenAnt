@@ -8,7 +8,7 @@
 
 ## 修改内容
 
-- 在 `apps/openant-cli/ui/artifact-view.html` 增加实际 OpenHarmony 产物字段的中文、英文名称和专用说明，覆盖：
+- 在 `apps/vulnfounder-cli/ui/artifact-view.html` 增加实际 OpenHarmony 产物字段的中文、英文名称和专用说明，覆盖：
   - 文件范围与解析统计；
   - bundle.json、GN、IDL、SA、Binder IPC、HDF 平台信息；
   - 调用图节点属性和图统计；
@@ -21,7 +21,7 @@
 
 ## 验证
 
-执行目录：`/Users/shiyu/学习/hyl/new/OpenAnt/apps/openant-cli`
+执行目录：`/Users/shiyu/学习/hyl/new/VulnFounder/apps/vulnfounder-cli`
 
 ```text
 node --check <(awk 'BEGIN{p=0} /<script>/{p=1;next} /<\/script>/{p=0} p' ui/artifact-view.html)

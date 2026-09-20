@@ -25,11 +25,11 @@ IDL interface/method → Binder transaction → OnRemoteRequest/dispatch → nat
 
 ## 2. 修改文件
 
-- `libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
   - 新增 `OpenHarmonyIPCResolver`/`IPCGraphResolver`；
   - 支持 dataclass 或字典形式的 IDL 结果、普通函数映射和完整 extractor 输出；
   - 支持直接 `OnRemoteRequest` dispatch 与 transaction table 初始化两类证据。
-- `libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py`
   - 增加正例、transaction table、同名误报、注释/字符串、orphan、重载方法和序列化测试。
 
 本阶段没有修改 generic 平台、C/C++ parser、入口检测器或 reachability 主流程。

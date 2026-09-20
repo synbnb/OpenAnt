@@ -30,9 +30,9 @@
 ## 执行命令
 
 ```text
-python -m pytest OpenAnt/libs/openant-core/tests/source_locator/test_worker.py -q
-python -m pytest OpenAnt/libs/openant-core/tests/source_locator -q
-ruff check OpenAnt/libs/openant-core/core/source_locator/worker.py OpenAnt/libs/openant-core/tests/source_locator/test_worker.py
+python -m pytest VulnFounder/libs/vulnfounder-core/tests/source_locator/test_worker.py -q
+python -m pytest VulnFounder/libs/vulnfounder-core/tests/source_locator -q
+ruff check VulnFounder/libs/vulnfounder-core/core/source_locator/worker.py VulnFounder/libs/vulnfounder-core/tests/source_locator/test_worker.py
 ```
 
 ## 结果

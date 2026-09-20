@@ -52,11 +52,11 @@ You are analyzing a JavaScript/TypeScript function ...
 
 ## 3. 修改文件
 
-- `libs/openant-core/utilities/context_enhancer.py`
+- `libs/vulnfounder-core/utilities/context_enhancer.py`
   - 增加可选 `language`、`platform_context` 参数；
   - single-shot unit 到 Prompt 的字段传递；
   - OpenHarmony 语言标签、code fence 和共享上下文区块。
-- `libs/openant-core/tests/openharmony/test_single_shot_enhancer_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_single_shot_enhancer_platform_context.py`
   - 新增 Prompt 构造、generic 隔离、malformed 回退和 ContextEnhancer 转发测试；
   - LLM 调用全部使用 monkeypatch，不访问网络。
 

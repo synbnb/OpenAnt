@@ -41,8 +41,8 @@ tests/openharmony/test_unit_semantic_context.py::test_numeric_ipccode_proxy_path
 旧代码执行数字匹配测试：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
   -k 'ipccode_literal'
 ```
 
@@ -51,8 +51,8 @@ OpenAnt/.venv/bin/python -m pytest -q \
 旧代码执行 Unit 上下文测试：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py \
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py \
   -k 'numeric_ipccode_proxy_path'
 ```
 
@@ -60,7 +60,7 @@ OpenAnt/.venv/bin/python -m pytest -q \
 
 ## 3. 实现内容
 
-文件：`libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+文件：`libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
 
 ### 3.1 直接数字识别
 
@@ -99,9 +99,9 @@ OpenAnt/.venv/bin/python -m pytest -q \
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py
 ```
 
 结果：
@@ -115,10 +115,10 @@ OpenAnt/.venv/bin/python -m pytest -q \
 语法检查：
 
 ```text
-OpenAnt/.venv/bin/python -m py_compile \
-  OpenAnt/libs/openant-core/core/platforms/openharmony/ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py
+VulnFounder/.venv/bin/python -m py_compile \
+  VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py
 ```
 
 结果：通过。
@@ -128,11 +128,11 @@ OpenAnt/.venv/bin/python -m py_compile \
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_*.py \
-  OpenAnt/libs/openant-core/tests/test_c_pipeline.py \
-  OpenAnt/libs/openant-core/tests/report/test_build_pipeline_output_return_contract.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_*.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_c_pipeline.py \
+  VulnFounder/libs/vulnfounder-core/tests/report/test_build_pipeline_output_return_contract.py
 ```
 
 结果：`108 passed, 6 skipped in 0.61s`。

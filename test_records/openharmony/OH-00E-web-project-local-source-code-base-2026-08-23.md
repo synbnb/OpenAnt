@@ -2,7 +2,7 @@
 
 ## 1. 阶段目标
 
-让 OpenAnt Web 直接发现项目内的 `source_code_base/`，从而在用户启动 Web 后可以从下拉框选择随项目保存的 OpenHarmony 仓库，不再依赖外部 `openharmony_reference` 目录或用户手工输入绝对路径。
+让 VulnFounder Web 直接发现项目内的 `source_code_base/`，从而在用户启动 Web 后可以从下拉框选择随项目保存的 OpenHarmony 仓库，不再依赖外部 `openharmony_reference` 目录或用户手工输入绝对路径。
 
 本阶段一次性完成 Web 侧所需的源码根目录解析、仓库目录枚举、opaque ID 解析、兼容逻辑、页面提示和测试。扫描器、Python 解析器、调用图、LLM 流程和动态测试没有修改。
 
@@ -11,7 +11,7 @@
 ### 修改前
 
 - Web `/repositories` 只读取 `~/.openant/projects/` 的项目登记和当前 Web 进程的最近扫描记录。
-- 项目内的 `OpenAnt/source_code_base/` 不会自动出现在下拉框中。
+- 项目内的 `VulnFounder/source_code_base/` 不会自动出现在下拉框中。
 - Web 只能依靠手工输入路径或 URL，项目打包后还需要额外告诉使用者源码在哪里。
 
 ### 修改后
@@ -27,15 +27,15 @@
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/config/source_code_base.go`
+- `apps/vulnfounder-cli/internal/config/source_code_base.go`
   - 新增可移植的 `source_code_base` 路径解析。
-- `apps/openant-cli/internal/config/source_code_base_test.go`
+- `apps/vulnfounder-cli/internal/config/source_code_base_test.go`
   - 覆盖显式环境变量、无效覆盖路径和工作目录祖先发现。
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 将项目内一级 Git 仓库加入 Web 目录，并过滤符号链接和非 Git 目录。
-- `apps/openant-cli/internal/server/repository_test.go`
+- `apps/vulnfounder-cli/internal/server/repository_test.go`
   - 增加项目内仓库目录、普通目录、子目录符号链接和 `.git` 符号链接测试。
-- `apps/openant-cli/ui/index.html`
+- `apps/vulnfounder-cli/ui/index.html`
   - 更新仓库选择提示，说明项目内源码仓库来源；保留原有 opaque ID 和手动输入逻辑。
 - `source_code_base/README.md`
   - 更新 Web 使用约定。
@@ -55,8 +55,8 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 结果：通过。
 
 ```text
-ok  github.com/knostic/open-ant-cli/internal/config  1.300s
-ok  github.com/knostic/open-ant-cli/internal/server  1.793s
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config  1.300s
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server  1.793s
 ```
 
 覆盖内容：
@@ -81,19 +81,19 @@ WEB_03C_UI_STATIC_OK project_source_hint=1 repository_select=1 opaque_field=1 sy
 在当前沙箱内首次运行时，`cmd` 包的既有 `httptest.NewServer` 测试因 IPv6 回环监听权限被环境拒绝；没有出现代码断言失败。随后在允许本机回环监听的环境中重跑，结果全部通过：
 
 ```text
-?  github.com/knostic/open-ant-cli  [no test files]
-ok github.com/knostic/open-ant-cli/cmd
-ok github.com/knostic/open-ant-cli/internal/checkpoint
-ok github.com/knostic/open-ant-cli/internal/config
-ok github.com/knostic/open-ant-cli/internal/git
-ok github.com/knostic/open-ant-cli/internal/languages
-ok github.com/knostic/open-ant-cli/internal/models
-ok github.com/knostic/open-ant-cli/internal/output
-ok github.com/knostic/open-ant-cli/internal/python
-ok github.com/knostic/open-ant-cli/internal/report
-ok github.com/knostic/open-ant-cli/internal/server
-?  github.com/knostic/open-ant-cli/internal/types [no test files]
-?  github.com/knostic/open-ant-cli/ui [no test files]
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli  [no test files]
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report
+ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types [no test files]
+?  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/ui [no test files]
 ```
 
 ### 4.4 二进制构建
@@ -104,7 +104,7 @@ GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
 GOCACHE="$PWD/../../.devtools/gocache" \
 ../../.devtools/go1.25.7/go/bin/go build \
-  -ldflags "-X github.com/knostic/open-ant-cli/cmd.version=web-03c" \
+  -ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=web-03c" \
   -o bin/openant ./main.go
 ./bin/openant version
 ```
@@ -131,10 +131,10 @@ REAL_WEB_INDEX_OK selector=1 opaque_field=1 source_option=1 project_local_hint=1
 
 ## 5. 当前 Web 状态
 
-当前运行的二进制版本为 `web-03c`，本地地址由系统动态分配。启动目录位于 OpenAnt 项目根目录，因此自动发现：
+当前运行的二进制版本为 `web-03c`，本地地址由系统动态分配。启动目录位于 VulnFounder 项目根目录，因此自动发现：
 
 ```text
-OpenAnt/source_code_base/
+VulnFounder/source_code_base/
 ```
 
 也可以通过 `OPENANT_SOURCE_CODE_BASE=/path/to/source_code_base` 指定另一个项目源码根目录。
@@ -142,10 +142,10 @@ OpenAnt/source_code_base/
 ## 6. 范围边界
 
 - 本阶段没有增加浏览器上传压缩包功能；现有项目内源码库选择和手动 URL/路径输入已经可以工作。若后续需要上传，需要单独设计压缩包解压、路径穿越、符号链接、磁盘配额和仓库生命周期策略。
-- 本阶段没有把 22 个子仓库合并为外层 OpenAnt Git 仓库；每个子仓库仍保持独立 `.git` 和 `origin`。
+- 本阶段没有把 22 个子仓库合并为外层 VulnFounder Git 仓库；每个子仓库仍保持独立 `.git` 和 `origin`。
 - `~/.openant/projects/` 仍保存项目元数据和扫描输出，不会被 `source_code_base/` 替代。
 
 ## 7. 结论
 
-OH-00E / WEB-03C 完成。Web 已能在可迁移的 OpenAnt 项目目录中发现并选择 22 个 OpenHarmony 仓库，opaque ID、路径过滤、旧目录兼容和真实页面验证均通过。
+OH-00E / WEB-03C 完成。Web 已能在可迁移的 VulnFounder 项目目录中发现并选择 22 个 OpenHarmony 仓库，opaque ID、路径过滤、旧目录兼容和真实页面验证均通过。
 

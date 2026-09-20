@@ -21,8 +21,8 @@
 - 受控参数：`max_shortlist=12`、`max_code_bytes=1200`、`max_tokens=6000`、
   `max_retries=1`；候选残余纳入审核；原始 `call_graph.json` 只读。
 
-实验使用的执行逻辑等价于：在 `PYTHONPATH=libs/openant-core`、
-`OPENANT_PROJECT_ROOT=/Users/shiyu/学习/hyl/new/OpenAnt` 环境下加载输入 JSON，
+实验使用的执行逻辑等价于：在 `PYTHONPATH=libs/vulnfounder-core`、
+`OPENANT_PROJECT_ROOT=/Users/shiyu/学习/hyl/new/VulnFounder` 环境下加载输入 JSON，
 调用 `run_recovery_review`，再调用 `project_recovery_overlay`；随后调用
 `run_iterative_recovery_review`（最多 4 轮、每轮最多 10 个点、最多 4 次模型请求）。
 
@@ -109,5 +109,5 @@
   `call_graph.json` 的 SHA-256 与运行元数据一致；4 条 overlay 边的 caller/target
   均存在于函数索引。
 - 回归命令：
-  ` .venv/bin/python -m pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py libs/openant-core/tests/openharmony/test_llm_call_graph_rounds.py libs/openant-core/tests/test_scanner_llm_recovery_integration.py`
+  ` .venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_rounds.py libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py`
 - 回归结果：`33 passed in 0.61s`。

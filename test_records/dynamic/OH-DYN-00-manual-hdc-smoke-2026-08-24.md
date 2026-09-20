@@ -112,10 +112,10 @@ Socket 清单中观察到 `AppSpawn`、`CJAppSpawn`、`HybridSpawn`、`NWebSpawn
 
 ## 6. 无害工件往返测试
 
-为验证 HDC 文件传输闭环，使用 OpenAnt 自带的 477 字节 fixture：
+为验证 HDC 文件传输闭环，使用 VulnFounder 自带的 477 字节 fixture：
 
 ```text
-本地文件：libs/openant-core/tests/fixtures/openharmony/ipc_service/bundle.json
+本地文件：libs/vulnfounder-core/tests/fixtures/openharmony/ipc_service/bundle.json
 本地 SHA-256：79bf4005fb7696914eb98f0f2cd3f6bac52bbb39455f2cd0a8bd0fd05a4de2e6
 远端目录：/data/local/tmp/openant-manual-20260824_131756/
 ```
@@ -197,12 +197,12 @@ python3 parse_results.py \
 | 日志解析是否可直接定案 | FAIL（存在历史日志误报） |
 | HAP/Native 漏洞触发 | NOT RUN |
 
-本次实践证明，动态验证的最小设备交互底座已经可以手动跑通；尚未证明 OpenAnt 的动态测试代码已经实现，也尚未证明任何漏洞存在。
+本次实践证明，动态验证的最小设备交互底座已经可以手动跑通；尚未证明 VulnFounder 的动态测试代码已经实现，也尚未证明任何漏洞存在。
 
 ## 10. 对后续实现的直接影响
 
 1. HDC client 必须在宿主机执行，并强制绑定设备序列号；
-2. OpenAnt 的首次动态阶段应先实现 preflight、baseline、artifact round trip 和 cleanup；
+2. VulnFounder 的首次动态阶段应先实现 preflight、baseline、artifact round trip 和 cleanup；
 3. 默认不能调用 `hilog -r`，应使用时间窗口和 run marker；
 4. `ss` 不可用时要有设备能力探测和降级路径；
 5. 日志结论必须关联 PID、时间窗口和目标候选；

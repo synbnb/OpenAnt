@@ -14,7 +14,7 @@ max_bytes=10_000)`，且默认拒绝超限文件。`multimedia_audio_framework/R
 Warning: Could not read README.md: README.md is too large (... > 10000); refusing to read
 ```
 
-该限制来自 OpenAnt 的仓库安全读取层，不是模型 API 的输入限制。它保护内存和请求预算，但
+该限制来自 VulnFounder 的仓库安全读取层，不是模型 API 的输入限制。它保护内存和请求预算，但
 会把仍然有价值的 README 整份排除。
 
 ## 2. 修改后的逻辑

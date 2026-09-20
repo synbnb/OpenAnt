@@ -26,7 +26,7 @@ OpenAPI 文件：`/Users/shiyu/学习/hyl/new/openapi.yaml`。
 | OpenGrok 版本 | 页面标记为 `1.14.11`，构建标识为 `512e738c6819518f2a95b9f49a3ea8550efff948` | 不是假设的旧版接口，需按 1.14 行为适配 |
 | 默认项目 | 页面 Cookie/下拉框显示 `openharmony` | 工具仍应显式传 `projects=openharmony`，不能依赖 Cookie |
 | 上下文路径 | 页面使用 `/source` | REST 完整前缀是 `/source/api/v1`，不是主机根下的 `/api/v1` |
-| 浏览器跨域头 | 搜索和 raw 响应均未看到 `Access-Control-Allow-Origin` | 由 OpenAnt 后端代理，不能让浏览器直接调用该实例 |
+| 浏览器跨域头 | 搜索和 raw 响应均未看到 `Access-Control-Allow-Origin` | 由 VulnFounder 后端代理，不能让浏览器直接调用该实例 |
 
 ## 3. REST API 端点矩阵
 
@@ -105,7 +105,7 @@ GET /source/api/v1/search?def=InitParamService&projects=openharmony&type=c&maxre
 
 另外，REST 搜索参数使用 `def`，而 suggester 请求体参数使用 `defs`/`refs`。适配器不能把两个接口的字段名混用。`suggest` 的 `caret` 必须不大于对应输入文本长度；输入长度错误时实例返回 HTTP 500，而不是友好的 4xx。
 
-## 6. 对 OpenAnt 工具的建议
+## 6. 对 VulnFounder 工具的建议
 
 ### 6.1 第一优先级（MVP 必须有）
 
@@ -136,6 +136,6 @@ OpenAPI 中的配置修改、项目增删、索引标记、suggester 重建、�
 
 ## 8. 结论
 
-本实例可以稳定调用 OpenGrok 的健康检查、索引时间和搜索 REST API；源码/目录/项目 REST API 在无 token 时被保护，但网页 `/raw` 和 `/xref` 可用。因此 OpenAnt 可以实现源码定位 MVP，但应采用“REST 搜索 + `/raw` 纯文本回退 + 可选 Bearer 的 `/file/content`”的后端适配，而不是只依赖 `/file/content` 或让浏览器直接跨域请求。
+本实例可以稳定调用 OpenGrok 的健康检查、索引时间和搜索 REST API；源码/目录/项目 REST API 在无 token 时被保护，但网页 `/raw` 和 `/xref` 可用。因此 VulnFounder 可以实现源码定位 MVP，但应采用“REST 搜索 + `/raw` 纯文本回退 + 可选 Bearer 的 `/file/content`”的后端适配，而不是只依赖 `/file/content` 或让浏览器直接跨域请求。
 
-本轮没有修改 OpenAnt 业务代码；下一步可在确认后实现上述只读适配器和自动化回归测试。
+本轮没有修改 VulnFounder 业务代码；下一步可在确认后实现上述只读适配器和自动化回归测试。

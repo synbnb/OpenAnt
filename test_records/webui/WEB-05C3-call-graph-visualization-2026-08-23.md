@@ -31,7 +31,7 @@
 
 ```text
 GOCACHE=/private/tmp/openant-gocache GOPATH=/private/tmp/openant-gopath \
-  /Users/shiyu/学习/hyl/new/OpenAnt/.devtools/go1.25.7/go/bin/go test ./...
+  /Users/shiyu/学习/hyl/new/VulnFounder/.devtools/go1.25.7/go/bin/go test ./...
 ```
 
 结果：通过。所有 Go 包通过，包含 Web 模板、产物路由、白名单和 C3 SVG 行为标记测试。

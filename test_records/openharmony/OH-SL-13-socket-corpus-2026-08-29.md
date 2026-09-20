@@ -1,9 +1,9 @@
 # OH-SL-13：socket.txt 真实源码 corpus 回归记录
 
 日期：2026-08-29  
-执行目录：`OpenAnt`  
+执行目录：`VulnFounder`  
 目标清单：`/Users/shiyu/学习/hyl/new/socket.txt`（实际读取 22 项）  
-源码根目录：`OpenAnt/source_code_base`
+源码根目录：`VulnFounder/source_code_base`
 
 ## 1. 实际执行方法
 
@@ -132,7 +132,7 @@ All checks passed
 声称 `go test` 已通过。部署前需在带 Go 1.25+ 的环境补跑：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 go test ./internal/python ./internal/server
 ```
 

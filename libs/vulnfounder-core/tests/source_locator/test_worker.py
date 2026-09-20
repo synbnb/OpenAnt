@@ -597,6 +597,86 @@ def test_socket_entrypoint_predicate_accepts_epoll_protocol_callback() -> None:
     assert _function_source_is_socket_entrypoint("ProcCommand", source)
 
 
+def test_socket_entrypoint_predicate_accepts_connection_protocol_callback() -> None:
+    """通用 socket server 的 on_connection 回调也是服务端入口。"""
+
+    from core.source_locator.worker import _function_source_is_socket_entrypoint
+
+    source = """static void socket_server_on_connection_cb(pa_socket_server *server,
+    pa_iochannel *io, void *userdata)
+{
+    pa_native_protocol_connect(native_protocol, io, options);
+}
+"""
+    assert _function_source_is_socket_entrypoint(
+        "socket_server_on_connection_cb", source
+    )
+
+
+def test_socket_entrypoint_artifact_recovers_connection_callback_from_registration_file() -> None:
+    """注册 socket 与 on_connection 回调在同一源码文件时应自动连起来。"""
+
+    source = """static void socket_server_on_connection_cb(void *server, void *io)
+{
+    pa_native_protocol_connect(native_protocol, io, options);
+}
+void StartNative(void)
+{
+    server = pa_socket_server_new_unix(loop, socket_path);
+    pa_socket_server_set_callback(server, socket_server_on_connection_cb, data);
+}
+"""
+    document = SourceDocument(
+        path="/openharmony/third_party/pulseaudio/src/modules/module-protocol-stub.c",
+        content=source,
+        source="fixture",
+    )
+    store = EvidenceStore()
+    registration = store.add_source_excerpt(
+        document, line_start=7, kind="socket_server_registration"
+    )
+    server = ServerAttributionResult(
+        status="HIGH",
+        confirmed=True,
+        score=90,
+        predicates={
+            "socket_identity": True,
+            "socket_acquire_or_bind": True,
+            "server_consumer": True,
+            "manifest_mapping": True,
+        },
+        candidates=(
+            AttributionCandidate(
+                role="service_owner",
+                subject="native",
+                source_locations=(SourceLocation(document.path, 7, 7),),
+                evidence_ids=(registration.evidence_id,),
+                score=30,
+            ),
+        ),
+        evidence_ids=(registration.evidence_id,),
+    )
+    fake_client = type(
+        "FakeOpenGrok",
+        (),
+        {"read_source": lambda self, path, max_bytes=None: document},
+    )()
+
+    payload = _build_socket_entrypoint_sources(
+        normalize_target("/dev/unix/socket/native"),
+        store,
+        server,
+        fake_client,
+        max_source_bytes=4096,
+    )
+
+    assert payload["status"] == "complete"
+    assert [item["function"] for item in payload["entries"]] == [
+        "socket_server_on_connection_cb"
+    ]
+    assert payload["entries"][0]["entry_scope"] == "protocol_dispatch"
+
+
 def test_compact_attribution_payload_keeps_server_roles() -> None:
     """Role-balanced compaction must retain consumers behind noisy creators."""
 

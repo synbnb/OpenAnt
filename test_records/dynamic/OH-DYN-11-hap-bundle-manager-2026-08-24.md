@@ -48,10 +48,10 @@ EntryAbility 加载页面
 
 ### 3.1 构建环境
 
-* Hvigor：OpenAnt 内置 Command Line Tools 6.1.0.860；
+* Hvigor：VulnFounder 内置 Command Line Tools 6.1.0.860；
 * SDK：`.../sdk`，产品的 compile/target/compatible API 均为 23；
 * 构建在 ASCII 临时目录 `/private/tmp/openant-hap-bundle-probe.IqT8dc` 中进行，避免工具链处理中文路径时产生额外变量；
-* `local.properties` 显式指向 OpenAnt 内置 SDK 和 Node，不依赖机器全局 SDK。
+* `local.properties` 显式指向 VulnFounder 内置 SDK 和 Node，不依赖机器全局 SDK。
 
 ### 3.2 构建结果
 
@@ -72,7 +72,7 @@ ENOENT: no such file or directory, stat
 
 ### 3.3 手动签名和完整性校验
 
-开发版对应的 OpenHarmony Release 授权材料来自先前已经验证的临时签名目录；私钥材料没有复制进 OpenAnt 产物，也没有把密码写入本记录。签名参数为 `localSign`、`SHA256withECDSA`、compatibleVersion `23`、signCode `0`。
+开发版对应的 OpenHarmony Release 授权材料来自先前已经验证的临时签名目录；私钥材料没有复制进 VulnFounder 产物，也没有把密码写入本记录。签名参数为 `localSign`、`SHA256withECDSA`、compatibleVersion `23`、signCode `0`。
 
 产物目录：
 

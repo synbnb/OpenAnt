@@ -9,7 +9,7 @@
 
 新增合成夹具：
 
-`libs/openant-core/tests/fixtures/openharmony/scope_roles/`
+`libs/vulnfounder-core/tests/fixtures/openharmony/scope_roles/`
 
 夹具覆盖以下角色：
 
@@ -22,7 +22,7 @@
 
 角色与文件清单记录在夹具内的 `scope_manifest.json`，扫描结果基线记录在：
 
-`libs/openant-core/tests/fixtures/openharmony/c_scope_baseline.json`
+`libs/vulnfounder-core/tests/fixtures/openharmony/c_scope_baseline.json`
 
 ## RED 阶段
 

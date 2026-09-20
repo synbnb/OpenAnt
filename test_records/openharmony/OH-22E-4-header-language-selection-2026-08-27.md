@@ -44,7 +44,7 @@ grammar 时，只产生错误的外层/部分函数单元。
 文件：
 
 ```text
-libs/openant-core/tests/parsers/c/test_header_language_detection.py
+libs/vulnfounder-core/tests/parsers/c/test_header_language_detection.py
 ```
 
 覆盖：
@@ -63,9 +63,9 @@ TDD 记录：
 执行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/parsers/c \
-  libs/openant-core/tests/openharmony
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/parsers/c \
+  libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -91,13 +91,13 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 输出：
 
 ```text
-/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-4-netmanager-20260827
+/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-4-netmanager-20260827
 ```
 
 执行 parser/reachability（无 LLM、无设备）：
 
 ```bash
-.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/communication_netmanager_base \
   --output debug_outputs/OH-22E-4-netmanager-20260827 \
   --processing-level reachable --platform openharmony --skip-tests
@@ -136,13 +136,13 @@ missing: 0
 仓库：
 
 ```text
-/Users/shiyu/学习/hyl/new/OpenAnt/source_code_base/sensors_medical_sensor
+/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/sensors_medical_sensor
 ```
 
 输出：
 
 ```text
-/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-4-sensors-20260827
+/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-4-sensors-20260827
 ```
 
 关键结果：

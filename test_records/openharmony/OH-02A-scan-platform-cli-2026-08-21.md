@@ -6,7 +6,7 @@
 |---|---|
 | 阶段 | OH-02A：Go/Python `scan --platform` 参数契约与转发 |
 | 日期 | 2026-08-21 |
-| OpenAnt 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
+| VulnFounder 实施基线 | `2476527b9d6f929a5c987bd3d5df414da04f1eaf` |
 | Python | 3.11.15，项目 `.venv` |
 | Go | 项目 `.devtools/go1.25.7/go` |
 
@@ -25,12 +25,12 @@
 ## 变更文件
 
 ```text
-apps/openant-cli/cmd/scan.go
-apps/openant-cli/cmd/scan_platform_test.go
-libs/openant-core/openant/cli.py
-libs/openant-core/core/scanner.py
-libs/openant-core/core/schemas.py
-libs/openant-core/tests/test_cli_platform_flags.py
+apps/vulnfounder-cli/cmd/scan.go
+apps/vulnfounder-cli/cmd/scan_platform_test.go
+libs/vulnfounder-core/openant/cli.py
+libs/vulnfounder-core/core/scanner.py
+libs/vulnfounder-core/core/schemas.py
+libs/vulnfounder-core/tests/test_cli_platform_flags.py
 ```
 
 关键兼容性措施：Python `cmd_scan` 使用 `getattr(args, "platform", "auto")`，因此既有直接构造 `argparse.Namespace` 的内部调用不因新字段而失败。
@@ -96,7 +96,7 @@ GOPATH=/private/tmp/openant-go \
 ../../.devtools/go1.25.7/go/bin/go test ./cmd -v
 ```
 
-结果：`ok github.com/knostic/open-ant-cli/cmd 0.547s`。
+结果：`ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd 0.547s`。
 
 Go 的已有 `httptest` 需要本地回环监听；沙箱默认禁止该操作，因此最终 Go 回归在用户批准的受控环境执行，未访问外部服务。初次模块下载仅使用 `go.mod` 声明依赖，缓存位于 `/private/tmp`。
 

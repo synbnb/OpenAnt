@@ -22,11 +22,11 @@
 
 ## 2. 代码变更
 
-- `libs/openant-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
   - 新增 `_SA_LIFECYCLE_CONTEXT_RE`；
   - `OnStart`/`OnStop` 使用 `_has_sa_lifecycle_context`；
   - 保持其他 OpenHarmony 入口类别行为不变。
-- `libs/openant-core/tests/platforms/test_openharmony_entry_points.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py`
   - 新增普通视频组件 `VideoProcessingNativeBase::OnStart/OnStop` 不应命中的回归测试；
   - 新增 `JsWindowExtension::OnStart` 不应命中的回归测试。
 

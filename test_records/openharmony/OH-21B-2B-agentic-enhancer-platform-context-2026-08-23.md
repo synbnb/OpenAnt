@@ -37,15 +37,15 @@ enhance_unit_with_agent()
 
 ## 3. 修改文件
 
-- `libs/openant-core/utilities/agentic_enhancer/prompts.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/prompts.py`
   - 增加可选 `language`、`platform_context` 参数；
   - 复用 `PlatformPromptContext` 的字段白名单、单行折叠、列表/总长度限制；
   - 为 OpenHarmony 首轮 Prompt 添加上下文区段和语言围栏；
   - generic 分支保留裸围栏和原有 Prompt 形状。
-- `libs/openant-core/utilities/agentic_enhancer/agent.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/agent.py`
   - 在 `ContextAgent.analyze_unit()` 中转发新参数；
   - 在 `enhance_unit_with_agent()` 中读取 snake_case/camelCase 平台上下文。
-- `libs/openant-core/tests/openharmony/test_agentic_prompt_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_agentic_prompt_platform_context.py`
   - 新增 Prompt、参数转发、fake adapter 和上下文边界测试。
 
 ## 4. TDD 与阶段测试记录

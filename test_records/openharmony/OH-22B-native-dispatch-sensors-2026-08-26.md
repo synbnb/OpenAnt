@@ -32,14 +32,14 @@ return (this->*memberFunc)(data, reply);
 未启用 LLM、CodeQL 或动态测试，执行两次离线 C/C++ 流程：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python \
-  libs/openant-core/parsers/c/test_pipeline.py \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python \
+  libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22B-native-dispatch-sensors-20260826-rerun \
   --platform openharmony --processing-level all --skip-tests
 
-PYTHONPATH=libs/openant-core .venv/bin/python \
-  libs/openant-core/parsers/c/test_pipeline.py \
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python \
+  libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/sensors_medical_sensor \
   --output debug_outputs/OH-22B-native-dispatch-sensors-20260826-reachable \
   --platform openharmony --processing-level reachable --skip-tests

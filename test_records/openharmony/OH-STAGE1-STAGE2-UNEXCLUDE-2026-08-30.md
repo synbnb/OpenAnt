@@ -25,17 +25,17 @@
 
 为节省费用、隔离变量，测试夹具只保留一个单元，但目标函数代码来自真实修复前仓库快照，没有手工预置漏洞结论：
 
-- [单函数 dataset.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/input/dataset.json)
-- [修复前对照函数索引](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/input/analyzer_output_pre_fix.json)
-- [真实源码复核断言](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/source_verification.json)
-- [本次 Stage 1 实际 system/user prompt 快照](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/prompt_snapshot.txt)
+- [单函数 dataset.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/input/dataset.json)
+- [修复前对照函数索引](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/input/analyzer_output_pre_fix.json)
+- [真实源码复核断言](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/source_verification.json)
+- [本次 Stage 1 实际 system/user prompt 快照](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/prompt_snapshot.txt)
 
 Stage 1 只读取目标函数；Stage 2 通过 `search_definitions`、`read_function`、`search_usages` 等现有工具从真实索引中追踪下游调用，不把 Stage 1 的结论改写后再送入验证。
 
 ## 4. Stage 1 结果
 
-- 结果文件：[stage1/results.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/results.json)
-- 日志：[stage1/run.log](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/run.log)
+- 结果文件：[stage1/results.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/results.json)
+- 日志：[stage1/run.log](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage1/run.log)
 - 单元数：1
 - 结论：`INCONCLUSIVE`
 - 模型调用：1 次
@@ -54,9 +54,9 @@ Stage 1 只读取目标函数；Stage 2 通过 `search_definitions`、`read_func
 
 ## 5. Stage 2 结果（官方修复前下游快照，主结果）
 
-- 结果文件：[stage2_pre_fix/results_verified.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/results_verified.json)
-- 日志：[stage2_pre_fix/run.log](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/run.log)
-- 检查点：[stage2_pre_fix/verify_checkpoints](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/verify_checkpoints)
+- 结果文件：[stage2_pre_fix/results_verified.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/results_verified.json)
+- 日志：[stage2_pre_fix/run.log](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/run.log)
+- 检查点：[stage2_pre_fix/verify_checkpoints](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2_pre_fix/verify_checkpoints)
 - 输入候选：1 个，其中 Stage 1 `INCONCLUSIVE` 1 个
 - 最终结论：`VULNERABLE`
 - 结论变化：`INCONCLUSIVE → VULNERABLE`
@@ -89,7 +89,7 @@ Stage 1 只读取目标函数；Stage 2 通过 `search_definitions`、`read_func
 
 为检查模型是否依赖错误上下文，另外用原始完整索引（下游包含修复后的首元素检查）重跑了一次 Stage 2：
 
-- [对照结果](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2/results_verified.json)
+- [对照结果](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/stage2/results_verified.json)
 - 结论同样为 `VULNERABLE`，但主要依据变为未校验枚举/位掩码；模型同时明确空 vector / null 首元素在当前下游已被拦截。
 - Token：57,556；成本：¥0.056272；耗时：88.3 秒；错误 0。
 
@@ -97,7 +97,7 @@ Stage 1 只读取目标函数；Stage 2 通过 `search_definitions`、`read_func
 
 ## 7. 本地源码逐条复核
 
-[source_verification.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/source_verification.json) 中的断言全部通过：
+[source_verification.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-STAGE1-STAGE2-UNEXCLUDE-20260830/source_verification.json) 中的断言全部通过：
 
 - 修复前 `AudioPolicyServer::UnexcludeOutputDevices` 没有 `newAudioDeviceDescriptors` 的空容器/首元素检查；
 - `ffe49823d3` 在目标函数授权检查之后增加了该检查；
@@ -128,14 +128,14 @@ core.verifier.run_verification(..., workers=1, include_inconclusive=True)
 本次没有修改业务代码；为确认现有 Stage 2 与 OpenHarmony 相关回归仍正常，额外执行：
 
 ```text
-pytest -q libs/openant-core/tests/openharmony/test_current_behavior_baseline.py \
-  libs/openant-core/tests/openharmony/test_disclosure_platform_context.py \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py
+pytest -q libs/vulnfounder-core/tests/openharmony/test_current_behavior_baseline.py \
+  libs/vulnfounder-core/tests/openharmony/test_disclosure_platform_context.py \
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py
 结果：16 passed, 1 skipped
 
-pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_recovery.py \
-  libs/openant-core/tests/openharmony/test_llm_recovery_execution.py \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py
+pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_recovery.py \
+  libs/vulnfounder-core/tests/openharmony/test_llm_recovery_execution.py \
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py
 结果：23 passed
 ```
 

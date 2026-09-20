@@ -10,7 +10,7 @@ Claude Code 使用 Ink 绘制终端界面。PTY 会持续输出边框、输入�
 
 ## 修复
 
-修改 `apps/openant-cli/ui/scan.html`：
+修改 `apps/vulnfounder-cli/ui/scan.html`：
 
 - 先把当前 PTY 输出合并并经过终端装饰过滤。
 - 只有过滤后存在可见正文时才创建或更新 Claude 消息块。
@@ -20,16 +20,16 @@ Claude Code 使用 Ink 绘制终端界面。PTY 会持续输出边框、输入�
 
 ## 验证
 
-执行目录：`apps/openant-cli`
+执行目录：`apps/vulnfounder-cli`
 
 ```text
 go test ./...
-ok   github.com/knostic/open-ant-cli/internal/server
+ok   github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server
 其余 Go 包全部通过
 ```
 
 ```text
-sed -n '/<script>/,/<\\/script>/p' apps/openant-cli/ui/scan.html | sed '1d;$d' | node --check
+sed -n '/<script>/,/<\\/script>/p' apps/vulnfounder-cli/ui/scan.html | sed '1d;$d' | node --check
 无输出，页面脚本语法通过
 ```
 
@@ -40,5 +40,5 @@ sed -n '/<script>/,/<\\/script>/p' apps/openant-cli/ui/scan.html | sed '1d;$d' |
 真实中文回复“你好，已读取候选清单。”仍然保留
 ```
 
-已重新构建 `apps/openant-cli/bin/openant`。当前 127.0.0.1:18080 进程仍在运行，为避免终止正在进行的 Claude 会话没有自动重启；结束当前会话后重启 Web 并强制刷新浏览器即可加载修复。
+已重新构建 `apps/vulnfounder-cli/bin/openant`。当前 127.0.0.1:18080 进程仍在运行，为避免终止正在进行的 Claude 会话没有自动重启；结束当前会话后重启 Web 并强制刷新浏览器即可加载修复。
 

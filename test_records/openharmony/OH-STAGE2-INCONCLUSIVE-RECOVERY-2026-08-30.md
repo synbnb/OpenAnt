@@ -28,15 +28,15 @@
 执行命令：
 
 ```bash
-PYTHONPATH=libs/openant-core pytest -q \
-  libs/openant-core/tests/test_stage2_inconclusive_recovery.py \
-  libs/openant-core/tests/test_generalized_vulnerability_prompt.py \
-  libs/openant-core/tests/report/test_poisoned_results_substrate.py \
-  libs/openant-core/tests/test_pr69_round5_unverified.py \
-  libs/openant-core/tests/test_e2e_model_propagation.py \
-  libs/openant-core/tests/openharmony/test_stage2_platform_context.py \
-  libs/openant-core/tests/test_scanner.py \
-  libs/openant-core/tests/test_reporter_status_fidelity.py
+PYTHONPATH=libs/vulnfounder-core pytest -q \
+  libs/vulnfounder-core/tests/test_stage2_inconclusive_recovery.py \
+  libs/vulnfounder-core/tests/test_generalized_vulnerability_prompt.py \
+  libs/vulnfounder-core/tests/report/test_poisoned_results_substrate.py \
+  libs/vulnfounder-core/tests/test_pr69_round5_unverified.py \
+  libs/vulnfounder-core/tests/test_e2e_model_propagation.py \
+  libs/vulnfounder-core/tests/openharmony/test_stage2_platform_context.py \
+  libs/vulnfounder-core/tests/test_scanner.py \
+  libs/vulnfounder-core/tests/test_reporter_status_fidelity.py
 ```
 
 结果：`75 passed in 0.53s`。
@@ -54,7 +54,7 @@ PYTHONPATH=libs/openant-core pytest -q \
 
 ## 完整测试集状态
 
-执行 `PYTHONPATH=libs/openant-core pytest -q libs/openant-core/tests` 时，测试在收集阶段
+执行 `PYTHONPATH=libs/vulnfounder-core pytest -q libs/vulnfounder-core/tests` 时，测试在收集阶段
 因本机环境缺少已有项目依赖而中止，主要包括：
 
 - `tree_sitter_c`、`tree_sitter_php`、`tree_sitter_rust`、`tree_sitter_zig`；

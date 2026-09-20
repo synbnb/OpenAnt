@@ -30,13 +30,13 @@
 
 ## 3. 修改文件
 
-- `libs/openant-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
-- `libs/openant-core/utilities/agentic_enhancer/entry_point_detector.py`
-- `libs/openant-core/utilities/agentic_enhancer/__init__.py`
-- `libs/openant-core/parsers/c/test_pipeline.py`
-- `libs/openant-core/core/parser_adapter.py`
-- `libs/openant-core/core/scanner.py`
-- `libs/openant-core/tests/platforms/test_openharmony_entry_points.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/entry_point_detector.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/__init__.py`
+- `libs/vulnfounder-core/parsers/c/test_pipeline.py`
+- `libs/vulnfounder-core/core/parser_adapter.py`
+- `libs/vulnfounder-core/core/scanner.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py`
 
 ## 4. TDD 定向测试
 
@@ -68,7 +68,7 @@ ModuleNotFoundError: No module named 'utilities.agentic_enhancer.openharmony_ent
 
 ## 5. 回归测试
 
-以下命令均在 `libs/openant-core` 下执行：
+以下命令均在 `libs/vulnfounder-core` 下执行：
 
 | 测试组 | 结果 |
 |---|---:|

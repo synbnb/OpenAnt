@@ -27,7 +27,7 @@
 运行命令：
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+.venv/bin/pytest -q libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：`12 passed`。
@@ -44,7 +44,7 @@
 运行命令：
 
 ```text
-.venv/bin/pytest -q libs/openant-core/tests/openharmony/test_llm_call_graph_projection.py
+.venv/bin/pytest -q libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_projection.py
 ```
 
 结果：`4 passed`（与投影纯函数边界相关的单元测试）。
@@ -53,10 +53,10 @@
 
 ```text
 .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/test_scanner.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py \
-  libs/openant-core/tests/test_schemas_multilang.py
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/test_scanner.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py \
+  libs/vulnfounder-core/tests/test_schemas_multilang.py
 ```
 
 结果：`185 passed, 2 skipped`。
@@ -94,7 +94,7 @@ edge kind: llm_confirmed_indirect_call
 
 ## 全量测试说明
 
-曾启动 `libs/openant-core/tests` 全量测试，但该集合包含已有的本地
+曾启动 `libs/vulnfounder-core/tests` 全量测试，但该集合包含已有的本地
 LLM/HTTP 集成测试；运行早期即建立多条 localhost 连接并长时间无输出，无法在本阶段作为稳定的离线回归依据，已停止该进程。它不影响上面的定向结果；本阶段没有把中途的集成测试状态宣称为通过。
 
 ## 结论

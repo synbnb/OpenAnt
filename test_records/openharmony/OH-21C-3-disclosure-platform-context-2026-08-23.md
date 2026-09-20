@@ -84,19 +84,19 @@ LLM 输出之后确定性插入，避免披露文档生成伪造源码。
 
 ## 4. 修改文件
 
-- `libs/openant-core/report/generator.py`
+- `libs/vulnfounder-core/report/generator.py`
   - 报告上下文 helper 改为可供 summary 和 disclosure 共用；
   - `generate_disclosure()` 增加可选 `pipeline_data`；
   - disclosure Prompt 填充平台上下文和攻击者模型。
-- `libs/openant-core/report/prompts/disclosure.txt`
+- `libs/vulnfounder-core/report/prompts/disclosure.txt`
   - 增加 `{platform_context}` 和 `{attacker_model}`。
-- `libs/openant-core/core/reporter.py`
+- `libs/vulnfounder-core/core/reporter.py`
   - 并行披露生成传入 pipeline provenance。
-- `libs/openant-core/report/__main__.py`
+- `libs/vulnfounder-core/report/__main__.py`
   - standalone disclosures 命令传入 pipeline provenance。
-- `libs/openant-core/tests/openharmony/test_disclosure_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_disclosure_platform_context.py`
   - 新增 OpenHarmony、generic 和 Prompt 注入测试。
-- `libs/openant-core/tests/test_llm_builtins.py`
+- `libs/vulnfounder-core/tests/test_llm_builtins.py`
   - 更新 binding 转发 fake，使其接受新增的可选上下文参数。
 
 ## 5. 测试记录

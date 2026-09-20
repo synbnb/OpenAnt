@@ -3,10 +3,10 @@
 - 执行日期：2026-08-22
 - 阶段：OH-11B（GN 静态结果接入 `RepositoryProfile`）
 - 状态：通过，可进入下一阶段评审
-- 解析器：`libs/openant-core/core/platforms/openharmony/gn.py`
-- 画像：`libs/openant-core/core/platforms/openharmony/profile.py`
-- 公共契约：`libs/openant-core/core/platforms/base.py`
-- 测试：`libs/openant-core/tests/platforms/test_openharmony_manifest.py`、`test_base.py`
+- 解析器：`libs/vulnfounder-core/core/platforms/openharmony/gn.py`
+- 画像：`libs/vulnfounder-core/core/platforms/openharmony/profile.py`
+- 公共契约：`libs/vulnfounder-core/core/platforms/base.py`
+- 测试：`libs/vulnfounder-core/tests/platforms/test_openharmony_manifest.py`、`test_base.py`
 
 ## 1. 原逻辑与目标逻辑
 

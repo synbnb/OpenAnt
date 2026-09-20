@@ -1,12 +1,12 @@
 # OH-22A P0：OpenHarmony native socket 入口种子测试记录
 
 - 日期：2026-08-26
-- 项目：OpenAnt
+- 项目：VulnFounder
 - 平台：OpenHarmony
 - 阶段：P0 native socket 边界入口识别
 - 状态：完成
-- 新增实现：`libs/openant-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
-- 新增测试：`libs/openant-core/tests/platforms/test_openharmony_entry_points.py`
+- 新增实现：`libs/vulnfounder-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
+- 新增测试：`libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py`
 - 新产物：`debug_outputs/OH-22A-socket-corpus-p0/`
 
 ## 1. 原逻辑与本阶段修改
@@ -39,7 +39,7 @@ OpenHarmony 平台入口检测器识别 Binder `OnRemoteRequest`、System Abilit
 
 ```bash
 .venv/bin/python -m pytest \
-  libs/openant-core/tests/platforms/test_openharmony_entry_points.py -q
+  libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py -q
 ```
 
 结果：**20 passed in 0.08s**。
@@ -56,9 +56,9 @@ OpenHarmony 平台入口检测器识别 Binder `OnRemoteRequest`、System Abilit
 
 ```bash
 .venv/bin/python -m pytest \
-  libs/openant-core/tests/openharmony \
-  libs/openant-core/tests/test_entry_point_detector.py \
-  libs/openant-core/tests/test_entry_point_detector_native_seeds.py -q
+  libs/vulnfounder-core/tests/openharmony \
+  libs/vulnfounder-core/tests/test_entry_point_detector.py \
+  libs/vulnfounder-core/tests/test_entry_point_detector_native_seeds.py -q
 ```
 
 结果：**95 passed, 2 skipped in 0.60s**。
@@ -68,7 +68,7 @@ OpenHarmony 平台入口检测器识别 Binder `OnRemoteRequest`、System Abilit
 对以下 9 个仓库使用相同命令复跑，输出写入新的 P0 目录：
 
 ```bash
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   <repository> \
   --output debug_outputs/OH-22A-socket-corpus-p0/<repository-name> \
   --platform openharmony \

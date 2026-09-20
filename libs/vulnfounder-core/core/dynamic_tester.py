@@ -1,8 +1,7 @@
-"""
-Dynamic testing wrapper.
+"""动态验证模式的统一编排入口。
 
-Runs Docker-isolated exploit tests against confirmed vulnerabilities.
-Wraps ``utilities.dynamic_tester.run_dynamic_tests()``.
+保留 Docker 隔离执行和 Claude Code 任务包，同时提供显式设备序列号、预算和
+状态变更授权约束下的 OpenHarmony 真机 Agentic Loop。
 """
 
 import json
@@ -25,12 +24,31 @@ def run_tests(
     registry=None,
     llm_config_name: str | None = None,
     mode: str = "docker",
+    device_serial: str | None = None,
+    device_hdc_path: str | None = None,
+    dynamic_device_max_rounds: int = 16,
+    dynamic_device_max_commands: int = 512,
+    dynamic_device_max_wall_seconds: int = 20 * 60,
+    dynamic_device_command_timeout_seconds: int = 30,
+    dynamic_device_allow_state_change: bool = False,
+    dynamic_device_canary_path: str = "/data/local/tmp/vulnfounder-canary",
+    dynamic_device_carrier_root: str | None = None,
+    dynamic_device_carrier_id: str | None = None,
+    dynamic_device_carrier_bundle: str = "com.security.research.trigger",
+    dynamic_device_carrier_ability: str = "EntryAbility",
+    dynamic_device_execute_carrier: bool = False,
+    dynamic_device_service_liveness_samples: int = 4,
+    dynamic_device_service_liveness_interval_seconds: float = 0.5,
+    dynamic_device_service_observation_delay_seconds: float = 0.8,
 ) -> DynamicTestStepResult:
     """Run dynamic exploit tests or prepare a Claude Code task workspace.
 
     ``docker`` preserves the existing isolated executor. ``claude-code`` does
     not call an LLM or Docker from VulnFounder; it creates a task workspace that
-    the operator can open with Claude Code.
+    the operator can open with Claude Code. ``openharmony-device`` executes a
+    bounded, auditable Agentic Loop against an explicitly selected OpenHarmony
+    development board and writes PoC/Exp evidence artifacts. Device state
+    changes are disabled unless explicitly enabled.
 
     Args:
         pipeline_output_path: Path to ``pipeline_output.json``.
@@ -39,7 +57,8 @@ def run_tests(
         registry: Pre-built PhaseRegistry passed down by the scanner.
             Standalone callers omit this and pay one config-load.
         llm_config_name: Name of the llm-config when registry is None.
-        mode: ``docker`` (default) or ``claude-code``.
+        mode: ``docker`` (default), ``claude-code`` or ``openharmony-device``.
+        device_serial: Explicit HDC target serial for ``openharmony-device``.
 
     Returns:
         DynamicTestStepResult with counts and paths.
@@ -48,14 +67,106 @@ def run_tests(
         RuntimeError: If Docker is not available.
         FileNotFoundError: If pipeline_output_path doesn't exist.
     """
-    if mode not in {"docker", "claude-code"}:
-        raise ValueError(f"unsupported dynamic-test mode: {mode!r}; choose docker or claude-code")
+    if mode not in {"docker", "claude-code", "openharmony-device"}:
+        raise ValueError(
+            f"unsupported dynamic-test mode: {mode!r}; "
+            "choose docker, claude-code, or openharmony-device"
+        )
 
     # Both modes need the static input, but Claude Code mode deliberately does
     # not require Docker or an VulnFounder LLM configuration.
     if not os.path.exists(pipeline_output_path):
         raise FileNotFoundError(
             f"pipeline_output.json not found: {pipeline_output_path}"
+        )
+
+    if mode == "openharmony-device":
+        if not device_serial:
+            raise ValueError(
+                "openharmony-device mode requires --device/"
+                "dynamic_device_serial; never implicitly select a board"
+            )
+        from utilities.dynamic_tester import materialize_dynamic_results, run_openharmony_device
+
+        # Standalone CLI callers may not have a scanner-created registry. If a
+        # local config exists, construct the dynamic-test binding so the device
+        # Agentic Loop can use tools; if credentials/configuration are absent,
+        # keep the read-only preflight usable and record a deterministic
+        # BLOCKED/INCONCLUSIVE result instead of failing before collecting it.
+        if registry is None:
+            try:
+                from utilities.llm import build_phase_registry, load_config_file, resolve_llm_config
+                config_file = load_config_file()
+                if config_file.llm_providers or config_file.llm_configs:
+                    registry = build_phase_registry(
+                        config_file,
+                        resolve_llm_config(config_file, llm_config_name),
+                    )
+            except Exception:
+                registry = None
+
+        os.makedirs(output_dir, exist_ok=True)
+        binding = registry.get("dynamic_test") if registry is not None else None
+
+        def _device_event(stage: str, summary_text: str, _details: dict) -> None:
+            # Keep Web/job logs readable; the complete task tree, command
+            # output and model trace are written to the device run artifacts.
+            print_chinese_log(
+                f"真机 Agent[{stage}] {summary_text}",
+                category="动态验证",
+            )
+
+        summary = run_openharmony_device(
+            pipeline_output_path=pipeline_output_path,
+            output_dir=output_dir,
+            serial=device_serial,
+            hdc_path=device_hdc_path,
+            binding=binding,
+            repo_path=repo_path,
+            max_rounds=dynamic_device_max_rounds,
+            max_commands=dynamic_device_max_commands,
+            max_wall_seconds=dynamic_device_max_wall_seconds,
+            command_timeout_seconds=dynamic_device_command_timeout_seconds,
+            allow_state_change=dynamic_device_allow_state_change,
+            canary_path=dynamic_device_canary_path,
+            carrier_root=dynamic_device_carrier_root,
+            carrier_id=dynamic_device_carrier_id,
+            carrier_bundle=dynamic_device_carrier_bundle,
+            carrier_ability=dynamic_device_carrier_ability,
+            execute_carrier=dynamic_device_execute_carrier,
+            service_liveness_samples=dynamic_device_service_liveness_samples,
+            service_liveness_interval_seconds=dynamic_device_service_liveness_interval_seconds,
+            service_observation_delay_seconds=dynamic_device_service_observation_delay_seconds,
+            event_callback=_device_event,
+        )
+        pipeline_data = read_json(pipeline_output_path)
+        repository = pipeline_data.get("repository", {})
+        repository_name = repository.get("name", "unknown") if isinstance(repository, dict) else "unknown"
+        results_json_path, results_md_path, results = materialize_dynamic_results(
+            summary, output_dir, repository_name
+        )
+        counts: dict[str, int] = {}
+        for item in results:
+            counts[item.status] = counts.get(item.status, 0) + 1
+        print_chinese_log(
+            f"OpenHarmony 真机动态验证完成：设备={device_serial}，候选={len(results)}，"
+            f"确认={counts.get('CONFIRMED', 0)}，阻塞={counts.get('BLOCKED', 0)}，"
+            f"待定={counts.get('INCONCLUSIVE', 0)}；证据目录={summary.get('run_dir')}",
+            category="动态验证",
+        )
+        return DynamicTestStepResult(
+            results_json_path=results_json_path,
+            results_md_path=results_md_path,
+            mode="openharmony-device",
+            task_workspace=summary.get("run_dir"),
+            task_manifest_path=summary.get("manifest"),
+            candidate_manifest=summary.get("decisions"),
+            findings_tested=len(results),
+            confirmed=counts.get("CONFIRMED", 0),
+            not_reproduced=counts.get("NOT_REPRODUCED", 0),
+            blocked=counts.get("BLOCKED", 0),
+            inconclusive=counts.get("INCONCLUSIVE", 0),
+            errors=counts.get("ERROR", 0),
         )
 
     if mode == "claude-code":

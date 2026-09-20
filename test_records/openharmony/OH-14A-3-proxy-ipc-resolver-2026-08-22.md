@@ -23,11 +23,11 @@ OH-14A-2 只能从服务端 `OnRemoteRequest` 或 dispatch table 找到 transact
 
 ## 2. 修改文件
 
-- `libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
   - 增加 Proxy 候选解析和 `proxy_to_transaction` 边；
   - 增加常见 OpenHarmony transaction token 命名变体；
   - 排除包含 `SendRequest` 的函数被误判为 dispatch table。
-- `libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py`
   - 增加 Proxy 正例、Proxy/Stub 角色隔离和 token 命名回归测试。
 
 ## 3. 测试结果

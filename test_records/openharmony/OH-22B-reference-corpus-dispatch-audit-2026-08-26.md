@@ -25,7 +25,7 @@
 - 产物根目录：
 
   ```text
-  /Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22B-reference-corpus-20260826-run1
+  /Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22B-reference-corpus-20260826-run1
   ```
 
 每个仓库均成功完成 C/C++ 扫描、tree-sitter 函数提取、原生调用图和 dataset 生成。每个仓库目录中包含 `call_graph.json`、`call_graph_residuals.json`、`semantic_graph.json`（若产生）、`dataset.json` 和 `pipeline_results.json`。
@@ -153,7 +153,7 @@ services/audio_service/server/src/audio_server_hpae_dump.cpp
 - 调用形式为 `(this->*dumpFuncMap[para])(dumpString)`；
 - 入口是 `Dump(fd, args)`/`ArgDataDump`，参数来自系统 dump/hidumper 命令，而不是 Binder `OnRemoteRequest`；
 - 因此不能把它们直接当作 IPC handler 接入 Binder 可达性，否则会产生错误的攻击面归类；
-- 但如果 OpenAnt 的安全范围包含 hidumper 命令参数，则应新增独立的“Dump 参数入口”类型，而不是丢弃这些边。
+- 但如果 VulnFounder 的安全范围包含 hidumper 命令参数，则应新增独立的“Dump 参数入口”类型，而不是丢弃这些边。
 
 同仓库的 53 个残留还包括 Taihe 回调中的裸函数指针和 `OHAudioSuiteEngine` 成员函数指针。它们没有稳定的本地函数表绑定证据，当前阶段不应按名字猜目标。
 

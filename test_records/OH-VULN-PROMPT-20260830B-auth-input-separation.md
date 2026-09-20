@@ -11,9 +11,9 @@
 
 ## 测试环境
 
-- 项目：OpenAnt
+- 项目：VulnFounder
 - Python：当前项目虚拟环境
-- 工作目录：`libs/openant-core`
+- 工作目录：`libs/vulnfounder-core`
 - 测试类型：无模型调用的提示词单元/集成回归测试
 
 ## RED 阶段

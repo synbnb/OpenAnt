@@ -82,7 +82,7 @@ llm-call-graph-recovery.report.json
 测试文件：
 
 ```text
-libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 ### RED
@@ -90,8 +90,8 @@ libs/openant-core/tests/test_scanner_llm_recovery_integration.py
 在生产代码未增加开关和阶段前运行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：
@@ -124,12 +124,12 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 ### scanner/CLI/schema/artifact 相关
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py \
-  libs/openant-core/tests/test_scanner.py \
-  libs/openant-core/tests/test_cli_platform_flags.py \
-  libs/openant-core/tests/test_schemas_multilang.py \
-  libs/openant-core/tests/test_artifact_serialization_contract.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py \
+  libs/vulnfounder-core/tests/test_scanner.py \
+  libs/vulnfounder-core/tests/test_cli_platform_flags.py \
+  libs/vulnfounder-core/tests/test_schemas_multilang.py \
+  libs/vulnfounder-core/tests/test_artifact_serialization_contract.py
 ```
 
 结果：
@@ -141,8 +141,8 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 ### OpenHarmony 测试集
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -155,10 +155,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 
 ```bash
 .venv/bin/ruff check \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/core/schemas.py \
-  libs/openant-core/openant/cli.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/core/schemas.py \
+  libs/vulnfounder-core/openant/cli.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 git diff --check
 ```
 
@@ -170,7 +170,7 @@ All checks passed!
 
 ### 全量测试环境限制
 
-执行整个 `libs/openant-core/tests` 时，既有 Go conformance 用例在当前环境首先失败：
+执行整个 `libs/vulnfounder-core/tests` 时，既有 Go conformance 用例在当前环境首先失败：
 
 ```text
 FileNotFoundError: [Errno 2] No such file or directory: 'go'

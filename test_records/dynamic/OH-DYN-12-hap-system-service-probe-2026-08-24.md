@@ -63,7 +63,7 @@ SDK 将该模块标记为 deprecated，但 API 23 仍能编译，设备实际调
 
 ## 4. 构建、签名和校验
 
-构建在 ASCII 临时目录 `/private/tmp/openant-hap-faultlogger-probe.uMMdwz` 完成，`local.properties` 指向 OpenAnt 内置 API 23 SDK 和 Node。
+构建在 ASCII 临时目录 `/private/tmp/openant-hap-faultlogger-probe.uMMdwz` 完成，`local.properties` 指向 VulnFounder 内置 API 23 SDK 和 Node。
 
 ArkTS 编译、资源处理、HAP 打包均成功。Hvigor 自动 `SignHap` 仍因 fixture 的旧配置引用不存在的 `signing/material` 目录而失败；这发生在 `PackageHap` 之后，不是源码编译错误。本轮使用已经验证过的开发版 OpenHarmony Release 授权材料手动签名。
 

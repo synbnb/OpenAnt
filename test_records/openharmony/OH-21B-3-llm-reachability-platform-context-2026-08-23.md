@@ -50,12 +50,12 @@ promote-only 门槛、scanner 的重新过滤逻辑或 `llm_reachability_signals
 
 ## 3. 修改文件
 
-- `libs/openant-core/core/llm_reachability.py`
+- `libs/vulnfounder-core/core/llm_reachability.py`
   - 引入 `PlatformPromptContext`；
   - 增加 `MAX_PLATFORM_CONTEXT_CHARS = 1600`；
   - 扩展 `_unit_for_prompt()` 的 OpenHarmony 投影逻辑；
   - generic 投影路径保持原有字段。
-- `libs/openant-core/tests/openharmony/test_llm_reachability_platform_context.py`
+- `libs/vulnfounder-core/tests/openharmony/test_llm_reachability_platform_context.py`
   - 新增平台投影、键名兼容、generic 兼容、限长/换行安全、批量 Prompt 和 fake
     adapter 测试。
 
@@ -103,7 +103,7 @@ OpenHarmony、scanner refilter、LLM Reachability 和 Prompt 安全回归：
 结果：`143 passed, 2 skipped`。
 
 `test_scanner_refilter_metadata.py` 使用同目录 pytest plugin。直接从
-`libs/openant-core` 按文件路径收集时，项目既有 pytest 路径设置无法找到该插件，
+`libs/vulnfounder-core` 按文件路径收集时，项目既有 pytest 路径设置无法找到该插件，
 出现收集错误；这不是本阶段生产代码失败。按该测试的实际导入约定补充 `tests/`
 到 `PYTHONPATH` 后单独运行：
 

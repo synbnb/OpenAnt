@@ -1,7 +1,7 @@
 # OH-22G-6：逐轮恢复提前终止与预算语义修复
 
 日期：2026-08-28  
-范围：`libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py` 及其回归测试
+范围：`libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py` 及其回归测试
 
 ## 修改前逻辑
 
@@ -37,8 +37,8 @@
 执行：
 
 ```text
-.venv/bin/python -m pytest -q libs/openant-core/tests/openharmony libs/openant-core/tests/test_scanner_llm_recovery_integration.py
-.venv/bin/python -m ruff check libs/openant-core/core/platforms/openharmony/llm_call_graph_rounds.py libs/openant-core/tests/openharmony/test_llm_call_graph_rounds.py
+.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
+.venv/bin/python -m ruff check libs/vulnfounder-core/core/platforms/openharmony/llm_call_graph_rounds.py libs/vulnfounder-core/tests/openharmony/test_llm_call_graph_rounds.py
 git diff --check
 ```
 

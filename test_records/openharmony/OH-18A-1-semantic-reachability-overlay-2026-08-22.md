@@ -26,19 +26,19 @@ reachable 阶段被裁掉。
 
 ## 2. 修改内容
 
-- 新增 `libs/openant-core/core/platforms/openharmony/reachability.py`
+- 新增 `libs/vulnfounder-core/core/platforms/openharmony/reachability.py`
   - `build_semantic_reachability_overlay()`：校验语义节点、过滤不允许的边并
     折叠 function → transaction → function 路径；
   - `merge_reachability_graph()`：以副本方式把临时边加入 forward/reverse 图，
     重复调用保持幂等。
-- 修改 `libs/openant-core/parsers/c/test_pipeline.py`
+- 修改 `libs/vulnfounder-core/parsers/c/test_pipeline.py`
   - OpenHarmony C reachable 过滤先计算 native 集合，再计算 semantic overlay
     集合；
   - 新增 `native_reachable_units`、`semantic_reachable_added` 和
     `semantic_overlay` 诊断字段；
   - 语义图缺失或格式错误时回退 native 流程，并打印警告。
 - 新增测试
-  - `libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py`
+  - `libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py`
 
 ## 3. TDD 记录
 
@@ -48,7 +48,7 @@ reachable 阶段被裁掉。
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py
 ```
 
 结果：收集阶段失败，`core.platforms.openharmony.reachability` 尚不存在：
@@ -69,9 +69,9 @@ ModuleNotFoundError: No module named 'core.platforms.openharmony.reachability'
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py \
-  libs/openant-core/tests/openharmony/test_unit_semantic_context.py \
-  libs/openant-core/tests/parsers/c/test_empty_seed_keep_all.py
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py \
+  libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py \
+  libs/vulnfounder-core/tests/parsers/c/test_empty_seed_keep_all.py
 ```
 
 结果：

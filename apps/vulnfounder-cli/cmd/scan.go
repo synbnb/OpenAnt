@@ -25,8 +25,9 @@ vulnerability report with false positive elimination.
 If no repository path is given, the active project is used (see: vulnfounder init).
 
 Dynamic testing runs by default when requested and uses Docker. Use
---dynamic-test-mode claude-code to prepare a Claude Code task workspace
-without Docker, or --skip-dynamic-test to opt out.
+--dynamic-test-mode claude-code to prepare a Claude Code task workspace, or
+--dynamic-test-mode openharmony-device with --dynamic-device SERIAL to run the
+bounded OpenHarmony device Agentic Loop. Use --skip-dynamic-test to opt out.
 
 Each step writes a {step}.report.json file with timing, cost, and metadata.
 A final scan.report.json aggregates all step reports.`,
@@ -47,6 +48,19 @@ var (
 	scanNoReport                    bool
 	scanSkipDynamicTest             bool
 	scanDynamicTestMode             string
+	scanDynamicDevice               string
+	scanDynamicHDC                  string
+	scanDynamicDeviceMaxRounds      int
+	scanDynamicDeviceMaxCommands    int
+	scanDynamicDeviceTimeout        int
+	scanDynamicDeviceWallTimeout    int
+	scanDynamicAllowStateChange     bool
+	scanDynamicCanaryPath           string
+	scanDynamicCarrierRoot          string
+	scanDynamicCarrierID            string
+	scanDynamicCarrierBundle        string
+	scanDynamicCarrierAbility       string
+	scanDynamicExecuteCarrier       bool
 	scanLimit                       int
 	scanLLMConfig                   string
 	scanWorkers                     int
@@ -93,7 +107,20 @@ func registerScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&scanEnhanceMode, "enhance-mode", "agentic", "Enhancement mode: agentic (thorough) or single-shot (fast)")
 	cmd.Flags().BoolVar(&scanNoReport, "no-report", false, "Skip report generation")
 	cmd.Flags().BoolVar(&scanSkipDynamicTest, "skip-dynamic-test", false, "Skip dynamic testing (default: run selected dynamic-test mode)")
-	cmd.Flags().StringVar(&scanDynamicTestMode, "dynamic-test-mode", "docker", "Dynamic-test mode: docker or claude-code")
+	cmd.Flags().StringVar(&scanDynamicTestMode, "dynamic-test-mode", "docker", "Dynamic-test mode: docker, claude-code, or openharmony-device")
+	cmd.Flags().StringVar(&scanDynamicDevice, "dynamic-device", "", "Explicit HDC serial for --dynamic-test-mode openharmony-device")
+	cmd.Flags().StringVar(&scanDynamicHDC, "dynamic-hdc", "", "HDC executable path for openharmony-device (optional)")
+	cmd.Flags().IntVar(&scanDynamicDeviceMaxRounds, "dynamic-device-max-rounds", 16, "OpenHarmony device Agentic Loop maximum rounds")
+	cmd.Flags().IntVar(&scanDynamicDeviceMaxCommands, "dynamic-device-max-commands", 512, "OpenHarmony device maximum commands")
+	cmd.Flags().IntVar(&scanDynamicDeviceTimeout, "dynamic-device-timeout", 30, "OpenHarmony per-command timeout in seconds")
+	cmd.Flags().IntVar(&scanDynamicDeviceWallTimeout, "dynamic-device-wall-timeout", 1200, "OpenHarmony device total timeout in seconds")
+	cmd.Flags().BoolVar(&scanDynamicAllowStateChange, "dynamic-device-allow-state-change", false, "Allow OpenHarmony device state-changing commands")
+	cmd.Flags().StringVar(&scanDynamicCanaryPath, "dynamic-device-canary-path", "/data/local/tmp/vulnfounder-canary", "Safe OpenHarmony device canary root")
+	cmd.Flags().StringVar(&scanDynamicCarrierRoot, "dynamic-device-carrier-root", "", "Reviewed HAP carrier root")
+	cmd.Flags().StringVar(&scanDynamicCarrierID, "dynamic-device-carrier-id", "", "Only execute reviewed carrier for this finding ID")
+	cmd.Flags().StringVar(&scanDynamicCarrierBundle, "dynamic-device-carrier-bundle", "com.security.research.trigger", "Reviewed HAP carrier bundle")
+	cmd.Flags().StringVar(&scanDynamicCarrierAbility, "dynamic-device-carrier-ability", "EntryAbility", "Reviewed HAP carrier Ability")
+	cmd.Flags().BoolVar(&scanDynamicExecuteCarrier, "dynamic-device-execute-carrier", false, "Explicitly execute reviewed HAP carriers; requires state-change authorization")
 	cmd.Flags().IntVar(&scanLimit, "limit", 0, "Max units to analyze (0 = no limit)")
 	cmd.Flags().StringVar(&scanLLMConfig, "llm-config", "", "Name of the llm-config (resolved from VULNFOUNDER_CONFIG_FILE, project-local config/vulnfounder/config.json, or legacy aliases; defaults to the file's default_llm).")
 	cmd.Flags().IntVar(&scanWorkers, "workers", 8, "Number of parallel workers for LLM steps (default: 8)")
@@ -145,6 +172,10 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 	if err := validateDynamicTestMode(scanDynamicTestMode); err != nil {
 		output.PrintError(err.Error())
+		os.Exit(2)
+	}
+	if !scanSkipDynamicTest && scanDynamicTestMode == "openharmony-device" && scanDynamicDevice == "" {
+		output.PrintError("--dynamic-test-mode openharmony-device requires --dynamic-device SERIAL")
 		os.Exit(2)
 	}
 	// Fail-fast on missing Docker when dynamic-test will run, before we
@@ -252,6 +283,33 @@ func runScan(cmd *cobra.Command, args []string) {
 		pyArgs = append(pyArgs, "--dynamic-test")
 		if scanDynamicTestMode != "docker" {
 			pyArgs = append(pyArgs, "--dynamic-test-mode", scanDynamicTestMode)
+		}
+		if scanDynamicTestMode == "openharmony-device" {
+			pyArgs = append(pyArgs,
+				"--dynamic-device", scanDynamicDevice,
+				"--dynamic-device-max-rounds", fmt.Sprintf("%d", scanDynamicDeviceMaxRounds),
+				"--dynamic-device-max-commands", fmt.Sprintf("%d", scanDynamicDeviceMaxCommands),
+				"--dynamic-device-timeout", fmt.Sprintf("%d", scanDynamicDeviceTimeout),
+				"--dynamic-device-wall-timeout", fmt.Sprintf("%d", scanDynamicDeviceWallTimeout),
+				"--dynamic-device-canary-path", scanDynamicCanaryPath,
+				"--dynamic-device-carrier-bundle", scanDynamicCarrierBundle,
+				"--dynamic-device-carrier-ability", scanDynamicCarrierAbility,
+			)
+			if scanDynamicCarrierRoot != "" {
+				pyArgs = append(pyArgs, "--dynamic-device-carrier-root", scanDynamicCarrierRoot)
+			}
+			if scanDynamicCarrierID != "" {
+				pyArgs = append(pyArgs, "--dynamic-device-carrier-id", scanDynamicCarrierID)
+			}
+			if scanDynamicExecuteCarrier {
+				pyArgs = append(pyArgs, "--dynamic-device-execute-carrier")
+			}
+			if scanDynamicHDC != "" {
+				pyArgs = append(pyArgs, "--dynamic-hdc", scanDynamicHDC)
+			}
+			if scanDynamicAllowStateChange {
+				pyArgs = append(pyArgs, "--dynamic-device-allow-state-change")
+			}
 		}
 	}
 	if scanLimit > 0 {

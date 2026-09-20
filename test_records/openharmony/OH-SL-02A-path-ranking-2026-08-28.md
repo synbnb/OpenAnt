@@ -62,18 +62,18 @@ production：1
 
 ## 4. 文件变更
 
-- `libs/openant-core/core/source_locator/path_classifier.py`
-- `libs/openant-core/core/source_locator/__init__.py`
-- `libs/openant-core/tests/source_locator/test_path_classifier.py`
-- `libs/openant-core/tests/source_locator/fixtures/opengrok/live_1_14_11/search_full_paramservice_paths.json`
-- `libs/openant-core/tests/source_locator/test_opengrok_live_fixture_contract.py`（登记新增路径清单夹具）
+- `libs/vulnfounder-core/core/source_locator/path_classifier.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/tests/source_locator/test_path_classifier.py`
+- `libs/vulnfounder-core/tests/source_locator/fixtures/opengrok/live_1_14_11/search_full_paramservice_paths.json`
+- `libs/vulnfounder-core/tests/source_locator/test_opengrok_live_fixture_contract.py`（登记新增路径清单夹具）
 
 ## 5. 独立测试
 
 执行：
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest -q \
   tests/source_locator/test_path_classifier.py \
   tests/source_locator/test_search_planner.py \
@@ -99,10 +99,10 @@ cd libs/openant-core
 
 ```text
 .venv/bin/ruff check \
-  libs/openant-core/core/source_locator/path_classifier.py \
-  libs/openant-core/core/source_locator/__init__.py \
-  libs/openant-core/tests/source_locator/test_path_classifier.py \
-  libs/openant-core/tests/source_locator/test_opengrok_live_fixture_contract.py
+  libs/vulnfounder-core/core/source_locator/path_classifier.py \
+  libs/vulnfounder-core/core/source_locator/__init__.py \
+  libs/vulnfounder-core/tests/source_locator/test_path_classifier.py \
+  libs/vulnfounder-core/tests/source_locator/test_opengrok_live_fixture_contract.py
 ```
 
 结果：`All checks passed!`；Python `compileall` 和 `git diff --check` 均通过。

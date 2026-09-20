@@ -17,8 +17,8 @@ python -m openant.cli source-locator create /dev/unix/socket/fd_holder \
 
 python -m openant.cli source-locator run loc_fdholderllmr10 \
   --root /private/tmp/openant-live-source-locator/fd-holder-llm-r10 \
-  --config-path OpenAnt/config/openant/config.json \
-  --project-root OpenAnt --max-steps 32 --max-paths 32 \
+  --config-path VulnFounder/config/openant/config.json \
+  --project-root VulnFounder --max-steps 32 --max-paths 32 \
   --llm-search --llm-config openharmony-live-gpt
 ```
 

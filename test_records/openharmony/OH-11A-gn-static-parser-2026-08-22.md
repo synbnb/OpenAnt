@@ -3,8 +3,8 @@
 - 执行日期：2026-08-22
 - 阶段：OH-11A（OH-11 GN 静态提取）
 - 状态：通过，可进入 OH-11B 评审
-- 代码：`libs/openant-core/core/platforms/openharmony/gn.py`
-- 测试：`libs/openant-core/tests/platforms/test_openharmony_gn.py`
+- 代码：`libs/vulnfounder-core/core/platforms/openharmony/gn.py`
+- 测试：`libs/vulnfounder-core/tests/platforms/test_openharmony_gn.py`
 
 ## 1. 本阶段范围
 

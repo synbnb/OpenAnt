@@ -1,7 +1,7 @@
 # OH-22E-3：OpenHarmony 参考仓库批量评估记录
 
 日期：2026-08-27  
-项目：`/Users/shiyu/学习/hyl/new/OpenAnt`  
+项目：`/Users/shiyu/学习/hyl/new/VulnFounder`  
 评估数据集：`/Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code`  
 仓库数量：9
 
@@ -13,7 +13,7 @@
 所有仓库使用同一命令模板：
 
 ```bash
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py <仓库路径> \\
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py <仓库路径> \\
   --output debug_outputs/OH-22E-3-reference-20260827/<仓库名> \\
   --processing-level reachable --platform openharmony --skip-tests
 ```
@@ -135,13 +135,13 @@
 
 批量根目录：
 
-[OH-22E-3-reference-20260827](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-3-reference-20260827)
+[OH-22E-3-reference-20260827](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-3-reference-20260827)
 
 汇总文件：
 
-- [batch_summary.csv](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-3-reference-20260827/batch_summary.csv)
-- [batch_summary.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-3-reference-20260827/batch_summary.json)
-- [batch_quality_analysis.json](/Users/shiyu/学习/hyl/new/OpenAnt/debug_outputs/OH-22E-3-reference-20260827/batch_quality_analysis.json)
+- [batch_summary.csv](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-3-reference-20260827/batch_summary.csv)
+- [batch_summary.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-3-reference-20260827/batch_summary.json)
+- [batch_quality_analysis.json](/Users/shiyu/学习/hyl/new/VulnFounder/debug_outputs/OH-22E-3-reference-20260827/batch_quality_analysis.json)
 
 每个仓库目录都包含：
 

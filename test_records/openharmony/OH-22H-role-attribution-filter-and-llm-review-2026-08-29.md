@@ -23,7 +23,7 @@
 执行命令：
 
 ```text
-PYTHONPATH=libs/openant-core pytest -q libs/openant-core/tests/source_locator
+PYTHONPATH=libs/vulnfounder-core pytest -q libs/vulnfounder-core/tests/source_locator
 ```
 
 结果：`258 passed in 26.83s`（加入语义证据的仓库排序锚点后再次执行）
@@ -41,7 +41,7 @@ PYTHONPATH=libs/openant-core pytest -q libs/openant-core/tests/source_locator
 
 ## 环境限制
 
-尝试执行全量 `libs/openant-core/tests` 时，当前环境缺少既有项目依赖（如 `tree_sitter_c`、`tree_sitter_php`、`tree_sitter_rust`、`tree_sitter_zig` 以及 Google GenAI SDK），导致测试收集阶段失败；这与本阶段 source-locator 修改无关。本记录以完整 source-locator 测试套件结果为准。
+尝试执行全量 `libs/vulnfounder-core/tests` 时，当前环境缺少既有项目依赖（如 `tree_sitter_c`、`tree_sitter_php`、`tree_sitter_rust`、`tree_sitter_zig` 以及 Google GenAI SDK），导致测试收集阶段失败；这与本阶段 source-locator 修改无关。本记录以完整 source-locator 测试套件结果为准。
 
 ## 结论
 

@@ -27,7 +27,7 @@
 
 ## 3. 测试命令和结果
 
-在 `libs/openant-core` 目录执行：
+在 `libs/vulnfounder-core` 目录执行：
 
 ```text
 ../../.venv/bin/pytest tests/source_locator/test_llm_search_planner.py -q

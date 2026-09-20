@@ -27,7 +27,7 @@
 | 系统 | `OpenHarmony 6.1.0.26` |
 | 内核架构 | `aarch64`（`uname -m`） |
 | 用户态位数 | `32`（`getconf LONG_BIT`） |
-| HDC | OpenAnt 内置 Command Line Tools 6.1.0.860 / HDC 3.2.0c |
+| HDC | VulnFounder 内置 Command Line Tools 6.1.0.860 / HDC 3.2.0c |
 | SELinux | `Enforcing` |
 | HDC shell 身份 | `uid=0(root) ... context=u:r:su:s0` |
 | 设备 SensorService | SA `3601`，进程 `sensors`，PID `588` |
@@ -120,7 +120,7 @@ hdc -t 150100424a5444345209d945be14b900 shell \
 源码位于：
 
 ```text
-libs/openant-core/utilities/dynamic_tester/fixtures/native_smoke/native_smoke.c
+libs/vulnfounder-core/utilities/dynamic_tester/fixtures/native_smoke/native_smoke.c
 ```
 
 程序只调用 `uname`、`getpid`、`getuid`、`geteuid` 并输出结果，不访问文件、网络或系统服务。
@@ -218,7 +218,7 @@ cleanup=PASS
 - 没有构建带 OpenHarmony IPC/SA NDK 的普通 HAP/Native proxy；
 - 没有执行 `EnableSensor`、`DisableSensor`、`RunCommand`、数据通道创建等会改变状态的请求；
 - 没有向 faultloggerd、foundation、samgr 等关键服务发送畸形或高频载荷；
-- 还没有把本轮 HDC、hidumper、ELF 检查和清理流程封装成 OpenAnt 自动适配器。
+- 还没有把本轮 HDC、hidumper、ELF 检查和清理流程封装成 VulnFounder 自动适配器。
 
 因此本记录只证明只读 IPC/SA 探索和 Native 工件生命周期可行，不包含任何漏洞确认结论。
 

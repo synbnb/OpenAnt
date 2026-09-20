@@ -22,7 +22,7 @@
 执行的核心命令为：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/python - <<'PY'
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python - <<'PY'
 from pathlib import Path
 import json
 from core.platforms.openharmony.dispatch_code_evidence import build_dispatch_code_evidence

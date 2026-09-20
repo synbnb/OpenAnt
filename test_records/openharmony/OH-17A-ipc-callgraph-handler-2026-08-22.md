@@ -29,8 +29,8 @@
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
   -k 'call_graph_when_handler_owner_differs'
 ```
 
@@ -45,8 +45,8 @@ TypeError: OpenHarmonyIPCResolver.resolve() got an unexpected keyword argument '
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py
 ```
 
 结果：`10 passed`。
@@ -93,11 +93,11 @@ OpenHarmonyIPCResolver().resolve(
 执行：
 
 ```text
-OpenAnt/.venv/bin/python -m pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_*.py \
-  OpenAnt/libs/openant-core/tests/test_c_pipeline.py \
-  OpenAnt/libs/openant-core/tests/report/test_build_pipeline_output_return_contract.py
+VulnFounder/.venv/bin/python -m pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_*.py \
+  VulnFounder/libs/vulnfounder-core/tests/test_c_pipeline.py \
+  VulnFounder/libs/vulnfounder-core/tests/report/test_build_pipeline_output_return_contract.py
 ```
 
 结果：`102 passed, 6 skipped`。
@@ -105,11 +105,11 @@ OpenAnt/.venv/bin/python -m pytest -q \
 语法检查：
 
 ```text
-OpenAnt/.venv/bin/python -m py_compile \
-  OpenAnt/libs/openant-core/core/platforms/openharmony/ipc_graph.py \
-  OpenAnt/libs/openant-core/parsers/c/test_pipeline.py \
-  OpenAnt/libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  OpenAnt/libs/openant-core/tests/openharmony/test_unit_semantic_context.py
+VulnFounder/.venv/bin/python -m py_compile \
+  VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py \
+  VulnFounder/libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_unit_semantic_context.py
 ```
 
 结果：通过。

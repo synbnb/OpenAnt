@@ -22,7 +22,7 @@ handler。
 
 ## 2. 修改内容
 
-- 修改 `libs/openant-core/core/parser_adapter.py`
+- 修改 `libs/vulnfounder-core/core/parser_adapter.py`
   - 在 native reachable 结果计算后加载输出目录中的
     `semantic_graph.json`；
   - 复用 `core.platforms.openharmony.reachability` 的构图和合并函数；
@@ -32,7 +32,7 @@ handler。
 - scanner 无需重复修改，因为它已有统一后置调用：
   `core.scanner -> core.parser_adapter.apply_reachability_filter`。
 - 扩展
-  `libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py`
+  `libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py`
   覆盖通用入口和 generic 隔离行为。
 
 ## 3. TDD 记录
@@ -43,7 +43,7 @@ handler。
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py
 ```
 
 结果：C 专用测试和 generic 隔离测试通过，但通用 OpenHarmony 测试失败：
@@ -67,12 +67,12 @@ expected units {main, bridge, handle}, got {main, bridge}
 
 ```text
 ./.venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py \
-  libs/openant-core/tests/test_reachability_empty_seed.py \
-  libs/openant-core/tests/test_reachability_prune_telemetry.py \
-  libs/openant-core/tests/test_parser_adapter_platform.py \
-  libs/openant-core/tests/openharmony/test_c_pipeline_platform.py \
-  libs/openant-core/tests/test_scanner.py
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py \
+  libs/vulnfounder-core/tests/test_reachability_empty_seed.py \
+  libs/vulnfounder-core/tests/test_reachability_prune_telemetry.py \
+  libs/vulnfounder-core/tests/test_parser_adapter_platform.py \
+  libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py \
+  libs/vulnfounder-core/tests/test_scanner.py
 ```
 
 结果：
@@ -84,7 +84,7 @@ expected units {main, bridge, handle}, got {main, bridge}
 OpenHarmony 测试目录回归：
 
 ```text
-./.venv/bin/python -m pytest -q libs/openant-core/tests/openharmony
+./.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -131,7 +131,7 @@ generic 过滤结果只保留 `main`、`bridge`，不会读取同目录 semantic
 运行命令：
 
 ```text
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/filemanagement_storage_service \
   --output /private/tmp/openant-oh18a-storage-reachable \
   --processing-level reachable --platform openharmony --skip-tests
@@ -159,7 +159,7 @@ generic 过滤结果只保留 `main`、`bridge`，不会读取同目录 semantic
 运行命令：
 
 ```text
-./.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+./.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   /Users/shiyu/学习/hyl/new/openharmony_reference/openharmony_source_code/security_device_auth \
   --output /private/tmp/openant-oh18a-device-auth-reachable \
   --processing-level reachable --platform openharmony --skip-tests
@@ -189,7 +189,7 @@ generic 过滤结果只保留 `main`、`bridge`，不会读取同目录 semantic
 额外运行：
 
 ```text
-./.venv/bin/python -m pytest -q libs/openant-core/tests
+./.venv/bin/python -m pytest -q libs/vulnfounder-core/tests
 ```
 
 结果：`3132 passed, 23 failed, 40 skipped`。

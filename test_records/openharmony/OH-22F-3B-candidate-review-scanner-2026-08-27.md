@@ -70,7 +70,7 @@ openant scan <repo> --llm-call-graph-candidate-review
 测试文件：
 
 ```text
-libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 ### RED
@@ -78,8 +78,8 @@ libs/openant-core/tests/test_scanner_llm_recovery_integration.py
 在生产代码接入前运行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 ```
 
 结果：
@@ -96,9 +96,9 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 接入 scanner、CLI、ScanResult 后运行：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py \
-  libs/openant-core/tests/openharmony
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py \
+  libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：
@@ -119,10 +119,10 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 
 ```bash
 .venv/bin/ruff check \
-  libs/openant-core/core/scanner.py \
-  libs/openant-core/core/schemas.py \
-  libs/openant-core/openant/cli.py \
-  libs/openant-core/tests/test_scanner_llm_recovery_integration.py
+  libs/vulnfounder-core/core/scanner.py \
+  libs/vulnfounder-core/core/schemas.py \
+  libs/vulnfounder-core/openant/cli.py \
+  libs/vulnfounder-core/tests/test_scanner_llm_recovery_integration.py
 git diff --check
 ```
 

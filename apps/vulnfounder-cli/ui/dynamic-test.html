@@ -1,0 +1,1279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>动态测试</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#d9dee8; --panel:#fff; --bg:#f5f7fb; --accent:#315efb; --ok:#147d4d; --warn:#a65b00; --bad:#b42318; --soft:#eef2ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 28px; background:#111827; color:#fff; }
+    .top h1 { margin:0; font-size:18px; }
+    .top p { margin:2px 0 0; color:#9aa7bd; font-size:13px; }
+    .crumb { display:flex; gap:8px; align-items:center; }
+    .crumb button { background:rgba(255,255,255,.12); color:#fff; border:0; border-radius:7px; padding:7px 13px; font:inherit; font-weight:600; cursor:pointer; }
+    .crumb button:hover { background:rgba(255,255,255,.22); }
+    main { max-width:1280px; margin:26px auto; padding:0 18px 60px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:18px; box-shadow:0 3px 14px rgba(16,24,40,.04); }
+    .panel h2 { margin:0 0 4px; font-size:17px; }
+    .hint { color:var(--muted); margin:0 0 14px; font-size:13px; }
+    label { display:block; font-weight:600; margin-bottom:5px; }
+    input, select { width:100%; border:1px solid #bfc7d6; border-radius:7px; padding:9px 11px; font:inherit; background:#fff; }
+    input[readonly] { background:#f3f5f9; color:var(--muted); }
+    button { border:0; border-radius:7px; padding:10px 15px; font:inherit; font-weight:600; cursor:pointer; background:var(--accent); color:#fff; }
+    button.secondary { background:#eef2ff; color:#2745a5; border:1px solid #cad5ff; }
+    button.ghost { background:#f4f6fa; color:#42526e; border:1px solid var(--line); }
+    button:disabled { opacity:.55; cursor:wait; }
+    #notice { min-height:22px; margin:10px 0 0; color:var(--muted); }
+    #notice.error { color:var(--bad); }
+    #notice.ok { color:var(--ok); }
+    .scan-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px,1fr)); gap:12px; margin-top:12px; }
+    .scan-card { border:1px solid var(--line); border-radius:10px; padding:14px; cursor:pointer; background:#fff; }
+    .scan-card:hover { border-color:#86a0ff; }
+    .scan-card.picked { border-color:var(--accent); background:#f7f9ff; box-shadow:0 0 0 1px var(--accent); }
+    .scan-card b { font-size:13px; overflow-wrap:anywhere; display:block; }
+    .scan-card .sub { color:var(--muted); font-size:12px; margin-top:4px; overflow-wrap:anywhere; }
+    .scan-card .counts { margin-top:9px; display:flex; gap:6px; flex-wrap:wrap; }
+    .chip { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .chip.v { background:#fdecec; color:var(--bad); }
+    .chip.i { background:#fff1db; color:var(--warn); }
+    .chip.s { background:#e7f6ef; color:var(--ok); }
+    .chip.n { background:#eef1f6; color:var(--muted); }
+    .chip.e { background:#fdecec; color:var(--bad); }
+    .bar { margin-top:9px; height:8px; border-radius:99px; background:#eef1f6; overflow:hidden; display:flex; }
+    .bar > span { height:100%; }
+    .bar .b-v { background:#e05a5a; } .bar .b-i { background:#eba23f; } .bar .b-s { background:#3aa574; } .bar .b-p { background:#8a94a8; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; white-space:nowrap; }
+    .badge.vulnerable { background:#fdecec; color:var(--bad); }
+    .badge.inconclusive { background:#fff1db; color:var(--warn); }
+    .badge.cwe { background:var(--soft); color:#2745a5; }
+    .meta { color:var(--muted); margin-top:5px; font-size:13px; overflow-wrap:anywhere; }
+    .cats { margin-top:7px; display:flex; gap:6px; flex-wrap:wrap; }
+    .cat { font-size:11.5px; padding:2px 7px; border-radius:5px; background:#f1f4f9; color:#42526e; border:1px solid #e2e7f0; }
+    .cat.impact { background:#fdf3e7; border-color:#f3ddb8; color:#8a5a12; }
+    .btn-row { margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    details.detail { margin-top:10px; border-top:1px dashed var(--line); padding-top:10px; }
+    details.detail summary { cursor:pointer; color:var(--accent); font-weight:600; font-size:13px; }
+    /* 分区卡片：每个 section 独立底色，标题突出加粗 */
+    .sec { margin-top:14px; padding:12px 15px 13px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+    .sec-t { font-weight:800; font-size:14px; color:var(--ink); margin-bottom:9px; padding-bottom:7px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; letter-spacing:.01em; }
+    .sec-t::before { content:''; width:4px; height:15px; border-radius:2px; background:var(--accent); flex:none; }
+    .sec-blue   { background:#f2f7ff; border-color:#d5e3fb; } .sec-blue   .sec-t::before { background:#315efb; }
+    .sec-green  { background:#f1faf4; border-color:#cdeeda; } .sec-green  .sec-t::before { background:#147d4d; }
+    .sec-purple { background:#f7f4ff; border-color:#e2d9fb; } .sec-purple .sec-t::before { background:#7a4df0; }
+    .sec-amber  { background:#fffaf0; border-color:#f5e5c4; } .sec-amber  .sec-t::before { background:#c26a1f; }
+    .sec-rose   { background:#fff5f6; border-color:#f7d9dd; } .sec-rose   .sec-t::before { background:#c2455f; }
+    .sec-gray   { background:#f7f9fc; border-color:#e4e9f2; } .sec-gray   .sec-t::before { background:#8a94a8; }
+    .sec-indigo { background:#f4f5ff; border-color:#dcdffb; } .sec-indigo .sec-t::before { background:#4f5bd5; }
+    .sec-cyan   { background:#f0fbff; border-color:#cbeef7; } .sec-cyan   .sec-t::before { background:#0796b2; }
+    .sec-pipeline-t { font-weight:800; font-size:14px; color:var(--ink); margin-top:16px; padding-bottom:7px; border-bottom:2px solid var(--line); }
+    .kv { display:grid; grid-template-columns:130px 1fr; gap:3px 10px; font-size:13px; }
+    .kv dt { color:var(--muted); } .kv dd { margin:0; overflow-wrap:anywhere; }
+    .textblock { white-space:pre-wrap; background:#f7f9fc; border:1px solid #e6ebf3; border-radius:7px; padding:10px 12px; font-size:13px; max-height:260px; overflow:auto; }
+    .codeblock { white-space:pre; background:#0f1728; color:#dbe5f3; border-radius:8px; padding:12px 14px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow:auto; max-height:420px; }
+    ul.ev { margin:4px 0 0; padding-left:18px; font-size:13px; }
+    ul.ev li { margin-bottom:3px; overflow-wrap:anywhere; }
+    ol.ev { margin:4px 0 0; padding-left:18px; font-size:13px; }
+    ol.ev li { margin-bottom:3px; overflow-wrap:anywhere; }
+    .kv-sub { font-size:12.5px; font-weight:700; color:var(--dim); margin-top:10px; }
+    ul.ev.neg li { color:#8a5a12; }
+    pre.raw { max-height:340px; overflow:auto; white-space:pre-wrap; background:#101828; color:#e6edf7; border-radius:7px; padding:12px; font-size:12px; }
+    .empty { color:var(--muted); padding:14px 0; }
+    .run-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:end; }
+    .run-grid .full { grid-column:1/-1; }
+    /* ---- 列表工具条：视图切换 / 检索 / 分页 ---- */
+    .toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin:12px 0 4px; }
+    .toolbar .grow { flex:1 1 260px; }
+    .seg { display:inline-flex; border:1px solid #cad5ff; border-radius:8px; overflow:hidden; }
+    .seg button { background:#fff; color:#2745a5; border:0; border-radius:0; padding:8px 13px; font-weight:600; }
+    .seg button.on { background:var(--accent); color:#fff; }
+    .pager { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:14px 0 4px; }
+    .pager button { padding:6px 11px; background:#fff; color:var(--ink); border:1px solid var(--line); }
+    .pager button.cur { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .pager button:disabled { opacity:.45; cursor:default; }
+    .entry { border:1px solid var(--line); border-radius:10px; padding:15px 16px; margin-top:12px; background:#fff; }
+    .entry-head { display:flex; justify-content:space-between; gap:14px; align-items:start; flex-wrap:wrap; }
+    .entry h3 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+    /* 文件树 / 类型分组 */
+    .group { border:1px solid var(--line); border-radius:10px; margin-top:10px; background:#fff; overflow:hidden; }
+    .group > summary { cursor:pointer; padding:11px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#f8fafd; }
+    .group > summary:hover { background:#f1f5fd; }
+    .group > summary .g-name { font-weight:700; font-size:13.5px; overflow-wrap:anywhere; font-family:ui-monospace,Menlo,monospace; }
+    .group > summary .g-count { color:var(--muted); font-size:12px; }
+    .group > .g-body { padding:4px 14px 12px; }
+    .mini { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:9px 4px; border-top:1px dashed var(--line); flex-wrap:wrap; }
+    .mini .m-main { min-width:0; flex:1 1 320px; }
+    .mini .m-title { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .mini .m-sample { font-weight:700; font-size:13.5px; overflow-wrap:anywhere; }
+    .mini .m-meta { color:var(--muted); font-size:12.5px; margin-top:2px; overflow-wrap:anywhere; font-family:ui-monospace,Menlo,monospace; }
+    .mini button { padding:7px 12px; font-size:13px; }
+    /* ---- 详情页：实时进度 ---- */
+    .stages { display:flex; gap:0; flex-wrap:wrap; margin:12px 0 4px; }
+    .stage { flex:1 1 110px; min-width:104px; border:2px solid var(--line); border-radius:9px; padding:8px 10px; background:#fff; position:relative; }
+    .stage .st-t { font-size:11px; letter-spacing:.04em; color:var(--muted); font-weight:700; }
+    .stage .st-v { font-size:12.5px; font-weight:700; margin-top:2px; color:var(--muted); }
+    .stage.active { border-color:#86a0ff; background:#f7f9ff; } .stage.active .st-v { color:#2745a5; }
+    .stage.done { border-color:#9fd9bd; background:#f2fbf6; } .stage.done .st-v { color:var(--ok); }
+    .stage.failed { border-color:#f2b8b5; background:#fff5f5; } .stage.failed .st-v { color:var(--bad); }
+    .live-status { display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+    .pulse { width:10px; height:10px; border-radius:50%; background:#98a4b8; }
+    .pulse.on { background:#18a05e; animation:pulse 1.2s ease-in-out infinite; }
+    .pulse.err { background:#e05a5a; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .cmdfeed { margin-top:8px; border:1px solid var(--line); border-radius:9px; background:#0f1728; color:#dbe5f3; font:12px/1.6 ui-monospace,Menlo,monospace; max-height:380px; overflow:auto; padding:8px 10px; }
+    .cmdline { white-space:pre-wrap; overflow-wrap:anywhere; }
+    .cmdline .c-idx { color:#7dd3fc; }
+    .cmdline .c-purpose { color:#a5b4fc; }
+    .cmdline .c-ok { color:#6ee7a0; }
+    .cmdline .c-bad { color:#fca5a5; }
+    .cmdline .c-dim { color:#8ea3c0; }
+    .cmdline.err { background:rgba(224,90,90,.12); border-radius:4px; }
+    .evtline { color:#9fb3d1; }
+    .evtline .e-kind { color:#fbbf24; font-weight:700; }
+    .evtline.recon { color:#8ab4f8; }
+    .evtline.recon .e-kind { color:#38bdf8; }
+    .evtline .e-dim { color:#8a94a8; }
+    .progresslog { margin-top:8px; border:1px dashed var(--line); border-radius:9px; background:#f8fafd; padding:8px 12px; font-size:12.5px; max-height:180px; overflow:auto; }
+    /* ---- 结果可视化 ---- */
+    .status-hero { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+    .status-big { font-size:22px; font-weight:800; padding:6px 18px; border-radius:10px; letter-spacing:.02em; }
+    .status-big.CONFIRMED { background:#e7f6ef; color:var(--ok); border:2px solid #9fd9bd; }
+    .status-big.NOT_REPRODUCED { background:#fdf3e7; color:#8a5a12; border:2px solid #f3ddb8; }
+    .status-big.REJECTED_VALIDATION, .status-big.ORACLE_UNAVAILABLE { background:#fdecec; color:var(--bad); border:2px solid #f2b8b5; }
+    .grade-pill { font-size:15px; font-weight:700; width:38px; height:38px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; background:#101828; color:#fff; }
+    .grade-pill.A { background:#147d4d; } .grade-pill.B { background:#3aa574; } .grade-pill.C { background:#eba23f; } .grade-pill.D { background:#c26a1f; }
+    .hero-sub { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+    .chain { display:flex; align-items:stretch; gap:0; margin:14px 0 4px; flex-wrap:wrap; }
+    .chain-node { flex:1 1 150px; min-width:140px; border:2px solid var(--line); border-radius:10px; padding:10px 12px; background:#fff; position:relative; }
+    .chain-node .cn-t { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+    .chain-node .cn-v { font-weight:800; font-size:14px; margin-top:2px; overflow-wrap:anywhere; }
+    .chain-node.pass { border-color:#9fd9bd; background:#f2fbf6; } .chain-node.pass .cn-v { color:var(--ok); }
+    .chain-node.block { border-color:#f3ddb8; background:#fffaf1; } .chain-node.block .cn-v { color:#8a5a12; }
+    .chain-node.fail { border-color:#f2b8b5; background:#fff5f5; } .chain-node.fail .cn-v { color:var(--bad); }
+    .chain-arrow { display:flex; align-items:center; padding:0 6px; color:#98a4b8; font-size:18px; font-weight:700; }
+    .oracle-cards { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+    .o-card { flex:1 1 220px; min-width:200px; border:1px solid var(--line); border-radius:9px; padding:11px 13px; font-size:13px; }
+    .o-card .o-h { display:flex; justify-content:space-between; align-items:center; font-weight:700; }
+    .o-ok { color:var(--ok); font-weight:800; } .o-no { color:var(--bad); font-weight:800; }
+    .o-card .o-path { color:var(--muted); font-size:12px; margin-top:5px; overflow-wrap:anywhere; }
+    .o-card .o-content { margin-top:6px; background:#f7f9fc; border-radius:6px; padding:7px 9px; font:12px ui-monospace,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; max-height:130px; overflow:auto; }
+    .notes li { margin-bottom:6px; font-size:13px; }
+    .recon { background:#f6f8ff; border:1px solid #dbe3ff; border-left:4px solid var(--accent); border-radius:6px; padding:9px 12px; font-size:13px; white-space:pre-wrap; margin-top:4px; max-height:200px; overflow:auto; }
+    /* 交付物在线预览 */
+    .dl-link { color:var(--accent); font-weight:600; text-decoration:none; cursor:pointer; }
+    .dl-link:hover { text-decoration:underline; }
+    .view-btn { background:none; border:1px solid var(--line); border-radius:6px; padding:2px 9px; font-size:12px; color:var(--accent); cursor:pointer; }
+    .view-btn:hover { background:#eef2ff; border-color:#c3cdf5; }
+    .viewer { position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:60; display:flex; align-items:center; justify-content:center; padding:24px; }
+    .viewer-box { background:var(--panel,#fff); border-radius:12px; width:min(920px,100%); max-height:86vh; display:flex; flex-direction:column; box-shadow:0 18px 50px rgba(0,0,0,.25); }
+    .viewer-h { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); font-weight:700; font-size:14px; }
+    .viewer-h .viewer-close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted); line-height:1; padding:2px 6px; }
+    .viewer-h .viewer-close:hover { color:var(--ink); }
+    .viewer-meta { padding:7px 16px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--line); }
+    .viewer-body { padding:14px 16px; overflow:auto; font:12.5px ui-monospace,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; flex:1; }
+    .viewer-body.src-view { white-space:pre; overflow-wrap:normal; }
+    .viewer-body.md-view { font:14px/1.65 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-family:inherit; }
+    .viewer-body.md-view h1,.viewer-body.md-view h2,.viewer-body.md-view h3 { font-size:1.15em; margin:.9em 0 .4em; }
+    .viewer-body.md-view table { border-collapse:collapse; margin:.6em 0; }
+    .viewer-body.md-view th,.viewer-body.md-view td { border:1px solid var(--line); padding:4px 8px; }
+    .viewer-body.md-view code { background:#f4f6fa; border-radius:4px; padding:1px 5px; font:12px ui-monospace,Menlo,monospace; }
+    .viewer-body.md-view pre { background:#f4f6fa; border-radius:6px; padding:9px 11px; overflow:auto; }
+    .viewer-err { padding:14px 16px; color:var(--bad); }
+    .fs-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+    .fs-table th, .fs-table td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+    .fs-table th { background:#f4f6fa; font-weight:700; }
+    .tag-exists { color:var(--ok); font-weight:700; } .tag-absent { color:var(--bad); font-weight:700; }
+    @media (max-width:800px) { .run-grid, .kv { grid-template-columns:1fr; } .run-grid .full { grid-column:auto; } .top { padding:15px 18px; } .chain-arrow { display:none; } .chain-node { min-width:100%; } .stage { min-width:46%; } }
+  </style>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+</head>
+<body class="scan-artifact-page">
+  <header class="top">
+    <div class="brand"><div class="mark" aria-hidden="true">VF</div><div><h1>动态测试</h1><p>选择历史扫描中的 vulnerable / inconclusive 条目，在真机上做动态验证</p></div></div>
+    <div class="top-actions"><vulnfounder-workspace-nav current="dynamic-test"></vulnfounder-workspace-nav></div>
+  </header>
+  <main>
+    <div class="crumb" style="margin-bottom:14px">
+      <button id="back-list" type="button" hidden>← 返回条目列表</button>
+      <span id="crumb-here" class="meta" style="margin:0"></span>
+    </div>
+
+    <!-- ================= 列表视图 ================= -->
+    <div id="list-view">
+      <section class="panel">
+        <h2>第一步 · 选择历史扫描</h2>
+        <p class="hint">自动列出本机的全部历史扫描（<code>~/.openant/webui/</code> 下每个目录对应一次扫描），无需手动输入路径。</p>
+        <button id="load-scans" type="button">加载扫描列表</button>
+        <div id="scans" class="scan-grid"></div>
+        <div id="notice" role="status"></div>
+      </section>
+
+      <section id="entries-panel" class="panel" hidden>
+        <h2>第二步 · 选择测试条目 <span id="scan-title" style="color:var(--muted);font-weight:400"></span></h2>
+        <div class="toolbar">
+          <div><label for="finding">判定过滤</label>
+            <select id="finding"><option value="">vulnerable + inconclusive</option><option value="vulnerable">仅 vulnerable</option><option value="inconclusive">仅 inconclusive</option></select>
+          </div>
+          <div><label for="cat-filter">漏洞类型过滤</label><select id="cat-filter"><option value="">全部类型</option></select></div>
+          <div class="grow"><label for="search">检索（函数名 / 目录 / 文件路径 / 条目 ID）</label>
+            <input id="search" type="search" placeholder="例如：Dubai::MoveDubaiDb、services/include、AI_schedule.cpp…">
+          </div>
+          <div>
+            <label>视图</label>
+            <div class="seg" role="tablist">
+              <button id="view-flat" type="button" class="on">平铺列表</button>
+              <button id="view-file" type="button">按文件路径</button>
+              <button id="view-type" type="button">按漏洞类型</button>
+            </div>
+          </div>
+          <div><button id="reload" class="secondary" type="button">刷新条目</button></div>
+        </div>
+        <div class="toolbar" id="page-toolbar" hidden>
+          <div><label for="page-size">每页条数</label>
+            <select id="page-size"><option>30</option><option selected>50</option><option>100</option><option>200</option></select>
+          </div>
+        </div>
+        <div id="entries-summary" class="hint" style="margin-top:8px"></div>
+        <div id="entries"></div>
+        <div id="pager" class="pager"></div>
+      </section>
+    </div>
+
+    <!-- ================= 详情视图 ================= -->
+    <div id="detail-view" hidden>
+      <section id="entry-panel" class="panel">
+        <h2>测试条目 <span id="detail-scan" style="color:var(--muted);font-weight:400"></span></h2>
+        <div id="entry-summary"></div>
+        <div id="entry-analysis"></div>
+      </section>
+
+      <section id="run-panel" class="panel">
+        <h2>发起真机动态测试</h2>
+        <p class="hint">该条目将经过：桥接 → 适配器（LLM 语义转换 + 确定性校验）→ 契约编译（侦查 loop + 硬校验）→ 真机执行。设备列表来自当前 HDC 连接，桥接层绝不隐式选择板卡。执行在后台进行，下方实时显示每个阶段的进度与每条设备命令。</p>
+        <form id="run-form" class="run-grid">
+          <div><label for="device-select">目标设备（当前已连接）</label>
+            <select id="device-select" required><option value="">加载中……</option></select>
+          </div>
+          <div><label for="hdc-select">HDC（自动解析，可更换）</label>
+            <select id="hdc-select"><option value="">自动（环境变量 / PATH / 内置工具链）</option></select>
+          </div>
+          <div class="full"><button id="run" type="submit">执行动态测试</button></div>
+        </form>
+      </section>
+
+      <section id="progress-panel" class="panel" hidden>
+        <h2>实时进度</h2>
+        <div class="live-status">
+          <span id="live-dot" class="pulse"></span>
+          <span id="live-text" class="hint" style="margin:0">尚未开始</span>
+        </div>
+        <div id="stages" class="stages"></div>
+        <div id="progress-error" class="hint" style="color:var(--bad)" hidden></div>
+        <div class="sec"><div class="sec-t">阶段事件</div><div id="progress-log" class="progresslog"><div class="empty">暂无事件</div></div></div>
+        <div class="sec"><div class="sec-t">设备命令流（ledger，实时）<span id="cmd-count" class="meta" style="margin-left:8px"></span></div>
+          <div id="cmdfeed" class="cmdfeed"><div class="evtline">等待命令……</div></div>
+        </div>
+      </section>
+
+      <section id="result-panel" class="panel" hidden>
+        <h2>执行结果</h2>
+        <div id="result-body"></div>
+        <details class="detail" style="margin-top:14px"><summary>原始 JSON</summary><pre id="result-json" class="raw"></pre></details>
+      </section>
+    </div>
+  </main>
+  <script>
+    const csrf = document.querySelector('meta[name="csrf"]').content;
+    const $ = id => document.getElementById(id);
+    const esc = s => s==null?'':String(s);
+    function el(tag, cls, text) { const e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=esc(text); return e; }
+    function fmt(n){ return n==null?'—':String(n); }
+    function fmtTs(ts){ if(!ts) return ''; try { const d=new Date(ts*1000); return d.toLocaleTimeString('zh-CN',{hour12:false})+'.'+String(d.getMilliseconds()).padStart(3,'0'); } catch(_) { return ''; } }
+    function showNotice(text, kind) { const n=$('notice'); n.textContent=text||''; n.className=kind||''; }
+    async function get(path) {
+      const response = await fetch(path, {credentials:'same-origin'});
+      const text = await response.text();
+      let data; try { data=JSON.parse(text); } catch(_) { throw new Error(text || ('请求失败（'+response.status+'）')); }
+      if (!response.ok) throw new Error(data.error || text || ('请求失败（'+response.status+'）'));
+      return data;
+    }
+    async function post(path, values) {
+      const body = new URLSearchParams(values); body.set('csrf', csrf);
+      const response = await fetch(path, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-Token':csrf}, body});
+      const text = await response.text();
+      let data; try { data=JSON.parse(text); } catch(_) { throw new Error(text || ('请求失败（'+response.status+'）')); }
+      if (!response.ok) throw new Error(data.error || text || ('请求失败（'+response.status+'）'));
+      return data;
+    }
+    function kvGrid(pairs) {
+      const dl = el('dl','kv');
+      for (const [k,v] of pairs) { if(v===undefined||v===null||v==='') continue; dl.appendChild(el('dt',null,k)); dl.appendChild(el('dd',null,v)); }
+      return dl;
+    }
+
+    /* ==================================================================
+       全局状态与路由（hash：#scan=<id>&sample=<id> 进详情页）
+       ================================================================== */
+    const state = {
+      scans: [], pickedScan: null, allEntries: [],
+      view: 'flat', page: 1, pageSize: 50, search: '',
+      detail: null,   // {scanId, sampleId, entry, runId}
+      es: null, cmds: [], phasesSeen: {}, runDone: false,
+    };
+    const RUN_KEY = (scan, sample) => 'vf.dyn.lastrun.'+scan+'.'+sample;
+
+    function route() {
+      const params = new URLSearchParams(location.hash.slice(1));
+      const scan = params.get('scan'), sample = params.get('sample');
+      if (scan && sample) openDetail(scan, sample, params.get('run') || localStorage.getItem(RUN_KEY(scan, sample)));
+      else showList();
+    }
+    window.addEventListener('hashchange', route);
+
+    function showList() {
+      stopStream();
+      $('detail-view').hidden = true;
+      $('list-view').hidden = false;
+      $('back-list').hidden = true;
+      $('crumb-here').textContent = '';
+      if (!state.scans.length) loadScans();
+    }
+
+    /* ============ 第一步：扫描列表 ============ */
+    async function loadScans() {
+      $('load-scans').disabled=true; showNotice('正在读取历史扫描……','');
+      try {
+        const data = await get('/scan-artifact/rounds');
+        state.scans = Array.isArray(data.scans) ? data.scans : [];
+        const box = $('scans'); box.replaceChildren();
+        if(!state.scans.length){ box.appendChild(el('div','empty','未发现历史扫描（webui 目录下没有带 results.json 的扫描目录）。')); }
+        state.scans.forEach(s => {
+          const card = el('div','scan-card'); card.tabIndex=0;
+          card.appendChild(el('b',null,s.repo_name||s.scan_id)).title = s.repo||'';
+          card.appendChild(el('div','sub',(s.started_at||'').replace('T',' ').slice(0,16)+' · '+s.scan_id.slice(0,8)+'…'));
+          const counts = el('div','counts');
+          const mk=(cls,label)=>{const c=el('span','chip '+cls);c.textContent=label+' '+fmt(s[label]);counts.appendChild(c);};
+          mk('v','vulnerable'); mk('i','inconclusive'); mk('s','safe'); mk('n','total');
+          if (s.errors) mk('e','errors');
+          card.appendChild(counts);
+          const total = (s.vulnerable||0)+(s.inconclusive||0)+(s.safe||0)+(s.protected||0)||(s.total||1);
+          const bar = el('div','bar');
+          const seg=(n,cls)=>{const sp=document.createElement('span');sp.className='b-'+cls;sp.style.width=(100*(n||0)/total).toFixed(1)+'%';bar.appendChild(sp);};
+          seg(s.vulnerable,'v'); seg(s.inconclusive,'i'); seg(s.safe,'s'); seg(s.protected,'p');
+          card.appendChild(bar);
+          card.appendChild(el('div','sub','模型 '+(s.model||'—')+(s.languages&&s.languages.length?' · '+s.languages.join(' / '):'')+(s.platform?' · '+s.platform:'')));
+          const pick = () => {
+            state.pickedScan = s.scan_id; state.allEntries = []; state.page = 1;
+            document.querySelectorAll('.scan-card').forEach(x=>x.classList.remove('picked'));
+            card.classList.add('picked');
+            $('entries-panel').hidden = false;
+            $('scan-title').textContent = '— '+s.repo_name+'（'+s.scan_id.slice(0,8)+'…）';
+            loadEntries();
+          };
+          card.addEventListener('click', pick);
+          card.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); pick(); } });
+          box.appendChild(card);
+        });
+        showNotice('已发现 '+state.scans.length+' 次扫描。点击选择一次扫描。','ok');
+      } catch(e){ showNotice(e.message||String(e),'error'); }
+      finally { $('load-scans').disabled=false; }
+    }
+    $('load-scans').addEventListener('click', loadScans);
+
+    /* ============ 第二步：条目列表 ============ */
+    async function loadEntries() {
+      if(!state.pickedScan) return;
+      showNotice('正在读取条目……','');
+      try {
+        const params = new URLSearchParams({scan_id: state.pickedScan});
+        if ($('finding').value) params.set('finding', $('finding').value);
+        const data = await get('/scan-artifact/entries?'+params.toString());
+        state.allEntries = Array.isArray(data.entries) ? data.entries : [];
+        const catSel = $('cat-filter'); const prev = catSel.value;
+        const cats = new Set();
+        state.allEntries.forEach(e => (e.vulnerability_categories||[]).forEach(c=>cats.add(c)));
+        catSel.innerHTML=''; { const o=document.createElement('option'); o.value=''; o.textContent='全部类型'; catSel.appendChild(o); }
+        [...cats].sort().forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o); });
+        if (prev && cats.has(prev)) catSel.value = prev;
+        state.page = 1;
+        renderEntries();
+        showNotice('','');
+      } catch(e){ showNotice(e.message||String(e),'error'); }
+    }
+    function filteredEntries() {
+      const cat = $('cat-filter').value;
+      const q = state.search.trim().toLowerCase();
+      return state.allEntries.filter(e => {
+        if (cat && !(e.vulnerability_categories||[]).includes(cat)) return false;
+        if (!q) return true;
+        const hay = [e.sample, e.function_analyzed, e.location, e.unit_id, e.cwe_id?('cwe-'+e.cwe_id):'', e.cwe_name,
+          (e.vulnerability_categories||[]).join(' ')]
+          .concat((e.location||'').split(':')[0]||'').join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    function entryMini(e) {
+      const row = el('div','mini');
+      const main = el('div','m-main');
+      const title = el('div','m-title');
+      title.appendChild(el('span','m-sample', e.sample));
+      title.appendChild(el('span','badge '+e.finding, e.finding));
+      if (e.cwe_id!=null) title.appendChild(el('span','badge cwe','CWE-'+e.cwe_id));
+      if (e.confidence!=null) title.appendChild(el('span','badge cwe','置信度 '+e.confidence));
+      main.appendChild(title);
+      main.appendChild(el('div','m-meta',(e.location||'—')+' · '+(e.function_analyzed||'—')));
+      row.appendChild(main);
+      const btn = el('button',null,'详情 / 执行'); btn.type='button';
+      btn.addEventListener('click',()=>{ location.hash = 'scan='+encodeURIComponent(state.pickedScan)+'&sample='+encodeURIComponent(e.sample); });
+      row.appendChild(btn);
+      return row;
+    }
+    function buildFileGroups(entries) {
+      const dirs = new Map();
+      for (const e of entries) {
+        const file = (e.location||'').split(':')[0] || '未知位置';
+        const idx = file.lastIndexOf('/');
+        const dir = idx>=0 ? file.slice(0,idx) : '(根目录)';
+        if(!dirs.has(dir)) dirs.set(dir, new Map());
+        const files = dirs.get(dir);
+        if(!files.has(file)) files.set(file, []);
+        files.get(file).push(e);
+      }
+      return new Map([...dirs.entries()].sort());
+    }
+    function buildTypeGroups(entries) {
+      const m = new Map();
+      for (const e of entries) {
+        const cats = (e.vulnerability_categories&&e.vulnerability_categories.length)? e.vulnerability_categories : ['未分类'];
+        for (const c of cats){ if(!m.has(c)) m.set(c,[]); m.get(c).push(e); }
+      }
+      return new Map([...m.entries()].sort());
+    }
+    function groupSection(name, countLabel, body, open) {
+      const d = el('details','group'); if (open) d.open = true;
+      const sum = el('summary');
+      sum.appendChild(el('span','g-name', name));
+      sum.appendChild(el('span','g-count', countLabel));
+      d.appendChild(sum);
+      const b = el('div','g-body'); b.appendChild(body); d.appendChild(b);
+      return d;
+    }
+    function renderEntries() {
+      const shown = filteredEntries();
+      const list = $('entries'); list.replaceChildren();
+      const pager = $('pager'); pager.replaceChildren();
+      const view = state.view;
+      $('page-toolbar').hidden = view !== 'flat';
+      const summary = $('entries-summary');
+      const scopeTxt = $('cat-filter').value ? '（类型过滤：'+$('cat-filter').value+'）' : '';
+      if (view === 'flat') {
+        const pages = Math.max(1, Math.ceil(shown.length / state.pageSize));
+        if (state.page > pages) state.page = pages;
+        const start = (state.page-1)*state.pageSize;
+        const slice = shown.slice(start, start+state.pageSize);
+        summary.textContent = '共 '+shown.length+' 条可动态测试条目'+scopeTxt+'，显示第 '+(shown.length? start+1:0)+'–'+Math.min(start+state.pageSize, shown.length)+' 条。点击「详情 / 执行」进入该条目的动态测试页。';
+        if(!shown.length){ list.appendChild(el('div','empty','没有匹配过滤/检索条件的条目。')); }
+        slice.forEach(e => {
+          const card = entryCard(e);
+          list.appendChild(card);
+        });
+        if (pages > 1) renderPager(pager, pages);
+      } else if (view === 'file') {
+        const groups = buildFileGroups(shown);
+        summary.textContent = '共 '+shown.length+' 条条目'+scopeTxt+'，按目录 → 文件分组为 '+groups.size+' 个目录。点击目录展开其中的文件与条目。';
+        if(!groups.size) list.appendChild(el('div','empty','没有匹配过滤/检索条件的条目。'));
+        groups.forEach((files, dir) => {
+          let n = 0; files.forEach(arr=>n+=arr.length);
+          const body = el('div');
+          files.forEach((arr, file) => {
+            const inner = el('div');
+            arr.forEach(e => inner.appendChild(entryMini(e)));
+            body.appendChild(groupSection(file, arr.length+' 条', inner, arr.length<=4));
+          });
+          list.appendChild(groupSection(dir+'/', n+' 条 · '+files.size+' 个文件', body, false));
+        });
+      } else {
+        const groups = buildTypeGroups(shown);
+        const sorted = [...groups.entries()].sort((a,b)=>b[1].length-a[1].length);
+        summary.textContent = '共 '+shown.length+' 条条目'+scopeTxt+'，按漏洞类型分组为 '+sorted.length+' 类（一条目可属多类）。';
+        if(!sorted.length) list.appendChild(el('div','empty','没有匹配过滤/检索条件的条目。'));
+        sorted.forEach(([cat, arr]) => {
+          const inner = el('div');
+          arr.forEach(e => inner.appendChild(entryMini(e)));
+          list.appendChild(groupSection(cat, arr.length+' 条', inner, arr.length<=6));
+        });
+      }
+    }
+    function renderPager(pager, pages) {
+      const mk = (label, page, opts) => {
+        const b = el('button',null,label); b.type='button';
+        if (opts&&opts.cur) b.classList.add('cur');
+        if (opts&&opts.dis) b.disabled = true;
+        else b.addEventListener('click',()=>{ state.page = page; renderEntries(); window.scrollTo({top:$('entries-panel').offsetTop-70, behavior:'smooth'}); });
+        pager.appendChild(b);
+      };
+      mk('‹ 上一页', state.page-1, {dis: state.page<=1});
+      const win = 2;
+      const shown = new Set([1, pages, state.page-1, state.page, state.page+1]);
+      let last = 0;
+      for (let p=1; p<=pages; p++) {
+        if (!shown.has(p)) continue;
+        if (p - last > 1) pager.appendChild(el('span','meta','…'));
+        mk(String(p), p, {cur: p===state.page});
+        last = p;
+      }
+      mk('下一页 ›', state.page+1, {dis: state.page>=pages});
+      pager.appendChild(el('span','meta','第 '+state.page+' / '+pages+' 页'));
+    }
+    function entryCard(e) {
+      const card = el('article','entry');
+      const head = el('div','entry-head');
+      const h3 = el('h3',null,e.sample); head.appendChild(h3);
+      const badges = el('div',null); badges.style.cssText='display:flex;gap:6px;flex-wrap:wrap;align-items:center;';
+      badges.appendChild(el('span','badge '+e.finding, e.finding));
+      if (e.cwe_id!=null) badges.appendChild(el('span','badge cwe','CWE-'+e.cwe_id+' '+(e.cwe_name||'')));
+      if (e.confidence!=null) badges.appendChild(el('span','badge cwe','置信度 '+e.confidence));
+      head.appendChild(badges); card.appendChild(head);
+      card.appendChild(el('div','meta','函数：'+(e.function_analyzed||'—')));
+      card.appendChild(el('div','meta','位置：'+(e.location||'—')));
+      const cats = el('div','cats');
+      (e.vulnerability_categories||[]).forEach(c=>cats.appendChild(el('span','cat',c)));
+      (e.impact||[]).forEach(c=>cats.appendChild(el('span','cat impact',c)));
+      if (cats.children.length) card.appendChild(cats);
+      if (e.attack_vector) {
+        const p = el('div','meta',e.attack_vector); p.style.marginTop='8px'; p.style.color='var(--ink)';
+        p.style.display='-webkit-box'; p.style.webkitBoxOrient='vertical'; p.style.webkitLineClamp='2'; p.style.overflow='hidden';
+        card.appendChild(p);
+      }
+      const row = el('div','btn-row');
+      const goBtn = el('button',null,'详情 / 执行动态测试'); goBtn.type='button';
+      goBtn.addEventListener('click',()=>{ location.hash = 'scan='+encodeURIComponent(state.pickedScan)+'&sample='+encodeURIComponent(e.sample); });
+      row.appendChild(goBtn);
+      row.appendChild(el('span','meta','unit_id: '+(e.unit_id||'—')));
+      card.appendChild(row);
+      const det = renderEntryAnalysis(e);
+      card.appendChild(det);
+      return card;
+    }
+    function renderEntryAnalysis(e) {
+      const det = document.createElement('details'); det.className='detail';
+      const sum = document.createElement('summary'); sum.textContent='展开完整分析细节'; det.appendChild(sum);
+      const addSec=(parent,title,node,variant)=>{const s=el('div','sec'+(variant?' '+variant:''));s.appendChild(el('div','sec-t',title));s.appendChild(node);parent.appendChild(s);};
+      const scen = el('div');
+      if (e.attack_scenario) addSec(scen,'攻击场景', (()=>{const d=el('div','textblock');d.textContent=e.attack_scenario;return d;})(), 'sec-rose');
+      if (e.preconditions) addSec(scen,'前置条件', (()=>{const d=el('div','textblock');d.textContent=e.preconditions;return d;})(), 'sec-amber');
+      if (e.dataflow_summary) addSec(scen,'数据流摘要', (()=>{const d=el('div','textblock');d.textContent=e.dataflow_summary;return d;})(), 'sec-indigo');
+      if (e.attack_vector) addSec(scen,'攻击向量', (()=>{const d=el('div','textblock');d.textContent=e.attack_vector;return d;})(), 'sec-purple');
+      if (scen.children.length) det.appendChild(scen);
+      if (e.reasoning) {
+        const s2 = el('div','sec sec-gray'); s2.appendChild(el('div','sec-t','LLM 判定推理'));
+        const d=el('div','textblock'); d.textContent=e.reasoning; s2.appendChild(d); det.appendChild(s2);
+      }
+      if (e.guard_analysis) {
+        const s3 = el('div','sec sec-gray'); s3.appendChild(el('div','sec-t','守卫（guard）分析'));
+        const d=el('div','textblock'); d.textContent=e.guard_analysis; s3.appendChild(d); det.appendChild(s3);
+      }
+      const ev = el('div','sec sec-amber'); ev.appendChild(el('div','sec-t','证据 · 反证 · 缺失证据'));
+      const evWrap = el('div');
+      const mkList=(title,items,neg)=>{ if(!items||!items.length)return; evWrap.appendChild(el('div',null,title)).style.fontWeight='700'; const ul=el('ul','ev'+(neg?' neg':'')); items.forEach(x=>ul.appendChild(el('li',null,x))); evWrap.appendChild(ul); };
+      mkList('支持证据', e.evidence); mkList('反证', e.counterevidence, true); mkList('缺失证据', e.missing_evidence, true);
+      ev.appendChild(evWrap); det.appendChild(ev);
+      if (e.code_excerpt) {
+        const s4 = el('div','sec sec-indigo'); s4.appendChild(el('div','sec-t','漏洞函数源码（含内联依赖，截取）'));
+        const c = el('pre','codeblock'); c.textContent = e.code_excerpt; s4.appendChild(c); det.appendChild(s4);
+      }
+      return det;
+    }
+    $('reload').addEventListener('click', loadEntries);
+    $('cat-filter').addEventListener('change', ()=>{ state.page=1; renderEntries(); });
+    $('finding').addEventListener('change', loadEntries);
+    let searchTimer = null;
+    $('search').addEventListener('input', ()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(()=>{ state.search=$('search').value; state.page=1; renderEntries(); }, 200); });
+    const viewBtns = {flat:$('view-flat'), file:$('view-file'), type:$('view-type')};
+    for (const [key,btn] of Object.entries(viewBtns)) {
+      btn.addEventListener('click', ()=>{ state.view=key; state.page=1;
+        Object.values(viewBtns).forEach(b=>b.classList.remove('on')); btn.classList.add('on'); renderEntries(); });
+    }
+    $('page-size').addEventListener('change', ()=>{ state.pageSize = parseInt($('page-size').value,10)||50; state.page=1; renderEntries(); });
+
+    /* ==================================================================
+       详情视图
+       ================================================================== */
+    const STAGES = [
+      ['start','启动'], ['compile','适配 · 编译侦查'], ['baseline','基线快照'],
+      ['send','输入发送'], ['observe','效果观察'], ['verdict','判定'], ['done','完成'],
+    ];
+    const PHASE_STAGE = {BASELINED:'baseline', MUTATED:'send', OBSERVED:'observe', VERDICTED:'verdict'};
+
+    async function openDetail(scanId, sampleId, runIdHint) {
+      stopStream();
+      $('list-view').hidden = true;
+      $('detail-view').hidden = false;
+      $('back-list').hidden = false;
+      $('crumb-here').textContent = '扫描 '+(scanId||'').slice(0,8)+'… · 条目 '+sampleId;
+      $('detail-scan').textContent = '— 扫描 '+(scanId||'').slice(0,8)+'…';
+      state.detail = {scanId, sampleId, entry: null, runId: runIdHint || null};
+      state.cmds = []; state.phasesSeen = {}; state.runDone = false;
+      resetProgressUI();
+      $('entry-summary').replaceChildren(el('div','empty','正在读取条目……'));
+      $('entry-analysis').replaceChildren();
+      $('result-panel').hidden = true; $('result-body').replaceChildren();
+      $('run-panel').hidden = false;
+      $('run').disabled = false;
+      loadDevices();
+      try {
+        const params = new URLSearchParams({scan_id: scanId});
+        const data = await get('/scan-artifact/entries?'+params.toString());
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        const entry = entries.find(x => x.sample === sampleId);
+        if (!entry) { $('entry-summary').replaceChildren(el('div','empty','未在该扫描中找到条目 '+sampleId+'（可能判定过滤不同）。可返回列表后重新选择。')); return; }
+        state.detail.entry = entry;
+        renderDetailEntry(entry);
+        if (state.detail.runId) resumeRun(state.detail.runId);
+      } catch(e) {
+        $('entry-summary').replaceChildren(el('div','empty','条目读取失败：'+(e.message||String(e))));
+      }
+    }
+    function renderDetailEntry(e) {
+      const head = el('div','entry-head');
+      const h3 = el('h3',null,e.sample); head.appendChild(h3);
+      const badges = el('div',null); badges.style.cssText='display:flex;gap:6px;flex-wrap:wrap;align-items:center;';
+      badges.appendChild(el('span','badge '+e.finding, e.finding));
+      if (e.cwe_id!=null) badges.appendChild(el('span','badge cwe','CWE-'+e.cwe_id+' '+(e.cwe_name||'')));
+      if (e.confidence!=null) badges.appendChild(el('span','badge cwe','置信度 '+e.confidence));
+      head.appendChild(badges);
+      const box = $('entry-summary'); box.replaceChildren();
+      box.appendChild(head);
+      box.appendChild(el('div','meta','函数：'+(e.function_analyzed||'—')));
+      box.appendChild(el('div','meta','位置：'+(e.location||'—')));
+      box.appendChild(el('div','meta','仓库：'+(e.repository||'—')+' · unit_id: '+(e.unit_id||'—')));
+      const cats = el('div','cats');
+      (e.vulnerability_categories||[]).forEach(c=>cats.appendChild(el('span','cat',c)));
+      (e.impact||[]).forEach(c=>cats.appendChild(el('span','cat impact',c)));
+      if (cats.children.length) box.appendChild(cats);
+      if (e.attack_vector) { const p=el('div','meta',e.attack_vector); p.style.color='var(--ink)'; p.style.marginTop='8px'; box.appendChild(p); }
+      $('entry-analysis').replaceChildren(renderEntryAnalysis(e));
+      const det = $('entry-analysis').querySelector('details.detail');
+      if (det) det.open = true;
+    }
+    $('back-list').addEventListener('click', ()=>{ location.hash = ''; });
+
+    async function loadDevices() {
+      const sel = $('device-select');
+      try {
+        const data = await get('/scan-artifact/devices');
+        sel.replaceChildren();
+        const devices = Array.isArray(data.devices) ? data.devices : [];
+        if(!devices.length){
+          const opt = document.createElement('option'); opt.value='';
+          opt.textContent = data.error ? '未发现设备（'+data.error+'）' : '未发现已连接设备';
+          sel.appendChild(opt); sel.disabled = true; return;
+        }
+        devices.forEach(d => { const opt=document.createElement('option'); opt.value=d.serial; opt.textContent=d.serial; sel.appendChild(opt); });
+        sel.disabled = false;
+      } catch(e) {
+        sel.replaceChildren(); const opt=document.createElement('option'); opt.value=''; opt.textContent='设备列表获取失败';
+        sel.appendChild(opt); sel.disabled = true;
+      }
+    }
+
+    $('run-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if(!state.detail || !state.detail.entry){ showNotice('条目尚未加载完成。','error'); return; }
+      const serial = $('device-select').value;
+      if(!serial){ showNotice('请先连接设备（设备列表为空）。','error'); return; }
+      $('run').disabled=true;
+      resetProgressUI();
+      $('progress-panel').hidden = false;
+      setLive('on','正在启动后台动态测试……');
+      try {
+        const values = { scan_id: state.detail.scanId, sample: state.detail.sampleId, device: serial };
+        if ($('hdc-select').value) values.hdc = $('hdc-select').value;
+        const data = await post('/scan-artifact/run', values);
+        state.detail.runId = data.run_id;
+        localStorage.setItem(RUN_KEY(state.detail.scanId, state.detail.sampleId), data.run_id);
+        setLive('on','后台执行中（run '+(data.run_id||'').slice(0,8)+'…）；以下为实时事件流。');
+        connectRun(data.run_id);
+        $('progress-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+      } catch(e) {
+        setLive('err','启动失败：'+(e.message||String(e)));
+        $('run').disabled=false;
+      }
+    });
+
+    /* ---------- 实时进度 ---------- */
+    function resetProgressUI() {
+      $('stages').replaceChildren();
+      for (const [key,label] of STAGES) {
+        const d = el('div','stage'); d.dataset.key = key;
+        d.appendChild(el('div','st-t',label));
+        d.appendChild(el('div','st-v','待开始'));
+        $('stages').appendChild(d);
+      }
+      $('progress-log').replaceChildren(el('div','empty','暂无事件'));
+      $('cmdfeed').replaceChildren(el('div','evtline','等待命令……'));
+      $('cmd-count').textContent = '';
+      $('progress-error').hidden = true;
+      $('result-panel').hidden = true;
+      state.cmds = []; state.phasesSeen = {}; state.runDone = false;
+    }
+    function stageEl(key){ return $('stages').querySelector('.stage[data-key="'+key+'"]'); }
+    function markStage(key, cls, text) {
+      const d = stageEl(key); if(!d) return;
+      d.classList.remove('active','done','failed'); if (cls) d.classList.add(cls);
+      d.querySelector('.st-v').textContent = text;
+    }
+    function setLive(cls, text) { $('live-dot').className='pulse '+(cls||''); $('live-text').textContent=text||''; }
+    function appendEvent(kind, text, ts) {
+      const log = $('progress-log');
+      if (log.querySelector('.empty')) log.replaceChildren();
+      const line = el('div','evtline');
+      line.appendChild(el('span','e-kind','['+kind+']'));
+      line.appendChild(document.createTextNode(' '+(ts?fmtTs(ts)+' ':'')+text));
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+    function appendCmd(row) {
+      state.cmds.push(row);
+      const feed = $('cmdfeed');
+      if (feed.querySelector('.evtline') && feed.children.length===1) feed.replaceChildren();
+      const line = el('div','cmdline'+(row.returncode?' err':''));
+      line.appendChild(el('span','c-idx','#'+(row.index!=null?row.index:'?')+' '));
+      if (row.purpose) line.appendChild(el('span','c-purpose','['+row.purpose+'] '));
+      const argv = (row.argv||[]);
+      // argv[0]=hdc argv[1]=serial(-t) argv[2]=serial 后接实际远端命令
+      const shown = argv.slice(3).join(' ');
+      line.appendChild(el('span','c-dim','$ '));
+      line.appendChild(document.createTextNode(shown.length>220? shown.slice(0,220)+'…' : shown));
+      line.appendChild(el('span', row.returncode?'c-bad':'c-ok', '  rc='+row.returncode));
+      line.appendChild(el('span','c-dim', '  '+(row.elapsed_ms!=null?row.elapsed_ms+'ms':'')));
+      const det = document.createElement('details');
+      const sum = document.createElement('summary'); sum.textContent='详情'; sum.style.cssText='color:#7dd3fc;cursor:pointer;font-size:11px;';
+      det.appendChild(sum);
+      const pre = el('pre',null);
+      pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;margin:6px 0 0;color:#c8d6ea;';
+      pre.textContent = 'argv: '+JSON.stringify(argv)+'\n--- stdout ---\n'+(row.stdout||'(空)')+'\n--- stderr ---\n'+(row.stderr||'(空)');
+      det.appendChild(pre);
+      line.appendChild(det);
+      feed.appendChild(line);
+      while (feed.children.length > 400) feed.removeChild(feed.firstChild);
+      feed.scrollTop = feed.scrollHeight;
+      $('cmd-count').textContent = '共 '+state.cmds.length+' 条';
+    }
+    function handleProgress(row) {
+      const kind = row.event || '';
+      if (kind === 'entry_discovery_turn') {
+        // 协议匹配前的入口发现 loop：与后续契约侦查分开显示，避免用户误以为
+        // entry_hints 是 Stage1 单轮适配器直接推断出的已验证端点。
+        markStage('start','done','已启动');
+        markStage('compile','active','入口发现 / 协议匹配中');
+        const rec = row.record || {};
+        const line = el('div','evtline recon');
+        const log = $('progress-log');
+        if (log.querySelector('.empty')) log.replaceChildren();
+        line.appendChild(el('span','e-kind','[入口发现'+(rec.turn!=null?(' '+rec.turn+'/'+rec.max_turns):'')+']'));
+        line.appendChild(document.createTextNode(' '+(row.ts?fmtTs(row.ts)+' ':'')+(row.detail||'')));
+        if (rec.tool) {
+          const extra = rec.ok === false ? ' · 拒绝/失败' : (rec.tool === 'finalize' ? ' · 提交候选' : '');
+          line.appendChild(el('span','e-dim', extra));
+        }
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+      } else if (kind === 'recon_turn') {
+        // 侦查 loop 每轮事件先于 run_started 到达（编译阶段），同步点亮 compile 步骤
+        markStage('start','done','已启动');
+        markStage('compile','active','侦查 / 编译中');
+        const rec = row.record || {};
+        const line = el('div','evtline recon');
+        const log = $('progress-log');
+        if (log.querySelector('.empty')) log.replaceChildren();
+        line.appendChild(el('span','e-kind','[侦查'+(rec.turn!=null?(' '+rec.turn+'/'+rec.max_turns):'')+']'));
+        line.appendChild(document.createTextNode(' '+(row.ts?fmtTs(row.ts)+' ':'')+(row.detail||'')));
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+      } else if (kind === 'run_started') {
+        markStage('start','done','已启动');
+        markStage('compile','active','侦查 / 编译中');
+        appendEvent('启动', row.detail||'', row.ts);
+      } else if (kind === 'phase') {
+        const key = PHASE_STAGE[(row.detail||'').toUpperCase()];
+        if (key === 'baseline') {
+          markStage('compile','done','完成'); markStage('baseline','done','已采样');
+          appendEvent('阶段','基线快照完成（BASELINED）', row.ts);
+        } else if (key === 'send') {
+          markStage('baseline','done','已采样'); markStage('send','done','已发送');
+          appendEvent('阶段','攻击输入已发送（MUTATED）', row.ts);
+        } else if (key === 'observe') {
+          markStage('send','done','已发送'); markStage('observe','done','已采集');
+          appendEvent('阶段','效果观察完成（OBSERVED）', row.ts);
+        } else if (key === 'verdict') {
+          markStage('observe','done','已采集'); markStage('verdict','done','已判定');
+          appendEvent('阶段','判定完成（VERDICTED）', row.ts);
+        }
+      } else if (kind === 'error') {
+        markStage('done','failed','失败');
+        $('progress-error').hidden = false;
+        $('progress-error').textContent = '执行错误：'+(row.detail||'');
+        appendEvent('错误', row.detail||'', row.ts);
+        setLive('err','执行出错');
+      } else if (kind === 'run_finished') {
+        markStage('verdict','done','已判定'); markStage('done','done','已收尾');
+        appendEvent('完成', row.detail||'', row.ts);
+      } else if (row.detail) {
+        appendEvent(kind||'事件', row.detail, row.ts);
+      }
+    }
+    function connectRun(runId) {
+      stopStream();
+      const es = new EventSource('/scan-artifact/runs/'+encodeURIComponent(runId)+'/events');
+      state.es = es;
+      es.addEventListener('progress', ev => { try { handleProgress(JSON.parse(ev.data)); } catch(_){} });
+      es.addEventListener('device-cmd', ev => { try { appendCmd(JSON.parse(ev.data)); } catch(_){} });
+      es.addEventListener('done', ev => {
+        es.close(); state.es = null;
+        let payload = {};
+        try { payload = JSON.parse(ev.data); } catch(_){}
+        onRunDone(payload);
+      });
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED && !state.runDone) {
+          setLive('err','事件流已断开（服务重启或网络中断）。可刷新页面恢复。');
+        }
+      };
+    }
+    function stopStream() { if (state.es) { state.es.close(); state.es = null; } }
+    async function resumeRun(runId) {
+      // 恢复：查状态端点。终态直接渲染结果；运行中重连 SSE。
+      $('progress-panel').hidden = false;
+      try {
+        const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId));
+        const run = data.run || {};
+        const status = String(run.status||'running').toLowerCase();
+        if (status === 'running') {
+          setLive('on','发现进行中的执行（run '+runId.slice(0,8)+'…），已重新接入实时事件流。');
+          markStage('start','done','已启动'); markStage('compile','active','侦查 / 编译中');
+          connectRun(runId);
+        } else {
+          state.runDone = true;
+          setLive(status==='error'||status==='cancelled'?'err':'', '历史执行已结束（'+status+'）。');
+          await fetchAndRenderResult(runId);
+        }
+      } catch(e) {
+        // run 目录不存在（如 run_id 无效）：给出提示但不阻塞页面
+        setLive('err','未能找到 run '+runId.slice(0,8)+'… 的执行记录（'+(e.message||'')+'）。可重新发起执行。');
+      }
+    }
+    async function onRunDone(payload) {
+      state.runDone = true;
+      const status = String(payload.status||'').toLowerCase();
+      if (status === 'error' || status === 'cancelled') {
+        setLive('err','执行结束：'+status);
+        const run = payload.run || {};
+        if (run.error) { $('progress-error').hidden=false; $('progress-error').textContent='执行错误：'+run.error; }
+        markStage('done','failed', status==='cancelled'?'已取消':'失败');
+      } else {
+        setLive('','执行结束：'+status+'。正在加载完整结果……');
+        markStage('done','done','已收尾');
+      }
+      $('run').disabled = false;
+      await fetchAndRenderResult(state.detail && state.detail.runId);
+    }
+    async function fetchAndRenderResult(runId) {
+      if (!runId) return;
+      try {
+        const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/result');
+        renderResult(data);
+        $('result-panel').hidden = false;
+        $('result-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+      } catch(e) {
+        if (state.runDone) {
+          const box = $('result-body'); box.replaceChildren();
+          box.appendChild(el('div','empty','结果尚未生成或读取失败：'+(e.message||String(e))));
+          $('result-panel').hidden = false;
+        }
+      }
+    }
+
+    /* ============ 结果可视化 ============ */
+    const STAGE_LABEL = {reachability:'① 可达性', influence:'② 影响力', effect:'③ 效果'};
+    const STAGE_OK = {reachability:'INPUT_DELIVERED', influence:'SINK_CONTROLLED', effect:'EFFECT_OBSERVED'};
+    function chainNode(key, value) {
+      const node = el('div','chain-node');
+      node.appendChild(el('div','cn-t',STAGE_LABEL[key]||key));
+      const ok = value === STAGE_OK[key];
+      node.classList.add(ok ? 'pass' : (value ? 'block' : 'fail'));
+      node.appendChild(el('div','cn-v', value || '—'));
+      return node;
+    }
+    function renderResult(data) {
+      const r = data.result || {};
+      const body = $('result-body'); body.replaceChildren();
+      const v = r.verdict || {};
+      const status = r.status || (data.run_status==='error' ? 'ERROR' : '—');
+      const hero = el('div','status-hero');
+      hero.appendChild(el('div','status-big '+status, status));
+      const grade = r.evidence_grade || '—';
+      hero.appendChild(el('div','grade-pill '+grade, grade)).title = '证据等级';
+      const sub = el('div','hero-sub');
+      sub.textContent = 'run '+(r.run_id||data.run_id||'—')+' · 契约 '+(v.contract_id||'—')+' · 漏洞类 '+(r.vuln_class||'—')+' · pattern '+(r.pattern||'—');
+      hero.appendChild(sub);
+      body.appendChild(hero);
+      if (v.gap) body.appendChild(el('div','hint','判定缺口：'+v.gap));
+      const allErrors = [...(r.adapter_errors||[]), ...(r.compile_errors||[]), ...(data.errors||[]), data.run_error?[data.run_error]:[]];
+      if (allErrors.length) {
+        const d = el('div','hint'); d.style.color='var(--bad)'; d.textContent = '错误：'+allErrors.join('；');
+        body.appendChild(d);
+      }
+      if (status === 'ERROR' || !r.verdict) {
+        // 管线失败：没有 verdict，给出原始 JSON 便于排查后直接返回
+        const pre = el('pre','raw'); pre.textContent = JSON.stringify(data, null, 2);
+        body.appendChild(pre);
+        $('result-json').textContent = JSON.stringify(data, null, 2);
+        return;
+      }
+      body.appendChild(el('div','sec-t','攻击链三阶段判定'));
+      const chain = el('div','chain');
+      chain.appendChild(chainNode('reachability', v.reachability));
+      chain.appendChild(el('div','chain-arrow','→'));
+      chain.appendChild(chainNode('influence', v.influence));
+      chain.appendChild(el('div','chain-arrow','→'));
+      chain.appendChild(chainNode('effect', v.effect));
+      body.appendChild(chain);
+      if (v.influence_blocker) body.appendChild(el('div','hint','影响阻断：'+v.influence_blocker));
+      const oracle = v.oracle || {};
+      const detailForms = (oracle.details && oracle.details.forms && typeof oracle.details.forms==='object') ? Object.entries(oracle.details.forms) : [];
+      const summaryForms = (oracle.forms && typeof oracle.forms==='object' && typeof oracle.forms.create !== 'boolean') ? Object.entries(oracle.forms) : [];
+      const forms = detailForms.length ? detailForms.map(([name,f])=>{ const passed = oracle.forms===true || (typeof oracle.forms==='object' && oracle.forms[name]===true) || f.passed===true; return [name, {...f, passed}]; })
+                   : summaryForms.map(([name,f])=>[name, {...f, passed: f.passed===true}]);
+      if (forms.length) {
+        body.appendChild(el('div','sec-t','预言机（Oracle）逐 form 证据 · kind='+ (oracle.kind||'—') +' · effect_observed='+(oracle.effect_observed?'是':'否')));
+        const wrap = el('div','oracle-cards');
+        for (const [name, f] of forms) {
+          const c = el('div','o-card');
+          const h = el('div','o-h'); h.appendChild(el('span',null,'form: '+name));
+          h.appendChild(el('span', f.passed?'o-ok':'o-no', f.passed?'通过':'未通过'));
+          c.appendChild(h);
+          if (f.path) c.appendChild(el('div','o-path', f.path));
+          if (f.before_exists!==undefined || f.after_exists!==undefined) {
+            const kv = kvGrid([['执行前存在', f.before_exists?'是':'否'], ['执行后存在', f.after_exists?'是':'否'], ['内容匹配', f.pattern_found?'命中':'未命中']]);
+            c.appendChild(kv);
+          }
+          if (f.content) { const cc=el('div','o-content'); cc.textContent=f.content; c.appendChild(cc); }
+          wrap.appendChild(c);
+        }
+        body.appendChild(wrap);
+        if ((oracle.refutation_checks||[]).length) {
+          const s = el('div','sec sec-amber'); s.appendChild(el('div','sec-t','否证检查（refutation）'));
+          const ul = el('ul','ev');
+          oracle.refutation_checks.forEach(rc => {
+            const extra = rc.pattern ? '（pattern='+rc.pattern+'）' : (rc.forms ? '（'+Object.entries(rc.forms).map(([k,x])=>k+':'+(x?'✓':'✗')).join(' ')+'）' : '');
+            ul.appendChild(el('li',null,rc.check+' — '+(rc.passed?'通过':'未通过')+extra));
+          });
+          s.appendChild(ul); body.appendChild(s);
+        }
+      }
+      const notes = r.compile_notes||[];
+      const entryDiscovery = r.entry_discovery || {};
+      if (Object.keys(entryDiscovery).length) {
+        const s = el('div','sec sec-cyan');
+        s.appendChild(el('div','sec-t','入口发现 Agent Loop（协议匹配前）'));
+        const candidates = entryDiscovery.candidates || [];
+        s.appendChild(kvGrid([
+          ['状态', entryDiscovery.status || '—'],
+          ['轮次', entryDiscovery.turns_used != null ? entryDiscovery.turns_used : '—'],
+          ['设备命令数', entryDiscovery.device_commands_used != null ? entryDiscovery.device_commands_used : '—'],
+          ['候选数', candidates.length],
+        ]));
+        if (candidates.length) {
+          const ul = el('ul','ev');
+          candidates.forEach(c => {
+            const evidence = [...(c.source_evidence||[]), ...(c.device_evidence||[])].join('；');
+            ul.appendChild(el('li',null,(c.hint||c.endpoint||'—')+' · '+(c.confidence||'—')+(evidence?' · '+evidence:'')));
+          });
+          s.appendChild(ul);
+        }
+        if ((entryDiscovery.missing_evidence||[]).length) {
+          const d = el('div','hint'); d.textContent = '待补证据：'+entryDiscovery.missing_evidence.join('；'); s.appendChild(d);
+        }
+        body.appendChild(s);
+      }
+      const recon = notes.find(n=>n.startsWith('recon-note:'));
+      if (recon) {
+        const s = el('div','sec sec-gray'); s.appendChild(el('div','sec-t','侦查 loop 结论（LLM 对源码与设备的查证）'));
+        const d = el('div','recon'); d.textContent = recon.replace(/^recon-note:\s*/,''); s.appendChild(d); body.appendChild(s);
+      }
+      const ct = r.contract || {};
+      if (ct.protocol || ct.fault) {
+        const s = el('div','sec sec-blue'); s.appendChild(el('div','sec-t','PoC 构造（编译产物契约）'));
+        if (ct.description) { const d1 = el('div','hint'); d1.textContent = ct.description; s.appendChild(d1); }
+        const proto = ct.protocol || {};
+        const fvs = proto.field_values || {};
+        if (Object.keys(fvs).length) {
+          s.appendChild(el('div','kv-sub','协议字段（protocol.field_values）· 描述符 '+(proto.descriptor_id||'—')));
+          s.appendChild(kvGrid(Object.entries(fvs)));
+        }
+        if ((proto.frame_sequence||[]).length) {
+          s.appendChild(el('div','kv-sub','报文帧序列 · 帧间隔 '+(proto.inter_frame_delay_seconds!=null?proto.inter_frame_delay_seconds+'s':'—')));
+          const ol = el('ol','ev');
+          proto.frame_sequence.forEach(fr => {
+            const key = String(fr).replace(/^frame_/, '');
+            const tmpl = (proto.param_space||{})[key+'_template'] || (proto.param_space||{})[key] || fvs[key] || '';
+            ol.appendChild(el('li',null, String(fr)+(tmpl?(' → '+tmpl):'')));
+          });
+          s.appendChild(ol);
+        }
+        const ps = proto.param_space || {};
+        if (ps.note) { const n1 = el('div','hint'); n1.textContent = '参数空间说明：'+ps.note; s.appendChild(n1); }
+        const fault = ct.fault || {};
+        if (fault.operator || fault.description) {
+          s.appendChild(el('div','kv-sub','故障注入（fault）· 算子 '+(fault.operator||'—')));
+          if (fault.description) { const fd = el('div','recon'); fd.textContent = fault.description; s.appendChild(fd); }
+          if (fault.evidence) { const fe = el('div','hint'); fe.textContent = '证据：'+fault.evidence; s.appendChild(fe); }
+        }
+        const guards = fault.expected_guards || [];
+        if (guards.length) {
+          s.appendChild(el('div','kv-sub','绕过的守卫条件（expected_guards）'));
+          const ul = el('ul','ev'); guards.forEach(g=>ul.appendChild(el('li',null,g)));
+          s.appendChild(ul);
+        }
+        const artifacts = ((ct.oracle||{}).artifact_forms)||[];
+        if (artifacts.length) {
+          s.appendChild(el('div','kv-sub','预期效果物（oracle.artifact_forms）'));
+          const ol2 = el('ol','ev');
+          artifacts.forEach(a => {
+            const bits = [];
+            if (a.form) bits.push(a.form);
+            if (a.path) bits.push('路径 '+a.path);
+            if (a.content_contains) bits.push('内容含 "'+a.content_contains+'"');
+            ol2.appendChild(el('li',null,bits.join(' · ')||JSON.stringify(a)));
+          });
+          s.appendChild(ol2);
+        }
+        const lg = (ct.oracle||{}).evidence;
+        if (lg) { const lgd = el('div','hint'); lgd.textContent = '预言机判定逻辑：'+lg; s.appendChild(lgd); }
+        const risk = ct.risk || {};
+        if (risk.target_process) {
+          s.appendChild(el('div','kv-sub','风险评估'));
+          s.appendChild(kvGrid([['目标进程', risk.target_process], ['风险层级', risk.risk_tier||'—'],
+            ['允许崩溃预言机', risk.crash_oracle_allowed?'是':'否'], ['可重启', risk.restartable?'是':'否']]));
+        }
+        body.appendChild(s);
+      }
+      const metaPairs = [
+        ['适配器', r.adapter_status], ['编译', r.compile_status],
+        ['入口线索', (r.entry_hints||[]).join(' · ')],
+        ['入口发现状态', (r.entry_discovery&&r.entry_discovery.status)||'—'],
+        ['sink', r.sink],
+        ['协议描述符', (notes.find(n=>n.startsWith('描述符命中:'))||'').replace('描述符命中: ','')],
+        ['侦查轮次', ((notes.find(n=>/侦查 loop: finalized/.test(n))||[]).match && (notes.find(n=>/侦查 loop: finalized/.test(n))||'').match(/turns=(\d+)/)||[])[1]],
+        ['设备命令数', (r.record&&r.record.command_count!=null)?r.record.command_count:(state.cmds.length||null)],
+        ['record', r.record_path],
+        ['ledger', state.detail&&state.detail.runId ? '~/.openant/webui/scan-artifact/runs/'+state.detail.runId+'/ledger.jsonl' : ''],
+      ];
+      body.appendChild(el('div','sec-t sec-pipeline-t','管线元信息'));
+      body.appendChild(kvGrid(metaPairs));
+      renderDeliverables(state.detail && state.detail.runId, r.deliverables);
+      const fsRows = [];
+      for (const o of (r.record&&r.record.observations||[])) {
+        for (const [path, info] of Object.entries(o.filesystem||{})) fsRows.push([path, info]);
+      }
+      if (fsRows.length) {
+        const s = el('div','sec sec-indigo'); s.appendChild(el('div','sec-t','设备侧文件系统证据'));
+        const t = el('table','fs-table');
+        const thead = el('thead'); const trh = el('tr');
+        ['路径','存在','大小','内容'].forEach(h=>trh.appendChild(el('th',null,h)));
+        thead.appendChild(trh); t.appendChild(thead);
+        const tb = el('tbody');
+        for (const [path, info] of fsRows) {
+          const tr = el('tr');
+          tr.appendChild(el('td',null,path));
+          const ex = el('td'); const sp = el('span', info.exists?'tag-exists':'tag-absent', info.exists?'存在':'不存在'); ex.appendChild(sp); tr.appendChild(ex);
+          tr.appendChild(el('td',null, info.size!=null?info.size+' B':'—'));
+          const td = el('td');
+          if (info.content) { const cc=el('div','o-content'); cc.textContent=info.content; td.appendChild(cc); }
+          else td.textContent='—';
+          tr.appendChild(td); tb.appendChild(tr);
+        }
+        t.appendChild(tb); s.appendChild(t); body.appendChild(s);
+      }
+      const hits = (r.record && r.record.hilog_hits) || [];
+      if (hits.length) {
+        const s = el('div','sec sec-gray'); s.appendChild(el('div','sec-t','hilog 命中'));
+        const ul = el('ul','ev'); hits.forEach(h=>ul.appendChild(el('li',null,(h.tag?'['+h.tag+'] ':'')+(h.line||h.message||JSON.stringify(h)))));
+        s.appendChild(ul); body.appendChild(s);
+      }
+      const det = document.createElement('details'); det.className='detail';
+      const sum = document.createElement('summary'); sum.textContent='完整判定详情（verdict / bridge / entry / record）'; det.appendChild(sum);
+      const vsec = el('div','sec sec-rose'); vsec.appendChild(el('div','sec-t','verdict'));
+      const vraw = el('pre','raw'); vraw.textContent = JSON.stringify(v,null,2); vsec.appendChild(vraw); det.appendChild(vsec);
+      const bsec = el('div','sec sec-gray'); bsec.appendChild(el('div','sec-t','桥接（扫描条目 → 中文语义卡）'));
+      const bgrid = kvGrid(Object.entries(r.bridge||{}).map(([k,x])=>[k, typeof x==='string'&&x.length>800?x.slice(0,800)+'…':x]));
+      bsec.appendChild(bgrid); det.appendChild(bsec);
+      const esec = el('div','sec sec-gray'); esec.appendChild(el('div','sec-t','原始条目（entry）'));
+      const eraw = el('pre','raw'); eraw.textContent = JSON.stringify(r.entry||{},null,2); esec.appendChild(eraw); det.appendChild(esec);
+      if (r.record) { const rsec=el('div','sec sec-gray'); rsec.appendChild(el('div','sec-t','run record'));
+        const rraw=el('pre','raw'); rraw.textContent=JSON.stringify(r.record,null,2); rsec.appendChild(rraw); det.appendChild(rsec); }
+      body.appendChild(det);
+      $('result-json').textContent = JSON.stringify(data, null, 2);
+    }
+
+    /* ============ 交付物下载（PoC + Exp） ============ */
+    const DELIV_LABEL = {
+      'poc.hap': 'PoC 触发应用（安装即复现）',
+      'exp.hap': 'Exp 利用应用（升级载荷）',
+      'contract_poc.json': 'PoC 契约',
+      'contract_exp.json': 'Exp 契约',
+      'evidence_exp.json': 'Exp 执行验证证据',
+      'README.md': '使用说明',
+      'poc_source_Index.ets': 'PoC 触发应用源码（ArkTS）',
+      'exp_source_Index.ets': 'Exp 利用应用源码（ArkTS）',
+    };
+    async function renderDeliverables(runId, deliverables) {
+      const body = $('result-body');
+      if (!runId) return;
+      let files = [];
+      // result.json 内嵌的 deliverables 元数据优先；缺失时回退列表端点
+      if (deliverables && deliverables.status === 'packaged' && (deliverables.files||[]).length) {
+        files = deliverables.files;
+      } else if (!deliverables || deliverables.status === 'packaged') {
+        try {
+          const listing = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables');
+          files = listing.files || [];
+        } catch(e) { /* 无交付物：静默（非 CONFIRMED / 旧 run） */ }
+      }
+      if (!files.length) return;
+      const s = el('div','sec sec-green'); s.appendChild(el('div','sec-t','交付物下载（PoC + Exp 完整利用包）'));
+      const d = deliverables || {};
+      if (d.status === 'packaged') {
+        const bits = [];
+        if (d.victim_path) bits.push('受害文件 '+(d.victim_path)+(d.victim_source==='llm'?'（LLM 推断）':'（模板默认）'));
+        if (d.exp_verdict && d.exp_verdict.effect_observed) bits.push('✓ Exp 效果已在板卡实证');
+        else if (d.exp_verdict) bits.push('⚠ Exp 效果未观测（证据已留档）');
+        if (bits.length) { const h = el('div','hint'); h.textContent = bits.join(' · '); s.appendChild(h); }
+        if (d.exp_payload) { const p = el('div','recon'); p.textContent = 'Exp 载荷：'+d.exp_payload; s.appendChild(p); }
+      }
+      const t = el('table','fs-table'); const tb = el('tbody');
+      const trh = el('tr');
+      ['文件','说明','大小','操作'].forEach(h=>trh.appendChild(el('th',null,h)));
+      const thead = el('thead'); thead.appendChild(trh); t.appendChild(thead);
+      for (const f of files) {
+        const tr = el('tr');
+        const nameTd = el('td'); const a = document.createElement('a');
+        a.href = f.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/'+encodeURIComponent(f.name));
+        a.textContent = f.name; a.download = f.name; a.className='dl-link'; nameTd.appendChild(a); tr.appendChild(nameTd);
+        tr.appendChild(el('td',null,DELIV_LABEL[f.name]||''));
+        tr.appendChild(el('td',null, f.bytes!=null ? (f.bytes>=1024?(f.bytes/1024).toFixed(1)+' KB':f.bytes+' B') : '—'));
+        const opTd = el('td');
+        if (DELIV_PREVIEWABLE[f.name]) {
+          const vb = el('button','view-btn','在线预览');
+          vb.addEventListener('click', () => openDelivViewer(runId, f));
+          opTd.appendChild(vb);
+        } else { opTd.textContent = '—'; }
+        tr.appendChild(opTd);
+        tb.appendChild(tr);
+      }
+      t.appendChild(tb); s.appendChild(t); body.appendChild(s);
+    }
+
+    /* ============ 交付物在线预览 ============ */
+    // 可在线预览的文本类交付物（hap 是二进制安装包，只提供下载；源码 .ets 可预览）
+    const DELIV_PREVIEWABLE = {
+      'contract_poc.json': true, 'contract_exp.json': true,
+      'evidence_exp.json': true, 'README.md': true,
+      'poc_source_Index.ets': true, 'exp_source_Index.ets': true,
+    };
+    let viewerEl = null;
+    function closeDelivViewer() { if (viewerEl) { viewerEl.remove(); viewerEl = null; } }
+    // 极简 Markdown 渲染：标题/表格/代码块/行内 code/加粗/链接/列表（无外链脚本依赖）
+    function mdToHtml(md) {
+      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const lines = md.split(/\r?\n/); const out = [];
+      let inCode = false, tableBuf = [];
+      const flushTable = () => {
+        if (!tableBuf.length) return;
+        const rows = tableBuf.map(r => r.replace(/^\||\|$/g,'').split('|').map(c=>c.trim()));
+        rows.splice(1, 1); // 第二行是 |---|---| 分隔
+        let html = '<table><tbody>';
+        rows.forEach((cells, ri) => {
+          html += '<tr>' + cells.map(c => (ri===0?'<th>':'<td>')+inline(c)+(ri===0?'</th>':'</td>')).join('') + '</tr>';
+        });
+        out.push(html+'</tbody></table>'); tableBuf = [];
+      };
+      const inline = s => esc(s)
+        .replace(/`([^`]+)`/g,'<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+      for (const line of lines) {
+        if (/^```/.test(line)) {
+          if (inCode) { out.push('</pre>'); inCode = false; }
+          else { flushTable(); out.push('<pre>'); inCode = true; }
+          continue;
+        }
+        if (inCode) { out.push(esc(line)); continue; }
+        if (/^\s*\|.*\|\s*$/.test(line)) { tableBuf.push(line.trim()); continue; }
+        flushTable();
+        const h = line.match(/^(#{1,4})\s+(.*)/);
+        if (h) { out.push(`<h${h[1].length+1}>`+inline(h[2])+`</h${h[1].length+1}>`); continue; }
+        if (/^\s*[-*]\s+/.test(line)) { out.push('<li>'+inline(line.replace(/^\s*[-*]\s+/,''))+'</li>'); continue; }
+        if (/^\s*\d+\.\s+/.test(line)) { out.push('<li>'+inline(line.replace(/^\s*\d+\.\s+/,''))+'</li>'); continue; }
+        if (!line.trim()) { out.push(''); continue; }
+        out.push('<p>'+inline(line)+'</p>');
+      }
+      if (inCode) out.push('</pre>');
+      flushTable();
+      return out.join('\n');
+    }
+    async function openDelivViewer(runId, f) {
+      closeDelivViewer();
+      const url = f.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/'+encodeURIComponent(f.name));
+      const box = el('div','viewer');
+      const inner = el('div','viewer-box');
+      const head = el('div','viewer-h');
+      head.appendChild(el('span',null,'在线预览 · '+(DELIV_LABEL[f.name]||f.name)));
+      const closeBtn = el('button','viewer-close','×');
+      closeBtn.title = '关闭（Esc）';
+      closeBtn.addEventListener('click', closeDelivViewer);
+      head.appendChild(closeBtn);
+      inner.appendChild(head);
+      const meta = el('div','viewer-meta');
+      meta.textContent = f.name + (f.bytes!=null ? ' · '+(f.bytes>=1024?(f.bytes/1024).toFixed(1)+' KB':f.bytes+' B') : '');
+      inner.appendChild(meta);
+      const bodyEl = el('div','viewer-body'); bodyEl.textContent = '加载中……';
+      inner.appendChild(bodyEl);
+      box.appendChild(inner);
+      box.addEventListener('click', e => { if (e.target === box) closeDelivViewer(); });
+      document.body.appendChild(box); viewerEl = box;
+      try {
+        const resp = await fetch(url, {credentials:'same-origin'});
+        if (!resp.ok) throw new Error('读取失败（'+resp.status+'）');
+        const text = await resp.text();
+        if (f.name.endsWith('.md')) {
+          bodyEl.className = 'viewer-body md-view';
+          bodyEl.innerHTML = mdToHtml(text);
+        } else if (f.name.endsWith('.ets')) {
+          // ArkTS 源码：等宽无换行排版；载荷常量行加 » 标记（FIRST/SECOND/MARKER 即报文内容）
+          bodyEl.className = 'viewer-body src-view';
+          const hl = text.split(/\r?\n/).map(line => {
+            const isPayload = /const (FIRST|SECOND|THIRD|MARKER|TARGET)\s*=/.test(line);
+            return isPayload ? '» ' + line : '  ' + line;
+          });
+          bodyEl.textContent = hl.join('\n');
+        } else {
+          // JSON：格式化展示
+          try { bodyEl.textContent = JSON.stringify(JSON.parse(text), null, 2); }
+          catch(_) { bodyEl.textContent = text; }
+        }
+      } catch(err) {
+        bodyEl.className = 'viewer-err';
+        bodyEl.textContent = '预览失败：'+(err.message||String(err));
+      }
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDelivViewer(); });
+
+    route();
+  </script>
+</body>
+</html>

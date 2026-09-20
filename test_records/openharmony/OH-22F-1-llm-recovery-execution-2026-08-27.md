@@ -31,7 +31,7 @@ core.platforms.openharmony.llm_call_graph_recovery.run_recovery_review()
 新增测试：
 
 ```text
-libs/openant-core/tests/openharmony/test_llm_recovery_execution.py
+libs/vulnfounder-core/tests/openharmony/test_llm_recovery_execution.py
 ```
 
 RED 阶段：
@@ -45,8 +45,8 @@ ImportError: cannot import name 'run_recovery_review'
 GREEN 阶段：
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony/test_llm_recovery_execution.py
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony/test_llm_recovery_execution.py
 ```
 
 结果：
@@ -65,8 +65,8 @@ PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
 ## 3. 相关回归测试
 
 ```bash
-PYTHONPATH=libs/openant-core .venv/bin/pytest -q \
-  libs/openant-core/tests/openharmony
+PYTHONPATH=libs/vulnfounder-core .venv/bin/pytest -q \
+  libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：

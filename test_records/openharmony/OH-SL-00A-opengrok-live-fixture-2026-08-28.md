@@ -46,10 +46,10 @@
 
 ## 4. 独立测试
 
-在 `OpenAnt` 虚拟环境中执行：
+在 `VulnFounder` 虚拟环境中执行：
 
 ```text
-cd libs/openant-core
+cd libs/vulnfounder-core
 ../../.venv/bin/python -m pytest -q \
   tests/source_locator/test_opengrok_live_fixture_contract.py \
   tests/test_opengrok_client.py \
@@ -62,7 +62,7 @@ cd libs/openant-core
 
 ```text
 .venv/bin/ruff check \
-  libs/openant-core/tests/source_locator/test_opengrok_live_fixture_contract.py
+  libs/vulnfounder-core/tests/source_locator/test_opengrok_live_fixture_contract.py
 ```
 
 结果：`All checks passed!`。

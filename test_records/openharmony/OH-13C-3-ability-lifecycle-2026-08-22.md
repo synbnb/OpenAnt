@@ -18,18 +18,18 @@
 
 ## 2. 修改文件
 
-- `libs/openant-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
+- `libs/vulnfounder-core/utilities/agentic_enhancer/openharmony_entry_point_detector.py`
   - 增加 Ability 上下文、类名和路径规则；
   - 增加 `ability_lifecycle` 匹配；
   - 增加 System Ability 优先级，修正名称含 Ability 的系统服务误报。
-- `libs/openant-core/tests/platforms/test_openharmony_entry_points.py`
+- `libs/vulnfounder-core/tests/platforms/test_openharmony_entry_points.py`
   - 增加 Ability 回调、System Ability 优先级和无关 `OnCommand` 的回归用例。
 
 本阶段复用了 OH-13C-2 已建立的文件证据传递链路；没有改变 generic 平台的默认检测行为。
 
 ## 3. 定向测试结果
 
-执行目录：`libs/openant-core`
+执行目录：`libs/vulnfounder-core`
 
 ```text
 ../../.venv/bin/python -m pytest tests/platforms tests/openharmony tests/parsers/c -q

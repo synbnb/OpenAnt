@@ -2,7 +2,7 @@
 
 日期：2026-08-28
 阶段：源码定位器 SL-03B：GitCode URL、remote 和 revision 确定性策略
-代码目录：`OpenAnt/libs/openant-core`
+代码目录：`VulnFounder/libs/vulnfounder-core`
 对应提交：待本阶段验收后提交
 
 ## 1. 本阶段解决的问题
@@ -95,14 +95,14 @@ allowed    = false
 
 ## 4. 实现文件
 
-- `libs/openant-core/core/source_locator/repository_policy.py`
+- `libs/vulnfounder-core/core/source_locator/repository_policy.py`
   - URL、remote、revision 和 mapping 四层策略；
   - `RepositoryPolicyDecision`、`GitCodeURLValidation`、`RevisionValidation`；
   - `RepositoryPolicy` 复用封装；
   - JSON 序列化和 clone 门禁属性。
-- `libs/openant-core/core/source_locator/__init__.py`
+- `libs/vulnfounder-core/core/source_locator/__init__.py`
   - 导出 SL-03B 公共接口。
-- `libs/openant-core/tests/source_locator/test_repository_policy.py`
+- `libs/vulnfounder-core/tests/source_locator/test_repository_policy.py`
   - 正常 GitCode 映射、allowlist、凭据、路径、重定向、版本、来源和序列化测试。
 
 ## 5. 测试命令与结果
@@ -112,7 +112,7 @@ allowed    = false
 ### SL-03B 专项测试
 
 ```bash
-cd OpenAnt/libs/openant-core
+cd VulnFounder/libs/vulnfounder-core
 ../../.venv/bin/ruff check \
   core/source_locator/repository_policy.py \
   core/source_locator/__init__.py \

@@ -373,7 +373,24 @@ _SOCKET_FD_HINT_RE = re.compile(
 _SOCKET_DISPATCH_LINE_RE = re.compile(
     r"\b(?:onreceive(?:request|message)?\w*|onrecv(?:message)?\w*|"
     r"handle(?:recv|msg|message)\w*|process(?:recv|msg|message|request)\w*|"
-    r"messagehandler\w*|recvmessage\w*)\b",
+    r"messagehandler\w*|recvmessage\w*|"
+    # A number of socket frameworks deliver an accepted connection through
+    # a callback instead of exposing recv/accept in the business translation
+    # unit.  Keep this narrow: only connection-callback shaped names are
+    # promoted, and they are still required to come from a target-bound
+    # source file selected by attribution.
+    r"(?:\b|_)on[_]?connection(?:[_]?(?:callback|cb))?|"
+    r"(?:\b|_)connection[_]?(?:callback|cb)|(?:\b|_)on[_]?connect)\b",
+    re.IGNORECASE,
+)
+# Callback-based socket frameworks often spell the callback as
+# ``socket_server_on_connection_cb``.  Its ``on_connection`` token is not a
+# word-boundary match because it is preceded by an underscore, so keep a
+# separate narrowly-scoped expression instead of weakening the general
+# dispatch matcher (which would increase false positives in arbitrary names).
+_SOCKET_CONNECTION_CALLBACK_RE = re.compile(
+    r"(?:\b|_)(?:on[_]?connection(?:[_]?(?:callback|cb))?|"
+    r"connection[_]?(?:callback|cb)|on[_]?connect)\b",
     re.IGNORECASE,
 )
 _SOCKET_SERVER_ANCHOR_RE = re.compile(
@@ -2354,11 +2371,21 @@ def _build_socket_entrypoint_sources(
         # repeat the socket name.
         candidates: list[Evidence] = [anchor]
         if anchor.kind not in _ENTRYPOINT_EVIDENCE_KINDS:
+            bounded_context_dirs = list(_target_bound_context_directories(store, target))
+            # A target-scoped registration row is itself the binding fact when
+            # the socket identity is held in a variable (for example
+            # ``u->socket_path``).  In that case the path cannot be inferred
+            # from the literal line, so retain the selected source directory
+            # as a one-file local scan boundary.  This does not widen the
+            # search to sibling files or the whole repository.
+            anchor_parent = path.rsplit("/", 1)[0] or "/"
+            if anchor_parent not in bounded_context_dirs:
+                bounded_context_dirs.append(anchor_parent)
             for local_line, local_kind in _target_local_entrypoint_lines(
                 path,
                 document,
                 target,
-                _target_bound_context_directories(store, target),
+                tuple(bounded_context_dirs),
                 allow_bound_file=True,
             ):
                 cache_key = (path, local_line, local_kind)
@@ -3457,7 +3484,8 @@ def _source_transport_profile(content: str) -> dict[str, int]:
     return {
         "receive": len(_SOCKET_NETWORK_RECEIVE_CALL_RE.findall(text))
         + len(_SOCKET_READ_CALL_RE.findall(text)),
-        "dispatch": len(_SOCKET_DISPATCH_LINE_RE.findall(text)),
+        "dispatch": len(_SOCKET_DISPATCH_LINE_RE.findall(text))
+        + len(_SOCKET_CONNECTION_CALLBACK_RE.findall(text)),
         "server_anchor": len(_SOCKET_SERVER_ANCHOR_RE.findall(text)),
         # ``bind``/``listen`` also occur in reusable client-side helpers (for
         # example faultloggerd's shared StartListen routine).  Keep a direct
@@ -3562,7 +3590,7 @@ def _target_local_entrypoint_lines(
                     continue
             lines.append((line_number, "socket_accept_read"))
         elif (
-            _SOCKET_DISPATCH_LINE_RE.search(line)
+            (_SOCKET_DISPATCH_LINE_RE.search(line) or _SOCKET_CONNECTION_CALLBACK_RE.search(line))
             and "=" not in line
             and not line.rstrip().endswith(";")
         ):
@@ -3597,6 +3625,19 @@ def _function_source_is_socket_entrypoint(function_name: str, source: str) -> bo
         and re.search(r"\bcase\b", text)
     ):
         return True
+    # Some reusable socket servers call a protocol callback after accepting
+    # the descriptor.  The callback itself is the first service-side
+    # function that receives the connection, even though it does not call
+    # recv() directly.  Require both a connection-callback-shaped function
+    # name and a protocol/IO hand-off in its body; this avoids promoting
+    # unrelated lifecycle hooks named ``OnConnection``.
+    compact_name = re.sub(r"[^A-Za-z0-9]", "", str(function_name or ""))
+    if re.search(r"(?i)(?:onconnection|connection(?:callback|cb)|onconnect)$", compact_name):
+        if re.search(
+            r"(?i)\b(?:protocol|native|io|channel|connection|accept|socket)\w*\s*\(",
+            text,
+        ):
+            return True
     # A dispatch function may receive an already decoded message from a
     # framework callback rather than call recv itself.  Do not treat every
     # ``switch`` in a business helper as a socket entry (``SetMark`` and

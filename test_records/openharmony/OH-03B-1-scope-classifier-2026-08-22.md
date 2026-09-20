@@ -13,12 +13,12 @@
 
 ## 新增实现
 
-- [scope.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/platforms/openharmony/scope.py)
+- [scope.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/platforms/openharmony/scope.py)
   - 角色：`production`、`test`、`fuzz`、`generated`、`third_party`、`build_metadata`、`interface_metadata`、`unsupported_source`、`unknown`。
   - scope：`production`、`security-tests`、`all`。
   - 静态读取 `bundle.json` 与 GN 文件中的 target/source 字符串，不执行 GN 或仓库代码。
   - 限制元数据文件大小，并拒绝绝对路径、`..` 路径和 symlink fallback 越界读取。
-- [repository_scanner.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/parsers/c/repository_scanner.py)
+- [repository_scanner.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/parsers/c/repository_scanner.py)
   - OpenHarmony 模式下生成文件角色、每类角色计数、unsupported 文件、跳过原因和构建元数据。
   - `skip_tests=True` 映射到 `production`，`skip_tests=False` 映射到 `all`，保留旧参数兼容性。
 

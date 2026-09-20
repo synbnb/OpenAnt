@@ -56,7 +56,7 @@ faultloggerd 是 OpenHarmony 的故障记录和栈转储服务。它不是通过
 ## 3. 实际执行命令
 
 ~~~sh
-HDC="/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/utilities/dynamic_tester/toolchains/commandline-tools-mac-arm64-6.1.0.860/command-line-tools/sdk/default/openharmony/toolchains/hdc"
+HDC="/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/utilities/dynamic_tester/toolchains/commandline-tools-mac-arm64-6.1.0.860/command-line-tools/sdk/default/openharmony/toolchains/hdc"
 SERIAL="150100424a5444345209d945be14b900"
 
 "$HDC" -t "$SERIAL" shell '

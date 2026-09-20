@@ -19,12 +19,12 @@
 
 ## 修改文件
 
-- [core/parser_adapter.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/parser_adapter.py)：新增平台参数、C 子进程 argv 转发和 scope 读取。
-- [core/scanner.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/scanner.py)：把显式平台传入单语言/多语言解析入口，并回填扫描结果覆盖数据。
-- [core/schemas.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/schemas.py)：新增可选 `platform_coverage`/`platform_selection` 字段并保持 generic 序列化兼容。
-- [openant/cli.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/openant/cli.py)：parse/scan 命令校验和转发平台值，更新帮助文本。
-- [parsers/c/test_pipeline.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/parsers/c/test_pipeline.py)：C 管线平台参数和 dataset scope 元数据。
-- 测试：[test_parser_adapter_platform.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/test_parser_adapter_platform.py)、[test_parse_platform_flags.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/test_parse_platform_flags.py)、[test_scanner.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/test_scanner.py)、[test_c_pipeline_platform.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/openharmony/test_c_pipeline_platform.py)。
+- [core/parser_adapter.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/parser_adapter.py)：新增平台参数、C 子进程 argv 转发和 scope 读取。
+- [core/scanner.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/scanner.py)：把显式平台传入单语言/多语言解析入口，并回填扫描结果覆盖数据。
+- [core/schemas.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/schemas.py)：新增可选 `platform_coverage`/`platform_selection` 字段并保持 generic 序列化兼容。
+- [openant/cli.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/openant/cli.py)：parse/scan 命令校验和转发平台值，更新帮助文本。
+- [parsers/c/test_pipeline.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/parsers/c/test_pipeline.py)：C 管线平台参数和 dataset scope 元数据。
+- 测试：[test_parser_adapter_platform.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/test_parser_adapter_platform.py)、[test_parse_platform_flags.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/test_parse_platform_flags.py)、[test_scanner.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/test_scanner.py)、[test_c_pipeline_platform.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py)。
 
 ## TDD 结果
 
@@ -101,14 +101,14 @@ PYTHONPATH=tests:. ../../.venv/bin/python -m pytest -q \
 
 结果：`80 passed in 1.92s`。
 
-Go CLI 回归（模块目录为 `apps/openant-cli`）：
+Go CLI 回归（模块目录为 `apps/vulnfounder-cli`）：
 
 ```text
 GOCACHE=/private/tmp/openant-go-build-cache GOPATH=/private/tmp/openant-go \
   ../../.devtools/go1.25.7/go/bin/go test ./cmd -v
 ```
 
-结果：`PASS`，`ok github.com/knostic/open-ant-cli/cmd`。其中探测失败用例的失败子调用是测试设计的预期负例，外层测试整体通过。
+结果：`PASS`，`ok github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd`。其中探测失败用例的失败子调用是测试设计的预期负例，外层测试整体通过。
 
 ## 质量检查
 

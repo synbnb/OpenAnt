@@ -2,11 +2,11 @@
 
 ## 1. 结论
 
-本轮第一次在 OpenAnt 项目目录内使用刚解压的 Command Line Tools 6.1.0.860，完成了从 ArkTS 源码编译、HAP 打包、手动签名、签名校验到真实 OpenHarmony 开发版安装和 Ability 生命周期冒烟的完整闭环。
+本轮第一次在 VulnFounder 项目目录内使用刚解压的 Command Line Tools 6.1.0.860，完成了从 ArkTS 源码编译、HAP 打包、手动签名、签名校验到真实 OpenHarmony 开发版安装和 Ability 生命周期冒烟的完整闭环。
 
 | 环节 | 结果 |
 |---|---|
-| 工具链解压到 OpenAnt 动态验证目录 | PASS |
+| 工具链解压到 VulnFounder 动态验证目录 | PASS |
 | 压缩包完整性和 SHA-256 校验 | PASS |
 | API 23 SDK / HDC 版本识别 | PASS |
 | Hvigor 任务发现 | PASS |
@@ -26,11 +26,11 @@
 
 | 项目 | 实际值 |
 |---|---|
-| OpenAnt | `/Users/shiyu/学习/hyl/new/OpenAnt` |
-| 工具链目录 | `libs/openant-core/utilities/dynamic_tester/toolchains/commandline-tools-mac-arm64-6.1.0.860` |
+| VulnFounder | `/Users/shiyu/学习/hyl/new/VulnFounder` |
+| 工具链目录 | `libs/vulnfounder-core/utilities/dynamic_tester/toolchains/commandline-tools-mac-arm64-6.1.0.860` |
 | HDC | `.../sdk/default/openharmony/toolchains/hdc` |
 | HDC 版本 | `3.2.0c` |
-| HAP fixture | `libs/openant-core/utilities/dynamic_tester/fixtures/hap_smoke_app` |
+| HAP fixture | `libs/vulnfounder-core/utilities/dynamic_tester/fixtures/hap_smoke_app` |
 | fixture 来源 | `/Users/shiyu/学习/hyl/harmony_exploit/02_hap_app`（复制后作为本地构建样例） |
 | 设备序列号 | `150100424a5444345209d945be14b900` |
 | 设备系统 | `OpenHarmony 6.1.0.26` |
@@ -39,7 +39,7 @@
 | 设备 ABI | `aarch64` |
 | bundle | `com.security.research.trigger` |
 
-原始压缩包 SHA-256、工具链目录和 HDC 路径见 [TOOLCHAIN-6.1.0.860.md](../../libs/openant-core/utilities/dynamic_tester/TOOLCHAIN-6.1.0.860.md)。
+原始压缩包 SHA-256、工具链目录和 HDC 路径见 [TOOLCHAIN-6.1.0.860.md](../../libs/vulnfounder-core/utilities/dynamic_tester/TOOLCHAIN-6.1.0.860.md)。
 
 ## 3. 构建过程
 
@@ -51,7 +51,7 @@ Hvigor 6.23.7 会拒绝包含中文目录名的工程路径，报错为：
 Invalid project path ... path must only letters/digits ...
 ```
 
-因此本轮把 fixture 暂时复制到 `/private/tmp/openant-hap-build-20260824` 构建，SDK 本体仍然使用 OpenAnt 目录内的 6.1.0.860 工具链。构建完成后，HAP 和公开校验证书链已复制回 OpenAnt 的测试产物目录；这只是工具链兼容性 workaround，不改变源码和运行产物的归属。
+因此本轮把 fixture 暂时复制到 `/private/tmp/openant-hap-build-20260824` 构建，SDK 本体仍然使用 VulnFounder 目录内的 6.1.0.860 工具链。构建完成后，HAP 和公开校验证书链已复制回 VulnFounder 的测试产物目录；这只是工具链兼容性 workaround，不改变源码和运行产物的归属。
 
 ### 3.2 构建配置
 
@@ -62,7 +62,7 @@ fixture 根目录 `build-profile.json5` 使用：
 - `targetSdkVersion: 23`；
 - `runtimeOS: OpenHarmony`。
 
-`local.properties` 在临时构建目录中使用 OpenAnt 内置 SDK 的绝对路径，避免构建过程误读主机上其他 SDK。
+`local.properties` 在临时构建目录中使用 VulnFounder 内置 SDK 的绝对路径，避免构建过程误读主机上其他 SDK。
 
 ### 3.3 Hvigor 和打包结果
 
@@ -88,15 +88,15 @@ ENOENT: no such file or directory, stat '/private/tmp/openant-hap-build-20260824
 
 ## 4. 手动签名和校验
 
-手动签名使用 OpenHarmony Release 证书链、profile 和授权 keystore，签名工具来自 OpenAnt 内置 SDK：
+手动签名使用 OpenHarmony Release 证书链、profile 和授权 keystore，签名工具来自 VulnFounder 内置 SDK：
 
 ```text
-libs/openant-core/utilities/dynamic_tester/toolchains/
+libs/vulnfounder-core/utilities/dynamic_tester/toolchains/
   commandline-tools-mac-arm64-6.1.0.860/command-line-tools/sdk/
   default/openharmony/toolchains/lib/hap-sign-tool.jar
 ```
 
-使用 `sign-app -mode localSign`、`SHA256withECDSA`、`compatibleVersion 23` 和 `signCode 0` 完成签名。私钥密码和 keystore 没有写入本记录，也没有复制到 OpenAnt 产物目录。
+使用 `sign-app -mode localSign`、`SHA256withECDSA`、`compatibleVersion 23` 和 `signCode 0` 完成签名。私钥密码和 keystore 没有写入本记录，也没有复制到 VulnFounder 产物目录。
 
 签名 HAP：
 
@@ -133,7 +133,7 @@ verify-app success
 
 ### 5.1 HDC 连接
 
-使用 OpenAnt 内置 HDC 3.2.0c 执行：
+使用 VulnFounder 内置 HDC 3.2.0c 执行：
 
 ```bash
 hdc kill

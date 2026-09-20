@@ -45,20 +45,20 @@ reverse_call_graph
 
 ## 3. 修改文件
 
-- `apps/openant-cli/internal/server/server.go`
+- `apps/vulnfounder-cli/internal/server/server.go`
   - 新增 `/scan/{id}/explore/{name}` 路由；
   - 增加安全 JSON 解析、白名单、大小限制、分页、筛选、集合切换和单项详情；
   - 增加 `available_collections`，支持函数表和两张调用图分别浏览。
-- `apps/openant-cli/ui/scan.html`
+- `apps/vulnfounder-cli/ui/scan.html`
   - 增加友好视图/原始 JSON 切换；
   - 增加搜索、语言、单元类型、结论、入口、可达筛选；
   - 增加分页、集合切换、单项详情、字段树懒展开和复制 JSON；
   - 增加中英文翻译及原有语言切换兼容。
-- `apps/openant-cli/internal/server/artifact_test.go`
+- `apps/vulnfounder-cli/internal/server/artifact_test.go`
   - 增加数据集搜索、分页、位置和完整单元详情测试；
   - 增加 analyzer 函数表搜索和调用图集合切换测试；
   - 增加非 JSON、非法分页、非法布尔参数测试。
-- `apps/openant-cli/internal/server/ui_i18n_test.go`
+- `apps/vulnfounder-cli/internal/server/ui_i18n_test.go`
   - 增加结构化浏览器关键 DOM 和行为标记检查。
 
 ## 4. 自动化测试
@@ -68,7 +68,7 @@ reverse_call_graph
 命令：
 
 ```bash
-sed -n '/<script>/,/<\\/script>/p' apps/openant-cli/ui/scan.html \
+sed -n '/<script>/,/<\\/script>/p' apps/vulnfounder-cli/ui/scan.html \
   | sed '1d;$d' \
   | node --check
 ```
@@ -80,7 +80,7 @@ sed -n '/<script>/,/<\\/script>/p' apps/openant-cli/ui/scan.html \
 命令：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 GOTOOLCHAIN=local GOTELEMETRY=off \
 GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
@@ -104,7 +104,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 命令：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 GOTOOLCHAIN=local GOTELEMETRY=off \
 GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \
@@ -119,7 +119,7 @@ GOCACHE="$PWD/../../.devtools/gocache" \
 命令：
 
 ```bash
-cd apps/openant-cli
+cd apps/vulnfounder-cli
 GOTOOLCHAIN=local GOTELEMETRY=off \
 GOPATH="$PWD/../../.devtools/gopath" \
 GOMODCACHE="$PWD/../../.devtools/gopath/pkg/mod" \

@@ -47,23 +47,23 @@
 
 ## 3. 涉及代码
 
-- `libs/openant-core/core/platforms/openharmony/ipc_graph.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py`
   - 保存函数参数、返回类型、类名和静态属性；
   - 读取 `class_bases`；
   - 增加类型形状归一化、Stub 继承链检查和契约候选排序；
   - 增加缺失生成代码时的 `transaction_to_handler` 证据边。
-- `libs/openant-core/core/platforms/openharmony/reachability.py`
+- `libs/vulnfounder-core/core/platforms/openharmony/reachability.py`
   - 增加 `entry_points` 结果字段；
   - 从合法 `ipc_transaction → transaction_to_handler → function` 关系提取外部入口。
-- `libs/openant-core/core/parser_adapter.py`
+- `libs/vulnfounder-core/core/parser_adapter.py`
   - 在空入口保护判断前合并语义外部入口；
   - 保证语义入口只扩大 reachable 集合，不裁剪原生 reachable 集合；
   - 记录 `entry_points_added` 和语义入口明细。
-- `libs/openant-core/parsers/c/test_pipeline.py`
+- `libs/vulnfounder-core/parsers/c/test_pipeline.py`
   - 将同样的语义入口合并逻辑接入 C/C++ 流水线。
 - 测试文件：
-  - `libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py`
-  - `libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py`
+  - `libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py`
+  - `libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py`
 
 ## 4. 单元和回归测试
 
@@ -73,8 +73,8 @@
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/platforms/test_openharmony_ipc_graph.py \
-  libs/openant-core/tests/openharmony/test_semantic_reachability_overlay.py
+  libs/vulnfounder-core/tests/platforms/test_openharmony_ipc_graph.py \
+  libs/vulnfounder-core/tests/openharmony/test_semantic_reachability_overlay.py
 ```
 
 结果：`26 passed`。
@@ -90,15 +90,15 @@
 ### 4.2 OpenHarmony 相关回归
 
 ```text
-.venv/bin/python -m pytest -q libs/openant-core/tests/openharmony
+.venv/bin/python -m pytest -q libs/vulnfounder-core/tests/openharmony
 ```
 
 结果：`171 passed, 2 skipped`。
 
 ```text
 .venv/bin/python -m pytest -q \
-  libs/openant-core/tests/openharmony/test_c_pipeline_platform.py \
-  libs/openant-core/tests/parsers/c
+  libs/vulnfounder-core/tests/openharmony/test_c_pipeline_platform.py \
+  libs/vulnfounder-core/tests/parsers/c
 ```
 
 结果：`103 passed`。
@@ -107,10 +107,10 @@
 
 ```text
 .venv/bin/python -m compileall -q \
-  libs/openant-core/core/platforms/openharmony/ipc_graph.py \
-  libs/openant-core/core/platforms/openharmony/reachability.py \
-  libs/openant-core/core/parser_adapter.py \
-  libs/openant-core/parsers/c/test_pipeline.py
+  libs/vulnfounder-core/core/platforms/openharmony/ipc_graph.py \
+  libs/vulnfounder-core/core/platforms/openharmony/reachability.py \
+  libs/vulnfounder-core/core/parser_adapter.py \
+  libs/vulnfounder-core/parsers/c/test_pipeline.py
 ```
 
 结果：`COMPILE_OK`。
@@ -155,7 +155,7 @@ parameter_match = scalar, sequence；matched = 2；mismatched = 0
 命令：
 
 ```text
-.venv/bin/python libs/openant-core/parsers/c/test_pipeline.py \
+.venv/bin/python libs/vulnfounder-core/parsers/c/test_pipeline.py \
   source_code_base/multimedia_audio_framework \
   --output /tmp/openant-oh23b-audio-dRtegQ \
   --platform openharmony --processing-level reachable --skip-tests \

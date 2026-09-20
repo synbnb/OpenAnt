@@ -44,29 +44,29 @@ OH-15 已经把 OpenHarmony 的边界、IDL/SA/IPC 语义和 Unit 上下文接�
 
 ## 3. 修改文件
 
-- [application_context.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/context/application_context.py)
+- [application_context.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/context/application_context.py)
   - 新增 `openharmony_component` 类型；
   - 增加 baseline、冲突、仓库 advisory 和 provenance 的兼容字段；
   - 增加 `has_openharmony_baseline()`。
-- [openharmony_context.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/context/openharmony_context.py)
+- [openharmony_context.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/context/openharmony_context.py)
   - 新增 baseline 生成和单调合并实现。
-- [scanner.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/scanner.py)
+- [scanner.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/scanner.py)
   - OpenHarmony app-context 阶段接入合并；
   - 将 provenance 传递到 ScanResult、scan report 和 pipeline output；
   - 兼容旧版 duck-typed context。
-- [schemas.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/schemas.py)
+- [schemas.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/schemas.py)
   - 新增可选 `application_context_provenance`。
-- [reporter.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/core/reporter.py)
+- [reporter.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/core/reporter.py)
   - `pipeline_output.json` 增加可选 provenance。
-- [vulnerability_analysis.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/prompts/vulnerability_analysis.py)
+- [vulnerability_analysis.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/prompts/vulnerability_analysis.py)
   - Stage 1 强制渲染 OpenHarmony baseline 和 advisory exclusion 语义。
-- [verification_prompts.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/prompts/verification_prompts.py)
+- [verification_prompts.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/prompts/verification_prompts.py)
   - Stage 2 使用同一平台最低基线。
-- [threat_model_render.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/prompts/threat_model_render.py)
+- [threat_model_render.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/prompts/threat_model_render.py)
   - 增加 mandatory baseline、边界、输入和检查项渲染。
-- [generator.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/report/generator.py)
+- [generator.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/report/generator.py)
   - 报告 header 确定性显示 OpenHarmony baseline 和合并冲突数量。
-- [test_application_context_baseline.py](/Users/shiyu/学习/hyl/new/OpenAnt/libs/openant-core/tests/openharmony/test_application_context_baseline.py)
+- [test_application_context_baseline.py](/Users/shiyu/学习/hyl/new/VulnFounder/libs/vulnfounder-core/tests/openharmony/test_application_context_baseline.py)
   - 新增 11 项专项测试，包含真实 scanner artifact 链路。
 
 ## 4. TDD 记录
@@ -76,8 +76,8 @@ OH-15 已经把 OpenHarmony 的边界、IDL/SA/IPC 语义和 Unit 上下文接�
 先加入专项测试，再执行：
 
 ```text
-OpenAnt/.venv/bin/pytest -q \
-  OpenAnt/libs/openant-core/tests/openharmony/test_application_context_baseline.py
+VulnFounder/.venv/bin/pytest -q \
+  VulnFounder/libs/vulnfounder-core/tests/openharmony/test_application_context_baseline.py
 ```
 
 结果：测试收集失败，`ModuleNotFoundError: context.openharmony_context`。该失败对应尚未实现的 baseline 模块，确认测试没有依赖旧实现伪通过。
@@ -117,7 +117,7 @@ OpenAnt/.venv/bin/pytest -q \
 
 ## 6. 完整测试集观察
 
-曾执行整个 `libs/openant-core/tests`：
+曾执行整个 `libs/vulnfounder-core/tests`：
 
 ```text
 3113 passed, 23 failed, 40 skipped

@@ -29,7 +29,7 @@
 
 ## 3. 自动化测试
 
-执行目录：`libs/openant-core`
+执行目录：`libs/vulnfounder-core`
 
 ```text
 python -m py_compile report/generator.py
@@ -57,7 +57,7 @@ pytest -q tests/report
 `/Users/shiyu/.openant/webui/733647a3508bcb02`：
 
 ```text
-源码 checkout：/Users/shiyu/学习/hyl/new/OpenAnt/source_code_base/sensors_medical_sensor
+源码 checkout：/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/sensors_medical_sensor
 branch：master
 commit：6f87daec8f0a91057336b0b243eee702bd8731e7
 release_version：OpenHarmony-v6.1-LTS-5-g6f87dae

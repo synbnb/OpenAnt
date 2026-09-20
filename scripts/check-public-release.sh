@@ -75,7 +75,7 @@ if [ "$NO_FETCH" = "0" ]; then
       fail "git fetch failed — check network / remote auth"
     fi
   else
-    fail "remote 'public' missing — run: git remote add public git@github.com:knostic/OpenAnt.git"
+    fail "remote 'public' missing — run: git remote add public git@github.com:knostic/VulnFounder.git"
   fi
 else
   pass "skipped fetch (--no-fetch)"
@@ -194,17 +194,17 @@ section "Build smoke test"
 
 if [ "$NO_BUILD" = "1" ]; then
   pass "skipped build (--no-build)"
-elif [ -d apps/openant-cli ]; then
+elif [ -d apps/vulnfounder-cli ]; then
   BUILD_OUT=$(mktemp)
-  if (cd apps/openant-cli && go build ./... >"$BUILD_OUT" 2>&1); then
-    pass "apps/openant-cli builds cleanly"
+  if (cd apps/vulnfounder-cli && go build ./... >"$BUILD_OUT" 2>&1); then
+    pass "apps/vulnfounder-cli builds cleanly"
   else
-    fail "apps/openant-cli build failed:"
+    fail "apps/vulnfounder-cli build failed:"
     sed 's/^/        /' "$BUILD_OUT"
   fi
   rm -f "$BUILD_OUT"
 else
-  fail "apps/openant-cli not found — adjust check-public-release.sh"
+  fail "apps/vulnfounder-cli not found — adjust check-public-release.sh"
 fi
 
 # ---------- Summary ----------
