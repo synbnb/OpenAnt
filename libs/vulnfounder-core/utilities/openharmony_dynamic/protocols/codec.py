@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import struct
+import json
 from typing import Any
 
 from ..models import ProtocolDescriptor
@@ -210,6 +211,51 @@ def encode_sp_daemon_text(frame_values: dict[str, Any]) -> bytes:
     return text.encode("utf-8")
 
 
+def encode_generic_descriptor(
+    descriptor: ProtocolDescriptor, field_values: dict[str, Any],
+) -> bytes:
+    """按自动发现描述符的 wire_format 编码，不依赖协议族名称。
+
+    该编码器只处理可由源码描述清楚的通用线路形态；未知/自定义二进制布局
+    仍然返回 CodecError，由契约编译阶段保留为待复核，而不是猜一个报文。
+    """
+    kind = descriptor.encoder_kind
+    fmt = descriptor.wire_format or {}
+    if kind == "raw_text":
+        value = field_values.get("payload", field_values.get("raw", ""))
+        if not isinstance(value, (str, bytes)):
+            raise CodecError("raw_text 的 payload 必须是字符串或字节串")
+        return value if isinstance(value, bytes) else value.encode("utf-8")
+    if kind == "json":
+        body = {k: v for k, v in field_values.items()
+                if k not in {"mode", "host", "port", "target", "local_path", "marker"}}
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if kind == "key_value":
+        pair_separator = str(fmt.get("pair_separator", "::"))
+        record_separator = str(fmt.get("record_separator", "\n"))
+        terminator = str(fmt.get("terminator", ""))
+        if not pair_separator or len(pair_separator) > 16 or len(record_separator) > 16:
+            raise CodecError("key_value 分隔符不合法")
+        ordered: list[tuple[str, Any]] = []
+        declared = sorted(descriptor.fields, key=lambda f: f.order)
+        declared_names = {f.name for f in declared}
+        for spec in declared:
+            if spec.name in field_values:
+                ordered.append((spec.name, field_values[spec.name]))
+        for key, value in field_values.items():
+            if key in declared_names or key in {"mode", "host", "port", "target", "local_path", "marker"}:
+                continue
+            ordered.append((str(key), value))
+        if not ordered:
+            raise CodecError("key_value 没有可编码字段")
+        for key, _ in ordered:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", key):
+                raise CodecError(f"key_value 键不安全: {key!r}")
+        return (record_separator.join(f"{k}{pair_separator}{v}" for k, v in ordered)
+                + terminator).encode("utf-8")
+    raise CodecError(f"自动描述符没有可用编码器: {descriptor.descriptor_id}/{kind}")
+
+
 _ENCODERS = {
     "hisysevent_eventraw": encode_hisysevent_eventraw,
     "sp_daemon_text": encode_sp_daemon_text,
@@ -219,7 +265,7 @@ _ENCODERS = {
 def encode(descriptor: ProtocolDescriptor, field_values: dict[str, Any]) -> bytes:
     encoder = _ENCODERS.get(descriptor.descriptor_id)
     if encoder is None:
-        raise CodecError(f"未注册的编码器: {descriptor.descriptor_id}")
+        return encode_generic_descriptor(descriptor, field_values)
     if descriptor.descriptor_id == "hisysevent_eventraw":
         return encode_hisysevent_eventraw(field_values, descriptor=descriptor)
     return encoder(field_values)

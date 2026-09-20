@@ -73,6 +73,8 @@ SP_DAEMON_TEXT = ProtocolDescriptor(
         "sp_thread_socket.cpp HandleMsg/HandleNullMsg：`key::value` 文本帧；"
         "真机实测：set_pkgName 与 catch_network_traffic 需两帧（300ms 间隔）"
     ),
+    encoder_kind="key_value",
+    wire_format={"pair_separator": "::", "record_separator": "\n", "terminator": ""},
     fields=[
         FieldSpec(name="set_pkgName", type="string", order=0, required=True),
         FieldSpec(name="catch_network_traffic", type="string", order=1),

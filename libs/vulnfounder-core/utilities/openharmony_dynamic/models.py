@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -62,6 +63,10 @@ class ProtocolDescriptor:
     known_guards: list[Guard] = field(default_factory=list)
     on_send_transforms: list[SendTransform] = field(default_factory=list)
     structure_evidence: str = ""
+    # 通用协议编码器声明。内置描述符可以继续使用既有编码器；自动发现的
+    # 描述符必须声明可解释的 wire_format，避免把协议族名称写死在运行器中。
+    encoder_kind: str = "custom"       # raw_text | key_value | json | custom
+    wire_format: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +78,8 @@ class ProtocolDescriptor:
             "known_guards": [g.__dict__ for g in self.known_guards],
             "on_send_transforms": [t.__dict__ for t in self.on_send_transforms],
             "structure_evidence": self.structure_evidence,
+            "encoder_kind": self.encoder_kind,
+            "wire_format": dict(self.wire_format),
         }
 
 
@@ -126,9 +133,51 @@ class IdentitySpec:
 class ProtocolSpec:
     descriptor_id: str
     field_values: dict[str, Any] = field(default_factory=dict)
+    # 编译时使用的协议描述符快照，便于脱离当前进程注册表重放契约。
+    descriptor_snapshot: dict[str, Any] = field(default_factory=dict)
     # 发送序列：多帧时按顺序；单帧省略。帧之间固定间隔秒数。
     frame_sequence: list[str] = field(default_factory=list)   # 字段值组合的键名列表
     inter_frame_delay_seconds: float = 0.3
+
+
+@dataclass
+class RouteBinding:
+    """某个 finding 在一个外部入口上的路由切片。
+
+    ProtocolDescriptor 描述协议族，RouteBinding 描述本次 finding 实际要走的
+    endpoint、handler、分派条件和状态读写。两者分离后，同一服务的其它入口不会
+    被错误拼进当前样本的动态测试契约。
+    """
+
+    route_id: str = ""
+    candidate_id: str = ""
+    relevance: str = "unknown"  # direct | possible | unrelated | unknown
+    handler: str = ""
+    target_sink: str = ""
+    dispatch_conditions: list[str] = field(default_factory=list)
+    state_flow: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    missing_evidence: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "route_id": self.route_id,
+            "candidate_id": self.candidate_id,
+            "relevance": self.relevance,
+            "handler": self.handler,
+            "target_sink": self.target_sink,
+            "dispatch_conditions": list(self.dispatch_conditions),
+            "state_flow": list(self.state_flow),
+            "evidence": list(self.evidence),
+            "assumptions": list(self.assumptions),
+            "missing_evidence": list(self.missing_evidence),
+        }
+
+    @staticmethod
+    def make_id(finding_id: str, candidate_id: str, sink: str) -> str:
+        material = f"{finding_id}|{candidate_id}|{sink}".encode("utf-8", "replace")
+        return "route-" + hashlib.sha256(material).hexdigest()[:16]
 
 
 @dataclass
@@ -188,6 +237,7 @@ class Contract:
     oracle: OracleSpec
     risk: RiskSpec
     cleanup: CleanupSpec
+    route_binding: RouteBinding = field(default_factory=RouteBinding)
     compile_status: str = "REQUIRES_PROTOCOL_REVIEW"
     limitations: list[str] = field(default_factory=list)
     description: str = ""
@@ -205,6 +255,8 @@ class Contract:
             "protocol": {
                 "descriptor_id": self.protocol.descriptor_id,
                 "field_values": dict(self.protocol.field_values),
+                **({"descriptor_snapshot": dict(self.protocol.descriptor_snapshot)}
+                   if self.protocol.descriptor_snapshot else {}),
                 "frame_sequence": list(self.protocol.frame_sequence),
                 "inter_frame_delay_seconds": self.protocol.inter_frame_delay_seconds,
                 # param_space：非线路字段（帧模板/预埋目录/效果窗口），round-trip 必须保留
@@ -222,6 +274,7 @@ class Contract:
             },
             "risk": self.risk.__dict__,
             "cleanup": self.cleanup.__dict__,
+            "route_binding": self.route_binding.to_dict(),
             "compile_status": self.compile_status,
             "limitations": list(self.limitations),
         }

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,8 @@ from typing import Any
 from .contract_validator import apply_compile_gate, validate_contract
 from .contracts.registry import contract_from_dict
 from .finding_input import FindingInput
-from .models import Contract
-from .protocols import get_descriptor
+from .models import Contract, RouteBinding
+from .protocols import get_descriptor, register
 
 # ---------------------------------------------------------------------------
 # §3.3 漏洞类 → 预言机映射（确定性表；未实现的预言机诚实降级）
@@ -130,7 +131,8 @@ class CompileResult:
 
 def _llm_binding():
     try:
-        root = Path(__file__).resolve().parents[3]
+        path = Path(__file__).resolve()
+        root = next((parent for parent in path.parents if (parent / "libs" / "vulnfounder-core").is_dir()), path.parents[3])
         core = str(root / "libs" / "vulnfounder-core")
         if core not in sys.path:
             sys.path.insert(0, core)
@@ -209,6 +211,122 @@ def _infer_endpoint(descriptor_id: str, finding: FindingInput) -> str:
     return _DESCRIPTOR_ENDPOINTS.get(descriptor_id, "")
 
 
+def _select_route_candidate(initial_hints: list[str], candidates: list[Any]) -> Any | None:
+    """把入口候选收窄到当前 finding 的路由切片。
+
+    选择依据按强度排序：Stage1 明确端点 > 唯一候选 > 唯一 direct 候选；
+    其它情况必须保持歧义，不能把同服务的其它端点拼进当前攻击链。
+    """
+    if not candidates:
+        return None
+    hints = " ".join(str(x).lower() for x in initial_hints)
+    # Stage 1 的 endpoint 线索只能缩小传输端点，不能推翻入口发现器对该
+    # finding 的 ``unrelated`` 路由判定。否则同一服务的多个端点中，错误的
+    # hint 会把与 sink 无关的端点强行投影进契约。
+    exact = [
+        c for c in candidates
+        if str(getattr(c, "endpoint", "")).lower() in hints
+        and str(getattr(c, "route_relevance", "unknown")) != "unrelated"
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    direct = [c for c in candidates if str(getattr(c, "route_relevance", "unknown")) == "direct"]
+    if len(direct) == 1:
+        return direct[0]
+    if len(candidates) == 1 and str(getattr(candidates[0], "route_relevance", "unknown")) != "unrelated":
+        return candidates[0]
+    return None
+
+
+def _route_binding_from_candidate(finding: FindingInput, candidate: Any | None) -> dict[str, Any]:
+    if candidate is None:
+        return RouteBinding(target_sink=finding.sink, relevance="unknown").to_dict()
+    candidate_id = str(getattr(candidate, "candidate_id", ""))
+    route = RouteBinding(
+        route_id=RouteBinding.make_id(finding.finding_id, candidate_id, finding.sink),
+        candidate_id=candidate_id,
+        relevance=str(getattr(candidate, "route_relevance", "unknown")),
+        handler=str(getattr(candidate, "handler", "")),
+        target_sink=str(getattr(candidate, "target_sink", "")) or finding.sink,
+        dispatch_conditions=list(getattr(candidate, "dispatch_conditions", []) or []),
+        state_flow=list(getattr(candidate, "state_flow", []) or []),
+        evidence=list(dict.fromkeys(
+            list(getattr(candidate, "source_evidence", []) or [])
+            + list(getattr(candidate, "route_evidence", []) or [])
+        ))[:24],
+        assumptions=[str(getattr(candidate, "reason", ""))] if getattr(candidate, "reason", "") else [],
+        missing_evidence=[] if str(getattr(candidate, "route_relevance", "unknown")) in {"direct", "possible"}
+        else ["尚未确认入口与目标 sink 的服务端分派关系"],
+    )
+    return route.to_dict()
+
+
+def _resolve_source_ref(repo_root: Path, ref: str) -> str | None:
+    """源码证据 file:line → 仓库内相对路径；basename 仅唯一命中时接受。"""
+    text = str(ref).strip()
+    match = re.match(r"^(.*?):\d+(?:-\d+)?$", text)
+    raw = match.group(1) if match else text
+    path = Path(raw)
+    if path.is_absolute() and path.is_file():
+        try:
+            return path.relative_to(repo_root).as_posix()
+        except ValueError:
+            return str(path)
+    candidate = repo_root / path
+    if candidate.is_file():
+        return path.as_posix()
+    hits = list(repo_root.rglob(path.name)) if path.name else []
+    if len(hits) == 1:
+        return hits[0].relative_to(repo_root).as_posix()
+    return None
+
+
+def _route_source_paths(finding: FindingInput, candidate: Any | None, repo_root: Path) -> list[str]:
+    refs = list(finding.source_paths)
+    if candidate is not None:
+        refs.extend(getattr(candidate, "source_evidence", []) or [])
+        refs.extend(getattr(candidate, "route_evidence", []) or [])
+    paths: list[str] = []
+    for ref in refs:
+        resolved = _resolve_source_ref(repo_root, str(ref))
+        if resolved and resolved not in paths:
+            paths.append(resolved)
+    return paths[:8]
+
+
+def _try_auto_descriptor(
+    finding: FindingInput, candidate: Any | None, repo_root: Path, notes: list[str],
+) -> str:
+    """为当前 route 生成并注册通用描述符；失败返回空字符串交给既有库。"""
+    if candidate is None or str(getattr(candidate, "route_relevance", "unknown")) not in {"direct", "possible"}:
+        return ""
+    source_paths = _route_source_paths(finding, candidate, repo_root)
+    if not source_paths:
+        notes.append("自动协议描述符跳过：当前路由没有可读取源码证据")
+        return ""
+    try:
+        from .descriptor_synthesizer import synthesize_descriptor  # noqa: PLC0415
+
+        route = _route_binding_from_candidate(finding, candidate)
+        material = json.dumps({"route": route, "sources": source_paths}, ensure_ascii=False, sort_keys=True)
+        descriptor_id = "auto_" + hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()[:16]
+        result = synthesize_descriptor(
+            source_paths, repo_root=str(repo_root), route_context=route,
+            descriptor_id_override=descriptor_id, auto_approve=True,
+        )
+        if result.status == "APPROVED" and result.descriptor is not None:
+            register(result.descriptor)
+            notes.append(
+                f"路由协议描述符自动生成并注册: {descriptor_id} "
+                f"encoder={result.descriptor.encoder_kind} sources={len(source_paths)}"
+            )
+            return descriptor_id
+        notes.append(f"自动协议描述符未通过: {result.status} {result.errors[:2]}")
+    except Exception as exc:  # noqa: BLE001 — 自动发现失败时保留既有描述符回退
+        notes.append(f"自动协议描述符异常，回退既有库: {type(exc).__name__}: {str(exc)[:180]}")
+    return ""
+
+
 def _load_exemplar(vuln_class: str, finding_id: str = "") -> dict[str, Any] | None:
     """加载同 vuln_class 的手写固件契约作为 few-shot 攻击链形状参考。
 
@@ -277,10 +395,18 @@ def promote_exemplar_if_absent(contract: Contract, verdict_status: str) -> str:
         return f"skipped:{exc}"
 
 
-def _deterministic_skeleton(finding: FindingInput, descriptor_id: str) -> dict[str, Any]:
+def _deterministic_skeleton(
+    finding: FindingInput, descriptor_id: str, candidate: Any | None = None,
+) -> dict[str, Any]:
     """确定性可推导块的填充（方案 §3.2 表）。"""
-    entry_kind = _infer_entry_kind(descriptor_id, finding)
+    entry_kind = str(getattr(candidate, "kind", "")) if candidate is not None else ""
+    entry_kind = entry_kind or _infer_entry_kind(descriptor_id, finding)
     identity = _ENTRY_IDENTITY.get(entry_kind, ("root_su", "root_su", "C"))
+    endpoint = str(getattr(candidate, "endpoint", "")) if candidate is not None else ""
+    try:
+        descriptor_snapshot = get_descriptor(descriptor_id).to_dict()
+    except KeyError:
+        descriptor_snapshot = {}
     return {
         "contract_id": f"GEN-{finding.finding_id}",
         "finding_ids": [finding.finding_id],
@@ -289,7 +415,7 @@ def _deterministic_skeleton(finding: FindingInput, descriptor_id: str) -> dict[s
         "description": finding.description,
         "entry": {
             "kind": entry_kind,
-            "endpoint": _infer_endpoint(descriptor_id, finding),
+            "endpoint": endpoint or _infer_endpoint(descriptor_id, finding),
             "reachability_identity": identity[0],
         },
         "identity": {
@@ -297,7 +423,8 @@ def _deterministic_skeleton(finding: FindingInput, descriptor_id: str) -> dict[s
             "identity_ladder_fallback": identity[1],
             "max_evidence_grade": identity[2],
         },
-        "protocol": {"descriptor_id": descriptor_id},
+        "protocol": {"descriptor_id": descriptor_id, "descriptor_snapshot": descriptor_snapshot},
+        "route_binding": _route_binding_from_candidate(finding, candidate),
         "risk": {"target_process": _target_process(finding), "risk_tier": "unknown"},
     }
 
@@ -345,6 +472,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
     # 没有 LLM 时保留已有 hints，不做无依据猜测。
     entry_discovery_data: dict[str, Any] = {}
     initial_entry_hints = list(finding.entry_hints)
+    selected_route_candidate: Any | None = None
     binding_pair = _llm_binding()
     if binding_pair is not None:
         from .agent.entry_discovery_loop import run_entry_discovery_loop  # noqa: PLC0415
@@ -363,10 +491,22 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         for candidate in entry_result.candidates:
             if candidate.hint not in finding.entry_hints:
                 finding.entry_hints.append(candidate.hint)
+        selected_route_candidate = _select_route_candidate(
+            initial_entry_hints, list(entry_result.candidates),
+        )
+        if selected_route_candidate is not None:
+            entry_discovery_data["selected_candidate_id"] = str(
+                getattr(selected_route_candidate, "candidate_id", "")
+            )
+            entry_discovery_data["selected_route_binding"] = _route_binding_from_candidate(
+                finding, selected_route_candidate,
+            )
         # 一个漏洞 finding 可能对应同一服务的多个端点（例如 SP_daemon 的
         # 8283/8284/8285）。入口发现应保留全部候选供审计，但协议契约一次只
         # 能发送一个 endpoint；没有 Stage1 明确端点时禁止按列表首项静默选择。
-        if not initial_entry_hints and len({c.hint for c in entry_result.candidates}) > 1:
+        if (not initial_entry_hints
+                and len({c.hint for c in entry_result.candidates}) > 1
+                and selected_route_candidate is None):
             notes.append("入口候选存在歧义：保留全部候选，未自动选择 endpoint")
             return CompileResult(
                 contract=None, compile_status="REQUIRES_PROTOCOL_REVIEW",
@@ -380,7 +520,10 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         notes.append("入口发现 loop 未运行：LLM 基础设施不可用，保留 Stage1 已有入口线索")
 
     # 1c. 描述符命中（未命中 → REQUIRES_PROTOCOL_REVIEW，指向描述符合成器）
-    descriptor_id = _match_descriptor(finding)
+    repo_root = Path(finding.repo_root) if finding.repo_root else Path(".")
+    descriptor_id = _try_auto_descriptor(
+        finding, selected_route_candidate, repo_root, notes,
+    ) or _match_descriptor(finding)
     if not descriptor_id:
         return CompileResult(
             contract=None, compile_status="REQUIRES_PROTOCOL_REVIEW",
@@ -390,7 +533,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
     notes.append(f"描述符命中: {descriptor_id}")
 
     # 3. 确定性骨架
-    skeleton = _deterministic_skeleton(finding, descriptor_id)
+    skeleton = _deterministic_skeleton(finding, descriptor_id, selected_route_candidate)
 
     # 4. 侦查 agent loop（§9）：LLM 自主查证（读源码/grep/hdc 只读探测）→ finalize 草案
     llm_used = False
@@ -549,6 +692,8 @@ def _merge_recon_draft(draft: dict[str, Any], finding: FindingInput,
     if "protocol" in merged:
         protocol = merged["protocol"]
         protocol["descriptor_id"] = skeleton["protocol"]["descriptor_id"]
+        if skeleton["protocol"].get("descriptor_snapshot"):
+            protocol["descriptor_snapshot"] = skeleton["protocol"]["descriptor_snapshot"]
         # 描述性文字值剔除（「推测：…」「需按设备填写」不是可执行值）：
         # field_values 保留真实字面量或受支持占位符；param_space 保留占位符/字面量
         _strip_descriptive_values(protocol.get("field_values"))

@@ -20,6 +20,8 @@ if str(CORE) not in sys.path:
 ed = importlib.import_module("utilities.openharmony_dynamic.agent.entry_discovery_loop")
 cc = importlib.import_module("utilities.openharmony_dynamic.contract_compiler")
 from utilities.openharmony_dynamic.finding_input import FindingInput  # noqa: E402
+from utilities.openharmony_dynamic.models import ProtocolDescriptor, FieldSpec  # noqa: E402
+from utilities.openharmony_dynamic.protocols.codec import encode  # noqa: E402
 
 
 class ScriptedLLM:
@@ -243,3 +245,53 @@ def test_compile_retry_does_not_bypass_ambiguous_entry_gate(monkeypatch, tmp_pat
     result = cc.compile_contract_with_retry(finding, hdc=None, failure_log={})
     assert result is fake
     assert len(calls) == 1
+
+
+def test_route_binding_keeps_finding_specific_handler_and_state(tmp_path):
+    (tmp_path / "socket.cpp").write_text("void HandleMsg() {}\n", encoding="utf-8")
+    candidate, error = ed._validate_candidate({
+        "kind": "hap_udp",
+        "endpoint": "127.0.0.1:8283",
+        "confidence": "high",
+        "source_evidence": ["socket.cpp:1"],
+        "device_evidence": ["udp 8283 LISTEN"],
+        "route_relevance": "direct",
+        "handler": "SpThreadSocket::HandleMsg",
+        "target_sink": "SPUtils::LoadCmd",
+        "dispatch_conditions": ["CATCH_NETWORK_TRAFFIC"],
+        "state_flow": ["set_pkgName 写入 dubaiPkgName", "ItemData 读取 dubaiPkgName"],
+        "route_evidence": ["socket.cpp:1"],
+    }, tmp_path)
+    assert error == ""
+    assert candidate is not None
+    route = cc._route_binding_from_candidate(_finding(tmp_path), candidate)
+    assert route["relevance"] == "direct"
+    assert route["handler"] == "SpThreadSocket::HandleMsg"
+    assert route["state_flow"]
+    assert route["route_id"].startswith("route-")
+
+
+def test_generic_key_value_descriptor_is_not_protocol_name_hardcoded():
+    descriptor = ProtocolDescriptor(
+        descriptor_id="auto_demo_protocol",
+        encoder_kind="key_value",
+        wire_format={"pair_separator": "=", "record_separator": "&", "terminator": "\\n"},
+        fields=[FieldSpec(name="command", type="string", order=0)],
+    )
+    payload = encode(descriptor, {"command": "ping", "value": "42"})
+    assert payload == b"command=ping&value=42\\n"
+
+
+def test_route_selection_does_not_promote_unrelated_endpoint_hint(tmp_path):
+    (tmp_path / "socket.cpp").write_text("void HandleMsg() {}\n", encoding="utf-8")
+    direct, error = ed._validate_candidate({
+        "kind": "hap_udp",
+        "endpoint": "127.0.0.1:8285",
+        "confidence": "high",
+        "source_evidence": ["socket.cpp:1"],
+        "device_evidence": ["udp 8285 LISTEN"],
+        "route_relevance": "unrelated",
+    }, tmp_path)
+    assert error == ""
+    assert direct is not None
+    assert cc._select_route_candidate(["hap_udp 127.0.0.1:8285"], [direct]) is None

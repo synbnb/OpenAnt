@@ -1,10 +1,12 @@
-"""描述符合成器（自动化方案 §6）：库未命中时 LLM 起草 + 源码核对兜底。
+"""协议描述符合成器（自动化方案 §6）：库未命中时 LLM 起草 + 源码核对兜底。
 
 流水（§6.1）：
   源码输入 → LLM 起草 ProtocolDescriptor 草案 → 确定性核对（每个字段名
   必须在证据源码中逐一 grep 到，grep 不到整份拒绝）→ 合法请求自证
   （发送一条全默认值合法报文，服务侧日志出现处理路径才算编码正确）→
-  首次合成 REQUIRES_HUMAN_APPROVAL（一次性人工闸门）→ 批准后入库复用。
+  默认首次合成 REQUIRES_HUMAN_APPROVAL（兼容旧流程）；动态测试自动路径在
+  route_scope、字段证据和编码形态都通过确定性校验后可显式 auto_approve，
+  注册为带证据的通用协议描述符，而不是按样本硬编码协议。
 
 人工审查的是"协议族声明"，成本 O(协议族数) 而非 O(样本数)——这是扩展性的来源。
 """
@@ -25,7 +27,8 @@ from .models import FieldSpec, Guard, ProtocolDescriptor, SendTransform
 
 def _llm_binding():
     try:
-        root = Path(__file__).resolve().parents[3]
+        path = Path(__file__).resolve()
+        root = next((parent for parent in path.parents if (parent / "libs" / "vulnfounder-core").is_dir()), path.parents[3])
         core = str(root / "libs" / "vulnfounder-core")
         if core not in sys.path:
             sys.path.insert(0, core)
@@ -57,7 +60,9 @@ _SYNTH_SYSTEM_PROMPT = (
     '  "known_guards": [{"name": "<检查名>", "evidence": "<file.cpp:行>",\n'
     '                    "checked_by": "<检查语义>", "guard_log_hints": ["<设备侧日志关键词>"]}],\n'
     '  "on_send_transforms": [],\n'
-    '  "structure_evidence": "<整体布局一句话+证据>"\n'
+    '  "structure_evidence": "<整体布局一句话+证据>",\n'
+    '  "encoder_kind": "raw_text|key_value|json|custom",\n'
+    '  "wire_format": {"pair_separator":"::", "record_separator":"\\n", "terminator":""}\n'
     "}\n"
     "硬规则：\n"
     "1. fields[].name 必须逐字出现在源码 struct 定义或键常量表中——会被 grep 核对，"
@@ -136,7 +141,9 @@ def verify_fields_against_source(
 # LLM 起草
 # ---------------------------------------------------------------------------
 
-def _llm_descriptor_draft(source_texts: list[str], *, source_names: list[str]) -> dict[str, Any] | None:
+def _llm_descriptor_draft(
+    source_texts: list[str], *, source_names: list[str], route_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     pair = _llm_binding()
     if pair is None:
         return None
@@ -146,6 +153,9 @@ def _llm_descriptor_draft(source_texts: list[str], *, source_names: list[str]) -
         parts.append(f"===== {name} =====")
         # 上限 60KB 防上下文爆炸
         parts.append(text[:60000])
+    if route_context:
+        parts.append("===== 当前 finding 的路由切片（只描述本次目标，不要混入同服务其它端点） =====")
+        parts.append(json.dumps(route_context, ensure_ascii=False, indent=2))
     text = simple_text(binding, "\n".join(parts), system=_SYNTH_SYSTEM_PROMPT, max_tokens=8000)
     text = text.strip()
     if text.startswith("```"):
@@ -194,6 +204,8 @@ def _descriptor_from_draft(raw: dict[str, Any]) -> ProtocolDescriptor | None:
             known_guards=guards,
             on_send_transforms=transforms,
             structure_evidence=str(raw.get("structure_evidence", "")),
+            encoder_kind=str(raw.get("encoder_kind", "custom")),
+            wire_format=dict(raw.get("wire_format") or {}),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -208,6 +220,9 @@ def synthesize_descriptor(
     *,
     repo_root: str = "",
     draft_override: dict[str, Any] | None = None,
+    route_context: dict[str, Any] | None = None,
+    descriptor_id_override: str = "",
+    auto_approve: bool = False,
 ) -> SynthesisResult:
     """源码 → ProtocolDescriptor 草案 → 字段核对 → 人工闸门。
 
@@ -224,7 +239,9 @@ def synthesize_descriptor(
             errors=["全部源码文件不可读，无法合成"],
         )
 
-    raw = draft_override or _llm_descriptor_draft(texts, source_names=source_paths)
+    raw = draft_override or _llm_descriptor_draft(
+        texts, source_names=source_paths, route_context=route_context,
+    )
     if raw is None:
         return SynthesisResult(
             descriptor=None, status="REQUIRES_PROTOCOL_REVIEW",
@@ -239,6 +256,15 @@ def synthesize_descriptor(
             llm_used=draft_override is None,
         )
 
+    if descriptor_id_override:
+        descriptor.descriptor_id = descriptor_id_override
+    if descriptor.encoder_kind not in {"raw_text", "key_value", "json", "custom"}:
+        return SynthesisResult(
+            descriptor=descriptor, status="REQUIRES_PROTOCOL_REVIEW",
+            errors=[f"不支持的 encoder_kind: {descriptor.encoder_kind}"],
+            llm_used=draft_override is None,
+        )
+
     # 确定性核对：字段名逐一 grep（方案 §6.1 第 2 步）
     check = verify_fields_against_source(descriptor, source_paths, repo_root=repo_root)
     if check["missing"] or not check["verified"]:
@@ -249,7 +275,14 @@ def synthesize_descriptor(
             llm_used=draft_override is None,
         )
 
-    # 人工闸门：首次合成永远停在这里（方案 §6.1 第 4 步）
+    # 自动动态路径只在调用方明确提供 route_scope 时允许自动注册；普通工具调用
+    # 仍保持旧的人工闸门，避免把孤立的协议草案误当成可执行事实。
+    if auto_approve and route_context:
+        return SynthesisResult(
+            descriptor=descriptor, status="APPROVED",
+            field_check=check, llm_used=draft_override is None,
+        )
+    # 人工闸门：默认首次合成停在这里（方案 §6.1 第 4 步）
     return SynthesisResult(
         descriptor=descriptor, status="REQUIRES_HUMAN_APPROVAL",
         field_check=check, llm_used=draft_override is None,

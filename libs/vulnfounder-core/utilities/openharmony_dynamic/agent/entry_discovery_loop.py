@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,12 @@ ENTRY_DISCOVERY_SYSTEM_PROMPT = (
     '"endpoint":"127.0.0.1:8283 或 /dev/unix/socket/name 或 domain/id 或命令名",'
     '"confidence":"high|medium|low",'
     '"source_evidence":["path/to/file.cpp:123-130"],'
-    '"device_evidence":["设备返回的事实摘要"],"reason":"..."}\n'
+    '"device_evidence":["设备返回的事实摘要"],'
+    '"route_relevance":"direct|possible|unrelated|unknown",'
+    '"handler":"接收后实际处理函数", "target_sink":"与当前 finding 对应的 sink",'
+    '"dispatch_conditions":["命令/事件/分派条件"],'
+    '"state_flow":["状态写入或读取关系"],'
+    '"route_evidence":["path/to/file.cpp:200-220"],"reason":"..."}\n'
     "硬规则：\n"
     "1. 不能仅凭 HandleMsg、Process、回调或业务函数名称臆造端口和 socket。\n"
     "2. source_evidence 必须指向仓库内真实源码位置；device_evidence 必须来自设备工具返回。\n"
@@ -61,7 +67,12 @@ ENTRY_DISCOVERY_SYSTEM_PROMPT = (
     "直接 finalize；入口发现不是调用图穷尽分析。\n"
     "7. 如果源码证据同时出现 UDP 与 TCP 入口，必须分别读取 /proc/net/udp 和 "
     "/proc/net/tcp（必要时再查 udp6/tcp6），不能只核实一种传输层后遗漏另一种。\n"
-    "8. finalize 只提交 JSON，不要附加解释文字。"
+    "8. route_relevance 必须针对当前 finding 的 sink 判断：direct 表示源码已把该入口"
+    "连接到目标 sink，possible 表示存在未决分派/状态关系但仍是合理候选，unrelated 表示"
+    "同服务但与目标 sink 无关，unknown 表示证据不足。不要把同一服务的全部端点都标成 direct。"
+    "9. route_evidence 只能引用当前仓库中真实存在的源码区间；state_flow 只记录状态/"
+    "事件关系，不要求在本阶段完成完整参数污点传播（Stage2 负责参数影响验证）。"
+    "10. finalize 只提交 JSON，不要附加解释文字。"
 )
 
 
@@ -72,7 +83,21 @@ class EntryCandidate:
     confidence: str
     source_evidence: list[str] = field(default_factory=list)
     device_evidence: list[str] = field(default_factory=list)
+    route_relevance: str = "unknown"
+    handler: str = ""
+    target_sink: str = ""
+    dispatch_conditions: list[str] = field(default_factory=list)
+    state_flow: list[str] = field(default_factory=list)
+    route_evidence: list[str] = field(default_factory=list)
     reason: str = ""
+
+    @property
+    def candidate_id(self) -> str:
+        material = "|".join([
+            self.kind, self.endpoint, self.handler, self.target_sink,
+            *self.source_evidence, *self.route_evidence,
+        ])
+        return "entry-" + hashlib.sha256(material.encode("utf-8", "replace")).hexdigest()[:16]
 
     @property
     def hint(self) -> str:
@@ -88,6 +113,13 @@ class EntryCandidate:
             "confidence": self.confidence,
             "source_evidence": list(self.source_evidence),
             "device_evidence": list(self.device_evidence),
+            "candidate_id": self.candidate_id,
+            "route_relevance": self.route_relevance,
+            "handler": self.handler,
+            "target_sink": self.target_sink,
+            "dispatch_conditions": list(self.dispatch_conditions),
+            "state_flow": list(self.state_flow),
+            "route_evidence": list(self.route_evidence),
             "reason": self.reason,
         }
 
@@ -170,6 +202,9 @@ def _validate_candidate(raw: Any, repo_root: Path) -> tuple[EntryCandidate | Non
         return None, f"入口类型不支持: {kind!r}"
     if confidence not in _CONFIDENCE_RANK:
         return None, f"confidence 非法: {confidence!r}"
+    relevance = str(raw.get("route_relevance", "unknown")).strip().lower()
+    if relevance not in {"direct", "possible", "unrelated", "unknown"}:
+        return None, f"route_relevance 非法: {relevance!r}"
     if kind in {"hap_udp", "hap_tcp"} and not _ENDPOINT_RE.match(endpoint):
         return None, f"{kind} endpoint 非法: {endpoint!r}"
     if kind in {"unix_dgram", "unix_stream"} and not _UNIX_RE.match(endpoint):
@@ -191,12 +226,26 @@ def _validate_candidate(raw: Any, repo_root: Path) -> tuple[EntryCandidate | Non
     bad_refs = [x for x in source if not _source_ref_valid(repo_root, x)]
     if bad_refs:
         return None, f"源码证据无法核验: {bad_refs[:3]}"
+    route_evidence = _normalize_source_refs([str(x) for x in (raw.get("route_evidence") or [])
+                                             if isinstance(x, str) and x.strip()])
+    bad_route_refs = [x for x in route_evidence if not _source_ref_valid(repo_root, x)]
+    if bad_route_refs:
+        return None, f"路由源码证据无法核验: {bad_route_refs[:3]}"
+    def _string_list(key: str) -> list[str]:
+        value = raw.get(key) or []
+        return [str(x)[:500] for x in value if str(x).strip()] if isinstance(value, list) else []
     return EntryCandidate(
         kind=kind,
         endpoint=endpoint,
         confidence=confidence,
         source_evidence=source[:12],
         device_evidence=device[:12],
+        route_relevance=relevance,
+        handler=str(raw.get("handler", ""))[:300],
+        target_sink=str(raw.get("target_sink", ""))[:500],
+        dispatch_conditions=_string_list("dispatch_conditions"),
+        state_flow=_string_list("state_flow"),
+        route_evidence=route_evidence[:12],
         reason=str(raw.get("reason", ""))[:1000],
     ), ""
 
@@ -211,6 +260,15 @@ def _merge_candidates(candidates: list[EntryCandidate]) -> list[EntryCandidate]:
         elif old is not None:
             old.source_evidence = list(dict.fromkeys(old.source_evidence + candidate.source_evidence))[:12]
             old.device_evidence = list(dict.fromkeys(old.device_evidence + candidate.device_evidence))[:12]
+            if old.route_relevance == "unknown" or (
+                candidate.route_relevance == "direct" and old.route_relevance != "direct"
+            ):
+                old.route_relevance = candidate.route_relevance
+            old.route_evidence = list(dict.fromkeys(old.route_evidence + candidate.route_evidence))[:12]
+            old.dispatch_conditions = list(dict.fromkeys(old.dispatch_conditions + candidate.dispatch_conditions))[:12]
+            old.state_flow = list(dict.fromkeys(old.state_flow + candidate.state_flow))[:12]
+            old.handler = old.handler or candidate.handler
+            old.target_sink = old.target_sink or candidate.target_sink
     return list(merged.values())[:_MAX_CANDIDATES]
 
 
