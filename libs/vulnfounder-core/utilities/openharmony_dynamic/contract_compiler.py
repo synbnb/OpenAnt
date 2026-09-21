@@ -1824,6 +1824,20 @@ def _validate_route_dispatch_spelling(draft: dict[str, Any], skeleton: dict[str,
     )
     if not tokens:
         return []
+    # 同一个分派项经常同时出现在枚举名和线路字面量中，例如
+    # ``CATCH_NETWORK_TRAFFIC`` 与 ``catch_network_traffic``。枚举名只是
+    # 源码内部标识，真正需要发送的是源码中出现的线路字面量。按大小写
+    # 折叠归并时优先保留包含小写字符的形式，避免把合法的线路帧误报为
+    # “仅大小写不同”。这仍然是通用的源码证据归并，不依赖任何服务名称。
+    canonical_tokens: dict[str, str] = {}
+    for token in sorted(tokens, key=lambda item: (item.casefold(), item)):
+        folded = token.casefold()
+        current = canonical_tokens.get(folded)
+        if current is None:
+            canonical_tokens[folded] = token
+        elif current.isupper() and not token.isupper():
+            canonical_tokens[folded] = token
+    tokens = set(canonical_tokens.values())
     protocol = draft.get("protocol") if isinstance(draft, dict) else None
     if not isinstance(protocol, dict):
         return []

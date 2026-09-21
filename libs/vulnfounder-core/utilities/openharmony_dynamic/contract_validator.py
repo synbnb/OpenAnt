@@ -97,7 +97,18 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
         descriptor = get_descriptor(contract.protocol.descriptor_id)
         known_fields = {f.name for f in descriptor.fields}
         if contract.entry.kind in ("hap_udp", "hap_tcp"):
-            known_fields |= {"mode", "host", "port", "target", "local_path"}
+            # HAP 载体的线路帧是“传输槽位”，不属于协议描述符的业务字段。
+            # 自动描述符在源码只能证明 raw/single-message 形态时可能没有
+            # fields，但契约侦查仍可依据当前源码提交 frame_* 模板；如果把
+            # 这些槽位交给 V3 的业务字段白名单，会出现“描述符已批准、契约
+            # 却无法编译”的自相矛盾。这里仅放行运行器实际支持的通用载体
+            # 槽位，不放行任意 LLM 自造字段。
+            known_fields |= {
+                "mode", "host", "port", "target", "local_path",
+                "first", "second", "third",
+                "frame_first", "frame_second", "frame_third",
+                "frame_first_template", "frame_second_template", "frame_third_template",
+            }
         for key in contract.protocol.field_values:
             if key not in known_fields:
                 errors.append(

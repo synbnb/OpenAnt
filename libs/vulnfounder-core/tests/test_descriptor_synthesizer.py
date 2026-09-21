@@ -48,6 +48,25 @@ def _descriptor(fields, *, probe=None):
     }
 
 
+def test_route_dispatch_prefers_literal_over_enum_case_variant() -> None:
+    """枚举名与线路字面量同时出现时，不能误拒合法线路帧。"""
+    skeleton = {
+        "route_binding": {
+            "evidence": (
+                'MessageType::CATCH_NETWORK_TRAFFIC maps to '
+                'std::string("catch_network_traffic")'
+            )
+        }
+    }
+    draft = {
+        "protocol": {
+            "frame_sequence": ["frame_first"],
+            "field_values": {"frame_first": "catch_network_traffic:::TOKEN"},
+        }
+    }
+    assert cc._validate_route_dispatch_spelling(draft, skeleton) == []
+
+
 def test_descriptor_synthesis_retries_after_field_evidence_feedback(tmp_path):
     source = tmp_path / "handler.cpp"
     source.write_text("void Handle() { parse(command); }\n", encoding="utf-8")
