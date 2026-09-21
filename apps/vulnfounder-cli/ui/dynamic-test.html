@@ -2053,6 +2053,13 @@
       if (Array.isArray(oracle.refutation_checks)) oracle.refutation_checks.forEach(check=>proofList.push('否证：'+check.check+' → '+(check.passed?'通过':'未通过')));
       const proofText = el('div','dossier-code compact'); proofText.textContent = proofList.length ? proofList.join('\n') : '本轮产物没有保存额外的设备证明细节；请查看 run_record/verdict 原始产物。'; section.appendChild(proofText);
     }
+    function descriptorSourceLabel(resolution) {
+      const source = resolution && typeof resolution === 'object' ? resolution.source : '';
+      if (source === 'auto_generated') return '本轮自动生成并通过源码校验';
+      if (source === 'library_fallback') return '内置协议库回退（不是本轮自动生成）';
+      if (source === 'unresolved') return '尚未确定';
+      return source || '未记录';
+    }
     async function appendDetailedExecutionDossier(parent, runId, data) {
       const r = data && data.result ? data.result : {};
       const ct = r.contract || {};
@@ -2068,13 +2075,7 @@
       const identity = ct.identity || {};
       const compileSummary = r.compile || {};
       const descriptorResolution = compileSummary.descriptor_resolution || r.descriptor_resolution || {};
-      const descriptorSourceText = descriptorResolution.source === 'auto_generated'
-        ? '本轮自动生成并通过源码校验'
-        : descriptorResolution.source === 'library_fallback'
-          ? '内置协议库回退（不是本轮自动生成）'
-          : descriptorResolution.source === 'unresolved'
-            ? '尚未确定'
-            : (descriptorResolution.source || '未记录');
+      const descriptorSourceText = descriptorSourceLabel(descriptorResolution);
       const token = String(Date.now())+'-'+Math.random();
       state.dossierToken = token;
       const dossier = el('div','dossier');
@@ -2369,6 +2370,8 @@
         body.appendChild(s);
       }
       appendDetailedExecutionDossier(body, state.detail && state.detail.runId, data);
+      const descriptorResolution = (r.compile && r.compile.descriptor_resolution) || r.descriptor_resolution || {};
+      const descriptorSourceText = descriptorSourceLabel(descriptorResolution);
       const metaPairs = [
         ['适配器', r.adapter_status], ['编译', r.compile_status],
         ['入口线索', (r.entry_hints||[]).join(' · ')],
