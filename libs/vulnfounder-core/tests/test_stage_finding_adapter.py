@@ -57,6 +57,28 @@ def test_convert_ok():
     assert f.analysis_context["根因分析"] == DP02_STAGE["根因分析"]
 
 
+def test_candidate_attack_chains_are_preserved_separately_from_primary_chain():
+    stage = {
+        **DP02_STAGE,
+        "候选攻击链": [
+            [
+                "sp_thread_socket.cpp:SpThreadSocket::HandleMsg",
+                "Network.cpp:Network::ItemData",
+                "Network.cpp:Network::ThreadGetHapNetwork",
+                "sp_utils.cpp:SPUtils::LoadCmd",
+            ]
+        ],
+    }
+    res = adapter.adapt_stage_finding(
+        stage, finding_id="DP-02", unit_id="developtools_profiler_dp02",
+        repo_root=REPO_ROOT, convert_override=DP02_CONVERT)
+    assert res.status == "CONVERTED"
+    assert res.finding.candidate_attack_chains == stage["候选攻击链"]
+    assert res.finding.to_dict()["candidate_attack_chains"] == stage["候选攻击链"]
+    # 主链仍然来自完整攻击链，候选链不会覆盖它。
+    assert res.finding.analysis_context["完整攻击链"] == DP02_STAGE["完整攻击链"]
+
+
 def test_missing_stage_keys_rejected():
     bad = dict(DP02_STAGE)
     del bad["完整攻击链"]

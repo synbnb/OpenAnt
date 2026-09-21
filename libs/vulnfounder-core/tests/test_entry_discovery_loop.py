@@ -130,6 +130,28 @@ def test_entry_discovery_rejects_candidate_without_evidence(tmp_path):
     assert any("证据" in item for item in result.missing_evidence)
 
 
+def test_entry_discovery_preserves_explicit_stage1_hint_when_llm_unavailable(monkeypatch, tmp_path):
+    """模型拒绝/断网时不能把已有 endpoint 静默变成“无入口”。"""
+    (tmp_path / "sp_thread_socket.cpp").write_text(
+        "void HandleMsg() {}\nvoid Recv() { recvfrom(fd, buf, n, 0, 0, 0); }\n// evidence\n",
+        encoding="utf-8",
+    )
+    recon_loop = importlib.import_module("utilities.openharmony_dynamic.agent.recon_loop")
+    monkeypatch.setattr(recon_loop, "_llm_binding", lambda: None)
+    result = ed.run_entry_discovery_loop(
+        finding=_finding(tmp_path, hints=["hap_udp 127.0.0.1:8283"]),
+        repo_root=tmp_path,
+        hdc=FakeHdc(stdout="00000000:205B 00000000:0000 07"),
+        binding_pair=None,
+        max_turns=2,
+    )
+    assert result.status == "stage1_hint_fallback"
+    assert result.candidates and result.candidates[0].route_relevance == "possible"
+    assert result.candidates[0].endpoint == "127.0.0.1:8283"
+    assert result.device_commands_used == 1
+    assert any(item["tool"] == "hdc_shell" for item in result.audit)
+
+
 def test_entry_discovery_cannot_finalize_empty_before_any_evidence(tmp_path):
     (tmp_path / "sp_thread_socket.cpp").write_text("void HandleMsg() {}\n", encoding="utf-8")
     bind = _bind([
@@ -295,3 +317,19 @@ def test_route_selection_does_not_promote_unrelated_endpoint_hint(tmp_path):
     assert error == ""
     assert direct is not None
     assert cc._select_route_candidate(["hap_udp 127.0.0.1:8285"], [direct]) is None
+
+
+def test_route_selection_prefers_full_transport_hint_over_same_port_candidate():
+    """同端口的错误传输候选不能遮蔽 finding 明确给出的 UDP 路由。"""
+    udp = type("Candidate", (), {
+        "hint": "hap_udp 127.0.0.1:8283",
+        "endpoint": "127.0.0.1:8283",
+        "route_relevance": "possible",
+    })()
+    tcp = type("Candidate", (), {
+        "hint": "hap_tcp 127.0.0.1:8283",
+        "endpoint": "127.0.0.1:8283",
+        "route_relevance": "possible",
+    })()
+    selected = cc._select_route_candidate(["hap_udp 127.0.0.1:8283"], [udp, tcp])
+    assert selected is udp

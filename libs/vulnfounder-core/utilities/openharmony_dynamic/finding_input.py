@@ -24,6 +24,9 @@ class FindingInput:
     evidence_lines: list[list[int]] = field(default_factory=list)  # 与 source_paths 对齐的 [起行, 止行]
     sink: str = ""               # sink 点描述
     entry_hints: list[str] = field(default_factory=list)    # 静态分析推断的入口线索（可为空）
+    # 与完整攻击链并列的候选路径。候选路径只作为动态侦查的补充线索，
+    # 不代表已经确认的执行路径，也不能覆盖完整攻击链。
+    candidate_attack_chains: list[list[str]] = field(default_factory=list)
     repo_root: str = ""          # 源码仓库根（LLM 与校验器读取源码用）
     # Stage 1 原始上下文的有限副本。它不参与契约字段推导，只供入口发现 loop
     # 定位源码、理解调用链和区分入口/内部转发使用。
@@ -39,6 +42,7 @@ class FindingInput:
             "evidence_lines": [list(e) for e in self.evidence_lines],
             "sink": self.sink,
             "entry_hints": list(self.entry_hints),
+            "candidate_attack_chains": [list(path) for path in self.candidate_attack_chains],
             "repo_root": self.repo_root,
             "analysis_context": dict(self.analysis_context),
         }
@@ -54,6 +58,11 @@ def finding_from_dict(raw: dict[str, Any]) -> FindingInput:
         evidence_lines=[list(e) for e in raw.get("evidence_lines", [])],
         sink=str(raw.get("sink", "")),
         entry_hints=list(raw.get("entry_hints", [])),
+        candidate_attack_chains=[
+            [str(node) for node in path]
+            for path in (raw.get("candidate_attack_chains") or [])
+            if isinstance(path, (list, tuple))
+        ],
         repo_root=str(raw.get("repo_root", "")),
         analysis_context=dict(raw.get("analysis_context") or {}),
     )

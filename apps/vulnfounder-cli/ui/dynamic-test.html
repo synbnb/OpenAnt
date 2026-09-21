@@ -60,6 +60,7 @@
     .sec { margin-top:14px; padding:12px 15px 13px; border:1px solid var(--line); border-radius:10px; background:#fff; }
     .sec-t { font-weight:800; font-size:14px; color:var(--ink); margin-bottom:9px; padding-bottom:7px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; letter-spacing:.01em; }
     .sec-t::before { content:''; width:4px; height:15px; border-radius:2px; background:var(--accent); flex:none; }
+    .sec-t .caption-note { color:var(--muted); font-size:11.5px; font-weight:400; }
     .sec-blue   { background:#f2f7ff; border-color:#d5e3fb; } .sec-blue   .sec-t::before { background:#315efb; }
     .sec-green  { background:#f1faf4; border-color:#cdeeda; } .sec-green  .sec-t::before { background:#147d4d; }
     .sec-purple { background:#f7f4ff; border-color:#e2d9fb; } .sec-purple .sec-t::before { background:#7a4df0; }
@@ -83,6 +84,13 @@
     .empty { color:var(--muted); padding:14px 0; }
     .run-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:end; }
     .run-grid .full { grid-column:1/-1; }
+    .mode-option { display:flex; gap:10px; align-items:flex-start; padding:11px 13px; border:1px solid #cad5ff; border-radius:9px; background:#f7f9ff; }
+    .mode-option input { width:auto; flex:none; margin:3px 0 0; accent-color:var(--accent); }
+    .mode-option label { margin:0; cursor:pointer; }
+    .mode-option .mode-title { display:block; color:#2745a5; font-weight:800; }
+    .mode-option .mode-help { display:block; margin-top:2px; color:var(--muted); font-size:12px; font-weight:400; line-height:1.45; }
+    .run-mode-hint { margin:0; padding:8px 11px; border-radius:7px; background:#f7f9fc; color:var(--muted); font-size:12px; }
+    .run-mode-hint.clean { background:#f1faf4; color:var(--ok); }
     /* ---- 列表工具条：视图切换 / 检索 / 分页 ---- */
     .toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin:12px 0 4px; }
     .toolbar .grow { flex:1 1 260px; }
@@ -96,6 +104,34 @@
     .entry { border:1px solid var(--line); border-radius:10px; padding:15px 16px; margin-top:12px; background:#fff; }
     .entry-head { display:flex; justify-content:space-between; gap:14px; align-items:start; flex-wrap:wrap; }
     .entry h3 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+    /* ---- 同一条目多次动态测试的历史会话 ---- */
+    .history-panel { background:#fbfcff; border-color:#cfd9f8; }
+    .history-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+    .history-head .hint { margin:3px 0 0; }
+    .history-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .history-toolbar button { padding:7px 10px; font-size:12px; }
+    .history-summary { color:var(--muted); font-size:12px; margin:10px 0 0; }
+    .history-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:10px; margin-top:10px; }
+    .history-card { border:1px solid var(--line); border-radius:10px; padding:12px 13px; background:#fff; min-width:0; transition:border-color .15s,box-shadow .15s,background .15s; }
+    .history-card:hover { border-color:#86a0ff; box-shadow:0 2px 9px rgba(49,94,251,.09); }
+    .history-card.active { border-color:var(--accent); background:#f7f9ff; box-shadow:0 0 0 1px var(--accent); }
+    .history-card.running { border-left:4px solid #315efb; }
+    .history-card.error { border-left:4px solid var(--bad); }
+    .history-card.confirmed { border-left:4px solid var(--ok); }
+    .history-card.not-reproduced,.history-card.inconclusive { border-left:4px solid #eba23f; }
+    .history-card-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+    .history-card-title { font-weight:800; font-size:13px; overflow-wrap:anywhere; }
+    .history-card-id { margin-top:3px; color:var(--muted); font:11px ui-monospace,Menlo,monospace; overflow-wrap:anywhere; }
+    .history-status { display:inline-flex; align-items:center; padding:2px 7px; border-radius:999px; background:#eef1f6; color:var(--muted); font-size:11px; white-space:nowrap; flex:none; }
+    .history-status.confirmed { background:#e7f6ef; color:var(--ok); }
+    .history-status.error { background:#fdecec; color:var(--bad); }
+    .history-status.not-reproduced,.history-status.inconclusive { background:#fff1db; color:var(--warn); }
+    .history-status.running { background:#eef2ff; color:#2745a5; }
+    .history-meta { display:flex; gap:6px 12px; flex-wrap:wrap; margin-top:9px; color:var(--muted); font-size:11.5px; }
+    .history-meta span { overflow-wrap:anywhere; }
+    .history-actions { display:flex; gap:7px; align-items:center; margin-top:10px; }
+    .history-actions button { padding:6px 10px; font-size:12px; }
+    .history-empty { border:1px dashed var(--line); border-radius:9px; padding:15px 12px; margin-top:10px; color:var(--muted); background:#fff; }
     /* 文件树 / 类型分组 */
     .group { border:1px solid var(--line); border-radius:10px; margin-top:10px; background:#fff; overflow:hidden; }
     .group > summary { cursor:pointer; padding:11px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#f8fafd; }
@@ -122,7 +158,7 @@
     .pulse.on { background:#18a05e; animation:pulse 1.2s ease-in-out infinite; }
     .pulse.err { background:#e05a5a; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
-    .cmdfeed { margin-top:8px; border:1px solid var(--line); border-radius:9px; background:#0f1728; color:#dbe5f3; font:12px/1.6 ui-monospace,Menlo,monospace; max-height:380px; overflow:auto; padding:8px 10px; }
+    .cmdfeed { margin-top:8px; border:1px solid var(--line); border-radius:9px; background:#0f1728; color:#dbe5f3; font:12px/1.6 ui-monospace,Menlo,monospace; height:clamp(280px,42vh,520px); max-height:none; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable both-edges; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:8px 10px; }
     .cmdline { white-space:pre-wrap; overflow-wrap:anywhere; }
     .cmdline .c-idx { color:#7dd3fc; }
     .cmdline .c-purpose { color:#a5b4fc; }
@@ -136,6 +172,62 @@
     .evtline.recon .e-kind { color:#38bdf8; }
     .evtline .e-dim { color:#8a94a8; }
     .progresslog { margin-top:8px; border:1px dashed var(--line); border-radius:9px; background:#f8fafd; padding:8px 12px; font-size:12.5px; max-height:180px; overflow:auto; }
+    .live-overview { display:grid; grid-template-columns:minmax(0,1.45fr) repeat(3,minmax(120px,.55fr)); gap:10px; margin:14px 0; }
+    .live-overview-card { border:1px solid var(--line); border-radius:10px; padding:11px 13px; background:#fbfcfe; min-width:0; }
+    .live-overview-card.primary { background:#f4f7ff; border-color:#cbd7ff; }
+    .live-overview-card .lo-label { color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.03em; }
+    .live-overview-card .lo-value { margin-top:3px; font-size:15px; font-weight:800; overflow-wrap:anywhere; }
+    .live-overview-card .lo-note { margin-top:2px; color:var(--muted); font-size:11.5px; overflow-wrap:anywhere; }
+    .live-tools { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:4px 0 10px; }
+    .live-tools .tool-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+    .live-tools button { padding:6px 10px; font-size:12px; }
+    .live-tools label { display:inline-flex; align-items:center; gap:6px; margin:0; color:var(--muted); font-size:12px; font-weight:500; }
+    .live-tools input { width:auto; }
+    .live-columns { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(310px,.75fr); gap:14px; align-items:start; }
+    .live-columns > * { min-width:0; min-height:0; }
+    .live-columns > div, .live-columns > aside { min-height:0; }
+    /*
+       阶段日志使用明确的可视高度，而不是只有 max-height。这样浏览器不会
+       在网格布局中把滚动容器压缩成“只能滚到一半”的高度。内部滚动只负责
+       日志本身，页面滚动仍由 body 负责，两个滚动区域不会互相抢事件。
+    */
+    .timeline { margin-top:8px; border:1px solid var(--line); border-radius:9px; background:#fbfcfe; padding:8px; height:clamp(360px,56vh,720px); max-height:none; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable both-edges; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+    .timeline .event-card { min-width:0; }
+    .timeline-empty { color:var(--muted); padding:12px 8px; text-align:center; }
+    .event-card { display:grid; grid-template-columns:76px minmax(0,1fr); gap:9px; padding:9px 8px; border-bottom:1px solid #e9edf4; }
+    .event-card:last-child { border-bottom:0; }
+    .event-time { color:var(--muted); font:11px/1.4 ui-monospace,Menlo,monospace; padding-top:2px; }
+    .event-main { min-width:0; }
+    .event-title { display:flex; gap:7px; align-items:center; flex-wrap:wrap; font-weight:800; font-size:12.5px; }
+    .event-kind { display:inline-flex; padding:1px 6px; border-radius:4px; background:#e9efff; color:#2745a5; font-size:10.5px; font-weight:700; }
+    .event-detail { margin-top:3px; color:var(--ink); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .event-card.warn { background:#fffaf1; } .event-card.warn .event-kind { background:#fff0d6; color:#8a5a12; }
+    .event-card.error { background:#fff5f5; } .event-card.error .event-kind { background:#fde2e1; color:var(--bad); }
+    .event-card.success { background:#f3fbf6; } .event-card.success .event-kind { background:#ddf4e8; color:var(--ok); }
+    .event-raw { margin-top:5px; }
+    .event-raw summary { color:var(--accent); cursor:pointer; font-size:11px; }
+    .event-raw pre { margin:5px 0 0; max-height:160px; overflow:auto; white-space:pre-wrap; background:#f3f5f9; border-radius:5px; padding:7px; font:11px/1.45 ui-monospace,Menlo,monospace; }
+    .artifact-grid { display:grid; grid-template-columns:1fr; gap:8px; margin-top:8px; }
+    .artifact-card { border:1px solid var(--line); border-radius:9px; padding:9px 10px; background:#fff; }
+    .artifact-card.available { border-color:#cfe7d9; background:#fbfffc; }
+    .artifact-card.pending { background:#fafbfc; }
+    .artifact-card .af-head { display:flex; justify-content:space-between; gap:8px; align-items:start; }
+    .artifact-card .af-name { font-weight:800; font-size:12.5px; overflow-wrap:anywhere; }
+    .artifact-card .af-state { flex:none; font-size:10.5px; padding:2px 6px; border-radius:999px; background:#eef1f6; color:var(--muted); }
+    .artifact-card.available .af-state { background:#e7f6ef; color:var(--ok); }
+    .artifact-card .af-desc { margin-top:4px; color:var(--muted); font-size:11.5px; line-height:1.45; }
+    .artifact-card .af-meta { margin-top:5px; color:var(--muted); font-size:10.5px; }
+    .artifact-card button { margin-top:7px; padding:5px 8px; font-size:11px; }
+    .evidence-summary { display:grid; grid-template-columns:1fr; gap:7px; margin-top:8px; }
+    .evidence-item { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; }
+    .evidence-item .ev-h { display:flex; justify-content:space-between; gap:8px; font-weight:700; font-size:12px; }
+    .evidence-item .ev-v { margin-top:3px; color:var(--muted); font-size:11.5px; overflow-wrap:anywhere; }
+    .evidence-item.pass { border-color:#bfe2cd; background:#f4fbf6; } .evidence-item.pass .ev-h { color:var(--ok); }
+    .evidence-item.wait { background:#fbfcfe; } .evidence-item.fail { border-color:#efc1bd; background:#fff7f6; } .evidence-item.fail .ev-h { color:var(--bad); }
+    .section-caption { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .section-caption .caption-note { color:var(--muted); font-size:11.5px; font-weight:400; }
+    @media (max-width:900px) { .live-columns { grid-template-columns:1fr; } .live-overview { grid-template-columns:repeat(2,minmax(0,1fr)); } .live-overview-card.primary { grid-column:1/-1; } .timeline { height:min(54vh,620px); } .cmdfeed { height:min(42vh,480px); } }
+    @media (max-width:520px) { .live-overview { grid-template-columns:1fr; } .live-overview-card.primary { grid-column:auto; } .event-card { grid-template-columns:1fr; gap:3px; } .event-time { padding-top:0; } }
     /* ---- 结果可视化 ---- */
     .status-hero { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
     .status-big { font-size:22px; font-weight:800; padding:6px 18px; border-radius:10px; letter-spacing:.02em; }
@@ -161,6 +253,141 @@
     .o-card .o-content { margin-top:6px; background:#f7f9fc; border-radius:6px; padding:7px 9px; font:12px ui-monospace,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; max-height:130px; overflow:auto; }
     .notes li { margin-bottom:6px; font-size:13px; }
     .recon { background:#f6f8ff; border:1px solid #dbe3ff; border-left:4px solid var(--accent); border-radius:6px; padding:9px 12px; font-size:13px; white-space:pre-wrap; margin-top:4px; max-height:200px; overflow:auto; }
+    /* PoC 线路帧与面向用户的触发说明 */
+    .frame-list { display:grid; gap:9px; margin-top:8px; }
+    .frame-card { border:1px solid #c9d8f6; border-radius:9px; background:#fff; padding:10px 12px; }
+    .frame-card.actual { border-color:#9fd9bd; background:#fbfffc; }
+    .frame-card.preview { border-color:#f1d39d; background:#fffdf7; }
+    .frame-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+    .frame-title { font-weight:800; font-size:12.5px; }
+    .frame-source { color:#53627a; font-size:11px; padding:2px 7px; border-radius:999px; background:#eef2ff; }
+    .frame-card.actual .frame-source { background:#e7f6ef; color:var(--ok); }
+    .frame-card.preview .frame-source { background:#fff1db; color:#8a5a12; }
+    .frame-payload { margin-top:7px; white-space:pre-wrap; overflow-wrap:anywhere; background:#101828; color:#e6edf7; border-radius:7px; padding:9px 10px; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .frame-meta { display:flex; gap:6px 14px; flex-wrap:wrap; margin-top:6px; color:var(--muted); font-size:11px; }
+    .frame-template { margin-top:6px; color:var(--muted); font-size:11.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .trigger-flow { display:grid; gap:0; margin-top:8px; }
+    .trigger-step { display:grid; grid-template-columns:34px minmax(0,1fr); gap:10px; position:relative; padding:9px 0 12px; }
+    .trigger-step:not(:last-child)::after { content:''; position:absolute; left:15px; top:34px; bottom:0; width:2px; background:#d9e1f3; }
+    .trigger-no { width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:#e8efff; color:#2745a5; font-weight:800; font-size:12px; z-index:1; }
+    .trigger-step.done .trigger-no { background:#dff4e8; color:var(--ok); }
+    .trigger-step.warn .trigger-no { background:#fff0d6; color:#8a5a12; }
+    .trigger-title { font-weight:800; font-size:13px; }
+    .trigger-detail { margin-top:3px; color:var(--muted); font-size:12px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .trigger-chain { margin-top:5px; padding:7px 9px; border-left:3px solid #86a0ff; background:#f6f8ff; border-radius:5px; color:#2f4b9b; font:11.5px/1.55 ui-monospace,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .flow-note { margin-top:8px; padding:8px 10px; border-radius:7px; background:#f7f9fc; color:var(--muted); font-size:11.5px; line-height:1.55; }
+    /* 面向复核人员的详细动态测试档案：将专家记录中的构造、命令和证明分层展示 */
+    .dossier { margin-top:14px; border:1px solid #cbd8ef; border-radius:11px; background:#fff; padding:13px 14px; }
+    .dossier-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+    .dossier-title { font-size:15px; font-weight:850; color:#193b79; }
+    .dossier-subtitle { margin-top:3px; color:var(--muted); font-size:11.5px; line-height:1.55; max-width:920px; }
+    .dossier-badge { border:1px solid #c7d2fe; background:#eef2ff; color:#3349a3; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
+    .dossier-section { margin-top:12px; border-top:1px solid #e8edf5; padding-top:10px; }
+    .dossier-section:first-of-type { border-top:0; padding-top:0; }
+    .dossier-section-title { display:flex; align-items:center; gap:7px; font-weight:800; font-size:13px; color:#253858; }
+    .dossier-section-title::before { content:''; width:4px; height:15px; border-radius:3px; background:#7693ed; display:inline-block; }
+    .dossier-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+    .dossier-card { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fbfcfe; min-width:0; }
+    .dossier-card.pass { border-color:#a9ddc0; background:#f4fbf6; }
+    .dossier-card.warn { border-color:#f0d49f; background:#fffaf1; }
+    .dossier-card.fail { border-color:#efc1bd; background:#fff6f5; }
+    .dossier-card .dc-label { color:var(--muted); font-size:10.5px; font-weight:700; letter-spacing:.02em; }
+    .dossier-card .dc-value { margin-top:3px; font-size:12px; line-height:1.5; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .dossier-explain { margin-top:7px; padding:8px 10px; border-left:3px solid #86a0ff; border-radius:6px; background:#f6f8ff; color:#43516b; font-size:11.5px; line-height:1.55; }
+    .dossier-field-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+    .dossier-field-card { border:1px solid #d7deeb; border-radius:8px; padding:8px 10px; background:#fbfcfe; min-width:0; }
+    .dossier-field-card.transport { border-color:#c9d8f6; background:#f7f9ff; }
+    .dossier-field-card.payload { border-color:#f0d49f; background:#fffaf1; }
+    .dossier-field-label { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#53627a; font-size:10.5px; font-weight:750; }
+    .dossier-field-role { color:#667085; font-size:10px; font-weight:500; }
+    .dossier-field-value { margin-top:5px; background:#101828; color:#e6edf7; border-radius:6px; padding:7px 8px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .dossier-field-note { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.45; }
+    .dossier-template-list { display:grid; gap:8px; margin-top:8px; }
+    .dossier-template-card { border:1px solid #c9d8f6; border-radius:8px; padding:9px 10px; background:#f8faff; }
+    .dossier-template-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+    .dossier-template-title { color:#2745a5; font-size:12px; font-weight:800; }
+    .dossier-template-kind { color:#53627a; font-size:10.5px; }
+    .dossier-template-body { margin-top:6px; background:#101828; color:#e6edf7; border-radius:6px; padding:8px 9px; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .dossier-placeholder { display:inline-block; margin:2px 3px 2px 0; padding:1px 5px; border-radius:4px; background:#fff0d6; color:#8a5a12; font:10.5px ui-monospace,Menlo,monospace; }
+    .dossier-oracle-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+    .dossier-oracle-card { border:1px solid #cfe7d9; border-radius:8px; padding:9px 10px; background:#f7fcf8; min-width:0; }
+    .dossier-oracle-card .oracle-name { color:#146c43; font-size:12px; font-weight:800; }
+    .dossier-oracle-card .oracle-condition { margin-top:5px; color:#344054; font-size:11.5px; line-height:1.5; overflow-wrap:anywhere; }
+    .dossier-oracle-card .oracle-condition code { background:#e7f6ef; color:#146c43; border-radius:4px; padding:1px 4px; font:11px ui-monospace,Menlo,monospace; }
+    .dossier-oracle-card .oracle-status { margin-top:6px; font-size:11px; color:var(--muted); }
+    .dossier-signal-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .dossier-signal { border:1px solid #c9d8f6; border-radius:999px; padding:3px 7px; background:#f6f8ff; color:#2f4b9b; font:11px ui-monospace,Menlo,monospace; overflow-wrap:anywhere; }
+    @media (max-width:760px) { .dossier-field-grid,.dossier-oracle-grid { grid-template-columns:1fr; } }
+    .dossier-code { margin-top:7px; background:#101828; color:#e6edf7; border-radius:7px; padding:9px 10px; font:12px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow:auto; max-height:300px; overflow-wrap:anywhere; }
+    .dossier-code.compact { max-height:190px; }
+    .dossier-list { margin:7px 0 0; padding-left:20px; color:#344054; font-size:12px; line-height:1.6; }
+    .dossier-list li { margin:3px 0; overflow-wrap:anywhere; }
+    .dossier-command-group { margin-top:9px; border:1px solid #d7deeb; border-radius:8px; overflow:hidden; }
+    .dossier-command-head { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 9px; background:#f4f6fa; font-weight:750; font-size:12px; }
+    .dossier-command-meta { color:var(--muted); font-size:10.5px; font-weight:400; }
+    .dossier-command-body { padding:0 9px 9px; }
+    .dossier-command-body .dossier-code { margin-bottom:0; }
+    .dossier-proof-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:8px; }
+    .dossier-proof { border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:#fff; min-width:0; }
+    .dossier-proof.pass { border-color:#a9ddc0; background:#f4fbf6; }
+    .dossier-proof.wait { border-color:#f0d49f; background:#fffaf1; }
+    .dossier-proof.fail { border-color:#efc1bd; background:#fff6f5; }
+    .dossier-proof .proof-state { font-weight:850; font-size:12px; }
+    .dossier-proof.pass .proof-state { color:var(--ok); } .dossier-proof.wait .proof-state { color:#8a5a12; } .dossier-proof.fail .proof-state { color:var(--bad); }
+    .dossier-proof .proof-detail { margin-top:4px; color:var(--muted); font-size:11.5px; line-height:1.5; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .dossier-artifacts { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+    .dossier-artifact-link { display:inline-flex; align-items:center; gap:4px; border:1px solid #c9d8f6; border-radius:6px; padding:4px 8px; color:#2f4b9b; background:#f6f8ff; font-size:11px; cursor:pointer; text-decoration:none; }
+    .dossier-artifact-link:hover { background:#eaf0ff; border-color:#9fb2ed; }
+    .dossier-loading { color:var(--muted); font-size:12px; padding:7px 0; }
+    .dossier-empty { color:var(--muted); font-size:12px; line-height:1.55; padding:7px 0; }
+    @media (max-width:760px) { .dossier-grid,.dossier-proof-grid { grid-template-columns:1fr; } }
+    /* ---- 页面模块色彩分层：用低饱和底色区分“选择、准备、执行、结果” ---- */
+    #list-view > .panel:first-child {
+      background:linear-gradient(135deg,#f5f8ff 0%,#ffffff 72%);
+      border-color:#cbd8f2;
+      box-shadow:0 3px 14px rgba(49,94,251,.06);
+    }
+    #entries-panel {
+      background:linear-gradient(135deg,#fbf8ff 0%,#ffffff 72%);
+      border-color:#ded4f4;
+      box-shadow:0 3px 14px rgba(122,77,240,.05);
+    }
+    #entry-panel {
+      background:linear-gradient(135deg,#f3fbfb 0%,#ffffff 72%);
+      border-color:#c9e5e5;
+      box-shadow:0 3px 14px rgba(7,150,178,.05);
+    }
+    #history-panel {
+      background:linear-gradient(135deg,#f7f8fc 0%,#ffffff 72%);
+      border-color:#d5dbe8;
+    }
+    #run-panel {
+      background:linear-gradient(135deg,#fffaf0 0%,#ffffff 72%);
+      border-color:#f0dfbd;
+      box-shadow:0 3px 14px rgba(194,106,31,.05);
+    }
+    #progress-panel {
+      background:linear-gradient(135deg,#f2fbf6 0%,#ffffff 72%);
+      border-color:#c9e6d5;
+      box-shadow:0 3px 14px rgba(20,125,77,.05);
+    }
+    #result-panel {
+      background:linear-gradient(135deg,#f7f4ff 0%,#ffffff 72%);
+      border-color:#ded5f5;
+      box-shadow:0 3px 14px rgba(122,77,240,.06);
+    }
+    #progress-panel .sec:nth-child(1) { background:#f5f8ff; border-color:#d5e3fb; }
+    #progress-panel .sec:nth-child(2) { background:#f5fbff; border-color:#cbeef7; }
+    #progress-panel aside .sec:nth-child(1) { background:#fffaf0; border-color:#f5e5c4; }
+    #progress-panel aside .sec:nth-child(2) { background:#f7f4ff; border-color:#e2d9fb; }
+    #progress-panel .sec:nth-child(1) .sec-t::before { background:#315efb; }
+    #progress-panel .sec:nth-child(2) .sec-t::before { background:#0796b2; }
+    #progress-panel aside .sec:nth-child(1) .sec-t::before { background:#c26a1f; }
+    #progress-panel aside .sec:nth-child(2) .sec-t::before { background:#7a4df0; }
+    #result-panel > h2 { color:#5136a0; }
+    #run-panel > h2 { color:#8a5a12; }
+    #progress-panel > h2 { color:#146c43; }
+    #entry-panel > h2 { color:#12677a; }
     /* 交付物在线预览 */
     .dl-link { color:var(--accent); font-weight:600; text-decoration:none; cursor:pointer; }
     .dl-link:hover { text-decoration:underline; }
@@ -184,7 +411,63 @@
     .fs-table { width:100%; border-collapse:collapse; font-size:12.5px; }
     .fs-table th, .fs-table td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
     .fs-table th { background:#f4f6fa; font-weight:700; }
+    .source-explorer { margin-top:12px; border:1px solid #cfe7d9; border-radius:9px; background:#fff; padding:10px 12px; }
+    .source-explorer .sx-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .source-explorer .sx-title { font-weight:800; color:#146c43; }
+    .source-explorer .sx-meta { color:var(--muted); font-size:11.5px; }
+    .source-explorer .sx-actions { display:flex; gap:7px; flex-wrap:wrap; }
+    .source-file-list { margin-top:8px; display:grid; grid-template-columns:minmax(0,1fr); gap:4px; max-height:300px; overflow:auto; }
+    .source-file-row { display:flex; align-items:center; gap:8px; padding:6px 7px; border-radius:6px; background:#f8fbf9; min-width:0; }
+    .source-file-row:hover { background:#edf8f1; }
+    .source-file-path { flex:1; min-width:0; overflow-wrap:anywhere; font:12px ui-monospace,Menlo,monospace; color:var(--ink); }
+    .source-file-size { color:var(--muted); font-size:10.5px; flex:none; }
+    .source-file-row .view-btn { flex:none; }
+    .source-empty { margin-top:8px; color:var(--muted); font-size:12px; }
     .tag-exists { color:var(--ok); font-weight:700; } .tag-absent { color:var(--bad); font-weight:700; }
+    /* ---- 结果页文字层级：标题、分区、正文、证据内容明确区分 ---- */
+    /* 主题样式在本页内联样式之后加载；提高选择器优先级，确保页面主标题不会被压回 16px。 */
+    body.scan-artifact-page .brand h1 { font-size:22px; line-height:1.25; letter-spacing:.01em; }
+    body.scan-artifact-page .brand p { font-size:13.5px; line-height:1.45; }
+    .top h1 { font-size:22px; line-height:1.25; letter-spacing:.01em; }
+    .top p { font-size:13.5px; line-height:1.45; }
+    .panel h2 { font-size:20px; line-height:1.35; letter-spacing:.005em; }
+    .panel > h2 + .hint, .panel > .history-head h2 + .hint { font-size:14px; line-height:1.6; }
+    .entry h3 { font-size:16px; line-height:1.4; }
+    .sec-t, .sec-pipeline-t { font-size:16px; line-height:1.4; }
+    .sec-t::before { width:5px; height:18px; }
+    .kv-sub { font-size:13.5px; line-height:1.45; }
+    .status-big { font-size:25px; line-height:1.25; }
+    .hero-sub { font-size:14px; line-height:1.55; }
+    .chain-node .cn-t { font-size:12px; }
+    .chain-node .cn-v { font-size:15px; line-height:1.4; }
+    .dossier-title { font-size:18px; line-height:1.35; }
+    .dossier-section-title { font-size:15px; line-height:1.45; }
+    .dossier-section-title::before { width:5px; height:18px; }
+    .dossier-subtitle, .dossier-explain { font-size:12.5px; line-height:1.65; }
+    .dossier-field-label, .dossier-template-kind, .dossier-card .dc-label { font-size:11.5px; }
+    .dossier-field-value, .dossier-template-body { font-size:13px; line-height:1.6; }
+    .dossier-field-note, .dossier-oracle-card .oracle-status { font-size:12px; line-height:1.55; }
+    .dossier-oracle-card .oracle-name { font-size:13.5px; }
+    .dossier-oracle-card .oracle-condition { font-size:12.5px; line-height:1.6; }
+    .trigger-title, .frame-title { font-size:14px; line-height:1.45; }
+    .trigger-detail, .frame-template, .flow-note { font-size:12.5px; line-height:1.65; }
+    .frame-payload, .dossier-code { font-size:12.5px; line-height:1.65; }
+    .artifact-card .af-name { font-size:13.5px; }
+    .artifact-card .af-desc { font-size:12px; line-height:1.55; }
+    .artifact-card .af-state { font-size:11.5px; }
+    .live-overview-card .lo-label { font-size:12px; }
+    .live-overview-card .lo-value { font-size:17px; line-height:1.35; }
+    .stage .st-t { font-size:12px; }
+    .stage .st-v { font-size:14px; }
+    .entry-head > div { min-width:0; }
+    .badge.cwe { white-space:normal; overflow-wrap:anywhere; }
+    @media (max-width:600px) {
+      .top h1 { font-size:20px; }
+      .panel h2 { font-size:18px; }
+      .sec-t, .sec-pipeline-t { font-size:15px; }
+      .dossier-title { font-size:17px; }
+      .status-big { font-size:22px; }
+    }
     @media (max-width:800px) { .run-grid, .kv { grid-template-columns:1fr; } .run-grid .full { grid-column:auto; } .top { padding:15px 18px; } .chain-arrow { display:none; } .chain-node { min-width:100%; } .stage { min-width:46%; } }
   </style>
   <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
@@ -250,6 +533,21 @@
         <div id="entry-analysis"></div>
       </section>
 
+      <section id="history-panel" class="panel history-panel">
+        <div class="history-head">
+          <div>
+            <h2>历史动态测试会话</h2>
+            <p class="hint">同一条目可以重复执行；历史会话彼此独立，点击「进入查看」即可切换到对应的日志、产物和判定。</p>
+          </div>
+          <div class="history-toolbar">
+            <span id="history-refresh-state" class="hint" style="margin:0">正在读取……</span>
+            <button id="refresh-history" type="button" class="secondary">刷新历史</button>
+          </div>
+        </div>
+        <div id="history-summary" class="history-summary" aria-live="polite"></div>
+        <div id="run-history" class="history-list" aria-live="polite"><div class="history-empty">正在读取历史会话……</div></div>
+      </section>
+
       <section id="run-panel" class="panel">
         <h2>发起真机动态测试</h2>
         <p class="hint">该条目将经过：桥接 → 适配器（LLM 语义转换 + 确定性校验）→ 契约编译（侦查 loop + 硬校验）→ 真机执行。设备列表来自当前 HDC 连接，桥接层绝不隐式选择板卡。执行在后台进行，下方实时显示每个阶段的进度与每条设备命令。</p>
@@ -260,6 +558,14 @@
           <div><label for="hdc-select">HDC（自动解析，可更换）</label>
             <select id="hdc-select"><option value="">自动（环境变量 / PATH / 内置工具链）</option></select>
           </div>
+          <div class="full mode-option">
+            <input id="clean-room" type="checkbox" aria-describedby="clean-room-help">
+            <label for="clean-room">
+              <span class="mode-title">独立评测（clean-room）</span>
+              <span id="clean-room-help" class="mode-help">不读取历史设备事实库和 exemplar，也不把本轮 CONFIRMED 契约写入历史 exemplar；适合做可重复、无历史提示污染的评测。</span>
+            </label>
+          </div>
+          <div id="run-mode-hint" class="full run-mode-hint">当前模式：辅助运行（assisted）。会使用当前设备的历史事实库和同类 exemplar。</div>
           <div class="full"><button id="run" type="submit">执行动态测试</button></div>
         </form>
       </section>
@@ -270,11 +576,33 @@
           <span id="live-dot" class="pulse"></span>
           <span id="live-text" class="hint" style="margin:0">尚未开始</span>
         </div>
+        <div id="run-overview" class="live-overview" aria-live="polite">
+          <div class="live-overview-card primary"><div class="lo-label">当前在做什么</div><div id="overview-current" class="lo-value">等待启动</div><div id="overview-detail" class="lo-note">启动后这里会用通俗语言说明当前阶段。</div></div>
+          <div class="live-overview-card"><div class="lo-label">阶段进度</div><div id="overview-stage" class="lo-value">0 / 7</div><div class="lo-note">按阶段逐步推进</div></div>
+          <div class="live-overview-card"><div class="lo-label">设备命令</div><div id="overview-commands" class="lo-value">0</div><div class="lo-note">已记录到命令账本</div></div>
+          <div class="live-overview-card"><div class="lo-label">中间产物</div><div id="overview-artifacts" class="lo-value">0 / 10</div><div class="lo-note">可点击查看内容</div></div>
+        </div>
+        <div class="live-tools">
+          <span class="hint" style="margin:0">页面会自动更新；原始详情只在展开后显示。</span>
+          <div class="tool-actions">
+            <label><input id="follow-log" type="checkbox" checked> 自动跟随最新日志</label>
+            <button id="jump-latest" type="button" class="ghost">跳到最新</button>
+            <button id="refresh-run-artifacts" type="button" class="ghost">刷新中间产物</button>
+          </div>
+        </div>
         <div id="stages" class="stages"></div>
         <div id="progress-error" class="hint" style="color:var(--bad)" hidden></div>
-        <div class="sec"><div class="sec-t">阶段事件</div><div id="progress-log" class="progresslog"><div class="empty">暂无事件</div></div></div>
-        <div class="sec"><div class="sec-t">设备命令流（ledger，实时）<span id="cmd-count" class="meta" style="margin-left:8px"></span></div>
-          <div id="cmdfeed" class="cmdfeed"><div class="evtline">等待命令……</div></div>
+        <div class="live-columns">
+          <div>
+            <div class="sec"><div class="sec-t section-caption"><span>阶段进展</span><span class="caption-note">入口发现、源码侦查、设备执行和最终判定</span></div><div id="progress-log" class="timeline" role="log" aria-live="polite" aria-label="动态测试阶段进展"><div class="timeline-empty">暂无事件，启动测试后会实时显示。</div></div></div>
+            <div class="sec"><div class="sec-t section-caption"><span>设备命令流</span><span id="cmd-count" class="caption-note">等待命令</span></div>
+              <div id="cmdfeed" class="cmdfeed" role="log" aria-live="polite"><div class="evtline">等待设备命令……</div></div>
+            </div>
+          </div>
+          <aside>
+            <div class="sec"><div class="sec-t section-caption"><span>中间产物</span><span class="caption-note">运行中逐步生成</span></div><div id="artifact-list" class="artifact-grid" aria-live="polite"><div class="empty">等待运行产物……</div></div></div>
+            <div class="sec"><div class="sec-t section-caption"><span>关键证据摘要</span><span class="caption-note">不需要阅读原始日志即可判断进度</span></div><div id="live-evidence" class="evidence-summary"><div class="evidence-item wait"><div class="ev-h"><span>设备输入自证</span><span>等待</span></div><div class="ev-v">HAP 载荷启动后，设备日志会确认是否真正发送了输入。</div></div></div></div>
+          </aside>
         </div>
       </section>
 
@@ -321,14 +649,18 @@
       scans: [], pickedScan: null, allEntries: [],
       view: 'flat', page: 1, pageSize: 50, search: '',
       detail: null,   // {scanId, sampleId, entry, runId}
-      es: null, cmds: [], phasesSeen: {}, runDone: false,
+      es: null, cmds: [], events: [], phasesSeen: {}, runDone: false,
+      artifacts: [], artifactTimer: null, historyTimer: null, history: [], lastEvent: null, historyLoadedRun: '',
     };
     const RUN_KEY = (scan, sample) => 'vf.dyn.lastrun.'+scan+'.'+sample;
 
     function route() {
       const params = new URLSearchParams(location.hash.slice(1));
       const scan = params.get('scan'), sample = params.get('sample');
-      if (scan && sample) openDetail(scan, sample, params.get('run') || localStorage.getItem(RUN_KEY(scan, sample)));
+      // 未显式指定 run 时，不盲目复用旧 localStorage。详情页会向服务端查询
+      // 与 scan/sample 匹配的最新磁盘产物，避免成功结果被旧执行覆盖。
+      if (scan && sample) openDetail(scan, sample, params.get('run') || null,
+        params.get('run') ? null : localStorage.getItem(RUN_KEY(scan, sample)));
       else showList();
     }
     window.addEventListener('hashchange', route);
@@ -608,7 +940,110 @@
     ];
     const PHASE_STAGE = {BASELINED:'baseline', MUTATED:'send', OBSERVED:'observe', VERDICTED:'verdict'};
 
-    async function openDetail(scanId, sampleId, runIdHint) {
+    function historyStatusKey(run) {
+      const value = String((run && (run.dynamic_status || run.run_status || run.status)) || 'running').toLowerCase();
+      return value.replace(/_/g,'-');
+    }
+    function historyStatusText(run) {
+      const dynamic = String((run && run.dynamic_status) || '').trim();
+      if (dynamic) return humanStatus(dynamic);
+      const execution = String((run && (run.run_status || run.status)) || 'running').toLowerCase();
+      return execution === 'running' ? '执行中' : humanStatus(execution);
+    }
+    function historyTime(run) {
+      const raw = run && (run.started_at || run.modified_at || run.ended_at);
+      if (!raw) return '时间未知';
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) return String(raw);
+      return date.toLocaleString('zh-CN',{hour12:false});
+    }
+    function renderRunHistory(runs) {
+      const box = $('run-history');
+      const summary = $('history-summary');
+      if (!box || !summary) return;
+      box.replaceChildren();
+      const list = Array.isArray(runs) ? runs : [];
+      summary.textContent = list.length
+        ? '共 '+list.length+' 个会话，按最近更新时间倒序排列。当前查看的会话会以蓝色边框标记。'
+        : '当前条目还没有历史运行记录；点击下方「执行动态测试」即可创建第一个会话。';
+      if (!list.length) {
+        box.appendChild(el('div','history-empty','尚未发现匹配的动态测试会话。历史产物不会被新的会话覆盖。'));
+        return;
+      }
+      list.forEach(run => {
+        const key = historyStatusKey(run);
+        const card = el('article','history-card '+key);
+        if (state.detail && state.detail.runId === run.run_id) card.classList.add('active');
+        const head = el('div','history-card-head');
+        const title = el('div');
+        title.appendChild(el('div','history-card-title', run.run_id === (state.detail&&state.detail.runId) ? '当前查看的会话' : '动态测试会话'));
+        title.appendChild(el('div','history-card-id',run.run_id||'—'));
+        head.appendChild(title);
+        head.appendChild(el('span','history-status '+key,historyStatusText(run)));
+        card.appendChild(head);
+        const meta = el('div','history-meta');
+        meta.appendChild(el('span',null,'开始：'+historyTime(run)));
+        if (run.device_serial) meta.appendChild(el('span',null,'设备：'+run.device_serial));
+        const mode = run.context_mode === 'clean_room' ? '独立评测（clean-room）' : (run.context_mode === 'assisted' ? '辅助运行（assisted）' : '运行模式未知');
+        meta.appendChild(el('span',null,mode));
+        if (run.match_source) meta.appendChild(el('span',null,'来源：'+run.match_source));
+        card.appendChild(meta);
+        const actions = el('div','history-actions');
+        const enter = el('button',null,state.detail&&state.detail.runId===run.run_id?'已在查看':'进入查看');
+        enter.type='button'; enter.className = state.detail&&state.detail.runId===run.run_id ? 'secondary' : 'ghost';
+        enter.disabled = state.detail&&state.detail.runId===run.run_id;
+        enter.addEventListener('click',()=>selectHistoricalRun(run.run_id));
+        actions.appendChild(enter);
+        const copy = el('button','ghost','复制会话 ID'); copy.type='button';
+        copy.addEventListener('click',async()=>{
+          try { await navigator.clipboard.writeText(String(run.run_id||'')); copy.textContent='已复制'; setTimeout(()=>{copy.textContent='复制会话 ID';},1200); }
+          catch(_) { copy.textContent='复制失败'; }
+        });
+        actions.appendChild(copy);
+        card.appendChild(actions);
+        box.appendChild(card);
+      });
+    }
+    async function refreshRunHistory(scanId, sampleId) {
+      if (!scanId || !sampleId) return [];
+      const stateLabel = $('history-refresh-state');
+      try {
+        const query = new URLSearchParams({scan_id:scanId, sample:sampleId});
+        const data = await get('/scan-artifact/runs?'+query.toString());
+        state.history = Array.isArray(data.runs) ? data.runs : [];
+        renderRunHistory(state.history);
+        if (stateLabel) stateLabel.textContent = '已更新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});
+        return state.history;
+      } catch (error) {
+        if (stateLabel) stateLabel.textContent = '读取失败';
+        const box = $('run-history');
+        if (box) { box.replaceChildren(el('div','history-empty','历史会话读取失败：'+(error.message||String(error)))); }
+        return [];
+      }
+    }
+    function startHistoryPolling(scanId, sampleId) {
+      if (state.historyTimer) window.clearInterval(state.historyTimer);
+      state.historyTimer = window.setInterval(()=>refreshRunHistory(scanId,sampleId), 3000);
+    }
+    function updateRunHash(runId) {
+      if (!state.detail || !runId) return;
+      const params = new URLSearchParams({scan:state.detail.scanId, sample:state.detail.sampleId, run:runId});
+      history.replaceState(null,'','#'+params.toString());
+    }
+    async function selectHistoricalRun(runId) {
+      if (!state.detail || !runId || state.detail.runId === runId) return;
+      stopStream();
+      state.detail.runId = runId;
+      state.cmds = []; state.events = []; state.phasesSeen = {}; state.runDone = false;
+      updateRunHash(runId);
+      resetProgressUI();
+      $('progress-panel').hidden = false;
+      renderRunHistory(state.history);
+      await resumeRun(runId);
+      startHistoryPolling(state.detail.scanId,state.detail.sampleId);
+    }
+
+    async function openDetail(scanId, sampleId, runIdHint, legacyRunHint) {
       stopStream();
       $('list-view').hidden = true;
       $('detail-view').hidden = false;
@@ -632,7 +1067,21 @@
         if (!entry) { $('entry-summary').replaceChildren(el('div','empty','未在该扫描中找到条目 '+sampleId+'（可能判定过滤不同）。可返回列表后重新选择。')); return; }
         state.detail.entry = entry;
         renderDetailEntry(entry);
-        if (state.detail.runId) resumeRun(state.detail.runId);
+        $('history-panel').hidden = false;
+        const runs = await refreshRunHistory(scanId,sampleId);
+        // An explicit #run is authoritative.  Otherwise reuse localStorage
+        // only when the ID is present in the server history; this prevents a
+        // stale local key from hiding newer sessions.
+        const remembered = legacyRunHint && runs.some(x=>x.run_id===legacyRunHint) ? legacyRunHint : null;
+        const selected = runIdHint || remembered || (runs[0] && runs[0].run_id) || null;
+        if (selected) {
+          state.detail.runId = selected;
+          localStorage.setItem(RUN_KEY(scanId, sampleId), selected);
+          updateRunHash(selected);
+          if (selected === runIdHint || selected === remembered) setLive('', '已加载历史动态测试会话。');
+          await resumeRun(selected);
+        }
+        startHistoryPolling(scanId,sampleId);
       } catch(e) {
         $('entry-summary').replaceChildren(el('div','empty','条目读取失败：'+(e.message||String(e))));
       }
@@ -692,16 +1141,35 @@
       try {
         const values = { scan_id: state.detail.scanId, sample: state.detail.sampleId, device: serial };
         if ($('hdc-select').value) values.hdc = $('hdc-select').value;
+        values.clean_room = $('clean-room').checked ? 'true' : 'false';
         const data = await post('/scan-artifact/run', values);
         state.detail.runId = data.run_id;
         localStorage.setItem(RUN_KEY(state.detail.scanId, state.detail.sampleId), data.run_id);
-        setLive('on','后台执行中（run '+(data.run_id||'').slice(0,8)+'…）；以下为实时事件流。');
+        updateRunHash(data.run_id);
+        await refreshRunHistory(state.detail.scanId, state.detail.sampleId);
+        const modeLabel = data.context_mode === 'clean_room' ? '独立评测（clean-room）' : '辅助运行（assisted）';
+        setLive('on','后台执行中（'+modeLabel+'，run '+(data.run_id||'').slice(0,8)+'…）；以下为实时事件流。');
         connectRun(data.run_id);
+        startHistoryPolling(state.detail.scanId,state.detail.sampleId);
         $('progress-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
       } catch(e) {
         setLive('err','启动失败：'+(e.message||String(e)));
         $('run').disabled=false;
       }
+    });
+
+    function updateRunModeHint() {
+      const checked = $('clean-room').checked;
+      const hint = $('run-mode-hint');
+      hint.classList.toggle('clean', checked);
+      hint.textContent = checked
+        ? '当前模式：独立评测（clean-room）。仅使用当前 finding、源码证据和本轮设备侦查结果。'
+        : '当前模式：辅助运行（assisted）。会使用当前设备的历史事实库和同类 exemplar。';
+    }
+    $('clean-room').addEventListener('change', updateRunModeHint);
+    updateRunModeHint();
+    $('refresh-history').addEventListener('click',()=>{
+      if (state.detail) refreshRunHistory(state.detail.scanId,state.detail.sampleId);
     });
 
     /* ---------- 实时进度 ---------- */
@@ -716,9 +1184,17 @@
       $('progress-log').replaceChildren(el('div','empty','暂无事件'));
       $('cmdfeed').replaceChildren(el('div','evtline','等待命令……'));
       $('cmd-count').textContent = '';
+      $('artifact-list').replaceChildren(el('div','empty','等待运行产物……'));
+      $('live-evidence').replaceChildren();
+      $('live-evidence').appendChild(makeEvidenceItem('wait','设备输入自证','HAP 载荷启动后，设备日志会确认是否真正发送了输入。'));
+      $('overview-current').textContent = '等待启动';
+      $('overview-detail').textContent = '启动后这里会用通俗语言说明当前阶段。';
+      $('overview-stage').textContent = '0 / '+STAGES.length;
+      $('overview-commands').textContent = '0';
+      $('overview-artifacts').textContent = '0 / 10';
       $('progress-error').hidden = true;
       $('result-panel').hidden = true;
-      state.cmds = []; state.phasesSeen = {}; state.runDone = false;
+      state.cmds = []; state.events = []; state.artifacts = []; state.phasesSeen = {}; state.runDone = false; state.lastEvent = null; state.historyLoadedRun = '';
     }
     function stageEl(key){ return $('stages').querySelector('.stage[data-key="'+key+'"]'); }
     function markStage(key, cls, text) {
@@ -727,22 +1203,114 @@
       d.querySelector('.st-v').textContent = text;
     }
     function setLive(cls, text) { $('live-dot').className='pulse '+(cls||''); $('live-text').textContent=text||''; }
-    function appendEvent(kind, text, ts) {
+    const EVENT_LABELS = {
+      '启动': ['开始执行', '正在准备动态测试所需的输入、设备和运行目录。'],
+      '入口发现': ['发现设备入口', '正在确认外部输入从哪个 socket、端口或事件入口进入。'],
+      '源码侦查': ['源码与设备侦查', '正在核对协议格式、分帧方式、字段含义和守卫条件。'],
+      '侦查': ['源码与设备侦查', '正在核对协议格式、分帧方式、字段含义和守卫条件。'],
+      '阶段': ['阶段切换', '测试已经进入下一步。'],
+      '错误': ['执行遇到问题', '当前步骤没有完成，下面会保留可复查的错误详情。'],
+      '完成': ['测试完成', '已生成最终判定和可审计运行记录。'],
+      '编译': ['契约编译', '正在把协议事实转换成可执行的设备测试契约。'],
+      '交付物': ['生成验证交付物', '正在整理 PoC、Exp 或辅助验证文件。'],
+    };
+    function eventTone(kind, text) {
+      const s = String(kind||'')+' '+String(text||'');
+      if (/错误|失败|拒绝|✗|not.?found/i.test(s)) return 'error';
+      if (/完成|成功|✓|已发送|已采集|已判定|通过|命中/i.test(s)) return 'success';
+      if (/等待|缺失|回退|未观测|未通过/i.test(s)) return 'warn';
+      return '';
+    }
+    function eventTitle(kind, text) {
+      const known = EVENT_LABELS[kind];
+      if (known) return known[0];
+      if (/entry_discovery/i.test(kind)) return '发现设备入口';
+      if (/recon/i.test(kind)) return '源码与设备侦查';
+      if (/compile/i.test(kind)) return '契约编译';
+      if (/deliverable/i.test(kind)) return '生成验证交付物';
+      return kind || '运行事件';
+    }
+    // 只有用户原本就在底部时才自动跟随。用户向上查看历史事件后，后续
+    // 实时事件不会再把滚动位置强行拉回底部；这样既保留实时跟随，也不会
+    // 让阶段进展窗口看起来“滚不到上面”。
+    function isNearBottom(node, tolerance=36) {
+      if (!node) return true;
+      return node.scrollHeight - node.scrollTop - node.clientHeight <= tolerance;
+    }
+    function followLatest(node, wasNearBottom) {
+      if (!$('follow-log').checked || !wasNearBottom || !node) return;
+      window.requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
+    }
+    function jumpToLatest() {
+      for (const id of ['progress-log','cmdfeed']) {
+        const node = $(id); if (node) node.scrollTop = node.scrollHeight;
+      }
+    }
+    function compactEventRecord(value, depth=0) {
+      if (typeof value === 'string') return value.length>1800 ? value.slice(0,1800)+'…（已折叠）' : value;
+      if (Array.isArray(value)) return value.slice(0,24).map(v=>compactEventRecord(v,depth+1));
+      if (value && typeof value === 'object' && depth<4) {
+        const out={}; Object.entries(value).slice(0,40).forEach(([k,v])=>{out[k]=compactEventRecord(v,depth+1);}); return out;
+      }
+      return value;
+    }
+    function appendEvent(kind, text, ts, raw) {
       const log = $('progress-log');
-      if (log.querySelector('.empty')) log.replaceChildren();
-      const line = el('div','evtline');
-      line.appendChild(el('span','e-kind','['+kind+']'));
-      line.appendChild(document.createTextNode(' '+(ts?fmtTs(ts)+' ':'')+text));
-      log.appendChild(line);
-      log.scrollTop = log.scrollHeight;
+      const wasNearBottom = isNearBottom(log);
+      if (log.querySelector('.empty') || log.querySelector('.timeline-empty')) log.replaceChildren();
+      const card = el('article','event-card '+eventTone(kind,text));
+      const time = el('div','event-time',ts?fmtTs(ts):'刚刚'); card.appendChild(time);
+      const main = el('div','event-main');
+      const title = el('div','event-title');
+      title.appendChild(el('span','event-kind',kind||'事件'));
+      title.appendChild(document.createTextNode(eventTitle(kind,text)));
+      main.appendChild(title);
+      const detail = el('div','event-detail',text||''); main.appendChild(detail);
+      if (raw && typeof raw === 'object' && Object.keys(raw).length) {
+        const d = el('details','event-raw'); d.appendChild(el('summary',null,'查看本轮结构化详情'));
+        const pre = el('pre'); pre.textContent = JSON.stringify(compactEventRecord(raw),null,2); d.appendChild(pre); main.appendChild(d);
+      }
+      card.appendChild(main); log.appendChild(card);
+      state.events.push({kind, text, ts, raw}); state.lastEvent = {kind,text,ts};
+      // 不再静默删除旧阶段事件。完整事件流仍以 progress.jsonl 保存，页面也
+      // 保留本次运行的全部可读事件，避免用户只能看到最近一部分内容。
+      followLatest(log, wasNearBottom);
+      updateOverview(eventTitle(kind,text), text);
+    }
+    function updateOverview(current, detail) {
+      $('overview-current').textContent = current || '处理中';
+      $('overview-detail').textContent = detail || '系统正在处理当前步骤。';
+      $('overview-commands').textContent = String(state.cmds.length);
+      const done = [...$('stages').querySelectorAll('.stage.done')].length;
+      const active = [...$('stages').querySelectorAll('.stage.active')].length;
+      $('overview-stage').textContent = Math.min(STAGES.length, done + (active ? 1 : 0))+' / '+STAGES.length;
+    }
+    function makeEvidenceItem(tone, title, value) {
+      const item = el('div','evidence-item '+(tone||'wait'));
+      const head = el('div','ev-h'); head.appendChild(el('span',null,title));
+      head.appendChild(el('span',null,tone==='pass'?'已确认':tone==='fail'?'未通过':'等待')); item.appendChild(head);
+      item.appendChild(el('div','ev-v',value)); return item;
+    }
+    function renderLiveEvidence() {
+      const all = state.cmds.map(x=>String(x.stdout||'')+' '+String(x.stderr||'')).join('\n');
+      const sent = all.match(/HAP_POC_SENT[^\n]*/);
+      const failed = all.match(/HAP_POC_FAIL[^\n]*/);
+      const marker = all.match(/marker[^\n]*/i);
+      const box = $('live-evidence'); box.replaceChildren();
+      if (sent) box.appendChild(makeEvidenceItem('pass','设备输入自证',sent[0].trim()));
+      else if (failed) box.appendChild(makeEvidenceItem('fail','设备输入自证',failed[0].trim()));
+      else box.appendChild(makeEvidenceItem('wait','设备输入自证','尚未看到 HAP_POC_SENT；这表示载荷可能仍在启动，或还没有完成发送。'));
+      if (marker) box.appendChild(makeEvidenceItem(/hack by|marker/i.test(marker[0])?'pass':'wait','效果线索',marker[0].trim()));
+      else box.appendChild(makeEvidenceItem('wait','效果线索','等待设备侧文件、日志或其他预言机证据。'));
     }
     function appendCmd(row) {
       state.cmds.push(row);
       const feed = $('cmdfeed');
+      const wasNearBottom = isNearBottom(feed);
       if (feed.querySelector('.evtline') && feed.children.length===1) feed.replaceChildren();
       const line = el('div','cmdline'+(row.returncode?' err':''));
       line.appendChild(el('span','c-idx','#'+(row.index!=null?row.index:'?')+' '));
-      if (row.purpose) line.appendChild(el('span','c-purpose','['+row.purpose+'] '));
+      if (row.purpose) line.appendChild(el('span','c-purpose','['+commandPurpose(row.purpose)+'] '));
       const argv = (row.argv||[]);
       // argv[0]=hdc argv[1]=serial(-t) argv[2]=serial 后接实际远端命令
       const shown = argv.slice(3).join(' ');
@@ -755,45 +1323,49 @@
       det.appendChild(sum);
       const pre = el('pre',null);
       pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;margin:6px 0 0;color:#c8d6ea;';
-      pre.textContent = 'argv: '+JSON.stringify(argv)+'\n--- stdout ---\n'+(row.stdout||'(空)')+'\n--- stderr ---\n'+(row.stderr||'(空)');
+      pre.textContent = '用途：'+commandPurpose(row.purpose||'')+'\nargv: '+JSON.stringify(argv)+'\n--- stdout ---\n'+(row.stdout||'(空)')+'\n--- stderr ---\n'+(row.stderr||'(空)');
       det.appendChild(pre);
       line.appendChild(det);
       feed.appendChild(line);
-      while (feed.children.length > 400) feed.removeChild(feed.firstChild);
-      feed.scrollTop = feed.scrollHeight;
+      // 命令账本同样不截断，避免阶段进展与设备命令数量对不上。
+      followLatest(feed, wasNearBottom);
       $('cmd-count').textContent = '共 '+state.cmds.length+' 条';
+      $('overview-commands').textContent = String(state.cmds.length);
+      renderLiveEvidence();
+    }
+    function commandPurpose(purpose) {
+      const p = String(purpose||'');
+      const map = [
+        [/pre-clear|baseline|after/, '效果物基线/复查'],
+        [/hilog-clear/, '清理设备日志'], [/hilog/, '读取设备日志'],
+        [/mkdir|run-dir/, '准备运行目录'], [/hap:install|install/, '安装测试载荷'],
+        [/hap:start|start/, '启动测试载荷'], [/force-stop|uninstall/, '清理旧载荷'],
+        [/validator|fact-verify/, '校验证据'], [/device-clock|date/, '读取设备时间'],
+      ];
+      for (const [re,label] of map) if (re.test(p)) return label;
+      return p || '设备命令';
     }
     function handleProgress(row) {
       const kind = row.event || '';
-      if (kind === 'entry_discovery_turn') {
+      if (kind === 'device_cmd') {
+        // 设备命令以 ledger 事件单独展示；progress.jsonl 里也可能留有同一
+        // 条镜像事件，这里跳过以免日志区和命令区重复计数。
+        return;
+      } else if (kind === 'entry_discovery_turn') {
         // 协议匹配前的入口发现 loop：与后续契约侦查分开显示，避免用户误以为
         // entry_hints 是 Stage1 单轮适配器直接推断出的已验证端点。
         markStage('start','done','已启动');
         markStage('compile','active','入口发现 / 协议匹配中');
         const rec = row.record || {};
-        const line = el('div','evtline recon');
-        const log = $('progress-log');
-        if (log.querySelector('.empty')) log.replaceChildren();
-        line.appendChild(el('span','e-kind','[入口发现'+(rec.turn!=null?(' '+rec.turn+'/'+rec.max_turns):'')+']'));
-        line.appendChild(document.createTextNode(' '+(row.ts?fmtTs(row.ts)+' ':'')+(row.detail||'')));
-        if (rec.tool) {
-          const extra = rec.ok === false ? ' · 拒绝/失败' : (rec.tool === 'finalize' ? ' · 提交候选' : '');
-          line.appendChild(el('span','e-dim', extra));
-        }
-        log.appendChild(line);
-        log.scrollTop = log.scrollHeight;
+        const suffix = rec.turn!=null ? '（第 '+rec.turn+' / '+(rec.max_turns||'?')+' 轮）' : '';
+        appendEvent('入口发现', (row.detail||'')+suffix, row.ts, rec);
       } else if (kind === 'recon_turn') {
         // 侦查 loop 每轮事件先于 run_started 到达（编译阶段），同步点亮 compile 步骤
         markStage('start','done','已启动');
         markStage('compile','active','侦查 / 编译中');
         const rec = row.record || {};
-        const line = el('div','evtline recon');
-        const log = $('progress-log');
-        if (log.querySelector('.empty')) log.replaceChildren();
-        line.appendChild(el('span','e-kind','[侦查'+(rec.turn!=null?(' '+rec.turn+'/'+rec.max_turns):'')+']'));
-        line.appendChild(document.createTextNode(' '+(row.ts?fmtTs(row.ts)+' ':'')+(row.detail||'')));
-        log.appendChild(line);
-        log.scrollTop = log.scrollHeight;
+        const suffix = rec.turn!=null ? '（第 '+rec.turn+' / '+(rec.max_turns||'?')+' 轮）' : '';
+        appendEvent('源码侦查', (row.detail||'')+suffix, row.ts, rec);
       } else if (kind === 'run_started') {
         markStage('start','done','已启动');
         markStage('compile','active','侦查 / 编译中');
@@ -813,6 +1385,14 @@
           markStage('observe','done','已采集'); markStage('verdict','done','已判定');
           appendEvent('阶段','判定完成（VERDICTED）', row.ts);
         }
+      } else if (kind === 'compile_note') {
+        appendEvent('编译', row.detail||'契约编译产生了一条说明。', row.ts, row.record||{});
+      } else if (kind === 'compile_error') {
+        appendEvent('错误', row.detail||'契约编译未通过。', row.ts, row.record||{});
+        $('progress-error').hidden = false;
+        $('progress-error').textContent = '编译提示：'+(row.detail||'');
+      } else if (kind === 'deliverable') {
+        appendEvent('交付物', row.detail||'正在整理验证文件。', row.ts, row.record||{});
       } else if (kind === 'error') {
         markStage('done','failed','失败');
         $('progress-error').hidden = false;
@@ -826,8 +1406,95 @@
         appendEvent(kind||'事件', row.detail, row.ts);
       }
     }
+    function formatBytes(bytes) {
+      if (bytes==null) return '';
+      const n = Number(bytes); if (!Number.isFinite(n)) return '';
+      if (n < 1024) return n+' B';
+      if (n < 1024*1024) return (n/1024).toFixed(1)+' KB';
+      return (n/1024/1024).toFixed(1)+' MB';
+    }
+    function artifactStateText(a) { return a.available ? '已生成' : '等待生成'; }
+    function renderRunArtifacts(items) {
+      const box = $('artifact-list'); if (!box) return;
+      box.replaceChildren();
+      const list = Array.isArray(items) ? items : [];
+      const available = list.filter(x=>x.available).length;
+      $('overview-artifacts').textContent = available+' / '+list.length;
+      if (!list.length) { box.appendChild(el('div','empty','暂无可展示的运行产物。')); return; }
+      list.forEach(a => {
+        const card = el('article','artifact-card '+(a.available?'available':'pending'));
+        const head = el('div','af-head'); head.appendChild(el('div','af-name',a.label||a.name));
+        head.appendChild(el('span','af-state',artifactStateText(a))); card.appendChild(head);
+        card.appendChild(el('div','af-desc',a.description||a.name||''));
+        const meta = [];
+        if (a.available && a.bytes!=null) meta.push(formatBytes(a.bytes));
+        if (a.available && a.modified_at) meta.push(String(a.modified_at).replace('T',' ').replace('Z',''));
+        if (meta.length) card.appendChild(el('div','af-meta',meta.join(' · ')));
+        if (a.available) {
+          const b = el('button','view-btn','查看产物'); b.type='button';
+          b.addEventListener('click',()=>openRunArtifactViewer(state.detail&&state.detail.runId,a)); card.appendChild(b);
+        }
+        box.appendChild(card);
+      });
+    }
+    async function refreshRunArtifacts(runId) {
+      if (!runId) return;
+      try {
+        const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/artifacts');
+        state.artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+        renderRunArtifacts(state.artifacts);
+      } catch(e) {
+        const box = $('artifact-list'); if (box && !state.artifacts.length) box.replaceChildren(el('div','empty','中间产物暂时不可读：'+(e.message||String(e))));
+      }
+    }
+    async function loadHistoricalRun(runId) {
+      if (!runId || state.historyLoadedRun===runId) return;
+      const progress = state.artifacts.find(x=>x.name==='progress.jsonl' && x.available);
+      const ledger = state.artifacts.find(x=>x.name==='ledger.jsonl' && x.available);
+      if (!progress && !ledger) { state.historyLoadedRun=runId; return; }
+      try {
+        const readJSONL = async artifact => {
+          if (!artifact) return [];
+          const resp = await fetch(artifact.url,{credentials:'same-origin',cache:'no-store'});
+          if (!resp.ok) return [];
+          const text = await resp.text(); const rows=[];
+          for (const line of text.split(/\r?\n/)) { if (!line.trim()) continue; try { rows.push(JSON.parse(line)); } catch(_){} }
+          return rows;
+        };
+        const [commands, events] = await Promise.all([readJSONL(ledger),readJSONL(progress)]);
+        commands.forEach(row=>appendCmd(row));
+        events.forEach(row=>handleProgress(row));
+        state.historyLoadedRun=runId;
+      } catch(_) {
+        // 历史日志读取失败不覆盖最终结果；页面仍保留当前可读产物。
+      }
+    }
+    async function openRunArtifactViewer(runId, artifact) {
+      if (!runId || !artifact) return;
+      closeDelivViewer();
+      const box = el('div','viewer'); const inner = el('div','viewer-box');
+      const head = el('div','viewer-h'); head.appendChild(el('span',null,'运行产物 · '+(artifact.label||artifact.name)));
+      const closeBtn = el('button','viewer-close','×'); closeBtn.title='关闭（Esc）'; closeBtn.addEventListener('click',closeDelivViewer); head.appendChild(closeBtn); inner.appendChild(head);
+      const meta = el('div','viewer-meta',(artifact.name||'')+(artifact.bytes!=null?' · '+formatBytes(artifact.bytes):'')); inner.appendChild(meta);
+      const body = el('div','viewer-body'); body.textContent='读取中……'; inner.appendChild(body); box.appendChild(inner);
+      box.addEventListener('click',e=>{if(e.target===box)closeDelivViewer();}); document.body.appendChild(box); viewerEl=box;
+      try {
+        const resp = await fetch(artifact.url,{credentials:'same-origin',cache:'no-store'});
+        if(!resp.ok) throw new Error('读取失败（'+resp.status+'）');
+        const text = await resp.text();
+        if (artifact.kind==='json') { try { body.textContent=JSON.stringify(JSON.parse(text),null,2); } catch(_) { body.textContent=text; } }
+        else {
+          const lines=text.split(/\r?\n/).filter(Boolean); const fragment=[];
+          for(const line of lines.slice(-400)) { try { fragment.push(JSON.stringify(JSON.parse(line),null,2)); } catch(_) { fragment.push(line); } }
+          body.textContent=fragment.join('\n\n');
+          if(lines.length>400) body.textContent='（仅显示最近 400 条）\n\n'+body.textContent;
+        }
+      } catch(err) { body.className='viewer-err'; body.textContent='产物读取失败：'+(err.message||String(err)); }
+    }
     function connectRun(runId) {
       stopStream();
+      refreshRunArtifacts(runId);
+      state.artifactTimer = window.setInterval(() => refreshRunArtifacts(runId), 1600);
       const es = new EventSource('/scan-artifact/runs/'+encodeURIComponent(runId)+'/events');
       state.es = es;
       es.addEventListener('progress', ev => { try { handleProgress(JSON.parse(ev.data)); } catch(_){} });
@@ -844,7 +1511,18 @@
         }
       };
     }
-    function stopStream() { if (state.es) { state.es.close(); state.es = null; } }
+    function stopStream() {
+      if (state.es) { state.es.close(); state.es = null; }
+      if (state.artifactTimer) { window.clearInterval(state.artifactTimer); state.artifactTimer = null; }
+      if (state.historyTimer) { window.clearInterval(state.historyTimer); state.historyTimer = null; }
+    }
+    $('jump-latest').addEventListener('click', jumpToLatest);
+    $('follow-log').addEventListener('change', event => {
+      if (event.target.checked) jumpToLatest();
+    });
+    $('refresh-run-artifacts').addEventListener('click',()=>{
+      if (state.detail && state.detail.runId) refreshRunArtifacts(state.detail.runId);
+    });
     async function resumeRun(runId) {
       // 恢复：查状态端点。终态直接渲染结果；运行中重连 SSE。
       $('progress-panel').hidden = false;
@@ -858,7 +1536,9 @@
           connectRun(runId);
         } else {
           state.runDone = true;
-          setLive(status==='error'||status==='cancelled'?'err':'', '历史执行已结束（'+status+'）。');
+          setLive(status==='error'||status==='cancelled'?'err':'', '历史执行已结束：'+humanStatus(status)+'。');
+          await refreshRunArtifacts(runId);
+          await loadHistoricalRun(runId);
           await fetchAndRenderResult(runId);
         }
       } catch(e) {
@@ -868,17 +1548,21 @@
     }
     async function onRunDone(payload) {
       state.runDone = true;
+      stopStream();
       const status = String(payload.status||'').toLowerCase();
       if (status === 'error' || status === 'cancelled') {
-        setLive('err','执行结束：'+status);
+        setLive('err','执行结束：'+humanStatus(status));
         const run = payload.run || {};
         if (run.error) { $('progress-error').hidden=false; $('progress-error').textContent='执行错误：'+run.error; }
         markStage('done','failed', status==='cancelled'?'已取消':'失败');
       } else {
-        setLive('','执行结束：'+status+'。正在加载完整结果……');
+        setLive('','执行结束：'+humanStatus(status)+'。正在加载完整结果……');
         markStage('done','done','已收尾');
       }
       $('run').disabled = false;
+      if (state.detail) await refreshRunHistory(state.detail.scanId,state.detail.sampleId);
+      if (state.detail) startHistoryPolling(state.detail.scanId,state.detail.sampleId);
+      await refreshRunArtifacts(state.detail && state.detail.runId);
       await fetchAndRenderResult(state.detail && state.detail.runId);
     }
     async function fetchAndRenderResult(runId) {
@@ -900,12 +1584,606 @@
     /* ============ 结果可视化 ============ */
     const STAGE_LABEL = {reachability:'① 可达性', influence:'② 影响力', effect:'③ 效果'};
     const STAGE_OK = {reachability:'INPUT_DELIVERED', influence:'SINK_CONTROLLED', effect:'EFFECT_OBSERVED'};
+    const STAGE_VALUE_LABEL = {
+      INPUT_DELIVERED:'输入已送达设备', SINK_CONTROLLED:'已影响目标操作', EFFECT_OBSERVED:'已观察到预期效果',
+      INPUT_NOT_DELIVERED:'输入未送达', SINK_NOT_CONTROLLED:'尚未证明影响目标操作', EFFECT_NOT_OBSERVED:'尚未观察到预期效果',
+    };
+    const STATUS_LABEL = {
+      CONFIRMED:'已确认：观察到预期效果', NOT_REPRODUCED:'暂未复现', BLOCKED:'已阻断',
+      INCONCLUSIVE:'证据不足，无法定案', ERROR:'运行失败', CANCELLED:'已取消',
+      COMPLETE:'已结束', RUNNING:'执行中', FAILED:'运行失败',
+      SUSPECTED:'疑似存在效果', ORACLE_UNAVAILABLE:'缺少可用预言机', REJECTED_VALIDATION:'校验未通过',
+    };
+    function humanStatus(status) { return STATUS_LABEL[String(status||'').toUpperCase()] || (status||'等待判定'); }
+    function humanStageValue(value) { return STAGE_VALUE_LABEL[String(value||'').toUpperCase()] || (value ? String(value) : '尚未判定'); }
+    const ORACLE_KIND_LABEL = {
+      artifact_differential:'文件或产物变化对比',
+      file_differential:'文件状态变化对比',
+      log_signal:'设备日志信号',
+      hilog_signal:'设备日志信号',
+      process_state:'进程状态变化',
+      response_match:'服务响应内容匹配',
+      marker_file:'标记文件检查',
+      composite:'多项证据综合判断',
+    };
+    const ORACLE_FORM_LABEL = {
+      create:'创建文件', append:'追加文件内容', overwrite:'覆盖文件内容',
+      file_create:'创建文件', file_append:'追加文件内容', file_content:'文件内容检查',
+      directory_create:'创建目录', response:'服务响应', log:'日志内容',
+    };
+    function humanOracleKind(kind) {
+      const value = String(kind||'').trim();
+      return ORACLE_KIND_LABEL[value] || (value ? '自定义效果检查' : '未记录检查方式');
+    }
+    function humanOracleForm(name) {
+      const value = String(name||'').trim();
+      if (ORACLE_FORM_LABEL[value]) return ORACLE_FORM_LABEL[value];
+      const readable = value.replace(/[_-]+/g,' ').trim();
+      return readable ? readable.charAt(0).toUpperCase()+readable.slice(1) : '未命名检查项';
+    }
+    function humanObserved(value) { return value ? '已观察到预期变化' : '尚未观察到预期变化'; }
+    function humanPassed(value) { return value ? '已通过' : '未通过'; }
+    function recordTransport(r) {
+      const observations = (r && r.record && Array.isArray(r.record.observations)) ? r.record.observations : [];
+      for (const observation of observations) {
+        if (observation && observation.transport && typeof observation.transport === 'object') return observation.transport;
+      }
+      return {};
+    }
+    function recordMarkerPath(r) {
+      const observations = (r && r.record && Array.isArray(r.record.observations)) ? r.record.observations : [];
+      for (const observation of observations) {
+        const files = observation && observation.filesystem && typeof observation.filesystem === 'object' ? observation.filesystem : {};
+        const paths = Object.keys(files);
+        const marker = paths.find(path => /marker/i.test(path));
+        if (marker) return marker;
+      }
+      return '';
+    }
+    function expandRuntimeFrame(value, r, ct) {
+      let text = value == null ? '' : String(value);
+      const pattern = r && r.record ? String(r.record.pattern || '') : '';
+      const marker = recordMarkerPath(r);
+      const runDir = marker && marker.includes('/') ? marker.slice(0, marker.lastIndexOf('/')) : '';
+      const target = String((ct && ct.contract_id) || (r && r.contract_id) || '');
+      const replacements = {
+        '__RUN_PATTERN__': pattern || '<本轮运行图案未记录>',
+        '__MARKER_PATH__': marker || '<执行后才确定的 marker 路径>',
+        '__MARKER__': marker || '<执行后才确定的 marker 路径>',
+        '__RUN_DIR__': runDir || '<本轮运行目录未记录>',
+        '__TARGET__': target || '<契约目标未记录>',
+      };
+      for (const [from, to] of Object.entries(replacements)) text = text.split(from).join(to);
+      return text;
+    }
+    function contractFrameEntries(ct, r) {
+      const proto = (ct && ct.protocol) || {};
+      const fvs = proto.field_values && typeof proto.field_values === 'object' ? proto.field_values : {};
+      const ps = proto.param_space && typeof proto.param_space === 'object' ? proto.param_space : {};
+      const transport = recordTransport(r);
+      const sent = Array.isArray(transport.sent_frames) ? transport.sent_frames.filter(x => x && (x.payload != null || x.payload_text != null)) : [];
+      if (sent.length) {
+        return sent.map((frame, index) => ({
+          index: frame.index != null ? frame.index : index + 1,
+          slot: frame.slot || ('frame_'+(index + 1)),
+          payload: String(frame.payload != null ? frame.payload : frame.payload_text),
+          template: '',
+          source: 'actual',
+          encoding: frame.encoding || 'UTF-8',
+          byteLength: frame.byte_length != null ? frame.byte_length : null,
+          delay: frame.delay_before_seconds != null ? frame.delay_before_seconds : (index ? (transport.frame_interval_seconds || null) : 0),
+        }));
+      }
+      const sequence = Array.isArray(proto.frame_sequence) ? proto.frame_sequence : [];
+      const aliases = {
+        frame_first: ['frame_first_template','frame_first','first'],
+        frame_first_template: ['frame_first_template','frame_first','first'],
+        first: ['frame_first_template','frame_first','first'],
+        frame_second: ['frame_second','second'],
+        second: ['frame_second','second'],
+        frame_third: ['frame_third','third'],
+        third: ['frame_third','third'],
+      };
+      return sequence.map((slot, index) => {
+        const key = String(slot);
+        const candidates = aliases[key] || [key, key+'_template'];
+        let template = '';
+        for (const candidate of candidates) {
+          if (ps[candidate] != null && String(ps[candidate]) !== '') { template = String(ps[candidate]); break; }
+          if (fvs[candidate] != null && String(fvs[candidate]) !== '') { template = String(fvs[candidate]); break; }
+        }
+        return {
+          index: index + 1, slot: key, payload: expandRuntimeFrame(template, r, ct), template,
+          source: 'preview', encoding: 'UTF-8', byteLength: null,
+          delay: index ? (proto.inter_frame_delay_seconds != null ? proto.inter_frame_delay_seconds : null) : 0,
+        };
+      });
+    }
+    function appendFrameEvidence(parent, ct, r) {
+      const proto = (ct && ct.protocol) || {};
+      const transport = recordTransport(r);
+      const frames = contractFrameEntries(ct, r);
+      parent.appendChild(el('div','kv-sub','本轮发送帧（设备线路内容）'));
+      const note = el('div','flow-note');
+      if (frames.some(frame => frame.source === 'actual')) {
+        note.textContent = '以下内容来自 run_record.observations.transport.sent_frames，表示 HAP/传输层在本轮运行时实际交给 socket 的 payload。';
+      } else if (frames.length) {
+        note.textContent = '本轮旧产物没有保存 sent_frames；以下内容按照 contract 的帧模板和 run_record.pattern 展开，仅作为可复核的发送预览，不冒充设备原始抓包。';
+      } else {
+        note.textContent = '当前契约没有可展示的帧序列。请先检查协议描述符、入口类型和契约编译结果。';
+      }
+      parent.appendChild(note);
+      if (!frames.length) return;
+      const list = el('div','frame-list');
+      frames.forEach(frame => {
+        const card = el('article','frame-card '+(frame.source === 'actual' ? 'actual' : 'preview'));
+        const head = el('div','frame-head');
+        head.appendChild(el('span','frame-title','第 '+frame.index+' 帧 · '+frame.slot));
+        head.appendChild(el('span','frame-source',frame.source === 'actual' ? '本轮实际发送' : '运行时展开预览'));
+        card.appendChild(head);
+        const payload = el('div','frame-payload'); payload.textContent = frame.payload || '（空帧）'; card.appendChild(payload);
+        const meta = [];
+        if (frame.encoding) meta.push('编码 '+frame.encoding);
+        if (frame.byteLength != null) meta.push('长度 '+frame.byteLength+' B');
+        if (frame.delay != null && frame.index > 1) meta.push('前置等待 '+frame.delay+' s');
+        if (meta.length) card.appendChild(el('div','frame-meta',meta.join(' · ')));
+        if (frame.source !== 'actual' && frame.template && frame.template !== frame.payload) {
+          const template = el('div','frame-template'); template.textContent = '契约模板：'+frame.template; card.appendChild(template);
+        }
+        list.appendChild(card);
+      });
+      parent.appendChild(list);
+      const endpoint = ct && ct.entry ? (ct.entry.endpoint || '') : '';
+      const mode = proto.field_values && proto.field_values.mode ? proto.field_values.mode : (ct && ct.entry ? ct.entry.kind : '');
+      parent.appendChild(kvGrid([
+        ['发送端点', endpoint || '—'],
+        ['传输模式', mode || '—'],
+        ['帧总数', frames.length],
+        ['帧间隔', proto.inter_frame_delay_seconds != null ? proto.inter_frame_delay_seconds+' s' : (transport.frame_interval_seconds != null ? transport.frame_interval_seconds+' s' : '—')],
+        ['HAP 自证', transport.poc_signal || '—'],
+      ]));
+    }
+    function appendTriggerFlow(parent, ct, r, frameEntries) {
+      const entry = (ct && ct.entry) || {};
+      const protocol = (ct && ct.protocol) || {};
+      const fault = (ct && ct.fault) || {};
+      const oracle = (ct && ct.oracle) || {};
+      const risk = (ct && ct.risk) || {};
+      const transport = recordTransport(r);
+      const route = (ct && ct.route_binding) || {};
+      const adapter = (r && r.bridge && r.bridge.bridge) || {};
+      const finding = (r && r.entry) || {};
+      const target = finding.function_analyzed || finding.target_id || (ct && ct.unit_id) || '当前扫描条目';
+      const chainCandidates = adapter['候选攻击链'] || adapter.candidate_attack_chains || (r && r.entry && r.entry.candidate_attack_chains) || [];
+      const steps = [
+        ['读取当前验证目标', '从本次扫描条目读取函数、漏洞类别、危险操作和已有源码证据：'+target+'；本步骤只确定测试对象，不会把漏洞结论直接当成设备效果。', 'done'],
+        ['确定外部入口与路由', '入口类型 '+(entry.kind||'未记录')+'，端点 '+(entry.endpoint||'未记录')+'。契约描述符 '+(protocol.descriptor_id||'未记录')+' 负责说明如何分帧和编码；入口与目标的关系由当前 route_binding/入口发现证据约束。', entry.endpoint ? 'done' : 'warn'],
+        ['编译本轮 PoC 契约', '把字段值、帧顺序、故障变异算子、守卫条件和 oracle 预期效果编译成可执行契约。变异目标：'+(fault.operator||'未记录')+'；预期效果：'+(oracle.kind||'未记录')+'。', 'done'],
+        ['构建并启动测试载体', '根据 entry.kind 选择传输层，构建、签名并安装 HAP；随后通过 HDC 启动 '+(transport.bundle||'载体应用')+'。HAP_POC_SENT 只证明载荷完成发送，不单独证明漏洞成立。', transport.bundle || entry.kind === 'hap_udp' || entry.kind === 'hap_tcp' ? 'done' : 'warn'],
+        ['按顺序发送线路帧', frameEntries.length ? (frameEntries.some(frame => frame.source === 'actual') ? '运行记录确认设备端点实际收到以下 '+frameEntries.length+' 帧，帧之间按照契约间隔发送。' : '当前旧产物没有原始帧记录，页面根据契约模板展开以下 '+frameEntries.length+' 帧作为可复核预览。') : '没有形成可发送的帧序列，测试会在传输前被阻断。', frameEntries.length ? 'done' : 'warn'],
+        ['沿源码处理链触发危险点', route.handler || route.target_sink ? '处理函数：'+(route.handler||'未记录')+'；目标操作：'+(route.target_sink||risk.target_process||'未记录')+'。'+(route.dispatch_conditions||[]).join('；') : '当前产物未提供确定的 handler/route_binding；候选攻击链仅作为分析线索展示。', route.handler || route.target_sink ? 'done' : 'warn'],
+        ['采集设备侧证据', '先比较执行前基线，再读取执行后文件、日志、进程和其他 oracle 证据；本轮 pattern='+((r && r.record && r.record.pattern) || '未记录')+' 用于确认效果来自本轮，而不是旧文件。', (r && r.record && r.record.observations && r.record.observations.length) ? 'done' : 'warn'],
+        ['按三阶段规则给出判定', '只有 reachability、influence、effect 按顺序满足，才会标记 CONFIRMED。仅有“输入已发送”或“函数被调用”时，会保留为 NOT_REPRODUCED/INCONCLUSIVE，而不会把路径存在误报为效果。', (r && r.verdict && r.verdict.status === 'CONFIRMED') ? 'done' : 'warn'],
+      ];
+      parent.appendChild(el('div','sec-t','动态测试最终触发全流程（面向用户）'));
+      const flow = el('div','trigger-flow');
+      steps.forEach((step, index) => {
+        const item = el('div','trigger-step '+step[2]);
+        item.appendChild(el('div','trigger-no',String(index+1)));
+        const content = el('div'); content.appendChild(el('div','trigger-title',step[0])); content.appendChild(el('div','trigger-detail',step[1]));
+        if (index === 5 && Array.isArray(chainCandidates) && chainCandidates.length) {
+          const chain = el('div','trigger-chain');
+          chain.textContent = '扫描条目提供的候选源码路线（用于解释路由，不等同于设备抓包）：\n' + chainCandidates.slice(0,6).map((path, i) => '候选 '+(i+1)+'：'+(Array.isArray(path) ? path.join(' → ') : String(path))).join('\n');
+          content.appendChild(chain);
+        }
+        item.appendChild(content); flow.appendChild(item);
+      });
+      parent.appendChild(flow);
+      const caveat = el('div','flow-note');
+      caveat.textContent = '判定口径：PoC 帧是“输入如何进入设备”的证据；源码路线是“为什么认为它可能到达危险点”的解释；文件、日志或状态差分是“危险操作是否产生本轮可观察效果”的证据。三者缺一时，页面会明确显示缺口，不会用模板或历史结果替代设备证据。';
+      parent.appendChild(caveat);
+    }
+
+    /*
+     * 面向专家复核的动态测试档案。
+     *
+     * 这里故意只消费本轮 result/contract/run_record/ledger 等产物：页面
+     * 不推测没有被记录的命令，也不把“源码候选链”冒充为设备运行轨迹。
+     * 这样既能把专家记录中的 PoC、安装、触发、证明步骤讲清楚，也能让
+     * 用户一眼看出哪些是实际设备证据、哪些只是当前扫描的静态线索。
+     */
+    function dossierSection(parent, title) {
+      const section = el('div','dossier-section');
+      section.appendChild(el('div','dossier-section-title',title));
+      parent.appendChild(section);
+      return section;
+    }
+    function dossierCard(parent, label, value, stateName) {
+      const card = el('div','dossier-card '+(stateName||''));
+      card.appendChild(el('div','dc-label',label));
+      card.appendChild(el('div','dc-value',value==null||value===''?'—':String(value)));
+      parent.appendChild(card);
+      return card;
+    }
+    function dossierCode(parent, text, compact) {
+      const pre = el('pre','dossier-code'+(compact?' compact':''));
+      pre.textContent = text==null||text===''?'（本轮产物没有保存该项）':String(text);
+      parent.appendChild(pre);
+      return pre;
+    }
+    function dossierList(parent, values, emptyText) {
+      const list = Array.isArray(values) ? values.filter(x=>x!==undefined&&x!==null&&String(x).trim()!=='') : [];
+      if (!list.length) { parent.appendChild(el('div','dossier-empty',emptyText||'本轮没有记录该项。')); return; }
+      const ul = el('ul','dossier-list');
+      list.forEach(value=>ul.appendChild(el('li',null,typeof value==='string'?value:JSON.stringify(value))));
+      parent.appendChild(ul);
+    }
+    function dossierArtifactByName(name) {
+      return state.artifacts.find(item=>item && item.name===name) || null;
+    }
+    async function readDossierArtifact(runId, name) {
+      if (!runId) return {artifact:null, text:'', available:false};
+      let artifact = dossierArtifactByName(name);
+      if (!artifact) {
+        try {
+          const listing = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/artifacts');
+          const items = Array.isArray(listing.artifacts) ? listing.artifacts : [];
+          artifact = items.find(item=>item && item.name===name) || null;
+          if (items.length) state.artifacts = items;
+        } catch(_) {}
+      }
+      if (!artifact || !artifact.available || !artifact.url) return {artifact, text:'', available:false};
+      try {
+        const response = await fetch(artifact.url,{credentials:'same-origin',cache:'no-store'});
+        if (!response.ok) return {artifact, text:'', available:false};
+        return {artifact, text:await response.text(), available:true};
+      } catch(_) { return {artifact, text:'', available:false}; }
+    }
+    function parseDossierJSONL(text) {
+      const rows = [];
+      for (const line of String(text||'').split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        try { const value=JSON.parse(line); if (value && typeof value==='object') rows.push(value); } catch(_) {}
+      }
+      return rows;
+    }
+    function parseDossierCommandSnapshot(text) {
+      if (!text) return [];
+      try {
+        const root = JSON.parse(text);
+        const rows = [];
+        const visit = value => {
+          if (!value || typeof value !== 'object') return;
+          if (Array.isArray(value)) { value.forEach(visit); return; }
+          if (Array.isArray(value.argv) || typeof value.command === 'string') rows.push(value);
+          Object.entries(value).forEach(([key, child]) => {
+            if (key !== 'stdout' && key !== 'stderr') visit(child);
+          });
+        };
+        visit(root);
+        return rows;
+      } catch(_) { return []; }
+    }
+    function shellQuoteDossier(value) {
+      const text = String(value==null?'':value);
+      return /^[A-Za-z0-9_./:=+@%-]+$/.test(text) ? text : "'"+text.replace(/'/g,"'\\''")+"'";
+    }
+    function argvToDossierCommand(argv) {
+      if (!Array.isArray(argv) || !argv.length) return '';
+      return argv.map(shellQuoteDossier).join(' ');
+    }
+    function redactDossierCommand(text) {
+      let value = String(text||'');
+      value = value.replace(/(\b(?:--?(?:key|store|keystore|cert|sign)[_-]?(?:pwd|password)|(?:key|store|keystore)[Pp]assword)\s+)([^\s]+)/g,'$1[已隐藏]');
+      value = value.replace(/(\b(?:password|passwd|pwd)\s*[=:]\s*)([^\s]+)/ig,'$1[已隐藏]');
+      return value;
+    }
+    function dossierPurposeLabel(purpose) {
+      const value = String(purpose||'');
+      if (/recon/i.test(value)) return '设备侦查';
+      if (/baseline|pre-clear|hilog-clear/i.test(value)) return '基线采样';
+      if (/install|start|force-stop-stale/i.test(value)) return 'HAP 安装与启动';
+      if (/observe|verify|oracle/i.test(value)) return '触发后证明';
+      if (/cleanup|uninstall|remove|clear/i.test(value)) return '清理与复位';
+      if (/exp/i.test(value)) return 'Exp 验证';
+      return '其他设备命令';
+    }
+    function appendDossierCommandGroup(parent, title, rows) {
+      const group = el('div','dossier-command-group');
+      const head = el('div','dossier-command-head');
+      head.appendChild(el('span',null,title));
+      head.appendChild(el('span','dossier-command-meta',rows.length+' 条实际账本记录'));
+      group.appendChild(head);
+      const body = el('div','dossier-command-body');
+      rows.forEach(row=>{
+        const command = redactDossierCommand(argvToDossierCommand(row.argv || row.command));
+        if (!command) return;
+        const purpose = row.purpose || row.phase || '设备命令';
+        const line = el('div','dossier-code compact');
+        line.textContent = '$ '+command+'\n返回码：'+(row.returncode!=null?row.returncode:'—')+' · 目的：'+purpose;
+        body.appendChild(line);
+        const output = String(row.stdout||row.stderr||'').trim();
+        if (output) {
+          const details = document.createElement('details');
+          const summary = document.createElement('summary'); summary.textContent='设备返回（'+Math.min(output.length,1600)+' 字符）'; details.appendChild(summary);
+          dossierCode(details, output.slice(0,1600)+(output.length>1600?'\n…（已截断，原文可从账本查看）':''), true);
+          body.appendChild(details);
+        }
+      });
+      if (!body.children.length) body.appendChild(el('div','dossier-empty','该分组没有可展示的命令参数。'));
+      group.appendChild(body); parent.appendChild(group);
+    }
+    function appendDossierArtifactLinks(parent, runId) {
+      const names = ['contract.json','finding_adapter.json','entry_discovery.json','compile_summary.json','hdc_commands.json','ledger.jsonl','cli.log','run_record.json','verdict.json','result.json'];
+      const manual = state.artifacts.filter(a=>a && /^manual_replay_[0-9]{8,20}\.(md|txt)$/.test(a.name));
+      const candidates = names.map(name=>dossierArtifactByName(name)).filter(Boolean).concat(manual);
+      const links = el('div','dossier-artifacts');
+      let count=0;
+      candidates.forEach(artifact=>{
+        if (!artifact.available) return;
+        count++;
+        const view = el('button','dossier-artifact-link','查看 '+(artifact.label||artifact.name)); view.type='button';
+        view.addEventListener('click',()=>openRunArtifactViewer(runId,artifact)); links.appendChild(view);
+        const dl = document.createElement('a'); dl.className='dossier-artifact-link'; dl.href=artifact.url; dl.download=artifact.name; dl.textContent='下载'; links.appendChild(dl);
+      });
+      if (!count) parent.appendChild(el('div','dossier-empty','当前运行还没有可在线查看的详细产物。运行结束后可刷新。'));
+      else parent.appendChild(links);
+    }
+    function dossierFieldRole(key) {
+      const roles = {
+        mode:['传输配置','决定使用 UDP、TCP 或其他载体，不会直接进入业务帧。'],
+        host:['传输配置','设备端点地址，帮助确认载荷发送到哪个本地/远端服务。'],
+        port:['传输配置','设备端口，和入口发现阶段的端点进行核对。'],
+        set_pkgName:['业务载荷','第一帧业务字段；模板中的图案和 marker 路径会在本轮运行时替换。'],
+        catch_network_traffic:['业务载荷','第二帧业务字段；用于触发目标服务继续处理前一帧写入的状态。'],
+        frame_first:['业务载荷','首帧槽位的候选值，实际发送时以 frame_sequence 和对应模板为准。'],
+        frame_second:['业务载荷','后续帧槽位的候选值，实际发送时以 frame_sequence 和对应模板为准。'],
+        pkg_marker_literal:['守卫条件','服务端用于识别目标业务分支的固定字面量。'],
+      };
+      return roles[key] || ['契约字段','由本轮协议契约提供，具体作用见协议描述符和源码证据。'];
+    }
+    function dossierReadableValue(value) {
+      if (value===undefined || value===null) return '';
+      if (Array.isArray(value)) return value.map(item=>dossierReadableValue(item)).join('；');
+      if (typeof value==='object') return Object.entries(value).map(([key,item])=>key+'：'+dossierReadableValue(item)).join('；');
+      return String(value);
+    }
+    function appendDossierFieldValues(parent, values) {
+      const entries = Object.entries(values||{});
+      if (!entries.length) { parent.appendChild(el('div','dossier-empty','当前契约没有保存字段值。')); return; }
+      const grid = el('div','dossier-field-grid');
+      entries.forEach(([key,value])=>{
+        const [role,note] = dossierFieldRole(key);
+        const isTransport = ['mode','host','port'].includes(key);
+        const card = el('div','dossier-field-card '+(isTransport?'transport':'payload'));
+        const label = el('div','dossier-field-label'); label.appendChild(el('span',null,key)); label.appendChild(el('span','dossier-field-role',role)); card.appendChild(label);
+        const valueBox = el('div','dossier-field-value'); valueBox.textContent = dossierReadableValue(value); card.appendChild(valueBox);
+        card.appendChild(el('div','dossier-field-note',note)); grid.appendChild(card);
+      });
+      parent.appendChild(grid);
+      parent.appendChild(el('div','dossier-explain','阅读方式：蓝色卡片是传输位置，黄色卡片是业务载荷。这里显示的是契约编译前的输入；其中 __RUN_PATTERN__、__MARKER_PATH__ 等占位符会在每次运行时绑定到本轮唯一图案和远端观察路径，实际发送内容请以下方“设备账本”和“本轮发送帧”为准。'));
+    }
+    function appendDossierTemplateBody(parent, value) {
+      const box = el('div','dossier-template-body');
+      const text = String(value==null?'':value);
+      const re = /(__[A-Z0-9_]+__)/g;
+      let cursor = 0; let match;
+      while ((match = re.exec(text)) !== null) {
+        if (match.index > cursor) box.appendChild(document.createTextNode(text.slice(cursor,match.index)));
+        box.appendChild(el('span','dossier-placeholder',match[1])); cursor = match.index + match[0].length;
+      }
+      if (cursor < text.length) box.appendChild(document.createTextNode(text.slice(cursor)));
+      if (!text) box.textContent='（空模板）';
+      parent.appendChild(box);
+    }
+    function appendDossierTemplates(parent, paramSpace, protocol) {
+      const ps = paramSpace && typeof paramSpace==='object' ? paramSpace : {};
+      const sequence = protocol && Array.isArray(protocol.frame_sequence) ? protocol.frame_sequence : [];
+      const candidates = [];
+      const add = (key,label,kind) => { if (ps[key]!==undefined && ps[key]!==null && String(ps[key])!=='') candidates.push([key,label,kind,String(ps[key])]); };
+      sequence.forEach((slot,index)=>{
+        const key = String(slot);
+        const candidateKeys = key==='frame_first' ? ['frame_first_template','frame_first','first'] : key==='frame_second' ? ['frame_second','second'] : key==='frame_third' ? ['frame_third','third'] : [key,key+'_template'];
+        const found = candidateKeys.find(item=>ps[item]!==undefined && ps[item]!==null && String(ps[item])!=='');
+        if (found) add(found,'第 '+(index+1)+' 帧 · '+key,'设备实际帧模板');
+      });
+      Object.keys(ps).filter(key=>!candidates.some(item=>item[0]===key) && !/note/i.test(key)).forEach(key=>add(key,'参数 · '+key,'参数空间'));
+      if (!candidates.length) { parent.appendChild(el('div','dossier-empty','当前契约没有保存可展开的帧模板。')); return; }
+      const list = el('div','dossier-template-list');
+      candidates.forEach(([key,label,kind,value])=>{
+        const card = el('div','dossier-template-card');
+        const head = el('div','dossier-template-head'); head.appendChild(el('span','dossier-template-title',label)); head.appendChild(el('span','dossier-template-kind',kind+' · '+key)); card.appendChild(head);
+        appendDossierTemplateBody(card,value);
+        list.appendChild(card);
+      });
+      parent.appendChild(list);
+      const note = ps.note ? '契约说明：'+String(ps.note)+'。' : '';
+      parent.appendChild(el('div','dossier-explain',(note||'这些模板描述“如何构造输入”，不是设备回显。')+' 黄色占位符表示运行器在发送前会替换的动态值；如果页面同时标注“本轮实际发送”，应优先以实际帧内容作为复核依据。'));
+    }
+    function appendDossierOracle(parent, oracle) {
+      const forms = Array.isArray(oracle && oracle.artifact_forms) ? oracle.artifact_forms : [];
+      const grid = el('div','dossier-oracle-grid');
+      forms.forEach((form,index)=>{
+        const card = el('div','dossier-oracle-card');
+        const name = form.form || ('form_'+(index+1)); card.appendChild(el('div','oracle-name',name));
+        const conditions = [];
+        if (form.path) conditions.push('观察路径：'+form.path);
+        if (form.content_contains) conditions.push('内容必须包含：'+form.content_contains);
+        if (form.output_surface) conditions.push('输出面：'+form.output_surface);
+        if (form.output_is_dir!==undefined) conditions.push('目录形态：'+(form.output_is_dir?'是':'否'));
+        card.appendChild(el('div','oracle-condition',conditions.length?conditions.join('\n'):'未指定文件或内容条件。'));
+        card.appendChild(el('div','oracle-status','判定含义：只有基线与触发后状态差分满足这些条件，才能把效果记为本轮观察到。'));
+        grid.appendChild(card);
+      });
+      if (forms.length) parent.appendChild(grid);
+      else parent.appendChild(el('div','dossier-empty','当前契约没有保存文件/产物形式的效果预言机。'));
+      const signals = Array.isArray(oracle && oracle.hilog_expectations) ? oracle.hilog_expectations : [];
+      if (signals.length) {
+        parent.appendChild(el('div','dossier-section-title','日志预期信号'));
+        const chips = el('div','dossier-signal-list'); signals.forEach(signal=>chips.appendChild(el('span','dossier-signal',dossierReadableValue(signal)))); parent.appendChild(chips);
+      }
+      if (oracle && oracle.evidence) parent.appendChild(el('div','dossier-explain','预言机来源说明：'+String(oracle.evidence)));
+      parent.appendChild(el('div','dossier-explain','判定顺序：先确认输入到达，再确认危险操作受到输入影响，最后确认文件、日志或其他设备状态出现与本轮图案绑定的效果。仅有“帧已发送”或“函数可能被调用”不能单独构成成功证明。'));
+    }
+    function appendDossierProof(section, r, ct) {
+      const verdict = r.verdict || {};
+      const transport = recordTransport(r);
+      const record = r.record || {};
+      const observations = Array.isArray(record.observations) ? record.observations : [];
+      const actualFrames = Array.isArray(transport.sent_frames) ? transport.sent_frames : [];
+      const pattern = record.pattern || r.pattern || '';
+      const files = [];
+      observations.forEach(observation=>Object.entries(observation.filesystem||{}).forEach(([path,info])=>files.push({path,info})));
+      const oracle = verdict.oracle || {};
+      const formDetails = oracle.details && oracle.details.forms && typeof oracle.details.forms==='object' ? oracle.details.forms : {};
+      const proofGrid = el('div','dossier-proof-grid');
+      const reachDetail = [transport.poc_signal, actualFrames.length?('实际发送 '+actualFrames.length+' 帧'):null, transport.bundle?('载体 '+transport.bundle):null].filter(Boolean).join(' · ');
+      dossierCard(proofGrid,'① 输入是否真正送达', verdict.reachability==='INPUT_DELIVERED'?'通过：'+(reachDetail||'已记录设备传输证据'):'未通过或未记录：'+(reachDetail||'没有设备侧发送证据'), verdict.reachability==='INPUT_DELIVERED'?'pass':'wait');
+      const influenceDetail = [verdict.influence, (ct.route_binding||{}).handler, (ct.route_binding||{}).target_sink].filter(Boolean).join(' · ');
+      dossierCard(proofGrid,'② 是否影响目标操作', verdict.influence==='SINK_CONTROLLED'?'通过：'+(influenceDetail||'判定为目标操作受控'):'尚未证明：'+(verdict.influence_blocker||influenceDetail||'缺少影响力证据'), verdict.influence==='SINK_CONTROLLED'?'pass':'wait');
+      const effectDetail = Object.entries(formDetails).map(([name,form])=>humanOracleForm(name)+'：'+humanPassed(form && form.passed)).join('；');
+      dossierCard(proofGrid,'③ 是否产生设备效果', verdict.effect==='EFFECT_OBSERVED'?'通过：'+(effectDetail||'设备预言机观察到效果'):'未观察到：'+(effectDetail||'没有可核验的设备效果'), verdict.effect==='EFFECT_OBSERVED'?'pass':'wait');
+      section.appendChild(proofGrid);
+      const proofList = [];
+      if (pattern) proofList.push('本轮唯一图案：'+pattern+'（用于排除旧文件/旧日志误命中）');
+      if (transport.hap) proofList.push('HAP 构建/执行路径：'+transport.hap);
+      if (files.length) files.forEach(item=>{ const info=item.info||{}; proofList.push('文件差分：'+item.path+' · '+(info.before_exists===false?'执行前不存在；':'')+(info.exists?'执行后存在；':'执行后不存在；')+(info.pattern_found?'内容命中本轮图案；':'')+(info.content_sha256?'SHA-256 '+info.content_sha256:'') ); });
+      if (record.hilog_hits && record.hilog_hits.length) record.hilog_hits.forEach(hit=>proofList.push('hilog：'+(hit.line||hit.message||JSON.stringify(hit))));
+      if (record.response_excerpt) proofList.push('服务响应摘录：'+record.response_excerpt);
+      if (Array.isArray(oracle.refutation_checks)) oracle.refutation_checks.forEach(check=>proofList.push('否证：'+check.check+' → '+(check.passed?'通过':'未通过')));
+      const proofText = el('div','dossier-code compact'); proofText.textContent = proofList.length ? proofList.join('\n') : '本轮产物没有保存额外的设备证明细节；请查看 run_record/verdict 原始产物。'; section.appendChild(proofText);
+    }
+    async function appendDetailedExecutionDossier(parent, runId, data) {
+      const r = data && data.result ? data.result : {};
+      const ct = r.contract || {};
+      // scan_artifact 的 bridge 是一个带 source/entry 元数据的 envelope；
+      // 兼容旧 run 直接把中文语义卡放在 r.bridge 的情况。
+      const bridgeEnvelope = r.bridge || {};
+      const bridge = bridgeEnvelope.bridge && typeof bridgeEnvelope.bridge === 'object' ? bridgeEnvelope.bridge : bridgeEnvelope;
+      const entry = r.entry || bridgeEnvelope.entry || {};
+      const route = ct.route_binding || {};
+      const protocol = ct.protocol || {};
+      const fault = ct.fault || {};
+      const oracle = ct.oracle || {};
+      const identity = ct.identity || {};
+      const token = String(Date.now())+'-'+Math.random();
+      state.dossierToken = token;
+      const dossier = el('div','dossier');
+      const head = el('div','dossier-head');
+      const titleBox = el('div'); titleBox.appendChild(el('div','dossier-title','完整 PoC 构造、安装触发与设备证明')); titleBox.appendChild(el('div','dossier-subtitle','以下内容按“目标 → 协议与载体 → 构建/安装/触发命令 → 源码路线 → 设备证明 → 原始产物”组织。标记为“实际/账本/设备”的内容来自本轮产物；标记为“候选/预览”的内容不作为触发成功证据。')); head.appendChild(titleBox);
+      head.appendChild(el('span','dossier-badge',r.context_mode==='clean_room'?'clean-room 独立评测':'辅助运行')); dossier.appendChild(head);
+
+      const targetSection = dossierSection(dossier,'一、测试目标与 PoC 构造依据');
+      const targetGrid = el('div','dossier-grid');
+      dossierCard(targetGrid,'漏洞/风险类型',r.vuln_class||entry.vuln_class||'未记录');
+      dossierCard(targetGrid,'目标函数',entry.function_analyzed||bridge['函数名称']||r.target_id||'未记录');
+      dossierCard(targetGrid,'源码位置',bridge['所处文件路径'] ? bridge['所处文件路径']+' · '+(bridge['起止位置']||'行号未记录') : (entry.location||r.location||'未记录'));
+      dossierCard(targetGrid,'危险操作 / sink',route.target_sink||r.sink||entry.sink||'未记录');
+      dossierCard(targetGrid,'入口类型与端点',(ct.entry||{}).kind||'未记录', '');
+      dossierCard(targetGrid,'执行身份',identity.execution_identity||((ct.entry||{}).reachability_identity)||'未记录');
+      dossierCard(targetGrid,'协议描述符',protocol.descriptor_id||'未记录');
+      dossierCard(targetGrid,'HAP/载体标识',(recordTransport(r).bundle)||'尚未记录');
+      targetSection.appendChild(targetGrid);
+      if (ct.description || bridge['具体漏洞源码与漏洞描述'] || entry.description) dossierCode(targetSection,ct.description||bridge['具体漏洞源码与漏洞描述']||entry.description,true);
+      if (fault.description || bridge['根因分析'] || entry.reasoning) {
+        targetSection.appendChild(el('div','dossier-section-title','漏洞触发与根因说明'));
+        dossierCode(targetSection,fault.description||bridge['根因分析']||entry.reasoning,true);
+      }
+      if (route.evidence && route.evidence.length) { targetSection.appendChild(el('div','dossier-section-title','源码/路由证据位置')); dossierList(targetSection,route.evidence); }
+
+      const protocolSection = dossierSection(dossier,'二、协议字段、PoC 载荷与编译约束');
+      const protocolGrid = el('div','dossier-grid');
+      dossierCard(protocolGrid,'传输模式',protocol.field_values&&protocol.field_values.mode || (ct.entry||{}).kind || '未记录');
+      dossierCard(protocolGrid,'目标端点',(ct.entry||{}).endpoint||'未记录');
+      dossierCard(protocolGrid,'字段分隔/编码',(protocol.wire_format&&dossierReadableValue(protocol.wire_format)) || (protocol.descriptor_snapshot&&protocol.descriptor_snapshot.encoder_kind) || '未记录');
+      dossierCard(protocolGrid,'帧顺序',Array.isArray(protocol.frame_sequence)?protocol.frame_sequence.join(' → '):'未记录');
+      dossierCard(protocolGrid,'帧间等待',protocol.inter_frame_delay_seconds!=null?protocol.inter_frame_delay_seconds+' s':'未记录');
+      dossierCard(protocolGrid,'变异算子',fault.operator||'未记录');
+      protocolSection.appendChild(protocolGrid);
+      if (protocol.field_values) {
+        protocolSection.appendChild(el('div','dossier-section-title','本轮字段值（模板展开前的契约输入）'));
+        appendDossierFieldValues(protocolSection,protocol.field_values);
+      }
+      if (protocol.param_space) {
+        protocolSection.appendChild(el('div','dossier-section-title','参数空间/载荷模板'));
+        appendDossierTemplates(protocolSection,protocol.param_space,protocol);
+      }
+      const guards = fault.expected_guards || (protocol.descriptor_snapshot&&protocol.descriptor_snapshot.known_guards) || [];
+      if (guards.length) { protocolSection.appendChild(el('div','dossier-section-title','守卫条件与绕过依据')); dossierList(protocolSection,guards); }
+      if (oracle.artifact_forms || oracle.hilog_expectations || oracle.evidence) {
+        protocolSection.appendChild(el('div','dossier-section-title','预言机与成功条件'));
+        appendDossierOracle(protocolSection,oracle);
+      }
+
+      const chainSection = dossierSection(dossier,'三、从入口到触发点的源码路线');
+      const fullChain = bridge['完整攻击链'] || bridge.attack_chain || entry.attack_chain || '';
+      if (fullChain) dossierCode(chainSection,fullChain,false); else if (route.handler || route.target_sink) dossierCode(chainSection,[route.handler,route.target_sink].filter(Boolean).join(' → '),false); else chainSection.appendChild(el('div','dossier-empty','本轮没有保存一条确定的完整源码路线。'));
+      const candidateChains = bridge['候选攻击链'] || bridge.candidate_attack_chains || entry.candidate_attack_chains || [];
+      if (Array.isArray(candidateChains) && candidateChains.length) { chainSection.appendChild(el('div','dossier-section-title','候选源码路线（不等同于设备已执行）')); candidateChains.forEach((chain,index)=>dossierCode(chainSection,'候选 '+(index+1)+'：'+(Array.isArray(chain)?chain.join(' → '):String(chain)),true)); }
+      const discovery = r.entry_discovery || {};
+      const discoveryEvidence = [];
+      (discovery.candidates||[]).forEach(candidate=>{ if (candidate.handler) discoveryEvidence.push('handler：'+candidate.handler); (candidate.source_evidence||[]).forEach(item=>discoveryEvidence.push('源码：'+item)); (candidate.device_evidence||[]).forEach(item=>discoveryEvidence.push('设备：'+item)); });
+      if (discoveryEvidence.length) { chainSection.appendChild(el('div','dossier-section-title','入口发现与路由证据')); dossierList(chainSection,discoveryEvidence); }
+      if (route.dispatch_conditions && route.dispatch_conditions.length) { chainSection.appendChild(el('div','dossier-section-title','分派条件')); dossierList(chainSection,route.dispatch_conditions); }
+      if (route.state_flow && route.state_flow.length) { chainSection.appendChild(el('div','dossier-section-title','状态/事件路线')); dossierList(chainSection,route.state_flow); }
+
+      const commandSection = dossierSection(dossier,'四、构建、签名、安装、启动与触发命令');
+      const compileNotes = (r.compile && Array.isArray(r.compile.notes)) ? r.compile.notes : (Array.isArray(r.compile_notes) ? r.compile_notes : []);
+      if (compileNotes.length) {
+        commandSection.appendChild(el('div','dossier-section-title','编译/签名阶段实际记录'));
+        dossierList(commandSection,compileNotes,'没有保存编译阶段说明。');
+      }
+      const commandMeta = el('div','dossier-grid');
+      dossierCard(commandMeta,'HAP/载体路径',recordTransport(r).hap||'未保存本机 HAP 路径');
+      dossierCard(commandMeta,'HAP 自证信号',recordTransport(r).poc_signal||'未保存 HAP_POC_SENT');
+      dossierCard(commandMeta,'最终交付物',r.deliverables && Array.isArray(r.deliverables.files) ? r.deliverables.files.map(file=>file.name||file).join('、') : '请查看下方交付物分区');
+      dossierCard(commandMeta,'命令来源','ledger.jsonl / hdc_commands.json / 手工复核记录（以实际存在的产物为准）');
+      commandSection.appendChild(commandMeta);
+      commandSection.appendChild(el('div','dossier-loading','正在读取本轮 ledger、CLI 原始日志和手工复核记录……'));
+      const proofSection = dossierSection(dossier,'五、设备侧触发证明与判定依据');
+      appendDossierProof(proofSection,r,ct);
+      const artifactSection = dossierSection(dossier,'六、原始产物在线查看与下载');
+      artifactSection.appendChild(el('div','dossier-subtitle','可直接打开原始 JSON/JSONL/日志复核；签名密码等敏感字段不会在页面中明文展示。')); appendDossierArtifactLinks(artifactSection,runId);
+      parent.appendChild(dossier);
+
+      // Replace the command placeholder after the dossier is visible.  This
+      // keeps the result page useful even when a large CLI log is still being
+      // fetched or an older run lacks one of the snapshots.
+      const commandMarker = commandSection.querySelector('.dossier-loading');
+      if (runId) {
+        const [ledger, snapshot, cli, replay] = await Promise.all([readDossierArtifact(runId,'ledger.jsonl'),readDossierArtifact(runId,'hdc_commands.json'),readDossierArtifact(runId,'cli.log'),(async()=>{
+          const item=state.artifacts.find(a=>a && /^manual_replay_[0-9]{8,20}\.(md|txt)$/.test(a.name) && a.available); return item?readDossierArtifact(runId,item.name):{artifact:null,text:'',available:false};
+        })()]);
+        if (state.dossierToken!==token) return;
+        if (commandMarker && commandMarker.parentNode) commandMarker.remove();
+        const ledgerRows = ledger.available ? parseDossierJSONL(ledger.text).filter(row=>Array.isArray(row.argv)||typeof row.command==='string') : [];
+        const snapshotRows = !ledgerRows.length && snapshot.available ? parseDossierCommandSnapshot(snapshot.text) : [];
+        const commandRows = ledgerRows.length ? ledgerRows : snapshotRows;
+        if (commandRows.length) {
+          const groups = new Map(); commandRows.forEach(row=>{ const key=dossierPurposeLabel(row.purpose||row.phase); if(!groups.has(key)) groups.set(key,[]); groups.get(key).push(row); });
+          groups.forEach((rows,title)=>appendDossierCommandGroup(commandSection,title,rows));
+        } else {
+          commandSection.appendChild(el('div','dossier-empty',ledger.available?'设备账本已生成，但没有可解析的 argv 记录。':'本轮未保存 ledger.jsonl；以下可查看 CLI 原始日志或手工复核记录，页面不会虚构安装命令。'));
+        }
+        if (cli.available) {
+          commandSection.appendChild(el('div','dossier-section-title','CLI 原始日志中的命令/阶段摘要'));
+          const lines = cli.text.split(/\r?\n/).filter(line=>/(hdc|install|aa start|force-stop|hilog|SP_daemon|poc|契约|编译|触发)/i.test(line));
+          dossierCode(commandSection,lines.slice(-160).join('\n') || 'CLI 原始日志没有匹配到命令关键词；可点击下方原始产物查看完整内容。',true);
+        }
+        if (replay.available) {
+          commandSection.appendChild(el('div','dossier-section-title','手工复核记录（若本轮生成）'));
+          dossierCode(commandSection,replay.text.slice(0,12000)+(replay.text.length>12000?'\n…（已截断，原文可在线打开）':''),true);
+        }
+      } else if (commandMarker) {
+        commandMarker.textContent='当前页面没有关联 run_id，无法读取命令账本。';
+      }
+    }
     function chainNode(key, value) {
       const node = el('div','chain-node');
       node.appendChild(el('div','cn-t',STAGE_LABEL[key]||key));
       const ok = value === STAGE_OK[key];
       node.classList.add(ok ? 'pass' : (value ? 'block' : 'fail'));
-      node.appendChild(el('div','cn-v', value || '—'));
+      node.appendChild(el('div','cn-v', humanStageValue(value)));
       return node;
     }
     function renderResult(data) {
@@ -913,16 +2191,21 @@
       const body = $('result-body'); body.replaceChildren();
       const v = r.verdict || {};
       const status = r.status || (data.run_status==='error' ? 'ERROR' : '—');
+      updateOverview(status==='—'?'执行结果':humanStatus(status), status==='—'?'等待结果文件。':'动态测试已结束，可查看下方判定和证据。');
+      if (state.artifacts.length) renderRunArtifacts(state.artifacts);
       const hero = el('div','status-hero');
-      hero.appendChild(el('div','status-big '+status, status));
+      hero.appendChild(el('div','status-big '+status, humanStatus(status)));
       const grade = r.evidence_grade || '—';
       hero.appendChild(el('div','grade-pill '+grade, grade)).title = '证据等级';
       const sub = el('div','hero-sub');
-      sub.textContent = 'run '+(r.run_id||data.run_id||'—')+' · 契约 '+(v.contract_id||'—')+' · 漏洞类 '+(r.vuln_class||'—')+' · pattern '+(r.pattern||'—');
+      const contextMode = r.context_mode || data.context_mode || '';
+      const contextLabel = contextMode === 'clean_room' ? '独立评测（clean-room）' : (contextMode === 'assisted' ? '辅助运行（assisted）' : '模式未知');
+      sub.textContent = 'run '+(r.run_id||data.run_id||'—')+' · '+contextLabel+' · 契约 '+(v.contract_id||'—')+' · 漏洞类 '+(r.vuln_class||'—')+' · pattern '+(r.pattern||'—');
       hero.appendChild(sub);
       body.appendChild(hero);
       if (v.gap) body.appendChild(el('div','hint','判定缺口：'+v.gap));
-      const allErrors = [...(r.adapter_errors||[]), ...(r.compile_errors||[]), ...(data.errors||[]), data.run_error?[data.run_error]:[]];
+      const allErrors = [...(r.adapter_errors||[]), ...(r.compile_errors||[]), ...(data.errors||[]), data.run_error?[data.run_error]:[]]
+        .filter(x => x !== undefined && x !== null && String(x).trim() !== '');
       if (allErrors.length) {
         const d = el('div','hint'); d.style.color='var(--bad)'; d.textContent = '错误：'+allErrors.join('；');
         body.appendChild(d);
@@ -949,28 +2232,32 @@
       const forms = detailForms.length ? detailForms.map(([name,f])=>{ const passed = oracle.forms===true || (typeof oracle.forms==='object' && oracle.forms[name]===true) || f.passed===true; return [name, {...f, passed}]; })
                    : summaryForms.map(([name,f])=>[name, {...f, passed: f.passed===true}]);
       if (forms.length) {
-        body.appendChild(el('div','sec-t','预言机（Oracle）逐 form 证据 · kind='+ (oracle.kind||'—') +' · effect_observed='+(oracle.effect_observed?'是':'否')));
+        const oracleHeading = el('div','sec-t');
+        oracleHeading.appendChild(el('span',null,'设备效果逐项检查'));
+        oracleHeading.appendChild(el('span','caption-note','检查方式：'+humanOracleKind(oracle.kind)+' · 本轮状态：'+humanObserved(oracle.effect_observed)));
+        body.appendChild(oracleHeading);
+        body.appendChild(el('div','hint','系统先记录执行前的设备状态，再与触发后的状态逐项比较。只有与本轮图案或日志信号对应的变化，才会计入动态测试证据。'));
         const wrap = el('div','oracle-cards');
         for (const [name, f] of forms) {
           const c = el('div','o-card');
-          const h = el('div','o-h'); h.appendChild(el('span',null,'form: '+name));
+          const h = el('div','o-h'); h.appendChild(el('span',null,'检查项：'+humanOracleForm(name)));
           h.appendChild(el('span', f.passed?'o-ok':'o-no', f.passed?'通过':'未通过'));
           c.appendChild(h);
-          if (f.path) c.appendChild(el('div','o-path', f.path));
+          if (f.path) c.appendChild(el('div','o-path', '观察位置：'+f.path));
           if (f.before_exists!==undefined || f.after_exists!==undefined) {
-            const kv = kvGrid([['执行前存在', f.before_exists?'是':'否'], ['执行后存在', f.after_exists?'是':'否'], ['内容匹配', f.pattern_found?'命中':'未命中']]);
+            const kv = kvGrid([['执行前状态', f.before_exists?'文件已存在':'文件不存在'], ['执行后状态', f.after_exists?'文件已生成':'文件未生成'], ['本轮图案', f.pattern_found?'已匹配':'未匹配']]);
             c.appendChild(kv);
           }
-          if (f.content) { const cc=el('div','o-content'); cc.textContent=f.content; c.appendChild(cc); }
+          if (f.content) { const cc=el('div','o-content'); cc.textContent='设备反馈：'+f.content; c.appendChild(cc); }
           wrap.appendChild(c);
         }
         body.appendChild(wrap);
         if ((oracle.refutation_checks||[]).length) {
-          const s = el('div','sec sec-amber'); s.appendChild(el('div','sec-t','否证检查（refutation）'));
+          const s = el('div','sec sec-amber'); s.appendChild(el('div','sec-t','排除误判检查'));
           const ul = el('ul','ev');
           oracle.refutation_checks.forEach(rc => {
-            const extra = rc.pattern ? '（pattern='+rc.pattern+'）' : (rc.forms ? '（'+Object.entries(rc.forms).map(([k,x])=>k+':'+(x?'✓':'✗')).join(' ')+'）' : '');
-            ul.appendChild(el('li',null,rc.check+' — '+(rc.passed?'通过':'未通过')+extra));
+            const extra = rc.pattern ? '（本轮图案：'+rc.pattern+'）' : (rc.forms ? '（'+Object.entries(rc.forms).map(([k,x])=>humanOracleForm(k)+'：'+(x?'通过':'未通过')).join('；')+'）' : '');
+            ul.appendChild(el('li',null,'检查项：'+(rc.check||'未命名检查')+' · '+(rc.passed?'已通过':'未通过')+extra));
           });
           s.appendChild(ul); body.appendChild(s);
         }
@@ -1012,11 +2299,11 @@
         const proto = ct.protocol || {};
         const fvs = proto.field_values || {};
         if (Object.keys(fvs).length) {
-          s.appendChild(el('div','kv-sub','协议字段（protocol.field_values）· 描述符 '+(proto.descriptor_id||'—')));
+          s.appendChild(el('div','kv-sub','本轮发送参数 · 描述符：'+(proto.descriptor_id||'未记录')));
           s.appendChild(kvGrid(Object.entries(fvs)));
         }
         if ((proto.frame_sequence||[]).length) {
-          s.appendChild(el('div','kv-sub','报文帧序列 · 帧间隔 '+(proto.inter_frame_delay_seconds!=null?proto.inter_frame_delay_seconds+'s':'—')));
+          s.appendChild(el('div','kv-sub','发送顺序与帧模板 · 帧间隔 '+(proto.inter_frame_delay_seconds!=null?proto.inter_frame_delay_seconds+' 秒':'未记录')));
           const ol = el('ol','ev');
           proto.frame_sequence.forEach(fr => {
             const key = String(fr).replace(/^frame_/, '');
@@ -1029,19 +2316,19 @@
         if (ps.note) { const n1 = el('div','hint'); n1.textContent = '参数空间说明：'+ps.note; s.appendChild(n1); }
         const fault = ct.fault || {};
         if (fault.operator || fault.description) {
-          s.appendChild(el('div','kv-sub','故障注入（fault）· 算子 '+(fault.operator||'—')));
+          s.appendChild(el('div','kv-sub','触发变体 · 方式：'+(fault.operator||'未记录')));
           if (fault.description) { const fd = el('div','recon'); fd.textContent = fault.description; s.appendChild(fd); }
           if (fault.evidence) { const fe = el('div','hint'); fe.textContent = '证据：'+fault.evidence; s.appendChild(fe); }
         }
         const guards = fault.expected_guards || [];
         if (guards.length) {
-          s.appendChild(el('div','kv-sub','绕过的守卫条件（expected_guards）'));
+          s.appendChild(el('div','kv-sub','需要满足的服务端条件'));
           const ul = el('ul','ev'); guards.forEach(g=>ul.appendChild(el('li',null,g)));
           s.appendChild(ul);
         }
         const artifacts = ((ct.oracle||{}).artifact_forms)||[];
         if (artifacts.length) {
-          s.appendChild(el('div','kv-sub','预期效果物（oracle.artifact_forms）'));
+          s.appendChild(el('div','kv-sub','设备上应出现的变化'));
           const ol2 = el('ol','ev');
           artifacts.forEach(a => {
             const bits = [];
@@ -1053,25 +2340,29 @@
           s.appendChild(ol2);
         }
         const lg = (ct.oracle||{}).evidence;
-        if (lg) { const lgd = el('div','hint'); lgd.textContent = '预言机判定逻辑：'+lg; s.appendChild(lgd); }
+        if (lg) { const lgd = el('div','hint'); lgd.textContent = '效果判定说明：'+lg; s.appendChild(lgd); }
         const risk = ct.risk || {};
         if (risk.target_process) {
           s.appendChild(el('div','kv-sub','风险评估'));
           s.appendChild(kvGrid([['目标进程', risk.target_process], ['风险层级', risk.risk_tier||'—'],
-            ['允许崩溃预言机', risk.crash_oracle_allowed?'是':'否'], ['可重启', risk.restartable?'是':'否']]));
+            ['允许将崩溃作为证据', risk.crash_oracle_allowed?'是':'否'], ['服务可重启', risk.restartable?'是':'否']]));
         }
+        const frameEntries = contractFrameEntries(ct, r);
+        appendFrameEvidence(s, ct, r);
+        appendTriggerFlow(s, ct, r, frameEntries);
         body.appendChild(s);
       }
+      appendDetailedExecutionDossier(body, state.detail && state.detail.runId, data);
       const metaPairs = [
         ['适配器', r.adapter_status], ['编译', r.compile_status],
         ['入口线索', (r.entry_hints||[]).join(' · ')],
         ['入口发现状态', (r.entry_discovery&&r.entry_discovery.status)||'—'],
-        ['sink', r.sink],
+        ['目标危险操作', r.sink],
         ['协议描述符', (notes.find(n=>n.startsWith('描述符命中:'))||'').replace('描述符命中: ','')],
         ['侦查轮次', ((notes.find(n=>/侦查 loop: finalized/.test(n))||[]).match && (notes.find(n=>/侦查 loop: finalized/.test(n))||'').match(/turns=(\d+)/)||[])[1]],
         ['设备命令数', (r.record&&r.record.command_count!=null)?r.record.command_count:(state.cmds.length||null)],
-        ['record', r.record_path],
-        ['ledger', state.detail&&state.detail.runId ? '~/.openant/webui/scan-artifact/runs/'+state.detail.runId+'/ledger.jsonl' : ''],
+        ['运行记录文件', r.record_path],
+        ['设备命令账本', state.detail&&state.detail.runId ? '~/.openant/webui/scan-artifact/runs/'+state.detail.runId+'/ledger.jsonl' : ''],
       ];
       body.appendChild(el('div','sec-t sec-pipeline-t','管线元信息'));
       body.appendChild(kvGrid(metaPairs));
@@ -1130,6 +2421,10 @@
       'README.md': '使用说明',
       'poc_source_Index.ets': 'PoC 触发应用源码（ArkTS）',
       'exp_source_Index.ets': 'Exp 利用应用源码（ArkTS）',
+      'poc_source.zip': 'PoC 完整工程源码（ZIP）',
+      'exp_source.zip': 'Exp 完整工程源码（ZIP）',
+      'poc_source_manifest.json': 'PoC 源码清单与 SHA-256',
+      'exp_source_manifest.json': 'Exp 源码清单与 SHA-256',
     };
     async function renderDeliverables(runId, deliverables) {
       const body = $('result-body');
@@ -1175,15 +2470,58 @@
         tr.appendChild(opTd);
         tb.appendChild(tr);
       }
-      t.appendChild(tb); s.appendChild(t); body.appendChild(s);
+      t.appendChild(tb); s.appendChild(t);
+      const sourceBox = el('div','source-explorers');
+      sourceBox.appendChild(el('div','sec-t','完整源码（在线浏览与下载）'));
+      sourceBox.appendChild(el('div','hint','源码快照来自本次 HAP 构建工程；构建缓存、签名材料和本机 SDK 路径已排除。可展开文件树查看，也可下载 ZIP 离线复核。'));
+      for (const item of [['poc','PoC 完整源码'],['exp','Exp 完整源码']]) {
+        const explorer = await renderSourceExplorer(runId, item[0], item[1]);
+        sourceBox.appendChild(explorer);
+      }
+      s.appendChild(sourceBox); body.appendChild(s);
     }
 
+    async function renderSourceExplorer(runId, kind, title) {
+      const box = el('div','source-explorer');
+      const head = el('div','sx-head');
+      const left = el('div'); left.appendChild(el('span','sx-title',title));
+      const meta = el('span','sx-meta','读取源码清单中……'); left.appendChild(meta); head.appendChild(left);
+      const actions = el('div','sx-actions'); head.appendChild(actions); box.appendChild(head);
+      const list = el('div','source-file-list'); box.appendChild(list);
+      try {
+        const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/source/'+encodeURIComponent(kind));
+        const files = Array.isArray(data.files) ? data.files : [];
+        meta.textContent = files.length+' 个文件 · '+formatBytes(data.total_bytes||0);
+        if (data.archive_url) {
+          const a = document.createElement('a'); a.className='view-btn'; a.href=data.archive_url; a.download=kind+'_source.zip'; a.textContent='下载完整 ZIP'; actions.appendChild(a);
+        }
+        if (data.manifest_url) {
+          const a = document.createElement('a'); a.className='view-btn'; a.href=data.manifest_url; a.download=kind+'_source_manifest.json'; a.textContent='下载清单'; actions.appendChild(a);
+        }
+        if (!files.length) { list.appendChild(el('div','source-empty','该类型源码快照尚未生成。')); return box; }
+        files.forEach(f => {
+          const row = el('div','source-file-row');
+          row.appendChild(el('span','source-file-path',f.path||'—'));
+          row.appendChild(el('span','source-file-size',formatBytes(f.bytes||0)));
+          if (f.previewable) {
+            const view = el('button','view-btn','在线查看'); view.type='button';
+            view.addEventListener('click',()=>openSourceViewer(runId, kind, f)); row.appendChild(view);
+          }
+          const dl = document.createElement('a'); dl.className='view-btn'; dl.href=(f.url||'')+'?download=1'; dl.download=f.path||''; dl.textContent='下载'; row.appendChild(dl);
+          list.appendChild(row);
+        });
+      } catch (err) {
+        meta.textContent='源码清单不可用'; list.appendChild(el('div','source-empty','读取失败：'+(err.message||String(err))));
+      }
+      return box;
+    }
     /* ============ 交付物在线预览 ============ */
     // 可在线预览的文本类交付物（hap 是二进制安装包，只提供下载；源码 .ets 可预览）
     const DELIV_PREVIEWABLE = {
       'contract_poc.json': true, 'contract_exp.json': true,
       'evidence_exp.json': true, 'README.md': true,
       'poc_source_Index.ets': true, 'exp_source_Index.ets': true,
+      'poc_source_manifest.json': true, 'exp_source_manifest.json': true,
     };
     let viewerEl = null;
     function closeDelivViewer() { if (viewerEl) { viewerEl.remove(); viewerEl = null; } }
@@ -1270,6 +2608,21 @@
         bodyEl.className = 'viewer-err';
         bodyEl.textContent = '预览失败：'+(err.message||String(err));
       }
+    }
+    async function openSourceViewer(runId, kind, f) {
+      closeDelivViewer();
+      const url = f.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/source/'+encodeURIComponent(kind)+'/'+String(f.path||'').split('/').map(encodeURIComponent).join('/'));
+      const box = el('div','viewer'); const inner = el('div','viewer-box');
+      const head = el('div','viewer-h'); head.appendChild(el('span',null,'在线源码 · '+kind.toUpperCase()+' · '+(f.path||'')));
+      const closeBtn = el('button','viewer-close','×'); closeBtn.title='关闭（Esc）'; closeBtn.addEventListener('click',closeDelivViewer); head.appendChild(closeBtn); inner.appendChild(head);
+      const meta = el('div','viewer-meta'); meta.textContent=(f.bytes!=null?formatBytes(f.bytes):'')+' · 仅展示源码快照，不执行页面内代码'; inner.appendChild(meta);
+      const bodyEl = el('div','viewer-body src-view'); bodyEl.textContent='加载中……'; inner.appendChild(bodyEl);
+      box.appendChild(inner); box.addEventListener('click',e=>{if(e.target===box)closeDelivViewer();}); document.body.appendChild(box); viewerEl=box;
+      try {
+        const resp = await fetch(url,{credentials:'same-origin'}); if(!resp.ok) throw new Error('读取失败（'+resp.status+'）');
+        const text = await resp.text();
+        bodyEl.textContent = text.split(/\r?\n/).map((line,i)=>String(i+1).padStart(4,' ')+' │ '+line).join('\n');
+      } catch(err) { bodyEl.className='viewer-err'; bodyEl.textContent='源码预览失败：'+(err.message||String(err)); }
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDelivViewer(); });
 

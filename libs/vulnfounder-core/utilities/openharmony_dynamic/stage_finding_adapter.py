@@ -48,6 +48,43 @@ _ENTRY_HINT_RE = re.compile(
 )
 
 
+def _normalize_candidate_attack_chains(value: Any) -> list[list[str]]:
+    """把 Stage1/桥接产物中的候选路径规约为有界的节点列表。
+
+    候选路径是证据线索，不是已经确认的调用边，因此这里仅做形状规约，
+    不替模型或源码校验器判定路径是否成立。支持 ``[[node, ...], ...]``，
+    以及单条字符串路径，便于兼容旧的扫描产物。
+    """
+    if isinstance(value, dict):
+        value = value.get("paths") or value.get("chains") or []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    paths: list[list[str]] = []
+    for raw_path in value[:8]:
+        if isinstance(raw_path, str):
+            # 保留原始路径文本作为一个节点，避免在不同箭头/分隔符下误拆符号。
+            nodes = [raw_path.strip()[:2000]] if raw_path.strip() else []
+        elif isinstance(raw_path, (list, tuple)):
+            nodes = [str(node).strip()[:500] for node in raw_path[:32]
+                     if str(node).strip()]
+        elif isinstance(raw_path, dict):
+            candidate_nodes = raw_path.get("path") or raw_path.get("nodes") or []
+            if isinstance(candidate_nodes, str):
+                nodes = [candidate_nodes.strip()[:2000]] if candidate_nodes.strip() else []
+            elif isinstance(candidate_nodes, (list, tuple)):
+                nodes = [str(node).strip()[:500] for node in candidate_nodes[:32]
+                         if str(node).strip()]
+            else:
+                nodes = []
+        else:
+            nodes = []
+        if nodes:
+            paths.append(nodes)
+    return paths
+
+
 @dataclass
 class AdapterResult:
     """适配结果：LLM 转换 + 确定性校验。"""
@@ -102,7 +139,8 @@ _ADAPT_SYSTEM_PROMPT = (
     'resource_exhaustion | parcel_check_missing | race_condition",\n'
     '  "description": "<finding 的一句话结论（中文可保留）>",\n'
     '  "sink": "<最终危险操作点：函数 + 文件:行，如 popen(...) at Network.cpp:153>",\n'
-    '  "entry_hints": ["<设备侧网络入口线索，从「完整攻击链」提取，必须符合以下形态之一>"]\n'
+    '  "entry_hints": ["<设备侧网络入口线索，从「完整攻击链」提取，必须符合以下形态之一>"],\n'
+    '  "candidate_attack_chains": [["<候选路径节点 1>", "<候选路径节点 2>"]]\n'
     "}\n"
     "entry_hints 形态（严格）：\n"
     '- UDP/TCP 入口: "hap_udp <ip>:<端口>" 或 "hap_tcp <ip>:<端口>"'
@@ -125,6 +163,8 @@ _ADAPT_SYSTEM_PROMPT = (
     "3. entry_hints 只描述**外部攻击者如何触达**该服务（网络端口/socket/事件总线/CLI），"
     "其余一律为空数组，不要编造端口或 socket 路径。\n"
     "4. 不要发明源码里不存在的函数名/行号——sink 的 文件:行 必须来自输入。\n"
+    "5. candidate_attack_chains 只从输入已有的「候选攻击链」或结构化候选路径中原样整理；"
+    "没有就输出空数组，不要根据函数名自行编造。候选路径不等于已确认路径。\n"
     "只输出一个 JSON 对象。"
 )
 
@@ -238,6 +278,11 @@ def adapt_stage_finding(
         evidence_lines=[lines],
         sink=str(raw.get("sink", "")),
         entry_hints=[str(h) for h in raw.get("entry_hints", [])][:4],
+        # 候选路径来自桥接层/Stage1 的结构化字段；不让适配 LLM 改写，
+        # 避免模型把候选边升级成确定攻击链。
+        candidate_attack_chains=_normalize_candidate_attack_chains(
+            stage_finding.get("候选攻击链", stage_finding.get("candidate_attack_chains", []))
+        ),
         repo_root=repo_root,
         # 保存 Stage 1 的有限原始上下文，供后置入口发现 loop 读取调用链、证据
         # 和缺失证据；source_paths/evidence_lines 仍由下面的确定性校验负责。

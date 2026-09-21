@@ -74,7 +74,15 @@ SP_DAEMON_TEXT = ProtocolDescriptor(
         "真机实测：set_pkgName 与 catch_network_traffic 需两帧（300ms 间隔）"
     ),
     encoder_kind="key_value",
-    wire_format={"pair_separator": "::", "record_separator": "\n", "terminator": ""},
+    # ``::`` 是命令字段的 key/value 分隔符；UDP token 采用独立的 ``:::`
+    # 后缀（RemoveToken 先移除它，再交给 SplitMsg）。两者不能混为一种
+    # 分隔符，否则合法的 command:::token 会被误判为 key:::value。
+    wire_format={
+        "pair_separator": "::",
+        "token_separator": ":::",
+        "record_separator": "\n",
+        "terminator": "",
+    },
     fields=[
         FieldSpec(name="set_pkgName", type="string", order=0, required=True),
         FieldSpec(name="catch_network_traffic", type="string", order=1),
@@ -104,4 +112,15 @@ def get_descriptor(descriptor_id: str) -> ProtocolDescriptor:
 
 
 def register(descriptor: ProtocolDescriptor) -> None:
+    """注册描述符。
+
+    手写的内置描述符保持“先注册者优先”，避免运行时探测覆盖稳定协议。
+    ``auto_`` 描述符则属于当前编译会话的临时语义事实：同一个稳定身份在
+    重试时可能得到更完整的字段或证据，必须允许后一次、已通过校验的结果
+    更新前一次结果。这样不会把某一轮模型的残缺快照冻结到本次重试的后续
+    阶段，也不会把临时描述符持久化为全局事实。
+    """
+    if descriptor.descriptor_id.startswith("auto_"):
+        _REGISTRY[descriptor.descriptor_id] = descriptor
+        return
     _REGISTRY.setdefault(descriptor.descriptor_id, descriptor)

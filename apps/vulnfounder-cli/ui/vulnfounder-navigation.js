@@ -7,7 +7,8 @@
     { id: "assets", href: "/device-socket-assets#asset-history", zh: "设备资产历史", en: "Device asset history" },
     { id: "source", href: "/source-locator", zh: "源码定位", en: "Source location" },
     { id: "scope", href: "/socket-scope", zh: "扫描范围", en: "Scan scope" },
-    { id: "dynamic-test", href: "/dynamic-test", zh: "动态测试", en: "Dynamic testing" },
+    { id: "dynamic-test", href: "/dynamic-test", zh: "动态测试执行", en: "Dynamic test execution" },
+    { id: "dynamic-history", href: "/dynamic-test-history", zh: "动态测试历史", en: "Dynamic test history" },
   ];
 
   const language = () => document.documentElement.lang.toLowerCase().startsWith("en") ? "en" : "zh";

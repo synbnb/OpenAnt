@@ -29,6 +29,8 @@ from core.exp_package import (  # noqa: E402
     _probe_pt_victims_dynamic,
 )
 from openharmony_dynamic import contract_compiler as cc  # noqa: E402
+from openharmony_dynamic.contract_validator import validate_contract  # noqa: E402
+from openharmony_dynamic.contracts.registry import load_contract  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +68,99 @@ def test_scan_repo_endpoints_dedup_and_cap(tmp_path: Path) -> None:
     hits = _scan_repo_endpoints(tmp_path, "UDP datagram")
     assert len(hits) == 3 and hits[0] == "127.0.0.1:9001" or len(hits) <= 3
     assert all(h.startswith("127.0.0.1:") for h in hits)
+
+
+def test_oracle_payload_checks_selected_wire_frame_only() -> None:
+    """说明性 recvBuf 不能掩盖实际 frame 的 touch/空内容载荷。"""
+    draft = {
+        "oracle": {"artifact_forms": [{"form": "create", "content_contains": "__RUN_PATTERN__"}]},
+        "protocol": {
+            "frame_sequence": ["frame_first", "frame_second"],
+            "field_values": {
+                # 非发送字段带有 marker，不应被当作真实线路载荷。
+                "recvBuf": "set_pkgName::smartperf;echo __RUN_PATTERN__>__MARKER_PATH__",
+            },
+            "param_space": {
+                "frame_first_template": "set_pkgName::smartperf;touch __MARKER_PATH__",
+                "frame_second": "catch_network_traffic",
+            },
+        },
+    }
+    errors = cc._validate_oracle_payload_observability(draft)
+    assert errors and "只创建 marker" in errors[0]
+
+    draft["protocol"]["param_space"]["frame_first_template"] = (
+        "set_pkgName::smartperf;echo __RUN_PATTERN__>__MARKER_PATH__"
+    )
+    assert cc._validate_oracle_payload_observability(draft) == []
+
+
+def test_validate_contract_rejects_non_mapping_hilog_expectations() -> None:
+    """hilog 期望必须是结构化对象，不能让字符串进入设备运行阶段。"""
+    contract = load_contract("DP-02")
+    contract.oracle.hilog_expectations = ["must_not_contain", "optional"]
+
+    errors = validate_contract(contract)
+
+    assert any("hilog_expectations" in error for error in errors)
+
+
+def test_normalize_draft_shapes_does_not_silently_drop_invalid_hilog_entries() -> None:
+    """非法日志期望要交给硬校验报告，不能被归一化悄悄吞掉。"""
+    draft = {"oracle": {"hilog_expectations": ["must_not_contain"]}}
+
+    cc._normalize_draft_shapes(draft)
+
+    assert draft["oracle"]["hilog_expectations"] == ["must_not_contain"]
+
+
+def test_retry_repairs_non_executable_hilog_entries_without_touching_artifact_oracle() -> None:
+    """fresh-session 只隔离非法日志辅助项，不替模型生成协议或效果条件。"""
+    draft = {
+        "oracle": {
+            "artifact_forms": [{"form": "create", "path": "__MARKER__"}],
+            "hilog_expectations": ["must_not_contain", {"tag": "SP", "required": False}],
+        }
+    }
+
+    cc._repair_optional_hilog_shape_for_retry(draft)
+
+    assert draft["oracle"]["hilog_expectations"] == [{"tag": "SP", "required": False}]
+    assert draft["oracle"]["artifact_forms"] == [{"form": "create", "path": "__MARKER__"}]
+    assert "retry-shape-repair" in draft["oracle"]["evidence"]
+
+
+def test_retry_repairs_equivalent_source_protocol_token(tmp_path: Path) -> None:
+    """重试只按当前源码证据修正 token 分隔符，不改写后续攻击载荷。"""
+    source = tmp_path / "route.cpp"
+    source.write_text(
+        '#define SET_PACKAGE "set_pkgName"\n'
+        'bool IsRoute(const std::string &s) { return s.find("set_pkgName::") != std::string::npos; }\n',
+        encoding="utf-8",
+    )
+    finding = type("Finding", (), {
+        "source_paths": [str(source)],
+        "candidate_attack_chains": [],
+        "repo_root": str(tmp_path),
+    })()
+    draft = {
+        "protocol": {
+            "frame_sequence": ["frame_first"],
+            "field_values": {},
+            "param_space": {
+                "frame_first_template": "set_pkg_name::smartperf;printf '%s' __RUN_PATTERN__ > __MARKER_PATH__",
+            },
+        },
+    }
+
+    repairs = cc._repair_source_protocol_frame_tokens(draft, finding)
+
+    assert repairs and "set_pkg_name" in repairs[0] and "set_pkgName" in repairs[0]
+    assert draft["protocol"]["param_space"]["frame_first_template"].startswith(
+        "set_pkgName::smartperf;"
+    )
+    assert "printf '%s' __RUN_PATTERN__" in draft["protocol"]["param_space"]["frame_first_template"]
+    assert any("retry-source-token-repair" in note for note in draft["protocol"]["normalization_notes"])
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +209,231 @@ def test_load_exemplar_hits_auto_library(tmp_path: Path, monkeypatch) -> None:
         json.dumps(ref_contract), encoding="utf-8")
     # 该类无手写 ref → 回落自动晋升库
     assert cc._load_exemplar("resource_exhaustion") == ref_contract
+
+
+def test_clean_room_context_never_loads_history(monkeypatch) -> None:
+    """clean-room 只允许当前 finding/源码证据，不读取历史 facts/exemplar。"""
+    from utilities.openharmony_dynamic.agent import device_facts as facts_module
+
+    def _unexpected_facts(*args, **kwargs):
+        raise AssertionError("clean-room 不得实例化设备事实库")
+
+    def _unexpected_exemplar(*args, **kwargs):
+        raise AssertionError("clean-room 不得加载历史 exemplar")
+
+    monkeypatch.setattr(facts_module, "DeviceFacts", _unexpected_facts)
+    monkeypatch.setattr(cc, "_load_exemplar", _unexpected_exemplar)
+    facts, exemplar = cc._select_recon_context(
+        finding=type("Finding", (), {"vuln_class": "command_injection"})(),
+        hdc=type("HDC", (), {"serial": "SERIAL-HISTORY"})(),
+        device_facts=None,
+        clean_room=True,
+    )
+    assert facts is None
+    assert exemplar is None
+
+
+def test_merge_recon_draft_fills_generic_create_observation() -> None:
+    """create 形态也必须有运行期唯一内容，否则 V7 无法验证写入是否发生。
+
+    这是通用的可观测性兜底，不绑定某个服务或命令；模型只需给出 create
+    的目标路径，运行器即可使用本轮 run_pattern 作为写入内容/判定针。
+    """
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"protocol": {"descriptor_id": "auto_test"},
+                "entry": {"kind": "hap_udp"}}
+    draft = {"oracle": {"artifact_forms": [
+        {"form": "create", "path": "__MARKER__"}
+    ]}}
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    form = merged["oracle"]["artifact_forms"][0]
+    assert form["content_contains"] == "__RUN_PATTERN__"
+
+
+def test_merge_recon_normalizes_composite_marker_path() -> None:
+    """契约编译阶段统一 marker 完整路径语义，避免运行后才出现假阴性。"""
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"protocol": {"descriptor_id": "auto_test"},
+                "entry": {"kind": "hap_udp"}}
+    draft = {
+        "protocol": {"param_space": {
+            "frame_first_template":
+                "route::value;echo __RUN_PATTERN__ > "
+                "__MARKER_PATH__/__MARKER__",
+        }},
+        "oracle": {"artifact_forms": [{
+            "form": "create",
+            "path": "__MARKER_PATH__/__MARKER__",
+            "content_contains": "__RUN_PATTERN__",
+            "output_is_dir": True,
+        }]},
+    }
+
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    assert merged is not None
+    assert merged["protocol"]["param_space"]["frame_first_template"].endswith(
+        "__MARKER_PATH__"
+    )
+    form = merged["oracle"]["artifact_forms"][0]
+    assert form["path"] == "__MARKER_PATH__"
+    assert form["output_is_dir"] is False
+
+
+def test_mutation_route_rejects_legal_probe_only_for_network_finding() -> None:
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"entry": {"kind": "hap_udp"}}
+    draft = {
+        "protocol": {
+            "field_values": {"mode": "udp", "host": "127.0.0.1", "port": 8283,
+                              "command": ["safe_probe"]},
+            "param_space": {},
+            "frame_sequence": [],
+        }
+    }
+    errors = cc._validate_mutation_route(draft, finding, skeleton)
+    assert errors and "变异帧" in errors[0]
+
+
+def test_mutation_route_accepts_evidence_backed_frame_template() -> None:
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {"param_space": {
+        "frame_first_template": "route::value;echo __MARKER_PATH__"
+    }}}
+    assert cc._validate_mutation_route(draft, finding, skeleton) == []
+
+
+def test_merge_recon_normalizes_structured_frame_sequence() -> None:
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"protocol": {"descriptor_id": "auto_test"},
+                "entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {"frame_sequence": [
+        {"index": 0, "payload": "route::payload __MARKER__", "note": "源码证据"},
+        {"index": 1, "payload": "trigger::x"},
+    ], "field_values": {"mode": "udp", "host": "127.0.0.1", "port": 8283}}}
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    proto = merged["protocol"]
+    assert proto["frame_sequence"] == ["frame_first", "frame_second"]
+    assert proto["param_space"]["frame_first_template"].startswith("route::")
+    assert proto["param_space"]["frame_second"] == "trigger::x"
+
+
+def test_merge_recon_normalizes_single_field_frame_objects() -> None:
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"protocol": {"descriptor_id": "auto_test"},
+                "entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {"frame_sequence": [
+        {"set_pkgName": "set_pkgName::payload __MARKER__", "index": 0},
+        {"catch_network_traffic": "catch_network_traffic::x", "index": 1},
+    ]}}
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    proto = merged["protocol"]
+    assert proto["frame_sequence"] == ["frame_first", "frame_second"]
+    assert proto["param_space"]["frame_first_template"].startswith("set_pkgName::")
+    assert proto["param_space"]["frame_second"] == "catch_network_traffic::x"
+
+
+def test_merge_recon_normalizes_literal_frame_sequence() -> None:
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"protocol": {"descriptor_id": "auto_test"},
+                "entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {"frame_sequence": [
+        "set_pkgName::payload __MARKER__", "catch_network_traffic::x"
+    ]}}
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    proto = merged["protocol"]
+    assert proto["frame_sequence"] == ["frame_first", "frame_second"]
+    assert proto["param_space"]["frame_first_template"].startswith("set_pkgName::")
+
+
+def test_merge_recon_prefixes_key_value_slot_from_descriptor_fields() -> None:
+    """模型只给 frame 槽位值时，按当前描述符字段完成通用线路编码。"""
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {
+        "protocol": {
+            "descriptor_id": "sp_daemon_text",
+            "descriptor_snapshot": {
+                "encoder_kind": "key_value",
+                "wire_format": {"pair_separator": "::"},
+                "fields": [
+                    {"name": "set_pkgName"},
+                    {"name": "catch_network_traffic"},
+                ],
+            },
+        },
+        "entry": {"kind": "hap_udp"},
+    }
+    draft = {"protocol": {
+        "frame_sequence": ["frame_first", "frame_second"],
+        "param_space": {
+            "frame_first": "smartperf;echo __MARKER__",
+            "frame_second": "x",
+        },
+    }}
+    merged = cc._merge_recon_draft(draft, finding, skeleton)
+    proto = merged["protocol"]
+    assert proto["param_space"]["frame_first_template"].startswith("set_pkgName::")
+    assert proto["param_space"]["frame_second"].startswith("catch_network_traffic::")
+    assert cc._validate_recon_protocol_route(merged) == []
+
+
+def test_validate_recon_protocol_route_rejects_numeric_frame_index() -> None:
+    """数组下标不是线路帧，不能让空帧通过形状闸门。"""
+    draft = {"protocol": {
+        "frame_sequence": ["frame_first"],
+        "param_space": {"frame_first": 0},
+    }}
+    errors = cc._validate_recon_protocol_route(draft)
+    assert errors and "没有可发送的帧值" in errors[0]
+
+
+def test_validate_mutation_route_rejects_plain_frame_placeholder() -> None:
+    """frame_first=first 不能掩盖真正变异载荷仍在其它字段中的问题。"""
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {
+        "frame_sequence": ["frame_first", "frame_second"],
+        "param_space": {"frame_first_template": "first", "frame_second": "second"},
+        "field_values": {"set_pkgName": "set_pkgName::x;echo marker"},
+    }}
+    errors = cc._validate_mutation_route(draft, finding, skeleton)
+    assert errors and "shell 语法变异" in errors[0]
+
+
+def test_mutation_route_rejects_shell_escaped_runtime_marker() -> None:
+    """运行期 marker 不能被 shell 变量前缀或反斜杠包裹后交给设备。"""
+    finding = type("Finding", (), {"vuln_class": "command_injection"})()
+    skeleton = {"entry": {"kind": "hap_udp"}}
+    draft = {"protocol": {
+        "frame_sequence": ["frame_first"],
+        "param_space": {
+            "frame_first_template": "route::value;echo "
+            + chr(36) + "__RUN_PATTERN__ > __MARKER_PATH__"
+        },
+        "field_values": {},
+    }, "oracle": {"artifact_forms": [
+        {"form": "create", "path": "__MARKER_PATH__",
+         "content_contains": "__RUN_PATTERN__"}
+    ]}}
+    errors = cc._validate_mutation_route(draft, finding, skeleton)
+    assert errors and "占位符" in errors[0]
+
+
+def test_retry_preserves_clean_room_on_every_attempt(monkeypatch) -> None:
+    """fresh-session 重试不能把 clean-room 降级成历史上下文模式。"""
+    calls = []
+
+    def fake_compile(finding, **kwargs):
+        calls.append(dict(kwargs))
+        if len(calls) == 1:
+            return _CompiledStub("REQUIRES_PROTOCOL_REVIEW", ["侦查 loop budget_exhausted"])
+        return _CompiledStub("ELIGIBLE", contract=object())
+
+    monkeypatch.setattr(cc, "compile_contract", fake_compile)
+    out = cc.compile_contract_with_retry(object(), clean_room=True)
+    assert out.compile_status == "ELIGIBLE"
+    assert len(calls) == 2
+    assert all(call.get("clean_room") is True for call in calls)
 
 
 # ---------------------------------------------------------------------------

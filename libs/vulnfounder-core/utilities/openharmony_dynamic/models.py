@@ -67,6 +67,9 @@ class ProtocolDescriptor:
     # 描述符必须声明可解释的 wire_format，避免把协议族名称写死在运行器中。
     encoder_kind: str = "custom"       # raw_text | key_value | json | custom
     wire_format: dict[str, Any] = field(default_factory=dict)
+    # 设备侧自证使用的无害合法报文。它与漏洞变异值分离，禁止包含 marker、
+    # shell 控制符或其它攻击载荷；动态测试在真正变异前先发送它验证传输闭环。
+    legal_probe: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +83,7 @@ class ProtocolDescriptor:
             "structure_evidence": self.structure_evidence,
             "encoder_kind": self.encoder_kind,
             "wire_format": dict(self.wire_format),
+            "legal_probe": dict(self.legal_probe),
         }
 
 
@@ -267,7 +271,14 @@ class Contract:
             "oracle": {
                 "kind": self.oracle.kind,
                 "artifact_forms": [f.__dict__ for f in self.oracle.artifact_forms],
-                "hilog_expectations": list(self.oracle.hilog_expectations),
+                # 非法草案会在 validator 阶段被拒绝，但仍需能够把原始形态
+                # 写入诊断产物；不要在错误报告序列化时再次因 list(None)
+                # 覆盖真正的格式错误。
+                "hilog_expectations": (
+                    list(self.oracle.hilog_expectations)
+                    if isinstance(self.oracle.hilog_expectations, list)
+                    else self.oracle.hilog_expectations
+                ),
                 "pattern_key": self.oracle.pattern_key,
                 "refutation": list(self.oracle.refutation),
                 "evidence": self.oracle.evidence,

@@ -23,8 +23,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
 import shutil
+import stat
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +51,14 @@ _EXP_FALLBACK_VICTIM = "/proc/self/attr/current"
 _EXP_DEFAULT_DST = "/data/local/tmp/vf_exp_takeout"
 _EXP_GUARDS = ("smartperf",)  # 协议守卫字面量（升级载荷必须保留）
 _EXP_NOTE_LLM_PROMPT_MAX = 400
+
+# 完整源码交付的边界。HAP 构建目录中会同时出现签名材料、缓存和主机相关
+# 配置；这些不是 PoC/Exp 源码，不能随交付物暴露。源文件本身使用受限的
+# 递归快照，并生成 manifest + zip，前端可在线浏览或一次性下载。
+_SOURCE_SKIP_DIRS = frozenset({".hvigor", "build", "signing", "node_modules", ".git"})
+_SOURCE_SKIP_FILES = frozenset({"local.properties", "hvigor-build.log", "sign.log"})
+_SOURCE_MAX_FILES = 512
+_SOURCE_MAX_BYTES = 16 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # P2 动态 victim 探测（全自动化收敛）：静态兜底候选清单 → 设备动态探测。
@@ -143,6 +155,7 @@ class ExpPackage:
     exp_payload: str = ""               # 升级后的注入载荷（展示用）
     victim_path: str = ""               # exp 读取的受害文件
     victim_source: str = ""             # llm / template_default
+    source_snapshots: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,7 +167,116 @@ class ExpPackage:
             "exp_payload": self.exp_payload,
             "victim_path": self.victim_path,
             "victim_source": self.victim_source,
+            "source_snapshots": self.source_snapshots,
         }
+
+
+def _package_source_snapshot(source_project: Path | None, out_dir: Path,
+                             kind: str) -> dict[str, Any]:
+    """复制一个 HAP 工程的可交付源码，并生成 manifest/zip。
+
+    这里只收集构建输入和源码，不收集 .hvigor/build/signing 等生成物，也不
+    跟随符号链接。这样既能让用户查看完整项目，又不会把主机 SDK、签名私钥
+    或构建缓存带进 Web 交付目录。
+    """
+    if source_project is None or not source_project.is_dir():
+        return {}
+    if kind not in {"poc", "exp"}:
+        return {}
+    root = out_dir / f"{kind}_source"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    total = 0
+    for current, dirs, names in os.walk(source_project, topdown=True, followlinks=False):
+        current_path = Path(current)
+        kept_dirs: list[str] = []
+        for dirname in sorted(dirs):
+            src_dir = current_path / dirname
+            rel_dir = src_dir.relative_to(source_project).as_posix()
+            if dirname in _SOURCE_SKIP_DIRS or src_dir.is_symlink() or not src_dir.is_dir():
+                excluded.append(rel_dir)
+                continue
+            kept_dirs.append(dirname)
+        dirs[:] = kept_dirs
+        for filename in sorted(names):
+            src = current_path / filename
+            rel = src.relative_to(source_project).as_posix()
+            if filename in _SOURCE_SKIP_FILES:
+                excluded.append(rel)
+                continue
+            try:
+                info = src.lstat()
+            except OSError:
+                continue
+            if src.is_symlink() or not stat.S_ISREG(info.st_mode):
+                excluded.append(rel)
+                continue
+            if len(entries) >= _SOURCE_MAX_FILES or total + info.st_size > _SOURCE_MAX_BYTES:
+                excluded.append(rel)
+                continue
+            dest = root / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copyfile(src, dest)
+            except OSError:
+                excluded.append(rel)
+                continue
+            digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+            entries.append({"path": rel, "bytes": info.st_size, "sha256": digest})
+            total += info.st_size
+
+    # 为被安全过滤的本地配置提供可复制的占位说明，不泄露本机绝对路径。
+    if (source_project / "local.properties").is_file():
+        example = root / "local.properties.example"
+        example.write_text("sdk.dir=<OpenHarmony SDK 路径>\nnodejs.dir=<Node.js 路径>\n",
+                           encoding="utf-8")
+        digest = hashlib.sha256(example.read_bytes()).hexdigest()
+        entries.append({"path": "local.properties.example", "bytes": example.stat().st_size,
+                        "sha256": digest})
+        total += example.stat().st_size
+
+    archive = out_dir / f"{kind}_source.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for item in entries:
+            path = root / item["path"]
+            zf.write(path, arcname=f"{kind}_source/{item['path']}")
+    manifest = {
+        "schema_version": 1,
+        "kind": kind,
+        "root": f"{kind}_source",
+        "file_count": len(entries),
+        "total_bytes": total,
+        "limits": {"max_files": _SOURCE_MAX_FILES, "max_bytes": _SOURCE_MAX_BYTES},
+        "excluded": sorted(set(excluded)),
+        "files": entries,
+    }
+    manifest_path = out_dir / f"{kind}_source_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "kind": kind,
+        "root": str(root),
+        "archive": str(archive),
+        "manifest": str(manifest_path),
+        "files": entries,
+        "file_count": len(entries),
+        "total_bytes": total,
+        "excluded_count": len(set(excluded)),
+    }
+
+
+def _register_source_snapshot_files(out_dir: Path, snapshot: dict[str, Any],
+                                    files: list[dict[str, Any]]) -> None:
+    """把源码快照的压缩包和 manifest 加入直接交付文件清单。"""
+    if not snapshot:
+        return
+    kind = snapshot.get("kind", "")
+    for name in (f"{kind}_source.zip", f"{kind}_source_manifest.json"):
+        path = out_dir / name
+        if path.is_file():
+            files.append({"name": name, "path": str(path), "bytes": path.stat().st_size})
 
 
 def _llm_victim_path(binding_pair, finding: Any, contract_dict: dict[str, Any]) -> str | None:
@@ -452,6 +574,12 @@ def _write_readme(out_dir: Path, poc_contract: dict[str, Any], exp_contract: dic
         "| contract_poc.json | PoC 契约（协议字段 / 帧序列 / 绕过的守卫 / 预言机） |",
         "| contract_exp.json | Exp 契约（升级后的载荷） |",
         "| evidence_exp.json | Exp 在板卡上的执行验证证据 |",
+        "| poc_source.zip | PoC 完整工程源码压缩包（可离线下载） |",
+        "| exp_source.zip | Exp 完整工程源码压缩包（可离线下载） |",
+        "| poc_source_manifest.json | PoC 源码文件清单、大小和 SHA-256 |",
+        "| exp_source_manifest.json | Exp 源码文件清单、大小和 SHA-256 |",
+        "| poc_source/ | PoC 在线浏览源码目录 |",
+        "| exp_source/ | Exp 在线浏览源码目录 |",
         "",
         "## Exp 载荷说明",
         "",
@@ -534,11 +662,30 @@ def build_deliverables(
             (out_dir / "evidence_exp.json").write_text(
                 json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
             files: list[dict[str, Any]] = []
+            if poc_hap and poc_hap.is_file():
+                poc_target = out_dir / "poc.hap"
+                if poc_hap.resolve() != poc_target.resolve():
+                    shutil.copy2(poc_hap, poc_target)
+                files.append({"name": "poc.hap", "path": str(poc_target),
+                              "bytes": poc_target.stat().st_size})
             exp_hap_path = evidence.get("exp_hap_path", "")
             if exp_hap_path and Path(exp_hap_path).is_file():
                 _reg_local = Path(exp_hap_path)
-                files.append({"name": "exp.hap", "path": str(_reg_local),
-                              "bytes": _reg_local.stat().st_size})
+                exp_target = out_dir / "exp.hap"
+                if _reg_local.resolve() != exp_target.resolve():
+                    shutil.copy2(_reg_local, exp_target)
+                files.append({"name": "exp.hap", "path": str(exp_target),
+                              "bytes": exp_target.stat().st_size})
+            source_snapshots: dict[str, Any] = {}
+            poc_snapshot = _package_source_snapshot(
+                (poc_hap.parent / "project") if poc_hap else None, out_dir, "poc")
+            exp_snapshot = _package_source_snapshot(
+                (Path(exp_hap_path).parent / "project") if exp_hap_path else None,
+                out_dir, "exp")
+            if poc_snapshot:
+                source_snapshots["poc"] = poc_snapshot
+            if exp_snapshot:
+                source_snapshots["exp"] = exp_snapshot
             (out_dir / "contract_exp.json").write_text(
                 json.dumps(exp_contract, ensure_ascii=False, indent=2), encoding="utf-8")
             (out_dir / "contract_poc.json").write_text(
@@ -550,12 +697,15 @@ def build_deliverables(
                 p = out_dir / name
                 if p.is_file():
                     files.append({"name": name, "path": str(p), "bytes": p.stat().st_size})
+            _register_source_snapshot_files(out_dir, poc_snapshot, files)
+            _register_source_snapshot_files(out_dir, exp_snapshot, files)
             return ExpPackage(
                 status="packaged", deliverables_dir=str(out_dir), files=files,
                 exp_verdict=evidence,
                 exp_payload=exp_contract["fault"]["description"],
                 victim_path=evidence.get("victim_path", ""),
                 victim_source=evidence.get("victim_source", ""),
+                source_snapshots=source_snapshots,
             )
         emit("Exp 契约已生成，构建 exp.hap…")
         # 3. 构建 exp.hap（复用 HapTransport.build；独立 out_dir 防覆盖 poc 工程）
@@ -627,6 +777,16 @@ def build_deliverables(
             idx = src_dir / "project" / "Entry" / "src" / "main" / "ets" / "pages" / "Index.ets"
             if idx.is_file():
                 shutil.copy2(idx, out_dir / name)
+        # 除了保留参数化入口文件，还复制整个可重建工程，便于用户检查模块配置、
+        # Ability 声明和所有源码，而不是只能看到一段载荷常量。
+        source_snapshots: dict[str, Any] = {}
+        poc_snapshot = _package_source_snapshot(
+            (poc_hap.parent / "project") if poc_hap else None, out_dir, "poc")
+        exp_snapshot = _package_source_snapshot(exp_hap_path.parent / "project", out_dir, "exp")
+        if poc_snapshot:
+            source_snapshots["poc"] = poc_snapshot
+        if exp_snapshot:
+            source_snapshots["exp"] = exp_snapshot
         (out_dir / "contract_poc.json").write_text(
             json.dumps(poc_contract, ensure_ascii=False, indent=2), encoding="utf-8")
         (out_dir / "contract_exp.json").write_text(
@@ -635,10 +795,13 @@ def build_deliverables(
         for name in ("README.md", "evidence_exp.json", "contract_poc.json", "contract_exp.json",
                      "poc_source_Index.ets", "exp_source_Index.ets"):
             _reg(out_dir / name, name)
+        _register_source_snapshot_files(out_dir, poc_snapshot, files)
+        _register_source_snapshot_files(out_dir, exp_snapshot, files)
         hap.cleanup()
         return ExpPackage(status="packaged", deliverables_dir=str(out_dir), files=files,
                           exp_verdict=evidence, exp_payload=exp_contract["fault"]["description"],
-                          victim_path=victim, victim_source=victim_source)
+                          victim_path=victim, victim_source=victim_source,
+                          source_snapshots=source_snapshots)
     except Exception as exc:  # noqa: BLE001
         return ExpPackage(status="failed", reason=f"{type(exc).__name__}: {exc}",
                           deliverables_dir=str(run_dir / "deliverables"))

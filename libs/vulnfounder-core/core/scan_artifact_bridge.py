@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +45,14 @@ _DYNC_TESTABLE_FINDINGS = {"vulnerable", "inconclusive"}
 # P0-1 缺口签名失败计数（进程级缓存）：每次 run spawn 新 Python 进程（Web 模式），
 # 该缓存天然按进程隔离；CLI 批量跑多条时同一进程内跨 run 累积。
 _COMPILE_FAILURE_LOG: dict[str, int] = {}
+
+# 契约编译的 fresh-session 重试上限。默认比底层库的单元测试默认值稍高，
+# 用于吸收 LLM 在 finalize 阶段偶发省略 oracle、帧槽位或源码守卫字面量的
+# 非确定性；它不生成任何样本协议，也不绕过 validator。部署时可通过环境变量
+# 调低/调高，但始终由 compile_contract_with_retry 做有界收敛。
+_DYNAMIC_COMPILE_ATTEMPTS = max(
+    1, int(os.environ.get("VULNFOUNDER_DYNAMIC_COMPILE_ATTEMPTS", "5") or "5")
+)
 
 # webui 扫描目录名白名单（与 Go 侧 jobIDRe 一致：hex，8-64 位）
 _WEBUI_SCAN_ID_RE = re.compile(r"^[a-f0-9]{8,64}$")
@@ -117,6 +126,55 @@ def _webui_entry_lines(entry: dict[str, Any], scan_dir: Path) -> tuple[str, int,
         except (OSError, json.JSONDecodeError):
             pass
     return "", 1, 1
+
+
+def _candidate_attack_chains_from_entry(entry: dict[str, Any]) -> list[list[str]]:
+    """从扫描条目的结构化阶段上下文提取候选入口路径。
+
+    ``results.json`` 当前没有单独的 candidate_attack_chains 顶层字段，
+    但 Stage1 已经把候选入口路径保存在
+    ``stage_context.stage1.candidate_entry_path_ids`` 中。桥接层把它复制为
+    中文键 ``候选攻击链``，再由 FindingInput 以英文标准字段保存。这样不改写
+    主攻击链，也不把候选路径误标成已确认路径。
+    """
+    stage_context = entry.get("stage_context") or {}
+    if not isinstance(stage_context, dict):
+        stage_context = {}
+    stage1 = stage_context.get("stage1") or entry.get("stage1_context") or {}
+    if not isinstance(stage1, dict):
+        stage1 = {}
+    raw = (
+        stage1.get("candidate_entry_path_ids")
+        or stage1.get("candidate_attack_chains")
+        or entry.get("candidate_attack_chains")
+        or entry.get("候选攻击链")
+        or []
+    )
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    paths: list[list[str]] = []
+    for path in raw[:8]:
+        if isinstance(path, str):
+            nodes = [path.strip()[:2000]] if path.strip() else []
+        elif isinstance(path, (list, tuple)):
+            nodes = [str(node).strip()[:500] for node in path[:32]
+                     if str(node).strip()]
+        elif isinstance(path, dict):
+            values = path.get("path") or path.get("nodes") or []
+            if isinstance(values, str):
+                nodes = [values.strip()[:2000]] if values.strip() else []
+            elif isinstance(values, (list, tuple)):
+                nodes = [str(node).strip()[:500] for node in values[:32]
+                         if str(node).strip()]
+            else:
+                nodes = []
+        else:
+            nodes = []
+        if nodes:
+            paths.append(nodes)
+    return paths
 
 
 def list_webui_scans(webui_dir: str | Path | None = None) -> list[dict[str, Any]]:
@@ -268,12 +326,14 @@ def bridge_webui_entry(
         "Attack vector: " + str(entry.get("attack_vector", "")) if entry.get("attack_vector") else "",
         "Preconditions: " + str(entry.get("preconditions", "")) if entry.get("preconditions") else "",
     ]
+    candidate_attack_chains = _candidate_attack_chains_from_entry(entry)
     bridge = {
         "函数名称": str(entry.get("function_analyzed", "")),
         "起止位置": f"{Path(file_rel).name}:{line_start}-{line_end}" if file_rel else f"unknown:{line_start}-{line_end}",
         "所处文件路径": file_rel,
         "具体漏洞源码与漏洞描述": str(entry.get("reasoning", "")),
         "完整攻击链": "\n\n".join(p for p in chain_parts if p),
+        "候选攻击链": candidate_attack_chains,
         "根因分析": primary_reasoning or str(entry.get("reasoning", "")),
         # 入口发现 Agent Loop 需要看到原始证据，而不是只有一段压缩后的
         # reasoning。以下字段仍是 Stage 1 产物的只读副本，不被适配器当作
@@ -575,12 +635,14 @@ def bridge_scan_entry(
         "Attack vector: " + str(entry.get("attack_vector", "")) if entry.get("attack_vector") else "",
         "Preconditions: " + str(entry.get("preconditions", "")) if entry.get("preconditions") else "",
     ]
+    candidate_attack_chains = _candidate_attack_chains_from_entry(entry)
     bridge = {
         "函数名称": str(entry.get("function_analyzed", "")),
         "起止位置": f"{Path(file_rel).name}:{line_start}-{line_end}",
         "所处文件路径": file_rel,
         "具体漏洞源码与漏洞描述": str(entry.get("reasoning", "")),
         "完整攻击链": "\n\n".join(p for p in chain_parts if p),
+        "候选攻击链": candidate_attack_chains,
         "根因分析": str(primary.get("reasoning") or entry.get("reasoning", "")),
     }
 
@@ -645,6 +707,7 @@ class ScanDynamicResult:
     record: dict[str, Any] = field(default_factory=dict)
     contract: dict[str, Any] = field(default_factory=dict)
     deliverables: dict[str, Any] = field(default_factory=dict)
+    clean_room: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -669,6 +732,13 @@ class ScanDynamicResult:
             "record": self.record,
             "contract": self.contract,
             "deliverables": self.deliverables,
+            "clean_room": self.clean_room,
+            "context_mode": "clean_room" if self.clean_room else "assisted",
+            "context_sources": (
+                ["current_finding", "current_source_evidence"]
+                if self.clean_room else
+                ["current_finding", "current_source_evidence", "device_facts", "exemplar"]
+            ),
         }
 
 
@@ -702,6 +772,57 @@ def _progress_emitter(progress_path: str | Path | None):
             pass
 
     return emit
+
+
+def _write_run_snapshot(progress_path: str | Path | None, name: str, payload: Any) -> None:
+    """把动态测试的关键中间状态写入 Web run 目录。
+
+    这些快照是面向审计和页面展示的只读副本，不参与执行决策。采用同目录
+    临时文件再替换，避免前端轮询时读到半个 JSON；写失败也不能影响真机
+    测试本身。文件名由调用方固定，Go 侧还会再次按白名单限制读取范围。
+    """
+    if not progress_path:
+        return
+    try:
+        root = Path(progress_path).expanduser().resolve().parent
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / name
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except (OSError, TypeError, ValueError):
+        # 运行快照是可选的可观测性产物，不能改变测试结论。
+        return
+
+
+def _emit_compile_diagnostics(emit, compile_result) -> None:
+    """把契约编译的 notes/errors 写入同一条进度流。
+
+    入口发现、描述符补证和侦查 loop 原本都有逐轮事件，但编译器最后的
+    设备自证结果只停留在 ScanDynamicResult.compile_notes 中，前端实时日志
+    因而看不到“为什么通过/为什么回退”。统一转成结构化事件，失败时也先
+    落盘再抛出 ScanBridgeError，便于前端和后续审计复用。
+    """
+    if emit is None:
+        return
+    for note in list(getattr(compile_result, "notes", []) or []):
+        try:
+            emit({
+                "event": "compile_note",
+                "detail": str(note),
+                "record": {"kind": "compile_note", "status": compile_result.compile_status},
+            })
+        except Exception:  # noqa: BLE001 — 进度展示不能影响主流程
+            pass
+    for error in list(getattr(compile_result, "errors", []) or []):
+        try:
+            emit({
+                "event": "compile_error",
+                "detail": str(error),
+                "record": {"kind": "compile_error", "status": compile_result.compile_status},
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _maybe_build_deliverables(result: ScanDynamicResult, *, progress_path: str | Path | None,
@@ -763,6 +884,7 @@ def run_dynamic_from_scan(
     ledger_path: str | Path | None = None,
     unit_id: str | None = None,
     progress_path: str | Path | None = None,
+    clean_room: bool = False,
 ) -> ScanDynamicResult:
     """扫描中间产物条目 → 适配 → 编译契约 → 真机执行，全链一气呵成。
 
@@ -784,7 +906,12 @@ def run_dynamic_from_scan(
 
     bridge, entry = bridge_scan_entry(result_dir, round_n=round_n, sample=sample,
                                       repo_root=repo_root)
-    result = ScanDynamicResult(entry=entry, bridge=bridge)
+    result = ScanDynamicResult(entry=entry, bridge=bridge, clean_room=clean_room)
+    _write_run_snapshot(progress_path, "bridge.json", {
+        "entry": entry.to_dict(),
+        "bridge": bridge,
+        "source": "scan_artifact_bridge",
+    })
 
     if repo_root is not None:
         resolved_repo_root = str(Path(repo_root).expanduser().resolve())
@@ -803,6 +930,7 @@ def run_dynamic_from_scan(
     result.adapter_status = adapter.status
     result.adapter_errors = list(adapter.errors)
     result.adapter_warnings = list(adapter.warnings)
+    _write_run_snapshot(progress_path, "finding_adapter.json", adapter.to_dict())
     if adapter.status != "CONVERTED" or adapter.finding is None:
         raise ScanBridgeError(
             f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
@@ -826,14 +954,21 @@ def run_dynamic_from_scan(
     try:
         from openharmony_dynamic.contract_compiler import compile_contract_with_retry  # noqa: PLC0415
 
-        compile_result = compile_contract_with_retry(finding, hdc=hdc, on_event=emit,
-                                                     failure_log=_COMPILE_FAILURE_LOG)
+        compile_result = compile_contract_with_retry(
+            finding, hdc=hdc, on_event=emit, clean_room=clean_room,
+            failure_log=_COMPILE_FAILURE_LOG,
+            max_attempts=_DYNAMIC_COMPILE_ATTEMPTS,
+        )
     except ImportError:
-        compile_result = compile_contract(finding, hdc=hdc, on_event=emit)
+        compile_result = compile_contract(finding, hdc=hdc, on_event=emit,
+                                          clean_room=clean_room)
     result.compile_status = compile_result.compile_status
     result.compile_errors = list(compile_result.errors)
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
+    _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
+    _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
+    _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
         raise ScanBridgeError(
             f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
@@ -842,6 +977,7 @@ def run_dynamic_from_scan(
 
     contract = compile_result.contract
     result.contract = contract.to_dict()
+    _write_run_snapshot(progress_path, "contract.json", result.contract)
     rec = Runner(hdc, on_event=emit).run(contract)
     result.run_id = rec.run_id
     result.pattern = rec.pattern
@@ -849,16 +985,26 @@ def run_dynamic_from_scan(
     result.verdict = verdict
     result.status = str(verdict.get("status", ""))
     result.evidence_grade = str(verdict.get("evidence_grade", ""))
+    _write_run_snapshot(progress_path, "verdict.json", {
+        "run_id": result.run_id,
+        "status": result.status,
+        "evidence_grade": result.evidence_grade,
+        "pattern": result.pattern,
+        "verdict": result.verdict,
+    })
     # CONFIRMED 契约自动晋升 exemplar（P0-2 全自动化收敛）：该 vuln_class 首个
     # 真机 CONFIRMED 契约沉淀为 L2 few-shot 参考；第一代钉死不可变。失败静默。
-    try:
-        from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
+    if not clean_room:
+        try:
+            from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
 
-        promotion = promote_exemplar_if_absent(contract, result.status)
-        if promotion != "skipped:非 CONFIRMED":
-            result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
-    except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
-        pass
+            promotion = promote_exemplar_if_absent(contract, result.status)
+            if promotion != "skipped:非 CONFIRMED":
+                result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
+        except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
+            pass
+    else:
+        result.compile_notes.append("clean-room: 跳过 CONFIRMED exemplar 自动晋升")
     # 回填 record（RunRecord 落盘 JSON）路径与内容：前端展示证据细节
     # （transport / 文件系统快照含 marker 内容与 stat / hilog 命中 / 命令计数）。
     # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
@@ -875,6 +1021,8 @@ def run_dynamic_from_scan(
             result.record = json.loads(runner_out.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             result.record = {}
+    if result.record:
+        _write_run_snapshot(progress_path, "run_record.json", result.record)
     _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
                               hdc=hdc, progress_emit=emit)
     return result
@@ -891,6 +1039,7 @@ def run_dynamic_from_webui(
     ledger_path: str | Path | None = None,
     unit_id: str | None = None,
     progress_path: str | Path | None = None,
+    clean_room: bool = False,
 ) -> ScanDynamicResult:
     """webui 扫描条目（~/.openant/webui/<scan_id>/results.json）→ 适配 →
     编译契约 → 真机执行。serial 必须显式给出（绝不隐式选择板卡）。"""
@@ -912,7 +1061,12 @@ def run_dynamic_from_webui(
     from openharmony_dynamic.runner import Runner  # noqa: PLC0415
     from openharmony_dynamic.stage_finding_adapter import adapt_stage_finding  # noqa: PLC0415
 
-    result = ScanDynamicResult(entry=entry, bridge=bridge)
+    result = ScanDynamicResult(entry=entry, bridge=bridge, clean_room=clean_room)
+    _write_run_snapshot(progress_path, "bridge.json", {
+        "entry": entry.to_dict(),
+        "bridge": bridge,
+        "source": "scan_artifact_bridge",
+    })
     # bridge_webui_entry 将 entry.repository 设为扫描 meta.repo（实际存在目录）。
     # 条目 file 是相对该根的路径；若 file 不在该根下（老扫描 file 只有裸文件名，
     # 或 repo 是深层子目录而 file 带仓库内前缀），逐级向上扩展根直到
@@ -939,6 +1093,7 @@ def run_dynamic_from_webui(
     result.adapter_status = adapter.status
     result.adapter_errors = list(adapter.errors)
     result.adapter_warnings = list(adapter.warnings)
+    _write_run_snapshot(progress_path, "finding_adapter.json", adapter.to_dict())
     if adapter.status != "CONVERTED" or adapter.finding is None:
         raise ScanBridgeError(
             f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
@@ -962,14 +1117,21 @@ def run_dynamic_from_webui(
     try:
         from openharmony_dynamic.contract_compiler import compile_contract_with_retry  # noqa: PLC0415
 
-        compile_result = compile_contract_with_retry(finding, hdc=hdc, on_event=emit,
-                                                     failure_log=_COMPILE_FAILURE_LOG)
+        compile_result = compile_contract_with_retry(
+            finding, hdc=hdc, on_event=emit, clean_room=clean_room,
+            failure_log=_COMPILE_FAILURE_LOG,
+            max_attempts=_DYNAMIC_COMPILE_ATTEMPTS,
+        )
     except ImportError:
-        compile_result = compile_contract(finding, hdc=hdc, on_event=emit)
+        compile_result = compile_contract(finding, hdc=hdc, on_event=emit,
+                                          clean_room=clean_room)
     result.compile_status = compile_result.compile_status
     result.compile_errors = list(compile_result.errors)
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
+    _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
+    _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
+    _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
         raise ScanBridgeError(
             f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
@@ -978,6 +1140,7 @@ def run_dynamic_from_webui(
 
     contract = compile_result.contract
     result.contract = contract.to_dict()
+    _write_run_snapshot(progress_path, "contract.json", result.contract)
     rec = Runner(hdc, on_event=emit).run(contract)
     result.run_id = rec.run_id
     result.pattern = rec.pattern
@@ -985,16 +1148,26 @@ def run_dynamic_from_webui(
     result.verdict = verdict
     result.status = str(verdict.get("status", ""))
     result.evidence_grade = str(verdict.get("evidence_grade", ""))
+    _write_run_snapshot(progress_path, "verdict.json", {
+        "run_id": result.run_id,
+        "status": result.status,
+        "evidence_grade": result.evidence_grade,
+        "pattern": result.pattern,
+        "verdict": result.verdict,
+    })
     # CONFIRMED 契约自动晋升 exemplar（P0-2 全自动化收敛）：该 vuln_class 首个
     # 真机 CONFIRMED 契约沉淀为 L2 few-shot 参考；第一代钉死不可变。失败静默。
-    try:
-        from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
+    if not clean_room:
+        try:
+            from openharmony_dynamic.contract_compiler import promote_exemplar_if_absent  # noqa: PLC0415
 
-        promotion = promote_exemplar_if_absent(contract, result.status)
-        if promotion != "skipped:非 CONFIRMED":
-            result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
-    except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
-        pass
+            promotion = promote_exemplar_if_absent(contract, result.status)
+            if promotion != "skipped:非 CONFIRMED":
+                result.compile_notes.append(f"exemplar 自动晋升: {promotion}")
+        except Exception:  # noqa: BLE001 — 晋升是增强，绝不影响主流程
+            pass
+    else:
+        result.compile_notes.append("clean-room: 跳过 CONFIRMED exemplar 自动晋升")
     # 回填 record（RunRecord 落盘 JSON）路径与内容：前端展示证据细节
     # （transport / 文件系统快照含 marker 内容与 stat / hilog 命中 / 命令计数）。
     # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
@@ -1011,6 +1184,8 @@ def run_dynamic_from_webui(
             result.record = json.loads(runner_out.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             result.record = {}
+    if result.record:
+        _write_run_snapshot(progress_path, "run_record.json", result.record)
     _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
                               hdc=hdc, progress_emit=emit)
     return result

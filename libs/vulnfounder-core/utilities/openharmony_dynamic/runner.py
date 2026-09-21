@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .contracts import load_contract
+from .contract_validator import (
+    _validate_hilog_expectations,
+    normalize_marker_path_placeholders,
+)
 from .hdc_client import HDCClient
 from .models import ArtifactForm, Contract, Observation, OracleResult, Verdict, new_run_id
 from .observation.oracles import (
@@ -42,6 +46,57 @@ _PATTERN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
 
 def _random_pattern(length: int = 12) -> str:
     return "vf" + "".join(secrets.choice(_PATTERN_ALPHABET) for _ in range(length - 2))
+
+
+def _safe_hilog_expectations(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """返回可安全交给运行器的 hilog 期望及格式错误。
+
+    编译器门禁应在设备交互前拦截非法契约；这里是第二道防线，覆盖直接加载
+    契约、旧产物复用和调用方绕过编译器的场景。调用方不会拿到字符串/非对象
+    项，因此后续 ``expect.get`` 不会再次把格式错误伪装成设备失败。
+    """
+    errors = _validate_hilog_expectations(value)
+    if errors:
+        return [], errors
+    # validator 已经保证这是 list[dict]；复制列表避免运行期修改契约对象。
+    return [dict(item) for item in value], []
+
+
+def _filter_preplant_paths(preplant: Any, oracle_paths: set[str]) -> list[str]:
+    """过滤会把 oracle 产物父目录写成普通文件的前置路径。
+
+    ``preplant`` 是“发送前必须存在的依赖文件”，而 oracle 的 create/exfil
+    路径可能位于同一运行目录下。若 LLM 把该目录本身也列入 preplant，旧逻辑
+    会用 ``printf > directory`` 将目录创建成普通文件，随后目标命令无法在其
+    下创建 marker。这是契约形状问题，不能通过重试同一帧解决；运行器在展开
+    占位符后统一跳过等于 oracle 路径父目录的项。精确的 oracle 文件仍保留，
+    不会扩大删除或写入范围。
+    """
+    if isinstance(preplant, bool) or preplant is None:
+        return []
+    if isinstance(preplant, (str, dict)):
+        preplant = [preplant]
+    if not isinstance(preplant, list):
+        return []
+    normalized: list[str] = []
+    oracle = {str(path).rstrip("/") for path in oracle_paths if str(path).strip()}
+    for item in preplant:
+        value = item.get("path") if isinstance(item, dict) else item
+        if not isinstance(value, str):
+            continue
+        value = value.strip().rstrip("/")
+        if not value:
+            continue
+        if value in oracle:
+            # 仍由 oracle 的专用预埋逻辑负责，避免覆盖其判定内容。
+            continue
+        prefix = value + "/"
+        if any(path.startswith(prefix) for path in oracle):
+            # 该项是 oracle 文件的父目录；run() 后续会用 mkdir -p 创建它。
+            continue
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
 
 
 def _substitute(obj: Any, mapping: dict[str, str]) -> None:
@@ -143,6 +198,19 @@ class Runner:
         run_dir = f"{_RUN_DIR_ROOT}/{run_id}-{contract.contract_id}"
         transport = None
         self._emit("run_started", f"{run_id} 契约 {contract.contract_id}")
+        # 预检必须发生在 try/finally 设备阶段之前：格式错误的契约不应为了
+        # “清理”而向设备发送 rm、force-stop 等命令，更不能先安装 HAP 再报错。
+        runtime_hilog_expectations, hilog_shape_errors = _safe_hilog_expectations(
+            contract.oracle.hilog_expectations
+        )
+        if hilog_shape_errors:
+            rec.error = "OracleError: hilog_expectations 格式非法：" + "；".join(hilog_shape_errors)
+            rec.finished_at = time.time()
+            rec.command_count = self.hdc.command_count()
+            self._persist(rec)
+            self._emit("error", rec.error)
+            self._emit("run_finished", f"state={rec.state} pattern={rec.pattern}")
+            return rec
         try:
             # 1. 参数解析：契约模板占位符 → 具体值（含 run 唯一图案回填）
             params = self._resolve_params(contract, run_id, run_dir, rec.pattern)
@@ -177,11 +245,11 @@ class Runner:
             # 时跳过——oracle 预埋先写 run_pattern（判定 needle），preplant 再写
             # vf-dep- 会覆盖它 → exfil 永远 miss（假阴性）。
             param_space = getattr(contract.protocol, "param_space", None) or {}
-            for tpl in param_space.get("preplant", []):
+            preplant_paths = _filter_preplant_paths(
+                param_space.get("preplant", []), oracle_paths
+            )
+            for tpl in preplant_paths:
                 dep = ArtifactForm(form="exfil", path=tpl, content_contains=f"vf-dep-{run_id}")
-                if tpl in oracle_paths:
-                    self._emit("phase_note", f"preplant 跳过（oracle 已预埋）: {tpl}")
-                    continue
                 ok = plant_exfil_file(self.hdc, dep, purpose=f"{run_id}:plant-dep")
                 if not ok:
                     raise OracleError(f"前置文件预埋失败: {tpl}")
@@ -217,8 +285,36 @@ class Runner:
                 # 契约 frame_sequence：键名列表 → field_values 中的 first/second/third 插槽
                 slots = ("first", "second", "third")
                 for slot, key in zip(slots, contract.protocol.frame_sequence):
-                    field_values[slot] = params.get(key, contract.protocol.field_values.get(key, ""))
-                send_result = transport.build_and_run(field_values, contract_id=contract.contract_id)
+                    # ``frame_first_template`` / ``frame_first`` / ``first`` 是同一
+                    # 个稳定运行器槽位的不同声明形态；不能把 param_space 中的
+                    # 模板键直接当作 field_values 的字典键，否则真实 HAP 会收到
+                    # 空的第一帧。其余键仍按契约声明的字段名读取，避免引入协议
+                    # 或样本专用的解释规则。
+                    frame_aliases = {
+                        "first": ("frame_first", "frame_first_template", "first"),
+                        "second": ("frame_second", "second"),
+                        "third": ("frame_third", "third"),
+                    }
+                    value = ""
+                    for alias in frame_aliases[slot]:
+                        if alias in params and str(params[alias] or ""):
+                            value = params[alias]
+                            break
+                        if alias in contract.protocol.field_values and str(
+                            contract.protocol.field_values[alias] or ""
+                        ):
+                            value = contract.protocol.field_values[alias]
+                            break
+                    if not value:
+                        value = params.get(key, contract.protocol.field_values.get(key, ""))
+                    field_values[slot] = value
+                # 保持第三方/测试传输适配器的旧签名兼容；默认 300ms 与 HAP
+                # 模板一致，只有契约明确要求其它间隔时才传入扩展参数。
+                run_kwargs: dict[str, Any] = {"contract_id": contract.contract_id}
+                interval = float(contract.protocol.inter_frame_delay_seconds or 0.3)
+                if abs(interval - 0.3) > 1e-9:
+                    run_kwargs["frame_interval_seconds"] = interval
+                send_result = transport.build_and_run(field_values, **run_kwargs)
             else:
                 raise OracleError(f"未支持的 entry.kind: {contract.entry.kind}")
             rec.reachability = send_result.reachability
@@ -228,9 +324,9 @@ class Runner:
             # 7. 效果窗口：hilog 期望存在时轮询等待（目标服务处理延迟可变，
             # 实测 hiview MergeEventLog 延迟 9~41s，固定 sleep 不可靠）；
             # 无 hilog 期望时按传输类型取固定窗口
-            if contract.oracle.hilog_expectations:
+            if runtime_hilog_expectations:
                 self._wait_for_hilog_expectations(
-                    contract.oracle.hilog_expectations, anchor_time=clock_before,
+                    runtime_hilog_expectations, anchor_time=clock_before,
                     record=rec, run_id=run_id,
                 )
             else:
@@ -245,7 +341,7 @@ class Runner:
             mutated_files = snapshot_paths(self.hdc, oracle_paths, purpose=f"{run_id}:after")
             hilog_after = dump_hilog(self.hdc, purpose=f"{run_id}:hilog")
             hits: list[dict[str, Any]] = []
-            for expect in contract.oracle.hilog_expectations:
+            for expect in runtime_hilog_expectations:
                 found = filter_hilog(
                     hilog_after.text,
                     tag=expect.get("tag", ""),
@@ -256,17 +352,32 @@ class Runner:
                 hits.extend(found)
             rec.hilog_hits = hits
 
-            # 9. oracle 判定（artifact_differential + hilog_expectation 联合）
+            # 9. oracle 判定。
+            #
+            # artifact forms 是直接副作用证据；hilog expectation 默认只是
+            # 辅助证据。LLM 起草的日志关键词经常来自源码中的普通调试日志，
+            # 设备版本、日志级别或缓冲区都可能使它不出现。不能让一个没有
+            # 明确 required=true 的辅助提示否决已经通过的文件/输出差分。
+            # 手工契约若确实把日志作为必要条件，应显式设置 required=true。
             oracle_result = evaluate_artifact_differential(
                 contract.oracle, baseline_files, mutated_files,
                 hdc=self.hdc, run_pattern=rec.pattern,
             )
-            if contract.oracle.hilog_expectations:
-                hilog_ok = len(hits) >= min(
-                    (e.get("min_count", 1) for e in contract.oracle.hilog_expectations), default=1
-                )
-                oracle_result.details["hilog_expectation"] = {"hits": len(hits), "passed": hilog_ok}
-                if not hilog_ok:
+            if runtime_hilog_expectations:
+                required_expects = [
+                    e for e in runtime_hilog_expectations
+                    if isinstance(e, dict) and e.get("required") is True
+                ]
+                required_ok = len(hits) >= min(
+                    (e.get("min_count", 1) for e in required_expects), default=1
+                ) if required_expects else True
+                oracle_result.details["hilog_expectation"] = {
+                    "hits": len(hits),
+                    "passed": required_ok,
+                    "required_count": len(required_expects),
+                    "advisory_count": len(runtime_hilog_expectations) - len(required_expects),
+                }
+                if required_expects and not required_ok:
                     oracle_result.effect_observed = False
 
             observation = Observation(
@@ -342,11 +453,20 @@ class Runner:
         每次循环重 dump 全量 hilog 并本地过滤；anchor 取自发送前设备时钟，
         filter_hilog 的时间窗按契约 window.seconds 裁剪。
         """
+        safe_expectations, shape_errors = _safe_hilog_expectations(expectations)
+        if shape_errors:
+            record.hilog_hits = []
+            self._emit("warning", "hilog_expectations 格式非法，跳过日志轮询：" + "；".join(shape_errors))
+            return
+        if not safe_expectations:
+            record.hilog_hits = []
+            return
+
         waited = 0.0
         while True:
             hilog_after = dump_hilog(self.hdc, purpose=f"{run_id}:hilog-poll")
             all_hits: list[dict[str, Any]] = []
-            for expect in expectations:
+            for expect in safe_expectations:
                 all_hits.extend(filter_hilog(
                     hilog_after.text,
                     tag=expect.get("tag", ""),
@@ -354,7 +474,7 @@ class Runner:
                     window_seconds=expect.get("window", {}).get("seconds"),
                     anchor_time=anchor_time,
                 ))
-            if len(all_hits) >= len(expectations):
+            if len(all_hits) >= len(safe_expectations):
                 record.hilog_hits = all_hits
                 return
             if waited >= max_wait:
@@ -365,6 +485,18 @@ class Runner:
 
     def _resolve_params(self, contract: Contract, run_id: str, run_dir: str, pattern: str) -> dict[str, str]:
         """契约模板占位符 → 本轮具体值（run 唯一图案/目录，可追溯、可否证）。"""
+        # 兼容旧契约和 LLM 草案的 ``__MARKER_PATH__/__MARKER__`` 形状。
+        # 当前两个占位符都表示完整 marker 文件路径，必须在取模板前归一，
+        # 否则发送帧和 oracle 会同时得到重复路径。
+        normalize_marker_path_placeholders(contract.protocol)
+        normalize_marker_path_placeholders(contract.oracle)
+        normalize_marker_path_placeholders(contract.cleanup)
+        # create/delete/attr 的 path 是具体产物文件；output_is_dir 只适用于
+        # exfil 的输出面。直接加载旧契约时也做同一语义归一，避免旧 JSON 的
+        # dataclass 默认值 True 继续污染运行记录。
+        for form in contract.oracle.artifact_forms:
+            if form.form in ("create", "delete", "attr"):
+                form.output_is_dir = False
         params: dict[str, str] = {}
         field_values = contract.protocol.field_values
         param_space = getattr(contract.protocol, "param_space", None) or {}
@@ -380,8 +512,6 @@ class Runner:
         params["stack_file"] = params["src_file"]
         params["cpu_file"] = f"{src_dir}/vf_{run_id}_cpu.txt"
         params["marker"] = f"{run_dir}/marker_{contract.contract_id}_{run_id}.txt"
-        params["frame_first"] = first_tpl.replace("__MARKER_PATH__", params["marker"])
-        params["frame_second"] = second_tpl
         mapping = {
             "__SRC_FILE__": params["src_file"],
             "__STACK_FILE__": params["stack_file"],
@@ -393,6 +523,21 @@ class Runner:
             "__RUN_PATTERN__": pattern,
             "__RUN_DIR__": run_dir,
         }
+        # 线路帧和 oracle/cleanup 使用同一套运行期占位符替换。旧实现只替换
+        # frame_first 的 marker 路径，导致 __RUN_PATTERN__ 以字面量发到设备：
+        # 文件虽被创建，内容却无法通过本轮预言机，从而产生
+        # INPUT_DELIVERED/SINK_CONTROLLED/NOT_REPRODUCED 的假阴性。
+        def expand(value: Any) -> str:
+            text = str(value or "")
+            for token, replacement in mapping.items():
+                text = text.replace(token, str(replacement))
+            return text
+
+        params["frame_first"] = expand(first_tpl)
+        params["frame_second"] = expand(second_tpl)
+        params["frame_third"] = expand(
+            field_values.get("frame_third") or param_space.get("frame_third", "")
+        )
         _substitute(contract.oracle, mapping)
         _substitute(contract.protocol, mapping)
         _substitute(contract.cleanup, mapping)

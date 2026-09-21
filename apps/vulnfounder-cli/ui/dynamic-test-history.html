@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>VulnFounder · 动态测试历史</title>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+  <style>
+    :root { color-scheme:light; --ink:#172033; --muted:#667085; --line:#d9dee8; --panel:#fff; --bg:#f5f7fb; --accent:#315efb; --ok:#147d4d; --warn:#a65b00; --bad:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 28px; color:#fff; background:#111827; }
+    .top h1 { margin:0; font-size:18px; } .top p { margin:2px 0 0; color:#9aa7bd; font-size:13px; }
+    .brand { display:flex; align-items:center; gap:10px; min-width:0; } .mark { display:grid; place-items:center; width:32px; height:32px; border-radius:8px; background:#d6eff2; color:#0c5565; font-weight:800; }
+    main { max-width:1360px; margin:26px auto; padding:0 18px 60px; }
+    .crumb { display:flex; align-items:center; gap:8px; margin-bottom:14px; } .crumb a { color:var(--accent); text-decoration:none; } .crumb a:hover { text-decoration:underline; }
+    .panel { margin-bottom:18px; padding:20px 22px; border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:0 3px 14px rgba(16,24,40,.04); }
+    .panel h2 { margin:0 0 4px; font-size:17px; } .hint { margin:0; color:var(--muted); font-size:13px; }
+    .toolbar { display:flex; align-items:end; gap:10px; flex-wrap:wrap; margin-top:14px; } .toolbar .grow { flex:1 1 330px; } label { display:block; margin-bottom:5px; font-weight:700; }
+    input { width:100%; padding:9px 11px; border:1px solid #bfc7d6; border-radius:7px; background:#fff; font:inherit; } button { padding:9px 14px; border:0; border-radius:7px; background:var(--accent); color:#fff; font:inherit; font-weight:700; cursor:pointer; } button.secondary { border:1px solid #cad5ff; background:#eef2ff; color:#2745a5; } button:disabled { opacity:.55; cursor:wait; }
+    #state { min-height:22px; margin-top:10px; color:var(--muted); } #state.error { color:var(--bad); }
+    .summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:16px; } .summary-card { padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:#fbfcfe; } .summary-label { color:var(--muted); font-size:11px; font-weight:700; } .summary-value { margin-top:2px; font-size:22px; font-weight:800; }
+    .scan-list { display:grid; gap:12px; } .scan-group { overflow:hidden; border:1px solid var(--line); border-radius:11px; background:#fff; } .scan-group summary { display:flex; align-items:center; gap:10px; padding:13px 15px; cursor:pointer; list-style:none; background:#f8fafd; } .scan-group summary::-webkit-details-marker { display:none; } .scan-group summary:hover { background:#f1f5fd; }
+    .scan-chevron { color:var(--muted); font-size:19px; transition:transform .15s; } .scan-group[open] .scan-chevron { transform:rotate(90deg); } .scan-title { min-width:0; flex:1; } .scan-title strong { display:block; overflow-wrap:anywhere; } .scan-title small { display:block; margin-top:2px; color:var(--muted); font:11px ui-monospace,Menlo,monospace; overflow-wrap:anywhere; } .scan-count { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .scan-body { padding:10px 14px 14px; } .sample-list { display:grid; gap:9px; } .sample-card { border:1px solid var(--line); border-radius:9px; padding:11px 12px; background:#fff; } .sample-card:hover { border-color:#9fb1f8; }
+    .sample-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; } .sample-name { font-weight:800; overflow-wrap:anywhere; } .sample-meta { margin-top:3px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; } .sample-runs { margin-top:9px; display:grid; gap:5px; }
+    .run-row { display:flex; align-items:center; gap:8px; padding:7px 8px; border-top:1px dashed var(--line); flex-wrap:wrap; } .run-row:first-child { border-top:0; } .run-id { min-width:190px; flex:1 1 240px; font:11px ui-monospace,Menlo,monospace; overflow-wrap:anywhere; } .run-time { color:var(--muted); font-size:11.5px; } .run-mode { color:var(--muted); font-size:11.5px; }
+    .status { display:inline-flex; padding:2px 8px; border-radius:999px; background:#eef1f6; color:var(--muted); font-size:11px; white-space:nowrap; } .status.confirmed { background:#e7f6ef; color:var(--ok); } .status.not-reproduced,.status.inconclusive { background:#fff1db; color:var(--warn); } .status.error,.status.blocked { background:#fdecec; color:var(--bad); } .status.running { background:#eef2ff; color:#2745a5; }
+    .run-actions { display:flex; gap:6px; margin-left:auto; align-items:center; } .run-actions a { padding:5px 9px; border:1px solid #cad5ff; border-radius:6px; color:#2745a5; background:#f7f9ff; font-size:12px; font-weight:700; text-decoration:none; white-space:nowrap; } .run-actions a:hover { background:#eef2ff; }
+    .run-actions button.delete-run { padding:5px 9px; border:1px solid #f1c3be; border-radius:6px; color:#a32920; background:#fff8f7; font-size:12px; font-weight:700; white-space:nowrap; } .run-actions button.delete-run:hover { background:#fdecec; } .run-actions button.delete-run:disabled { opacity:.55; cursor:wait; }
+    .empty { padding:22px 8px; color:var(--muted); text-align:center; } .foot-note { margin-top:12px; color:var(--muted); font-size:12px; }
+    @media (max-width:800px) { .top { padding:15px 18px; } .summary { grid-template-columns:repeat(2,minmax(0,1fr)); } .scan-count { display:none; } }
+    @media (max-width:480px) { .summary { grid-template-columns:1fr 1fr; } .run-actions { width:100%; margin-left:0; } }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><div class="mark" aria-hidden="true">VF</div><div><h1>动态测试历史</h1><p>按历史扫描统一浏览每个样本的所有真机验证会话</p></div></div>
+    <div class="top-actions"><vulnfounder-workspace-nav current="dynamic-history"></vulnfounder-workspace-nav></div>
+  </header>
+  <main>
+    <div class="crumb"><a href="/">← 返回扫描工作台</a><span class="hint">/</span><span class="hint">动态测试历史</span></div>
+    <section class="panel">
+      <h2>全部动态测试会话</h2>
+      <p class="hint">历史记录按扫描、样本和运行 ID 分层展示。进入某个会话后，可以继续查看它自己的事件流、设备账本、中间产物和最终判定。</p>
+      <div class="toolbar"><div class="grow"><label for="history-search">检索扫描、样本、函数或会话 ID</label><input id="history-search" type="search" placeholder="例如：SPUTILS、e1566550、CONFIRMED"></div><button id="refresh" type="button">刷新历史</button></div>
+      <div id="state" role="status">正在加载历史会话……</div>
+      <div class="summary" aria-label="历史统计"><div class="summary-card"><div class="summary-label">历史扫描</div><div id="scan-count" class="summary-value">—</div></div><div class="summary-card"><div class="summary-label">测试样本</div><div id="sample-count" class="summary-value">—</div></div><div class="summary-card"><div class="summary-label">执行会话</div><div id="run-count" class="summary-value">—</div></div><div class="summary-card"><div class="summary-label">已确认</div><div id="confirmed-count" class="summary-value">—</div></div></div>
+    </section>
+    <section class="panel"><div id="history" class="scan-list"><div class="empty">正在读取历史产物……</div></div><p class="foot-note">旧版产物若没有关联扫描 ID，会集中显示在“未关联扫描的历史产物”分组中；这类记录仍可直接打开运行结果。</p></section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = value => value == null ? '' : String(value);
+    const STATUS = {CONFIRMED:'已确认',NOT_REPRODUCED:'暂未复现',BLOCKED:'已阻断',INCONCLUSIVE:'证据不足',ERROR:'运行失败',CANCELLED:'已取消',RUNNING:'执行中',COMPLETE:'已结束'};
+    const state = {scans:[], query:'', deleting:new Set()};
+    const csrfToken = document.querySelector('meta[name="csrf"]')?.content || '';
+    const effectiveStatus = run => String((run && (run.dynamic_status || run.run_status || run.status)) || 'running').trim().toUpperCase();
+    const statusKey = run => effectiveStatus(run).toLowerCase().replace(/_/g,'-');
+    const statusText = run => { const value=effectiveStatus(run); return STATUS[value] || value; };
+    const deletable = run => effectiveStatus(run) !== 'CONFIRMED';
+    function dateText(value) { if(!value) return '时间未知'; const date=new Date(value); return Number.isNaN(date.getTime())?String(value):date.toLocaleString('zh-CN',{hour12:false}); }
+    function runHref(scan,sample,run) {
+      if (!scan) return '/scan-artifact/runs/'+encodeURIComponent(run.run_id)+'/result';
+      return '/dynamic-test#scan='+encodeURIComponent(scan)+'&sample='+encodeURIComponent(sample)+'&run='+encodeURIComponent(run.run_id);
+    }
+    function matches(scan,sample) {
+      if(!state.query) return true;
+      const q=state.query.toLowerCase();
+      const values=[scan.scan_id,scan.label,sample.sample,sample.function_analyzed,sample.location,sample.finding];
+      (sample.runs||[]).forEach(run=>values.push(run.run_id,run.dynamic_status,run.run_status,run.status));
+      return values.some(value=>String(value||'').toLowerCase().includes(q));
+    }
+    function render() {
+      const root=$('history'); root.replaceChildren();
+      let scanCount=0,sampleCount=0,runCount=0,confirmed=0;
+      const visible=[];
+      state.scans.forEach(scan=>{
+        const samples=(scan.samples||[]).filter(sample=>matches(scan,sample));
+        if(!samples.length) return;
+        visible.push([scan,samples]); scanCount++; sampleCount+=samples.length; samples.forEach(sample=>{runCount+=(sample.runs||[]).length; confirmed+=(sample.runs||[]).filter(run=>String(run.dynamic_status||'').toUpperCase()==='CONFIRMED').length;});
+      });
+      $('scan-count').textContent=scanCount; $('sample-count').textContent=sampleCount; $('run-count').textContent=runCount; $('confirmed-count').textContent=confirmed;
+      if(!visible.length){ root.appendChild(Object.assign(document.createElement('div'),{className:'empty',textContent:state.query?'没有匹配的历史会话。':'尚未发现动态测试历史产物。'})); return; }
+      visible.forEach(([scan,samples],index)=>{
+        const details=document.createElement('details'); details.className='scan-group'; details.open=index===0;
+        const summary=document.createElement('summary'); summary.appendChild(Object.assign(document.createElement('span'),{className:'scan-chevron',textContent:'›'}));
+        const title=document.createElement('span'); title.className='scan-title'; title.appendChild(Object.assign(document.createElement('strong'),{textContent:scan.label||'历史扫描'})); title.appendChild(Object.assign(document.createElement('small'),{textContent:scan.scan_id||'无关联扫描 ID'})); summary.appendChild(title); summary.appendChild(Object.assign(document.createElement('span'),{className:'scan-count',textContent:samples.length+' 个样本 · '+samples.reduce((n,s)=>n+(s.runs||[]).length,0)+' 个会话'})); details.appendChild(summary);
+        const body=document.createElement('div'); body.className='scan-body'; const list=document.createElement('div'); list.className='sample-list';
+        samples.forEach(sample=>{
+          const card=document.createElement('article'); card.className='sample-card'; const head=document.createElement('div'); head.className='sample-head'; const info=document.createElement('div'); info.style.minWidth='0'; info.appendChild(Object.assign(document.createElement('div'),{className:'sample-name',textContent:sample.sample}));
+          const meta=[sample.function_analyzed,sample.location,sample.finding].filter(Boolean).join(' · '); if(meta) info.appendChild(Object.assign(document.createElement('div'),{className:'sample-meta',textContent:meta})); head.appendChild(info); head.appendChild(Object.assign(document.createElement('span'),{className:'status',textContent:(sample.runs||[]).length+' 次执行'})); card.appendChild(head);
+          const runs=document.createElement('div'); runs.className='sample-runs'; (sample.runs||[]).forEach(run=>{
+            const row=document.createElement('div'); row.className='run-row';
+            row.appendChild(Object.assign(document.createElement('span'),{className:'run-id',textContent:run.run_id}));
+            const badge=document.createElement('span'); badge.className='status '+statusKey(run); badge.textContent=statusText(run); row.appendChild(badge);
+            row.appendChild(Object.assign(document.createElement('span'),{className:'run-time',textContent:dateText(run.started_at||run.modified_at||run.ended_at)}));
+            if(run.context_mode) row.appendChild(Object.assign(document.createElement('span'),{className:'run-mode',textContent:run.context_mode==='clean_room'?'独立评测':'辅助运行'}));
+            const actions=document.createElement('span'); actions.className='run-actions';
+            const link=document.createElement('a'); link.href=runHref(scan.scan_id,sample.sample,run); link.textContent=scan.scan_id?'进入会话':'查看结果'; actions.appendChild(link);
+            if (deletable(run)) {
+              const remove=document.createElement('button'); remove.type='button'; remove.className='delete-run'; remove.textContent='删除会话';
+              remove.setAttribute('aria-label','删除动态测试会话 '+String(run.run_id||''));
+              remove.disabled=state.deleting.has(run.run_id);
+              remove.addEventListener('click',()=>deleteRun(run)); actions.appendChild(remove);
+            }
+            row.appendChild(actions); runs.appendChild(row);
+          }); card.appendChild(runs); list.appendChild(card);
+        });
+        body.appendChild(list); details.appendChild(body); root.appendChild(details);
+      });
+    }
+    async function deleteRun(run) {
+      const runID=String(run&&run.run_id||'').trim(); if(!runID || state.deleting.has(runID)) return;
+      if (effectiveStatus(run)==='CONFIRMED') { $('state').textContent='CONFIRMED 会话受保护，不能删除。'; return; }
+      if (!window.confirm('确定删除动态测试会话「'+runID+'」吗？该会话的日志、账本和中间产物都会删除，操作不可恢复。')) return;
+      state.deleting.add(runID); render(); $('state').className=''; $('state').textContent='正在删除会话 '+runID+'……';
+      try {
+        const response=await fetch('/scan-artifact/runs/'+encodeURIComponent(runID),{method:'DELETE',credentials:'same-origin',headers:{'X-CSRF-Token':csrfToken}});
+        let data={}; try { data=await response.json(); } catch(_) {}
+        if(!response.ok) throw new Error(data.error||('删除失败（HTTP '+response.status+'）'));
+        $('state').textContent='已删除会话 '+runID+'。';
+        await load();
+      } catch(error) {
+        state.deleting.delete(runID); render(); $('state').className='error'; $('state').textContent='删除失败：'+(error.message||String(error));
+      }
+    }
+    async function load() { $('refresh').disabled=true; $('state').className=''; $('state').textContent='正在读取所有动态测试历史……'; try { const response=await fetch('/scan-artifact/history',{credentials:'same-origin',cache:'no-store'}); const data=await response.json(); if(!response.ok) throw new Error(data.error||'历史接口请求失败'); state.scans=Array.isArray(data.scans)?data.scans:[]; state.deleting.clear(); render(); $('state').textContent='已加载 '+state.scans.length+' 个历史扫描分组。'; } catch(error) { $('state').className='error'; $('state').textContent='历史读取失败：'+(error.message||String(error)); $('history').replaceChildren(Object.assign(document.createElement('div'),{className:'empty',textContent:'暂时无法读取动态测试历史。'})); } finally { $('refresh').disabled=false; } }
+    $('refresh').addEventListener('click',load); $('history-search').addEventListener('input',event=>{state.query=event.target.value.trim(); render();}); load();
+  </script>
+</body>
+</html>

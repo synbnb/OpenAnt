@@ -282,32 +282,33 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
-	pythonPath             string
-	outDir                 string
-	mgr                    *manager
-	tmplIndex              *template.Template
-	tmplScan               *template.Template
-	tmplArtifact           *template.Template
-	tmplSum                *template.Template
-	tmplDisclosure         *template.Template
-	tmplSourceLocator      *template.Template
-	tmplExposureSurface    *template.Template
-	tmplExposureLocator    *template.Template
-	tmplDeviceSocketAssets *template.Template
-	tmplSocketScope        *template.Template
-	tmplScanArtifact       *template.Template
-	sem                    chan struct{}
-	csrfToken              string
-	sourceLocatorMu        sync.Mutex     // serializes Web source-locator mutations, including deletion
-	exposureSurfaceMu      sync.Mutex     // serializes Web exposure-surface mutations, including deletion
-	wg                     sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
-	shutdownDone           chan struct{}  // closed once cancel+drain completes
-	drainMu                sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
-	draining               bool           // set at shutdown so no new job is added after Wait starts
-	deviceSocketJobsMu     sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
-	deviceSocketJobs       map[string]*deviceSocketAssetJob
-	scanArtifactJobsMu     sync.RWMutex   // protects scan-artifact dynamic-test runs observed by the Web UI
-	scanArtifactJobs       map[string]*scanArtifactJob
+	pythonPath              string
+	outDir                  string
+	mgr                     *manager
+	tmplIndex               *template.Template
+	tmplScan                *template.Template
+	tmplArtifact            *template.Template
+	tmplSum                 *template.Template
+	tmplDisclosure          *template.Template
+	tmplSourceLocator       *template.Template
+	tmplExposureSurface     *template.Template
+	tmplExposureLocator     *template.Template
+	tmplDeviceSocketAssets  *template.Template
+	tmplSocketScope         *template.Template
+	tmplScanArtifact        *template.Template
+	tmplScanArtifactHistory *template.Template
+	sem                     chan struct{}
+	csrfToken               string
+	sourceLocatorMu         sync.Mutex     // serializes Web source-locator mutations, including deletion
+	exposureSurfaceMu       sync.Mutex     // serializes Web exposure-surface mutations, including deletion
+	wg                      sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
+	shutdownDone            chan struct{}  // closed once cancel+drain completes
+	drainMu                 sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
+	draining                bool           // set at shutdown so no new job is added after Wait starts
+	deviceSocketJobsMu      sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
+	deviceSocketJobs        map[string]*deviceSocketAssetJob
+	scanArtifactJobsMu      sync.RWMutex // protects scan-artifact dynamic-test runs observed by the Web UI
+	scanArtifactJobs        map[string]*scanArtifactJob
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
@@ -357,6 +358,10 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dynamic-test.html: %w", err)
 	}
+	tmplScanArtifactHistory, err := template.ParseFS(uifiles.FS, "dynamic-test-history.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse dynamic-test-history.html: %w", err)
+	}
 
 	// Per-instance CSRF synchronizer token: 32 hex chars from crypto/rand,
 	// stable for the server's lifetime and embedded in served pages.
@@ -366,25 +371,26 @@ func New(pythonPath, outDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		pythonPath:             pythonPath,
-		outDir:                 outDir,
-		mgr:                    newManager(outDir),
-		tmplIndex:              tmplIndex,
-		tmplScan:               tmplScan,
-		tmplArtifact:           tmplArtifact,
-		tmplSum:                tmplSum,
-		tmplDisclosure:         tmplDisclosure,
-		tmplSourceLocator:      tmplSourceLocator,
-		tmplExposureSurface:    tmplExposureSurface,
-		tmplExposureLocator:    tmplExposureLocator,
-		tmplDeviceSocketAssets: tmplDeviceSocketAssets,
-		tmplSocketScope:        tmplSocketScope,
-		tmplScanArtifact:       tmplScanArtifact,
-		sem:                    make(chan struct{}, 4),
-		csrfToken:              hex.EncodeToString(tokBytes),
-		shutdownDone:           make(chan struct{}),
-		deviceSocketJobs:       make(map[string]*deviceSocketAssetJob),
-		scanArtifactJobs:       make(map[string]*scanArtifactJob),
+		pythonPath:              pythonPath,
+		outDir:                  outDir,
+		mgr:                     newManager(outDir),
+		tmplIndex:               tmplIndex,
+		tmplScan:                tmplScan,
+		tmplArtifact:            tmplArtifact,
+		tmplSum:                 tmplSum,
+		tmplDisclosure:          tmplDisclosure,
+		tmplSourceLocator:       tmplSourceLocator,
+		tmplExposureSurface:     tmplExposureSurface,
+		tmplExposureLocator:     tmplExposureLocator,
+		tmplDeviceSocketAssets:  tmplDeviceSocketAssets,
+		tmplSocketScope:         tmplSocketScope,
+		tmplScanArtifact:        tmplScanArtifact,
+		tmplScanArtifactHistory: tmplScanArtifactHistory,
+		sem:                     make(chan struct{}, 4),
+		csrfToken:               hex.EncodeToString(tokBytes),
+		shutdownDone:            make(chan struct{}),
+		deviceSocketJobs:        make(map[string]*deviceSocketAssetJob),
+		scanArtifactJobs:        make(map[string]*scanArtifactJob),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -848,14 +854,23 @@ func (s *Server) Handler() http.Handler {
 	// read-only; the run route is a mutation (CSRF + same-origin) and pins
 	// its ledger inside the server-owned scan-artifact output directory.
 	mux.HandleFunc("GET /dynamic-test", s.handleScanArtifactIndex)
+	mux.HandleFunc("GET /dynamic-test-history", s.handleScanArtifactHistoryIndex)
 	mux.HandleFunc("GET /scan-artifact/rounds", s.handleScanArtifactRounds)
 	mux.HandleFunc("GET /scan-artifact/entries", s.handleScanArtifactEntries)
 	mux.HandleFunc("GET /scan-artifact/devices", s.handleScanArtifactDevices)
 	mux.HandleFunc("POST /scan-artifact/run", s.handleScanArtifactRun)
+	mux.HandleFunc("GET /scan-artifact/history", s.handleScanArtifactHistory)
+	mux.HandleFunc("GET /scan-artifact/runs", s.handleScanArtifactRunHistory)
+	mux.HandleFunc("DELETE /scan-artifact/runs/{run_id}", s.handleScanArtifactRunDelete)
 	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/events", s.handleScanArtifactRunEvents)
 	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/result", s.handleScanArtifactRunResult)
+	mux.HandleFunc("GET /scan-artifact/runs/latest", s.handleScanArtifactLatestRun)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/artifacts", s.handleScanArtifactRunArtifacts)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/artifacts/{name}", s.handleScanArtifactRunArtifact)
 	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables", s.handleScanArtifactRunDeliverables)
 	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables/{name}", s.handleScanArtifactRunDeliverable)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables/source/{kind}", s.handleScanArtifactRunSource)
+	mux.HandleFunc("GET /scan-artifact/runs/{run_id}/deliverables/source/{kind}/{path...}", s.handleScanArtifactRunSourceFile)
 	mux.HandleFunc("GET /scan-artifact/runs/{run_id}", s.handleScanArtifactRunStatus)
 	return securityHeaders(mux)
 }
@@ -1274,7 +1289,7 @@ func (s *Server) Start(ctx context.Context, addr string) (string, error) {
 		s.drainMu.Unlock()
 		s.mgr.cancelAll() // cancel job ctxs -> killer goroutines SIGKILL process groups
 		s.cancelDeviceSocketAssetJobs()
-	s.cancelScanArtifactJobs()
+		s.cancelScanArtifactJobs()
 		_ = srv.Close() // stop listening + drop conns immediately (an open SSE stream
 		//                   would make graceful Shutdown block forever)
 		// Wait for in-flight runJob goroutines to finish their kill+cleanup, bounded

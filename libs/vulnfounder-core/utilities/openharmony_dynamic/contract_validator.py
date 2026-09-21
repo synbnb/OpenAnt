@@ -34,6 +34,43 @@ _ALLOWED_PATH_PREFIXES = ("/data/local/tmp/vf", "/data/log/")
 _IDENTITY_GRADES = {"hap_app": "A", "debug_app": "B", "root_su": "C"}
 _PLACEHOLDER_RE = re.compile(r"__[A-Z_]+__")
 
+# ``__MARKER_PATH__`` 在运行器中表示“本轮 marker 文件的完整路径”，而不是
+# marker 所在目录。LLM 有时会把两个占位符按“目录 + 文件名”的习惯拼成
+# ``__MARKER_PATH__/__MARKER__``，运行期就会得到
+# ``/path/marker.txt//path/marker.txt``。这个形状与当前占位符契约不兼容，
+# 必须在进入设备前统一归一为单一完整路径；不能让错误路径直到 oracle 阶段
+# 才表现为 NOT_REPRODUCED。
+_MARKER_PATH_COMPOSITE_RE = re.compile(r"__MARKER_PATH__/+__MARKER__")
+
+
+def normalize_marker_path_placeholders(obj: Any) -> None:
+    """就地归一 marker 路径占位符，兼容草案和旧产物。
+
+    运行器目前把 ``__MARKER_PATH__`` 和 ``__MARKER__`` 都映射为同一个
+    完整文件路径。因此两者不能再用斜杠串联。该函数只处理占位符形状，
+    不生成服务命令、路径或样本专属值。
+    """
+    if isinstance(obj, dict):
+        for key, value in list(obj.items()):
+            if isinstance(value, str):
+                obj[key] = _MARKER_PATH_COMPOSITE_RE.sub("__MARKER_PATH__", value)
+            else:
+                normalize_marker_path_placeholders(value)
+        return
+    if isinstance(obj, list):
+        for index, value in enumerate(obj):
+            if isinstance(value, str):
+                obj[index] = _MARKER_PATH_COMPOSITE_RE.sub("__MARKER_PATH__", value)
+            else:
+                normalize_marker_path_placeholders(value)
+        return
+    if hasattr(obj, "__dict__"):
+        for key, value in vars(obj).items():
+            if isinstance(value, str):
+                setattr(obj, key, _MARKER_PATH_COMPOSITE_RE.sub("__MARKER_PATH__", value))
+            else:
+                normalize_marker_path_placeholders(value)
+
 
 def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
     """九项硬校验（方案 §4 表）。返回错误列表；空 = 全过。"""
@@ -102,6 +139,7 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
         )
     if not contract.oracle.refutation:
         errors.append("V7 预言机: refutation 为空")
+    errors.extend(_validate_hilog_expectations(contract.oracle.hilog_expectations))
     try:
         _validate_spec(contract.oracle)
     except OracleError as exc:
@@ -125,6 +163,75 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
     for item in skipped:
         if item not in contract.limitations:
             contract.limitations.append(f"validator-skip: {item}")
+    return errors
+
+
+def _validate_hilog_expectations(expectations: Any) -> list[str]:
+    """校验 hilog 期望的可执行形状。
+
+    ``OracleSpec`` 的类型标注并不会在 JSON 反序列化时生效。此前字符串列表
+    （例如 ``["must_not_contain", "optional"]``）可以一路进入 runner，轮询
+    阶段再对字符串调用 ``.get``，导致已经发送设备输入后才出现基础设施错误。
+    这里把运行器实际消费的契约形状固定下来：列表元素必须是映射，tag/pattern
+    至少有一个，window/min_count/required/capture_groups 的类型必须可执行。
+    """
+    errors: list[str] = []
+    if expectations is None:
+        return ["V7 预言机: oracle.hilog_expectations 必须是列表，不能为 null"]
+    if not isinstance(expectations, list):
+        return ["V7 预言机: oracle.hilog_expectations 必须是对象列表"]
+
+    for index, item in enumerate(expectations):
+        prefix = f"V7 预言机: oracle.hilog_expectations[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{prefix} 必须是对象（包含 tag/pattern/window），实际为 {type(item).__name__}")
+            continue
+
+        tag = item.get("tag")
+        pattern = item.get("pattern")
+        if tag is not None and not isinstance(tag, str):
+            errors.append(f"{prefix}.tag 必须是字符串")
+        if pattern is not None and not isinstance(pattern, str):
+            errors.append(f"{prefix}.pattern 必须是字符串")
+        if isinstance(tag, str) and not tag.strip() and isinstance(pattern, str) and not pattern.strip():
+            errors.append(f"{prefix} 至少需要非空 tag 或 pattern")
+        elif tag is None and pattern is None:
+            errors.append(f"{prefix} 至少需要 tag 或 pattern")
+
+        window = item.get("window")
+        if window is not None:
+            if not isinstance(window, dict):
+                errors.append(f"{prefix}.window 必须是对象，例如 {{'seconds': 20}}")
+            else:
+                seconds = window.get("seconds")
+                if seconds is not None and (
+                    isinstance(seconds, bool)
+                    or not isinstance(seconds, (int, float))
+                    or seconds <= 0
+                ):
+                    errors.append(f"{prefix}.window.seconds 必须是正数")
+                from_value = window.get("from")
+                if from_value is not None and not isinstance(from_value, str):
+                    errors.append(f"{prefix}.window.from 必须是字符串")
+
+        min_count = item.get("min_count")
+        if min_count is not None and (
+            isinstance(min_count, bool)
+            or not isinstance(min_count, int)
+            or min_count <= 0
+        ):
+            errors.append(f"{prefix}.min_count 必须是正整数")
+
+        required = item.get("required")
+        if required is not None and not isinstance(required, bool):
+            errors.append(f"{prefix}.required 必须是布尔值")
+
+        capture_groups = item.get("capture_groups")
+        if capture_groups is not None and (
+            not isinstance(capture_groups, list)
+            or any(not isinstance(group, str) for group in capture_groups)
+        ):
+            errors.append(f"{prefix}.capture_groups 必须是字符串列表")
     return errors
 
 

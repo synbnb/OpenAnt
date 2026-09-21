@@ -29,6 +29,8 @@ func TestWebTemplatesParseAfterRedesign(t *testing.T) {
 		"exposure-locator.html",
 		"device-socket-assets.html",
 		"socket-scope.html",
+		"dynamic-test.html",
+		"dynamic-test-history.html",
 		"summary.html",
 		"disclosure.html",
 	} {
@@ -48,6 +50,8 @@ func TestWebTemplatesUseSharedVisualLanguage(t *testing.T) {
 		"exposure-locator.html",
 		"device-socket-assets.html",
 		"socket-scope.html",
+		"dynamic-test.html",
+		"dynamic-test-history.html",
 		"summary.html",
 		"disclosure.html",
 	} {
@@ -122,6 +126,8 @@ func TestWorkbenchTemplatesUseSharedStageNavigation(t *testing.T) {
 		`href: "/device-socket-assets#asset-history"`,
 		`href: "/source-locator"`,
 		`href: "/socket-scope"`,
+		`href: "/dynamic-test"`,
+		`href: "/dynamic-test-history"`,
 		`link.setAttribute("aria-current", "page")`,
 		`event.key === "Escape"`,
 	} {
@@ -415,6 +421,8 @@ func TestHomeProvidesPhaseNavigation(t *testing.T) {
 		"nav.analysis.title",
 		"nav.analysis.assets",
 		"/device-socket-assets#asset-history",
+		"/dynamic-test",
+		"/dynamic-test-history",
 	} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index.html missing phase navigation marker %q", want)
@@ -422,6 +430,21 @@ func TestHomeProvidesPhaseNavigation(t *testing.T) {
 	}
 	if got := strings.Count(index, "<details class=\"stage-nav-group\""); got != 4 {
 		t.Errorf("phase navigation groups = %d, want 4", got)
+	}
+}
+
+func TestDynamicHistoryProvidesProtectedDeleteAction(t *testing.T) {
+	history := readUITemplate(t, "dynamic-test-history.html")
+	for _, want := range []string{
+		`meta name="csrf"`,
+		`method:'DELETE'`,
+		`/scan-artifact/runs/`,
+		`CONFIRMED 会话受保护`,
+		`删除会话`,
+	} {
+		if !strings.Contains(history, want) {
+			t.Errorf("dynamic-test-history.html missing delete-safety marker %q", want)
+		}
 	}
 }
 

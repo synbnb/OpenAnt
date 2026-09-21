@@ -272,6 +272,92 @@ def _merge_candidates(candidates: list[EntryCandidate]) -> list[EntryCandidate]:
     return list(merged.values())[:_MAX_CANDIDATES]
 
 
+def _stage1_hint_source_refs(finding: Any, repo_root: Path) -> list[str]:
+    """把 Stage 1 已有源码位置整理成可复核的证据引用。
+
+    入口 Agent 因模型限流、安全策略或临时网络故障不可用时，不能把“无
+    候选”误写成“无入口”。这里仅提升 Stage 1 已明确给出的 endpoint 线索，
+    并保留其源码位置；不从仓库名称或协议族名称猜测新的入口。该候选的
+    ``route_relevance`` 固定为 ``possible``，仍需后续路由/协议证据确认。
+    """
+    paths = list(getattr(finding, "source_paths", []) or [])
+    ranges = list(getattr(finding, "evidence_lines", []) or [])
+    refs: list[str] = []
+    for index, raw_path in enumerate(paths):
+        path = Path(str(raw_path))
+        resolved = path if path.is_absolute() else repo_root / path
+        if not resolved.is_file():
+            matches = [p for p in repo_root.rglob(path.name) if p.is_file()]
+            if len(matches) != 1:
+                continue
+            path = matches[0].relative_to(repo_root)
+            resolved = repo_root / path
+        span = ranges[index] if index < len(ranges) else None
+        if isinstance(span, (list, tuple)) and span:
+            try:
+                start = max(1, int(span[0]))
+                end = max(start, int(span[1] if len(span) > 1 else span[0]))
+            except (TypeError, ValueError):
+                start = end = 1
+        else:
+            start = end = 1
+        refs.append(f"{path.as_posix()}:{start}-{end}")
+    return list(dict.fromkeys(refs))
+
+
+def _stage1_hint_fallback(
+    finding: Any, repo_root: Path, tools: ReconTools,
+) -> tuple[list[EntryCandidate], list[str]]:
+    """从显式 Stage 1 endpoint 线索构造保守入口候选。
+
+    这是“模型不可用时的证据保全”，不是协议或 socket 名称硬编码：只有
+    finding.entry_hints 中已经出现的 hap/unix endpoint 才会被提升。若设备
+    对象可用，还会执行一次只读 ``/proc/net`` 查询并把结果摘要写入设备证据。
+    """
+    refs = _stage1_hint_source_refs(finding, repo_root)
+    if not refs:
+        return [], ["Stage1 入口线索存在，但没有可复核源码位置"]
+    result: list[EntryCandidate] = []
+    missing: list[str] = []
+    for hint in list(getattr(finding, "entry_hints", []) or []):
+        text = str(hint).strip()
+        match = re.match(r"^(hap_udp|hap_tcp|unix_dgram|unix_stream)\s+(.+)$", text, re.IGNORECASE)
+        if not match:
+            continue
+        kind = match.group(1).lower()
+        endpoint = match.group(2).strip()
+        device_evidence: list[str] = []
+        if tools.hdc is not None and kind in {"hap_udp", "hap_tcp"}:
+            table = "udp" if kind == "hap_udp" else "tcp"
+            probe = tools.call("hdc_shell", {"argv": ["cat", f"/proc/net/{table}"]})
+            if probe.get("ok"):
+                port_match = re.search(r":(\d+)$", endpoint)
+                port = int(port_match.group(1)) if port_match else 0
+                needle = f":{port:04X}" if port else endpoint
+                if needle.upper() in str(probe.get("output", "")).upper():
+                    device_evidence.append(f"/proc/net/{table} 命中 {endpoint}")
+                else:
+                    missing.append(f"设备未在 /proc/net/{table} 中确认 {endpoint}")
+            else:
+                missing.append(f"设备只读查询失败：{probe.get('error', 'unknown')}")
+        candidate, error = _validate_candidate({
+            "kind": kind,
+            "endpoint": endpoint,
+            "confidence": "medium",
+            "source_evidence": refs,
+            "device_evidence": device_evidence,
+            "route_relevance": "possible",
+            "target_sink": str(getattr(finding, "sink", "")),
+            "reason": "模型入口发现不可用；仅保留 Stage 1 明确 endpoint 和源码证据，"
+                      "未把该线索升级为 direct 路由。",
+        }, repo_root)
+        if candidate is not None:
+            result.append(candidate)
+        elif error:
+            missing.append(f"Stage1 入口线索校验失败：{error}")
+    return _merge_candidates(result), missing
+
+
 def run_entry_discovery_loop(
     *,
     finding: Any,
@@ -298,6 +384,13 @@ def run_entry_discovery_loop(
         result.status = "llm_unavailable"
         result.notes = list(tools.notes)
         result.error = "入口发现 Agent Loop 的 LLM 不可用"
+        fallback, missing = _stage1_hint_fallback(finding, repo_root, tools)
+        if fallback:
+            result.candidates = fallback
+            result.status = "stage1_hint_fallback"
+            result.notes.append("LLM 不可用：保留 Stage1 显式入口线索，路由等级降为 possible")
+        result.missing_evidence.extend(missing)
+        result.device_commands_used = tools.device_commands_used
         result.audit = [a.to_dict() for a in tools.audit]
         return result
     binding, simple_text = binding_pair
@@ -442,6 +535,16 @@ def run_entry_discovery_loop(
         result.error = f"{max_turns} 轮未 finalize"
     result.notes = list(tools.notes)
     result.device_commands_used = tools.device_commands_used
+    # LLM 可能在请求阶段被提供方拒绝或网络中断。此时保留显式 Stage 1
+    # endpoint，比返回空候选更安全；后续描述符 Agent 和设备自证仍会继续
+    # 验证，不会把该 fallback 当成 direct 入口。
+    if not result.candidates and result.status in {"llm_unavailable", "budget_exhausted"}:
+        fallback, missing = _stage1_hint_fallback(finding, repo_root, tools)
+        if fallback:
+            result.candidates = fallback
+            result.status = "stage1_hint_fallback"
+            result.notes.append("入口 Agent 未完成：保留 Stage1 显式入口线索，路由等级降为 possible")
+        result.missing_evidence.extend(missing)
     result.audit = [a.to_dict() for a in tools.audit]
     if not result.status:
         result.status = "budget_exhausted"

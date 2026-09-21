@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,7 @@ class NativeUnixTransport:
         """
         client = self.ensure_client()
         payload_local = self._encode_to_file(protocol, descriptor)
+        payload_bytes = payload_local.read_bytes()
         payload_remote = f"/data/local/tmp/vf/{_PAYLOAD_NAME}"
         self.hdc.file_send(payload_local, payload_remote, purpose="push:payload")
 
@@ -89,6 +91,19 @@ class NativeUnixTransport:
             "client": client,
             "argv": argv,
             "on_send_transforms": sorted(transforms),
+            "sent_frames": [{
+                "index": 1,
+                "slot": "payload",
+                "payload": payload_bytes.decode("utf-8", errors="replace"),
+                "payload_hex": payload_bytes.hex(),
+                "encoding": "UTF-8-or-binary",
+                "byte_length": len(payload_bytes),
+                "delay_before_seconds": 0.0,
+                "source": "native_unix_encoded_payload",
+            }],
+            "frame_count": 1,
+            "frame_note": "设备侧 unix_client 从 payload.bin 读取并向声明的 Unix socket 发送该字节序列。",
+            "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
         }
         if result_line is None:
             return SendResult(
