@@ -2066,6 +2066,15 @@
       const fault = ct.fault || {};
       const oracle = ct.oracle || {};
       const identity = ct.identity || {};
+      const compileSummary = r.compile || {};
+      const descriptorResolution = compileSummary.descriptor_resolution || r.descriptor_resolution || {};
+      const descriptorSourceText = descriptorResolution.source === 'auto_generated'
+        ? '本轮自动生成并通过源码校验'
+        : descriptorResolution.source === 'library_fallback'
+          ? '内置协议库回退（不是本轮自动生成）'
+          : descriptorResolution.source === 'unresolved'
+            ? '尚未确定'
+            : (descriptorResolution.source || '未记录');
       const token = String(Date.now())+'-'+Math.random();
       state.dossierToken = token;
       const dossier = el('div','dossier');
@@ -2082,8 +2091,15 @@
       dossierCard(targetGrid,'入口类型与端点',(ct.entry||{}).kind||'未记录', '');
       dossierCard(targetGrid,'执行身份',identity.execution_identity||((ct.entry||{}).reachability_identity)||'未记录');
       dossierCard(targetGrid,'协议描述符',protocol.descriptor_id||'未记录');
+      dossierCard(targetGrid,'描述符来源',descriptorSourceText);
       dossierCard(targetGrid,'HAP/载体标识',(recordTransport(r).bundle)||'尚未记录');
       targetSection.appendChild(targetGrid);
+      if (descriptorResolution.source === 'library_fallback' || descriptorResolution.errors || descriptorResolution.skip_reason) {
+        const resolutionBox = el('div','dossier-explain');
+        const reason = descriptorResolution.errors || descriptorResolution.skip_reason || '自动描述符未通过当前轮次校验';
+        resolutionBox.textContent = '协议说明：本轮最终使用的是内置协议描述符。自动生成阶段的状态仅作为诊断信息保存，不能把本次设备效果证明理解为自动描述符已独立验证成功。原因：' + (Array.isArray(reason) ? reason.join('；') : String(reason));
+        targetSection.appendChild(resolutionBox);
+      }
       if (ct.description || bridge['具体漏洞源码与漏洞描述'] || entry.description) dossierCode(targetSection,ct.description||bridge['具体漏洞源码与漏洞描述']||entry.description,true);
       if (fault.description || bridge['根因分析'] || entry.reasoning) {
         targetSection.appendChild(el('div','dossier-section-title','漏洞触发与根因说明'));
@@ -2359,6 +2375,7 @@
         ['入口发现状态', (r.entry_discovery&&r.entry_discovery.status)||'—'],
         ['目标危险操作', r.sink],
         ['协议描述符', (notes.find(n=>n.startsWith('描述符命中:'))||'').replace('描述符命中: ','')],
+        ['描述符来源', descriptorSourceText],
         ['侦查轮次', ((notes.find(n=>/侦查 loop: finalized/.test(n))||[]).match && (notes.find(n=>/侦查 loop: finalized/.test(n))||'').match(/turns=(\d+)/)||[])[1]],
         ['设备命令数', (r.record&&r.record.command_count!=null)?r.record.command_count:(state.cmds.length||null)],
         ['运行记录文件', r.record_path],

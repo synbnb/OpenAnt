@@ -698,6 +698,7 @@ class ScanDynamicResult:
     compile_errors: list[str] = field(default_factory=list)
     compile_notes: list[str] = field(default_factory=list)
     entry_discovery: dict[str, Any] = field(default_factory=dict)
+    descriptor_resolution: dict[str, Any] = field(default_factory=dict)
     run_id: str = ""
     pattern: str = ""
     status: str = ""
@@ -723,6 +724,7 @@ class ScanDynamicResult:
             "compile_errors": self.compile_errors,
             "compile_notes": self.compile_notes,
             "entry_discovery": self.entry_discovery,
+            "descriptor_resolution": self.descriptor_resolution,
             "run_id": self.run_id,
             "pattern": self.pattern,
             "status": self.status,
@@ -957,15 +959,20 @@ def run_dynamic_from_scan(
         compile_result = compile_contract_with_retry(
             finding, hdc=hdc, on_event=emit, clean_room=clean_room,
             failure_log=_COMPILE_FAILURE_LOG,
+            # clean-room 评测必须证明本轮自动描述符链路；内置协议只能作为
+            # assisted 模式的显式 library_fallback，不能悄悄进入评测契约。
+            require_auto_descriptor=clean_room,
             max_attempts=_DYNAMIC_COMPILE_ATTEMPTS,
         )
     except ImportError:
         compile_result = compile_contract(finding, hdc=hdc, on_event=emit,
-                                          clean_room=clean_room)
+                                          clean_room=clean_room,
+                                          require_auto_descriptor=clean_room)
     result.compile_status = compile_result.compile_status
     result.compile_errors = list(compile_result.errors)
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
+    result.descriptor_resolution = dict(compile_result.descriptor_resolution)
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
@@ -1120,15 +1127,18 @@ def run_dynamic_from_webui(
         compile_result = compile_contract_with_retry(
             finding, hdc=hdc, on_event=emit, clean_room=clean_room,
             failure_log=_COMPILE_FAILURE_LOG,
+            require_auto_descriptor=clean_room,
             max_attempts=_DYNAMIC_COMPILE_ATTEMPTS,
         )
     except ImportError:
         compile_result = compile_contract(finding, hdc=hdc, on_event=emit,
-                                          clean_room=clean_room)
+                                          clean_room=clean_room,
+                                          require_auto_descriptor=clean_room)
     result.compile_status = compile_result.compile_status
     result.compile_errors = list(compile_result.errors)
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
+    result.descriptor_resolution = dict(compile_result.descriptor_resolution)
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)

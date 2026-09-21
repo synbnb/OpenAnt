@@ -126,6 +126,9 @@ class CompileResult:
     llm_used: bool = False
     notes: list[str] = field(default_factory=list)
     entry_discovery: dict[str, Any] = field(default_factory=dict)
+    # 描述符来源必须显式可审计：自动合成、内置库回退和未解析不能混成一个
+    # descriptor_hit，否则一个使用手写协议的 CONFIRMED 会被误读为自动合成成功。
+    descriptor_resolution: dict[str, Any] = field(default_factory=dict)
     # clean-room 运行标记：用于审计本轮是否禁用了历史 exemplar/设备事实库。
     clean_room: bool = False
 
@@ -137,6 +140,7 @@ class CompileResult:
             "llm_used": self.llm_used,
             "notes": list(self.notes),
             "entry_discovery": dict(self.entry_discovery),
+            "descriptor_resolution": dict(self.descriptor_resolution),
             "clean_room": self.clean_room,
             "context_mode": "clean_room" if self.clean_room else "assisted",
             "context_sources": (
@@ -386,6 +390,27 @@ def _entry_candidate_to_dict(candidate: Any) -> dict[str, Any]:
     return data
 
 
+def _recover_cached_route_candidate(candidates: list[Any], cached: Any) -> Any | None:
+    """从同一次 retry 闭环的候选缓存恢复已选择的路由。
+
+    这里只允许 candidate_id 或完整 hint 命中当前运行刚刚重新发现/合并的
+    候选，并拒绝 ``unrelated``。不会跨运行读取设备事实或历史 exemplar。
+    """
+    if not isinstance(cached, dict):
+        return None
+    wanted_id = str(cached.get("candidate_id", ""))
+    wanted_hint = str(cached.get("hint", "")).strip().lower()
+    for candidate in candidates:
+        candidate_id = str(getattr(candidate, "candidate_id", ""))
+        candidate_hint = str(getattr(candidate, "hint", "")).strip().lower()
+        if ((wanted_id and candidate_id == wanted_id) or
+                (wanted_hint and candidate_hint == wanted_hint)):
+            if str(getattr(candidate, "route_relevance", "unknown")) == "unrelated":
+                return None
+            return candidate
+    return None
+
+
 def _route_binding_from_candidate(finding: FindingInput, candidate: Any | None) -> dict[str, Any]:
     if candidate is None:
         return RouteBinding(target_sink=finding.sink, relevance="unknown").to_dict()
@@ -465,11 +490,22 @@ def _route_source_paths(finding: FindingInput, candidate: Any | None, repo_root:
 
 def _try_auto_descriptor(
     finding: FindingInput, candidate: Any | None, repo_root: Path, notes: list[str], hdc=None,
-    on_event=None,
+    on_event=None, resolution: dict[str, Any] | None = None,
 ) -> str:
     """为当前 route 生成并注册通用描述符；失败返回空字符串交给既有库。"""
     if candidate is None or str(getattr(candidate, "route_relevance", "unknown")) not in {"direct", "possible"}:
+        if resolution is not None:
+            resolution.setdefault("auto_attempted", False)
+            resolution["skip_reason"] = (
+                "没有选中的路由候选" if candidate is None else
+                f"路由相关性不满足自动合成准入: {getattr(candidate, 'route_relevance', 'unknown')}"
+            )
+        notes.append("自动协议描述符跳过：没有可绑定到当前 finding 的路由候选")
         return ""
+    if resolution is not None:
+        resolution["auto_attempted"] = True
+        resolution["candidate_id"] = str(getattr(candidate, "candidate_id", ""))
+        resolution["route_relevance"] = str(getattr(candidate, "route_relevance", "unknown"))
     source_paths = _route_source_paths(finding, candidate, repo_root)
     if not source_paths:
         notes.append("自动协议描述符跳过：当前路由没有可读取源码证据")
@@ -526,12 +562,30 @@ def _try_auto_descriptor(
                 f"encoder={result.descriptor.encoder_kind} sources={len(result.evidence_paths)} "
                 f"attempts={result.attempts}"
             )
+            if resolution is not None:
+                resolution.update({
+                    "auto_status": "APPROVED",
+                    "descriptor_id": descriptor_id,
+                    "attempts": result.attempts,
+                    "evidence_paths": list(result.evidence_paths),
+                })
             return descriptor_id
+        if resolution is not None:
+            resolution.update({
+                "auto_status": str(result.status),
+                "errors": list(result.errors[:4]),
+                "attempts": result.attempts,
+            })
         notes.append(
             f"自动协议描述符未通过: {result.status} {result.errors[:2]} "
             f"attempts={result.attempts} feedback={result.feedback_history[-2:]}"
         )
     except Exception as exc:  # noqa: BLE001 — 自动发现失败时保留既有描述符回退
+        if resolution is not None:
+            resolution.update({
+                "auto_status": "ERROR",
+                "errors": [f"{type(exc).__name__}: {str(exc)[:180]}"],
+            })
         notes.append(f"自动协议描述符异常，回退既有库: {type(exc).__name__}: {str(exc)[:180]}")
     return ""
 
@@ -677,7 +731,8 @@ def _select_recon_context(*, finding: FindingInput, hdc=None,
 def compile_contract(finding: FindingInput, *, hdc=None,
                      device_facts=None, on_event=None,
                      clean_room: bool = False,
-                     repair_missing_oracle: bool = False) -> CompileResult:
+                     repair_missing_oracle: bool = False,
+                     require_auto_descriptor: bool = False) -> CompileResult:
     """FindingInput → candidate contract（侦查 loop 起草 + 确定性填充 + 硬校验）。
 
     v2：LLM 起草由侦查 agent loop（§9）替代单轮盲写——LLM 可读源码、grep、
@@ -687,11 +742,16 @@ def compile_contract(finding: FindingInput, *, hdc=None,
     on_event：可选进度回调，透传给侦查 loop（recon_turn 事件）。
     """
     notes: list[str] = []
+    descriptor_resolution: dict[str, Any] = {
+        "source": "unresolved",
+        "auto_attempted": False,
+    }
     if clean_room:
         notes.append("clean-room: 已禁用历史 exemplar 与设备事实库，仅使用当前 finding/源码证据")
 
     def _result(**kwargs) -> CompileResult:
         kwargs.setdefault("clean_room", clean_room)
+        kwargs.setdefault("descriptor_resolution", dict(descriptor_resolution))
         return CompileResult(**kwargs)
 
     # 2. vuln_class → oracle 映射（未实现 → ORACLE_UNAVAILABLE，诚实降级）
@@ -794,11 +854,30 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         selected_route_candidate = _select_route_candidate(
             initial_entry_hints, merged_candidates,
         )
+        # fresh session 可能只重新发现一个候选，而当前运行缓存中保留了其余
+        # 候选。若仅依赖本轮 fresh 列表，原本明确的 Stage1 端点会在重试中
+        # 变成 selected=null，随后自动描述符被跳过并静默落到内置描述符。
+        # 先按当前运行内稳定 candidate_id，再按完整 hint 恢复选择；不读取
+        # 跨运行事实，因此不会破坏 clean-room 隔离。
+        if selected_route_candidate is None and isinstance(current_context, dict):
+            cached_selected = current_context.get("_dynamic_current_run_selected_candidate")
+            recovered = _recover_cached_route_candidate(merged_candidates, cached_selected)
+            if recovered is not None:
+                selected_route_candidate = recovered
+                entry_discovery_data["selected_candidate_recovered"] = True
+                notes.append(
+                    "当前运行重试恢复已选路由候选: "
+                    f"{getattr(recovered, 'candidate_id', '') or getattr(recovered, 'hint', '')}"
+                )
         if isinstance(current_context, dict) and merged_candidates:
             current_context["_dynamic_current_run_entry_candidates"] = [
                 _entry_candidate_to_dict(candidate) for candidate in merged_candidates
             ]
         if selected_route_candidate is not None:
+            if isinstance(current_context, dict):
+                current_context["_dynamic_current_run_selected_candidate"] = (
+                    _entry_candidate_to_dict(selected_route_candidate)
+                )
             entry_discovery_data["selected_candidate_id"] = str(
                 getattr(selected_route_candidate, "candidate_id", "")
             )
@@ -809,7 +888,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         # 8283/8284/8285）。入口发现应保留全部候选供审计，但协议契约一次只
         # 能发送一个 endpoint；没有 Stage1 明确端点时禁止按列表首项静默选择。
         if (not initial_entry_hints
-                and len({c.hint for c in entry_result.candidates}) > 1
+                and len({c.hint for c in merged_candidates}) > 1
                 and selected_route_candidate is None):
             notes.append("入口候选存在歧义：保留全部候选，未自动选择 endpoint")
             return _result(
@@ -825,9 +904,26 @@ def compile_contract(finding: FindingInput, *, hdc=None,
 
     # 1c. 描述符命中（未命中 → REQUIRES_PROTOCOL_REVIEW，指向描述符合成器）
     repo_root = Path(finding.repo_root) if finding.repo_root else Path(".")
-    descriptor_id = _try_auto_descriptor(
-        finding, selected_route_candidate, repo_root, notes, hdc=hdc, on_event=on_event,
-    ) or _match_descriptor(finding)
+    auto_descriptor_id = _try_auto_descriptor(
+        finding, selected_route_candidate, repo_root, notes, hdc=hdc,
+        on_event=on_event, resolution=descriptor_resolution,
+    )
+    if auto_descriptor_id:
+        descriptor_id = auto_descriptor_id
+        descriptor_resolution["source"] = "auto_generated"
+    else:
+        descriptor_id = _match_descriptor(finding)
+        if descriptor_id:
+            descriptor_resolution.update({
+                "source": "library_fallback",
+                "fallback_descriptor_id": descriptor_id,
+            })
+            if descriptor_resolution.get("auto_attempted"):
+                notes.append(
+                    f"自动协议描述符未被采用，显式回退内置描述符: {descriptor_id}"
+                )
+            else:
+                notes.append(f"未执行自动协议描述符，使用内置描述符: {descriptor_id}")
     if not descriptor_id:
         return _result(
             contract=None, compile_status="REQUIRES_PROTOCOL_REVIEW",
@@ -835,6 +931,22 @@ def compile_contract(finding: FindingInput, *, hdc=None,
             entry_discovery=entry_discovery_data,
         )
     notes.append(f"描述符命中: {descriptor_id}")
+
+    # clean-room/严格模式不能把内置库命中伪装成自动合成成功。普通 assisted
+    # 模式仍可使用内置协议以保持历史兼容，但产物会明确标记 source=library_fallback。
+    if require_auto_descriptor and descriptor_resolution.get("source") != "auto_generated":
+        reason = descriptor_resolution.get("skip_reason") or descriptor_resolution.get("errors") or (
+            "自动描述符未通过源码/设备侧校验"
+        )
+        return _result(
+            contract=None, compile_status="REQUIRES_PROTOCOL_REVIEW",
+            errors=[
+                "严格自动描述符模式拒绝内置回退："
+                + ("；".join(str(x) for x in reason) if isinstance(reason, list) else str(reason))
+            ],
+            descriptor_hit=descriptor_id, llm_used=True, notes=notes,
+            entry_discovery=entry_discovery_data,
+        )
 
     # 3. 确定性骨架
     skeleton = _deterministic_skeleton(finding, descriptor_id, selected_route_candidate)
@@ -2202,7 +2314,8 @@ def _attach_compile_feedback(finding: Any, result: CompileResult) -> None:
 def compile_contract_with_retry(finding, *, hdc=None, device_facts=None,
                                 on_event=None, max_attempts: int = 3,
                                 clean_room: bool = False,
-                                failure_log=None) -> CompileResult:
+                                failure_log=None,
+                                require_auto_descriptor: bool | None = None) -> CompileResult:
     """compile_contract 的闭环重试包装（P0-1）。
 
     - 首次 REQUIRES_PROTOCOL_REVIEW → 在有界次数内换 fresh session 重跑（新侦查
@@ -2217,15 +2330,25 @@ def compile_contract_with_retry(finding, *, hdc=None, device_facts=None,
     validator，也不会把失败状态改写成设备确认。需要更大预算的调用方可以
     显式传入 ``max_attempts``，而不是隐式改变测试语义。
     """
+    # clean-room 默认启用严格自动描述符闸门：它不能以历史/内置协议的成功
+    # 冒充本轮自动合成成功。调用方仍可显式关闭，以保持 assisted 模式的兼容性。
+    if require_auto_descriptor is None:
+        require_auto_descriptor = bool(clean_room)
+
     # 只允许同一次 retry 闭环复用入口候选。FindingInput 可能来自长期驻留的
     # worker，若不清理这两个内部键，下一次独立动态测试会错误继承上一场证据。
     context = getattr(finding, "analysis_context", None)
     if isinstance(context, dict):
         context.pop("_dynamic_current_run_entry_candidates", None)
+        context.pop("_dynamic_current_run_selected_candidate", None)
         context.pop("dynamic_compile_feedback", None)
 
+    # 在首场编译前冻结 Stage1 原始入口提示；不能从首场 Agent 追加的多候选
+    # entry_hints 反向生成“明确端点”，否则 fresh session 会误选首个候选。
+    original_entry_hints = list(getattr(finding, "entry_hints", []) or [])
     result = compile_contract(finding, hdc=hdc, device_facts=device_facts,
-                              on_event=on_event, clean_room=clean_room)
+                              on_event=on_event, clean_room=clean_room,
+                              require_auto_descriptor=require_auto_descriptor)
     if result.compile_status == "ELIGIBLE":
         return result
 
@@ -2282,6 +2405,7 @@ def compile_contract_with_retry(finding, *, hdc=None, device_facts=None,
         retry_result = compile_contract(
             finding, hdc=hdc, device_facts=device_facts,
             on_event=on_event, clean_room=clean_room,
+            require_auto_descriptor=require_auto_descriptor,
             # 首场保持严格门禁，只有收到确定性“缺少 oracle”反馈后，
             # fresh-session 才允许使用 vuln_class 的已实现预言机骨架修复
             # LLM 的结构省略；这不是服务专用兜底，也不会替模型生成攻击帧。

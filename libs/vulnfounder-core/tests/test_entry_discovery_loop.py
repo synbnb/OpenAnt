@@ -226,6 +226,105 @@ def test_compile_runs_entry_discovery_before_descriptor_match(monkeypatch, tmp_p
     assert result.descriptor_hit == "sp_daemon_text"
 
 
+def test_route_selection_keeps_explicit_stage1_endpoint_among_multiple_candidates():
+    """多个端点并存时，明确的 Stage1 hint 必须稳定选中对应路由。"""
+    candidates = [
+        type("Candidate", (), {
+            "hint": "hap_udp 127.0.0.1:8283",
+            "endpoint": "127.0.0.1:8283",
+            "route_relevance": "possible",
+        })(),
+        type("Candidate", (), {
+            "hint": "hap_tcp 127.0.0.1:8284",
+            "endpoint": "127.0.0.1:8284",
+            "route_relevance": "unknown",
+        })(),
+        type("Candidate", (), {
+            "hint": "hap_udp 127.0.0.1:8285",
+            "endpoint": "127.0.0.1:8285",
+            "route_relevance": "unknown",
+        })(),
+    ]
+    selected = cc._select_route_candidate(["hap_udp 127.0.0.1:8283"], candidates)
+    assert selected is candidates[0]
+
+
+def test_retry_candidate_cache_recovers_the_same_route_after_fresh_session():
+    """fresh session 只返回一个候选时，不能丢失首场已选的 8283 路由。"""
+    first = type("Candidate", (), {
+        "hint": "hap_udp 127.0.0.1:8283",
+        "endpoint": "127.0.0.1:8283",
+        "route_relevance": "possible",
+        "candidate_id": "entry-8283",
+    })()
+    fresh_only = type("Candidate", (), {
+        "hint": "hap_udp 127.0.0.1:8283",
+        "endpoint": "127.0.0.1:8283",
+        "route_relevance": "possible",
+        "candidate_id": "entry-8283",
+    })()
+    recovered = cc._recover_cached_route_candidate(
+        [fresh_only], {"candidate_id": first.candidate_id, "hint": first.hint},
+    )
+    assert recovered is fresh_only
+
+
+def test_compile_result_exposes_library_fallback_source():
+    """内置描述符回退必须带来源字段，不能只显示 descriptor_id。"""
+    result = cc.CompileResult(
+        contract=None,
+        compile_status="REQUIRES_PROTOCOL_REVIEW",
+        descriptor_hit="sp_daemon_text",
+        descriptor_resolution={
+            "source": "library_fallback",
+            "auto_attempted": True,
+            "fallback_descriptor_id": "sp_daemon_text",
+            "errors": ["缺少设备侧 token"],
+        },
+    )
+    payload = result.to_dict()
+    assert payload["descriptor_resolution"]["source"] == "library_fallback"
+    assert payload["descriptor_resolution"]["auto_attempted"] is True
+
+
+def test_strict_auto_descriptor_rejects_silent_builtin_fallback(monkeypatch, tmp_path):
+    """严格模式不允许在自动合成失败后继续使用手写协议执行。"""
+    source = tmp_path / "sp_thread_socket.cpp"
+    source.write_text("void HandleMsg() { recvfrom(fd, buf, 1, 0, 0, 0); }\n", encoding="utf-8")
+    finding = _finding(tmp_path, hints=["hap_udp 127.0.0.1:8283"])
+    candidate = type("Candidate", (), {
+        "hint": "hap_udp 127.0.0.1:8283",
+        "endpoint": "127.0.0.1:8283",
+        "route_relevance": "possible",
+        "candidate_id": "entry-demo",
+        "source_evidence": ["sp_thread_socket.cpp:1"],
+        "route_evidence": ["sp_thread_socket.cpp:1"],
+        "handler": "HandleMsg",
+        "target_sink": finding.sink,
+        "dispatch_conditions": [],
+        "state_flow": [],
+        "reason": "candidate",
+    })()
+    fake_result = type("EntryResult", (), {
+        "status": "finalized", "candidates": [candidate], "notes": [],
+        "turns_used": 1, "device_commands_used": 0,
+        "to_dict": lambda self: {"status": self.status, "candidates": [candidate.to_dict()]}
+        if hasattr(candidate, "to_dict") else {"status": self.status},
+    })()
+    monkeypatch.setattr(cc, "_llm_binding", lambda: ("binding", lambda *a, **k: "{}"))
+    monkeypatch.setattr(
+        "utilities.openharmony_dynamic.agent.entry_discovery_loop.run_entry_discovery_loop",
+        lambda **kwargs: fake_result,
+    )
+    monkeypatch.setattr(cc, "_try_auto_descriptor", lambda *a, **k: "")
+    result = cc.compile_contract(
+        finding, hdc=None, clean_room=True, require_auto_descriptor=True,
+    )
+    assert result.compile_status == "REQUIRES_PROTOCOL_REVIEW"
+    assert "严格自动描述符模式拒绝内置回退" in result.errors[0]
+    assert result.descriptor_resolution["source"] == "library_fallback"
+
+
 def test_compile_does_not_silently_choose_ambiguous_endpoints(monkeypatch, tmp_path):
     (tmp_path / "sp_thread_socket.cpp").write_text("void HandleMsg() {}\n", encoding="utf-8")
     finding = _finding(tmp_path, hints=[])

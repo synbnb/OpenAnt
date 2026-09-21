@@ -86,6 +86,84 @@ def test_descriptor_synthesis_retries_after_field_evidence_feedback(tmp_path):
     assert any(e["record"].get("kind") == "approved" for e in events)
 
 
+def test_descriptor_agent_can_read_same_route_startup_guard_source(tmp_path):
+    """守卫 setter 可位于接收循环同目录的另一个实现文件，不能被证据范围静默丢掉。"""
+    handler = tmp_path / "handler.cpp"
+    handler.write_text(
+        'bool CheckToken(const char* frame) { return isNeedToken; }\n'
+        'void Handle() { parse(command); }\n', encoding="utf-8"
+    )
+    startup = tmp_path / "startup.cpp"
+    startup.write_text(
+        'void StartWithoutToken() { SetNeedToken(false); }\n', encoding="utf-8"
+    )
+    descriptor = _descriptor([], probe={
+        "mode": "udp", "host": "127.0.0.1", "port": 8283,
+        "first": "ping", "second": "", "third": "",
+        "evidence": "handler.cpp:2",
+    })
+    descriptor["encoder_kind"] = "raw_text"
+    descriptor["wire_format"] = {}
+    llm = ScriptedLLM([
+        json.dumps({"tool": "grep", "args": {"pattern": "SetNeedToken", "path": "."}}),
+        json.dumps({"tool": "read_file", "args": {"path": "startup.cpp"}}),
+        json.dumps({"tool": "finalize", "args": {"descriptor": descriptor}}),
+    ])
+
+    result = ds.synthesize_descriptor(
+        ["handler.cpp"], repo_root=str(tmp_path),
+        route_context={"handler": "Handle", "target_sink": "sink"},
+        binding_pair=("binding", llm), auto_approve=True, max_turns=4,
+    )
+
+    assert result.status == "APPROVED"
+    assert "startup.cpp" in result.evidence_paths
+    assert any(item["tool"] == "read_file" and item["args"].get("path") == "startup.cpp"
+               for item in result.audit)
+
+
+def test_descriptor_rejects_empty_raw_text_for_key_value_parser(tmp_path):
+    """源码已经显示键值拆包时，空字段 raw_text 必须反馈给 Agent 继续补证。"""
+    handler = tmp_path / "handler.cpp"
+    handler.write_text(
+        'auto key = recvBuf.find("::");\n'
+        'auto value = SplitMsg(recvBuf);\n', encoding="utf-8"
+    )
+    table = tmp_path / "messages.h"
+    table.write_text('static constexpr char COMMAND[] = "command";\n', encoding="utf-8")
+    first = _descriptor([], probe={
+        "mode": "udp", "host": "127.0.0.1", "port": 9999,
+        "first": "command::ping", "second": "", "third": "",
+        "evidence": "handler.cpp:1",
+    })
+    first["encoder_kind"] = "raw_text"
+    first["wire_format"] = {}
+    second = _descriptor([
+        {"name": "command", "type": "string", "order": 0,
+         "evidence": "messages.h:1"},
+    ], probe={
+        "mode": "udp", "host": "127.0.0.1", "port": 9999,
+        "first": "command::ping", "second": "", "third": "",
+        "evidence": "handler.cpp:1",
+    })
+    llm = ScriptedLLM([
+        json.dumps({"tool": "finalize", "args": {"descriptor": first}}),
+        json.dumps({"tool": "read_file", "args": {"path": "messages.h"}}),
+        json.dumps({"tool": "finalize", "args": {"descriptor": second}}),
+    ])
+
+    result = ds.synthesize_descriptor(
+        ["handler.cpp"], repo_root=str(tmp_path),
+        route_context={"handler": "Handle", "target_sink": "sink"},
+        binding_pair=("binding", llm), auto_approve=True, max_turns=4,
+    )
+
+    assert result.status == "APPROVED"
+    assert result.descriptor is not None
+    assert result.descriptor.encoder_kind == "key_value"
+    assert any("键值分帧证据" in item for item in result.feedback_history)
+
+
 def test_recon_route_observations_keep_source_order_without_domain_keyword_bias():
     """路由索引不应因历史服务/危险 API 词表重排源码观察。"""
     recon = importlib.import_module("utilities.openharmony_dynamic.agent.recon_loop")

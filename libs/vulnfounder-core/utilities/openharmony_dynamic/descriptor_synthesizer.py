@@ -85,6 +85,16 @@ _SYNTH_SYSTEM_PROMPT = (
     "insufficient。\n"
     "4b. 当前 route 的源码文件可以用绝对路径或仓库相对路径表示；证据必须是当前 bundle"
     "中的真实 file:line，不能只写‘文件名 + 函数名’或从同目录其它实现推断。\n"
+    "4c. 协议守卫经常跨文件生效：不要只看 recv/dispatch 函数里的通用 token 检查。"
+    "在 finalize 前，必须检查当前 route 对应的默认开关、构造函数、启动参数、配置/属性"
+    "以及 Set*Token/SetNeed*Token 一类 setter 的调用位置。可以在当前 route 源码目录及其"
+    "直接依赖中 grep 守卫字段或 setter，再 read_file 读取命中实现；这些动作不是针对某个"
+    "服务的硬编码，而是为了确认同一 endpoint 在当前启动模式下是否真的要求 token。若源码"
+    "明确表明某种合法启动方式关闭了守卫，应把该证据写入 known_guards 和 legal_probe；"
+    "不要仅因存在通用 token 分支就宣称协议不可生成。反之，若选定 route 无条件要求一个"
+    "设备侧无法取得的 token，才应返回 insufficient。\n"
+    "4d. 如果源码出现 SplitMsg、StrSplit 或按字符串分隔符拆包，不能用空 fields 的"
+    "raw_text 草案逃避协议恢复；必须继续查找当前 route 的命令/消息表和分隔符证据。\n"
     "5. 只输出一个 JSON 动作对象。"
 )
 
@@ -481,6 +491,42 @@ def _validate_wire_format_against_source(
     return []
 
 
+def _validate_protocol_shape_against_source(
+    descriptor: ProtocolDescriptor, source_paths: list[str], *, repo_root: str = "",
+) -> list[str]:
+    """防止把有明确键值分帧证据的协议过早降级成空字段 raw_text。
+
+    这不是服务名称或命令名称规则，而是对当前源码证据的形态校验：如果源码
+    明确存在 ``SplitMsg``/``find("::")``/按 ``::`` 拆分等键值分帧操作，描述符
+    至少应列出当前 route 的一个字段并声明分隔符。否则模型可能在尚未读取命令
+    表时提交一个“看似通用”的 raw_text 草案，随后动态运行器无法构造真实帧。
+    二进制/custom 协议不受此检查影响。
+    """
+    if descriptor.encoder_kind != "raw_text" or descriptor.fields:
+        return []
+    texts: list[str] = []
+    for raw in _unique_source_paths(source_paths):
+        resolved = _resolve_source_ref(raw, repo_root)
+        if resolved is None:
+            continue
+        _, path = resolved
+        text = _read_source(path)
+        if text:
+            texts.append(text)
+    key_value_patterns = (
+        r"\bSplitMsg\s*\(",
+        r"\bStrSplit\s*\([^\n;]*(?:\"|')::",
+        r"\.find\s*\(\s*(?:\"|')::",
+        r"\.substr\s*\([^\n;]*find\s*\(\s*(?:\"|')::",
+    )
+    if any(re.search(pattern, text) for text in texts for pattern in key_value_patterns):
+        return [
+            "当前源码包含键值分帧证据，但 descriptor.encoder_kind=raw_text 且 fields 为空；"
+            "请读取命令/消息表，声明当前 route 实际使用的字段，并提供 pair_separator 的源码证据"
+        ]
+    return []
+
+
 def _descriptor_agent_loop(
     source_paths: list[str], *, repo_root: str, route_context: dict[str, Any] | None,
     binding_pair=None, hdc=None, max_turns: int = 8,
@@ -517,9 +563,20 @@ def _descriptor_agent_loop(
             return True
         suffix = Path(normalized).suffix.lower()
         # 头文件可能承载消息常量/结构声明，是当前 route 的直接依赖；源码
-        # 实现文件则必须已经由 finding/候选攻击链明确提供，避免 grep 同目录
-        # 时把其它命令处理器误带入协议描述符。
-        return suffix in {".h", ".hh", ".hpp", ".hxx", ".inc"}
+        # 实现文件可以从当前 route 的有限源码邻域补入：启动构造、默认配置和
+        # setter 往往与接收循环位于同一个 client/server 目录，但不一定出现在
+        # finding 的候选攻击链中。只允许同目录或直接父目录中的实现文件，避免
+        # grep 全仓时把其它组件的同名处理器带进当前协议证据 bundle。
+        if suffix in {".h", ".hh", ".hpp", ".hxx", ".inc"}:
+            return True
+        if suffix not in {".c", ".cc", ".cpp", ".cxx"}:
+            return False
+        candidate_parent = Path(canonical).parent
+        route_parents = {Path(_normalize_source_ref(p)).parent for p in paths}
+        for parent in route_parents:
+            if candidate_parent == parent or candidate_parent == parent.parent:
+                return True
+        return False
 
     for turn in range(1, max_turns + 1):
         def emit(kind: str, detail: str, **extra: Any) -> None:
@@ -542,7 +599,10 @@ def _descriptor_agent_loop(
             f"已经执行的动作:\n{chr(10).join(transcript[-6:])}\n"
             f"上轮失败反馈:\n{chr(10).join(feedback[-4:]) or '(无)'}\n"
             "可用工具：read_file、grep、list_dir、hdc_shell（只读）或 finalize。"
-            "优先补读消息表、分帧/拆包函数、字段常量、守卫和命令分派。"
+            "优先补读消息表、分帧/拆包函数、字段常量、守卫和命令分派；对守卫还要"
+            "检索默认值、构造函数、启动参数、配置/属性和 Set*Token/SetNeed*Token"
+            "调用，确认当前启动模式是否实际启用鉴权。grep 可以在当前 route 的源码"
+            "邻域内查找跨文件证据，命中后必须 read_file 核对上下文。"
             "finalize 格式：{\"tool\":\"finalize\",\"args\":{\"descriptor\":{...}}}。"
             "只提交一个 JSON 动作。"
         )
@@ -620,6 +680,16 @@ def _descriptor_agent_loop(
                 audit.append({"turn": turn, "tool": "finalize", "status": "REJECTED",
                               "error": list(wire_errors), "field_check": check})
                 emit("feedback", "线路编码证据校验失败：" + "; ".join(wire_errors),
+                     tool="finalize", status="REJECTED")
+                continue
+            shape_errors = _validate_protocol_shape_against_source(
+                descriptor, paths, repo_root=repo_root,
+            )
+            if shape_errors:
+                feedback.extend(shape_errors)
+                audit.append({"turn": turn, "tool": "finalize", "status": "REJECTED",
+                              "error": list(shape_errors), "field_check": check})
+                emit("feedback", "协议形态与源码不一致：" + "; ".join(shape_errors),
                      tool="finalize", status="REJECTED")
                 continue
             feedback.append("字段、编码形态和合法探测报文校验通过")
@@ -787,6 +857,16 @@ def synthesize_descriptor(
         return SynthesisResult(
             descriptor=descriptor, status="REJECTED_FIELD_CHECK",
             field_check=check, errors=probe_errors, llm_used=False, attempts=1,
+            evidence_paths=evidence_paths,
+        )
+
+    shape_errors = _validate_protocol_shape_against_source(
+        descriptor, evidence_paths, repo_root=repo_root,
+    )
+    if auto_approve and shape_errors:
+        return SynthesisResult(
+            descriptor=descriptor, status="REJECTED_FIELD_CHECK",
+            field_check=check, errors=shape_errors, llm_used=False, attempts=1,
             evidence_paths=evidence_paths,
         )
 
