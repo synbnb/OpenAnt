@@ -203,27 +203,45 @@ def _llm_binding():
 # ---------------------------------------------------------------------------
 
 def _match_descriptor(finding: FindingInput) -> str:
-    """描述符库确定性查找：entry_hints + vuln_class 线索匹配已注册描述符。"""
-    hints = " ".join(finding.entry_hints).lower()
+    """只按显式描述符或入口类型兼容关系查找内置描述符。
+
+    旧实现会根据 ``popen``、``hisysevent``、``udp/tcp`` 或端口号猜服务，
+    这种猜测会把未知服务错误套入 ``sp_daemon_text``。现在协议族必须来自
+    当前 finding 的显式上下文、完整 descriptor id，或入口发现器已经验证的
+    通用载体类型（如 ``hap_udp``）；服务名、sink 和端口不再是描述符证据。
+    自动描述符失败时调用方仍会把缺口交给补证 loop，而不是生成攻击帧。
+    """
+    context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
+    explicit: list[str] = []
+    for key in ("protocol_descriptor_id", "descriptor_id"):
+        value = context.get(key)
+        if isinstance(value, str):
+            explicit.append(value.strip())
+    protocol = context.get("protocol")
+    if isinstance(protocol, dict) and isinstance(protocol.get("descriptor_id"), str):
+        explicit.append(protocol["descriptor_id"].strip())
+    hints = " ".join(str(item or "") for item in finding.entry_hints).lower()
+    explicit.extend(re.findall(r"(?<![a-z0-9_])(?:hisysevent_eventraw|sp_daemon_text)(?![a-z0-9_])", hints))
+    for descriptor_id in explicit:
+        if not descriptor_id:
+            continue
+        try:
+            get_descriptor(descriptor_id)
+        except KeyError:
+            continue
+        return descriptor_id
+
+    # 入口发现器输出的 kind 是协议载体类型，不是服务名；只在完整 kind
+    # token 出现时提供兼容映射。裸的“UDP 127.0.0.1:8283”不会命中，必须
+    # 先由入口 loop 绑定 handler/分帧证据，或由 finding 显式指定 descriptor。
     for descriptor_id, entry_kinds in _DESCRIPTOR_ENTRY_KIND.items():
         try:
             get_descriptor(descriptor_id)
         except KeyError:
             continue
         for kind in entry_kinds:
-            if kind in hints or kind.replace("_", " ") in hints:
+            if re.search(rf"(?<![a-z0-9_]){re.escape(kind)}(?![a-z0-9_])", hints):
                 return descriptor_id
-    # sink 特征兜底：popen/网络端点 → sp_daemon_text；hisysevent → eventraw
-    sink = finding.sink.lower()
-    if "hisysevent" in hints or "hisysevent" in sink:
-        return "hisysevent_eventraw"
-    # event_bus 入口（Stage1 适配器对事件订阅型服务的产出形态）：当前描述符库
-    # 中唯一事件订阅协议族为 hisysevent_eventraw；domain/stringid 具体值仍由
-    # 侦查 loop 从设备规则表查证（hint 中 unknown/unknown 即此意图）
-    if "event_bus" in hints:
-        return "hisysevent_eventraw"
-    if "udp" in hints or "tcp" in hints or "8283" in hints:
-        return "sp_daemon_text"
     return ""
 
 
@@ -236,17 +254,18 @@ def _infer_entry_kind(descriptor_id: str, finding: FindingInput) -> str:
     return kinds[0] if kinds else ""
 
 
-# 已知协议族的设备侧标准端点（确定性填充来源之一；V4 会在设备上复核存在性）
-_DESCRIPTOR_ENDPOINTS: dict[str, str] = {
-    "hisysevent_eventraw": "/dev/unix/socket/hisysevent",
-    "sp_daemon_text": "127.0.0.1:8283",
-}
-
-
 def _infer_endpoint(descriptor_id: str, finding: FindingInput) -> str:
-    """端点推断：entry_hints 中显式出现（如 socket 路径/ host:port）优先，
-    否则用描述符族的标准端点。"""
+    """只从当前 finding/设备入口上下文读取端点，不按描述符猜标准端口。"""
     import re as _re
+    context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
+    for key in ("protocol_endpoint", "endpoint"):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    protocol = context.get("protocol")
+    if isinstance(protocol, dict) and isinstance(protocol.get("endpoint"), str):
+        if protocol["endpoint"].strip():
+            return protocol["endpoint"].strip()
     # unix socket 绝对路径
     for hint in finding.entry_hints:
         m = _re.search(r"(/dev/unix/socket/[\w./-]+)", hint)
@@ -255,7 +274,8 @@ def _infer_endpoint(descriptor_id: str, finding: FindingInput) -> str:
         m = _re.search(r"(\d+\.\d+\.\d+\.\d+:\d+)", hint)
         if m:
             return m.group(1)
-    return _DESCRIPTOR_ENDPOINTS.get(descriptor_id, "")
+    # descriptor_id 仅表示编码/分帧 schema，不包含当前服务实际 endpoint。
+    return ""
 
 
 def _legal_probe_values(descriptor_snapshot: dict[str, Any]) -> dict[str, Any]:

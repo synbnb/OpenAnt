@@ -287,6 +287,22 @@ def test_compile_result_exposes_library_fallback_source():
     assert payload["descriptor_resolution"]["auto_attempted"] is True
 
 
+def test_descriptor_match_does_not_guess_from_sink_or_port(tmp_path):
+    finding = _finding(
+        tmp_path,
+        hints=["UDP 127.0.0.1:8283"],
+    )
+    assert cc._match_descriptor(finding) == ""
+    finding.sink = "hisysevent event handler calls popen(cmd, \"r\")"
+    assert cc._match_descriptor(finding) == ""
+
+
+def test_descriptor_match_accepts_explicit_context_only(tmp_path):
+    finding = _finding(tmp_path, hints=["Unix datagram /dev/unix/socket/custom"])
+    finding.analysis_context["protocol_descriptor_id"] = "hisysevent_eventraw"
+    assert cc._match_descriptor(finding) == "hisysevent_eventraw"
+
+
 def test_strict_auto_descriptor_rejects_silent_builtin_fallback(monkeypatch, tmp_path):
     """严格模式不允许在自动合成失败后继续使用手写协议执行。"""
     source = tmp_path / "sp_thread_socket.cpp"
