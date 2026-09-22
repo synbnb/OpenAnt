@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前 Git 提交：`待本阶段提交后更新`
+> 当前 Git 提交：`f37dfea`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `4de39e2 fix: show dynamic deliverables before source preview` |
+| 最新提交 | `f37dfea feat: verify device service stability before dynamic testing` |
 | 工作区 | 已清理、无已跟踪文件未提交改动 |
 | 本轮聚焦 | 进度记录与既有实现验收，暂不重复实现已有模块 |
 
@@ -411,3 +411,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `0e5f98e` | 扩展 CLI/event_bus 合法探针自证，并完善自动 skeleton 的通用载体/身份识别；新增针对性测试后累计 80 项通过并已推送 |
 | 2026-09-22 | `f8ca6b4` | 将合法探针的实际载体、回执和失败原因写入 `probe_result` 与 `probe_result.json`；阶段测试累计 82 项通过并已推送 |
 | 2026-09-22 | `8293baf` | 新增样本级 `dynamic_baseline.json`：冻结源码哈希、版本字段、候选线索与 clean-room 输入边界；新增 4 项基线测试，联同已有回归累计 86 项通过；已推送 `origin/refactor/vulnfounder-brand` |
+| 2026-09-22 | `f37dfea` | 阶段 1 收口：隔离 HDC ANSI/诊断噪声，增加两次连续服务驻留复核，并完成官方 24 项逐样本 L0 真机预检归档；针对性测试 87 项通过，Go 服务端测试通过；已推送 `origin/refactor/vulnfounder-brand` |
