@@ -2150,6 +2150,7 @@
       const identity = ct.identity || {};
       const compileSummary = r.compile || {};
       const descriptorResolution = compileSummary.descriptor_resolution || r.descriptor_resolution || {};
+      const protocolEvidence = r.protocol_evidence || compileSummary.protocol_evidence || {};
       const descriptorSourceText = descriptorSourceLabel(descriptorResolution);
       const token = String(Date.now())+'-'+Math.random();
       state.dossierToken = token;
@@ -2218,6 +2219,29 @@
       if (discoveryEvidence.length) { chainSection.appendChild(el('div','dossier-section-title','入口发现与路由证据')); dossierList(chainSection,discoveryEvidence); }
       if (route.dispatch_conditions && route.dispatch_conditions.length) { chainSection.appendChild(el('div','dossier-section-title','分派条件')); dossierList(chainSection,route.dispatch_conditions); }
       if (route.state_flow && route.state_flow.length) { chainSection.appendChild(el('div','dossier-section-title','状态/事件路线')); dossierList(chainSection,route.state_flow); }
+      if (Object.keys(protocolEvidence).length) {
+        const evidenceSection = dossierSection(dossier,'三点五、协议源码证据（候选，需继续核验）');
+        const counts = protocolEvidence.counts || {};
+        evidenceSection.appendChild(kvGrid([
+          ['提取状态', protocolEvidence.status || '未完成'],
+          ['接收/发送/绑定', counts.transport != null ? counts.transport : 0],
+          ['端点/端口', counts.endpoints != null ? counts.endpoints : 0],
+          ['分帧/字段', counts.framing != null ? counts.framing : 0],
+          ['命令/消息分派', counts.dispatch != null ? counts.dispatch : 0],
+          ['校验/权限线索', counts.guards != null ? counts.guards : 0],
+        ]));
+        const evidenceList = [];
+        ['transport','endpoints','framing','dispatch','guards'].forEach(category=>{
+          (protocolEvidence[category] || []).slice(0,16).forEach(item=>{
+            evidenceList.push((item.path||'未知文件')+':'+(item.line||'?')+' · '+(item.signal||'线索')+' · '+(item.snippet||''));
+          });
+        });
+        if (evidenceList.length) dossierList(evidenceSection,evidenceList);
+        if (Array.isArray(protocolEvidence.missing_evidence) && protocolEvidence.missing_evidence.length) {
+          evidenceSection.appendChild(el('div','dossier-explain','当前仍缺少：'+protocolEvidence.missing_evidence.join('；')));
+        }
+        evidenceSection.appendChild(el('div','dossier-explain','这些内容只表示源码中找到的结构线索，不等同于已验证的协议字段或可发送报文；最终描述符仍需结合 Agent 读取的源码和设备侧合法探针自证。'));
+      }
 
       const commandSection = dossierSection(dossier,'四、构建、签名、安装、启动与触发命令');
       const compileNotes = (r.compile && Array.isArray(r.compile.notes)) ? r.compile.notes : (Array.isArray(r.compile_notes) ? r.compile_notes : []);

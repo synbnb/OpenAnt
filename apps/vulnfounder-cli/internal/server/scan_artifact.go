@@ -52,6 +52,7 @@ var scanArtifactRunArtifactSpecs = map[string]struct {
 	"finding_adapter.json": {"漏洞适配结果", "漏洞类型、危险操作点和入口线索的适配结果。", "json", 8 << 20},
 	"entry_discovery.json": {"入口发现结果", "协议匹配前 Agent Loop 找到的设备入口与待补证据。", "json", 8 << 20},
 	"device_fingerprint.json": {"设备前置确认", "本轮只读采集的设备版本、服务端点、进程身份与环境结论。", "json", 32 << 20},
+	"protocol_evidence.json": {"协议源码证据", "当前路由源码中提取的接收、端点、分帧、分派和校验线索。", "json", 16 << 20},
 	"compile_summary.json": {"契约编译摘要", "侦查、校验和编译状态的中间摘要。", "json", 16 << 20},
 	"contract.json":        {"设备测试契约", "最终交给 HAP 载荷和设备执行器的结构化契约。", "json", 16 << 20},
 	"verdict.json":         {"判定快照", "可达性、影响力和效果观察的阶段性判定。", "json", 16 << 20},
@@ -916,6 +917,9 @@ func scanArtifactDerivedResult(root, runDir, runID string) (map[string]any, erro
 		result["compile"] = compileSnap
 		if entryDiscovery, ok := compileSnap["entry_discovery"]; ok {
 			result["entry_discovery"] = entryDiscovery
+		}
+		if protocolEvidence, ok := compileSnap["protocol_evidence"]; ok {
+			result["protocol_evidence"] = protocolEvidence
 		}
 		if errorsValue, ok := compileSnap["errors"]; ok {
 			result["compile_errors"] = errorsValue

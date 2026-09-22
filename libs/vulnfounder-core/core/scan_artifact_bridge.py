@@ -699,6 +699,7 @@ class ScanDynamicResult:
     compile_notes: list[str] = field(default_factory=list)
     entry_discovery: dict[str, Any] = field(default_factory=dict)
     descriptor_resolution: dict[str, Any] = field(default_factory=dict)
+    protocol_evidence: dict[str, Any] = field(default_factory=dict)
     # L0 只读设备/版本/服务前置确认。它与协议编译、漏洞判定分开保存，
     # 避免把设备不存在误读成协议或预言机失败。
     device_fingerprint: dict[str, Any] = field(default_factory=dict)
@@ -728,6 +729,7 @@ class ScanDynamicResult:
             "compile_notes": self.compile_notes,
             "entry_discovery": self.entry_discovery,
             "descriptor_resolution": self.descriptor_resolution,
+            "protocol_evidence": self.protocol_evidence,
             "device_fingerprint": self.device_fingerprint,
             "run_id": self.run_id,
             "pattern": self.pattern,
@@ -1030,7 +1032,9 @@ def run_dynamic_from_scan(
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
     result.descriptor_resolution = dict(compile_result.descriptor_resolution)
+    result.protocol_evidence = dict(compile_result.protocol_evidence)
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
+    _write_run_snapshot(progress_path, "protocol_evidence.json", result.protocol_evidence)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
@@ -1202,7 +1206,9 @@ def run_dynamic_from_webui(
     result.compile_notes = list(compile_result.notes)
     result.entry_discovery = dict(compile_result.entry_discovery)
     result.descriptor_resolution = dict(compile_result.descriptor_resolution)
+    result.protocol_evidence = dict(compile_result.protocol_evidence)
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
+    _write_run_snapshot(progress_path, "protocol_evidence.json", result.protocol_evidence)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:

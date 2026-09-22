@@ -145,6 +145,9 @@ class CompileResult:
     # 描述符来源必须显式可审计：自动合成、内置库回退和未解析不能混成一个
     # descriptor_hit，否则一个使用手写协议的 CONFIRMED 会被误读为自动合成成功。
     descriptor_resolution: dict[str, Any] = field(default_factory=dict)
+    # 当前路由源码中提取的协议结构证据；它是候选证据，不等于已批准的
+    # descriptor，也不直接决定设备发送帧。
+    protocol_evidence: dict[str, Any] = field(default_factory=dict)
     # clean-room 运行标记：用于审计本轮是否禁用了历史 exemplar/设备事实库。
     clean_room: bool = False
 
@@ -157,6 +160,7 @@ class CompileResult:
             "notes": list(self.notes),
             "entry_discovery": dict(self.entry_discovery),
             "descriptor_resolution": dict(self.descriptor_resolution),
+            "protocol_evidence": dict(self.protocol_evidence),
             "clean_room": self.clean_room,
             "context_mode": "clean_room" if self.clean_room else "assisted",
             "context_sources": (
@@ -507,6 +511,7 @@ def _route_source_paths(finding: FindingInput, candidate: Any | None, repo_root:
 def _try_auto_descriptor(
     finding: FindingInput, candidate: Any | None, repo_root: Path, notes: list[str], hdc=None,
     on_event=None, resolution: dict[str, Any] | None = None,
+    evidence_out: dict[str, Any] | None = None,
 ) -> str:
     """为当前 route 生成并注册通用描述符；失败返回空字符串交给既有库。"""
     if candidate is None or str(getattr(candidate, "route_relevance", "unknown")) not in {"direct", "possible"}:
@@ -527,9 +532,30 @@ def _try_auto_descriptor(
         notes.append("自动协议描述符跳过：当前路由没有可读取源码证据")
         return ""
     try:
+        from .protocol_evidence import infer_protocol_evidence  # noqa: PLC0415
         from .descriptor_synthesizer import synthesize_descriptor  # noqa: PLC0415
 
         route = _route_binding_from_candidate(finding, candidate)
+        protocol_evidence = infer_protocol_evidence(
+            source_paths, repo_root=repo_root, route_context=route,
+        ).to_dict()
+        if evidence_out is not None:
+            evidence_out.update(protocol_evidence)
+        if resolution is not None:
+            resolution["protocol_evidence_status"] = protocol_evidence.get("status", "insufficient")
+            resolution["protocol_evidence_counts"] = dict(protocol_evidence.get("counts") or {})
+            resolution["protocol_evidence_missing"] = list(protocol_evidence.get("missing_evidence") or [])
+        notes.append(
+            "协议源码证据提取："
+            f"status={protocol_evidence.get('status', 'insufficient')} "
+            f"transport={len(protocol_evidence.get('transport', []))} "
+            f"endpoint={len(protocol_evidence.get('endpoints', []))} "
+            f"framing={len(protocol_evidence.get('framing', []))} "
+            f"dispatch={len(protocol_evidence.get('dispatch', []))}"
+        )
+        # Agent 看到结构化证据与原始 route 源码引用；不会把正则命中直接
+        # 升级成描述符事实，描述符合成器仍负责语义核对和设备侧自证。
+        route["protocol_evidence"] = protocol_evidence
         # fresh-session 重试时把上一场确定性失败原因带给描述符补证器；这只是
         # 诊断上下文，不会把失败结论当成协议事实。
         previous_feedback = (getattr(finding, "analysis_context", {}) or {}).get(
@@ -762,12 +788,14 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         "source": "unresolved",
         "auto_attempted": False,
     }
+    protocol_evidence: dict[str, Any] = {}
     if clean_room:
         notes.append("clean-room: 已禁用历史 exemplar 与设备事实库，仅使用当前 finding/源码证据")
 
     def _result(**kwargs) -> CompileResult:
         kwargs.setdefault("clean_room", clean_room)
         kwargs.setdefault("descriptor_resolution", dict(descriptor_resolution))
+        kwargs.setdefault("protocol_evidence", dict(protocol_evidence))
         return CompileResult(**kwargs)
 
     # 2. vuln_class → oracle 映射（未实现 → ORACLE_UNAVAILABLE，诚实降级）
@@ -923,6 +951,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
     auto_descriptor_id = _try_auto_descriptor(
         finding, selected_route_candidate, repo_root, notes, hdc=hdc,
         on_event=on_event, resolution=descriptor_resolution,
+        evidence_out=protocol_evidence,
     )
     if auto_descriptor_id:
         descriptor_id = auto_descriptor_id
