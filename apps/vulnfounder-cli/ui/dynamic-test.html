@@ -1679,6 +1679,9 @@
       dossierCard(grid,'进程事实',Array.isArray(fp.processes)?(fp.processes.length+' 个进程记录'):'未记录');
       dossierCard(grid,'Unix 端点',Array.isArray(fp.unix_sockets)?(fp.unix_sockets.length+' 条'):'未记录');
       dossierCard(grid,'TCP/UDP 端点',Array.isArray(fp.inet_sockets)?(fp.inet_sockets.length+' 条'):'未记录');
+      const health = fp.service_health && typeof fp.service_health === 'object' ? fp.service_health : {};
+      const healthLabels = {READY:'已就绪', NOT_READY:'未就绪', UNKNOWN:'状态未知', NOT_OBSERVED:'未观察到目标'};
+      dossierCard(grid,'目标服务健康状态',String(health.status||'NOT_OBSERVED')+' · '+(healthLabels[health.status]||'需继续核验'));
       section.appendChild(grid);
       if (Array.isArray(fp.status_reasons) && fp.status_reasons.length) {
         const reason = el('div','hint'); reason.textContent='结论依据：'+fp.status_reasons.join('；'); section.appendChild(reason);
@@ -1692,6 +1695,16 @@
           ul.appendChild(el('li',null,detail));
         });
         section.appendChild(el('div','kv-sub','当前条目关联的目标服务/端点')); section.appendChild(ul);
+      }
+      if (Array.isArray(health.start_attempts) && health.start_attempts.length) {
+        const start = el('div','hint');
+        start.textContent = '已按条目声明尝试启动：'+health.start_attempts.map(x =>
+          (x.argv||[]).join(' ')+'（返回码 '+(x.returncode!=null?x.returncode:'—')+'）').join('；');
+        section.appendChild(start);
+      } else if (health.mutation_policy) {
+        const policy = el('div','hint');
+        policy.textContent = '状态变更策略：'+(health.mutation_policy==='read_only_preflight'?'只读前置确认':health.mutation_policy);
+        section.appendChild(policy);
       }
       if (Array.isArray(fp.command_errors) && fp.command_errors.length) {
         const err = el('div','hint'); err.style.color='var(--bad)'; err.textContent='采集异常：'+fp.command_errors.map(x=>x.command+': '+x.error).join('；'); section.appendChild(err);
