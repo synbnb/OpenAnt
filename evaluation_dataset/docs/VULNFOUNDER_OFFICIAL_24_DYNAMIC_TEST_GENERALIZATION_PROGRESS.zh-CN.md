@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`eec8796`
+> 当前代码提交：`bd69184`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `f37dfea feat: verify device service stability before dynamic testing` |
+| 最新提交 | `bd69184 feat: add evidence-gated route arbitration loop` |
 | 工作区 | 已清理、无已跟踪文件未提交改动 |
 | 本轮聚焦 | 进度记录与既有实现验收，暂不重复实现已有模块 |
 
@@ -46,7 +46,7 @@ flowchart LR
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
-| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已完成 clean-room 编译；DP-02 仅保留既有基线** | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；23 项逐样本有独立产物，DP-06 复验验证了本地头文件端点证据扩展 | 23 项中只有 DP-16 达到 `ELIGIBLE`；其余停在协议复核，仍需后续输入载体与预言机阶段；不能把协议编译结果当作漏洞确认 |
+| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已完成 clean-room 编译；DP-02 仅保留既有基线** | entry discovery loop、候选路由复核 loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；23 项逐样本有独立产物，DP-06 复验验证了本地头文件端点证据扩展，DP-01 增量复验记录了多端点安全 defer | 23 项中只有 DP-16 达到 `ELIGIBLE`；其余停在协议复核，仍需后续输入载体与预言机阶段；不能把协议编译结果当作漏洞确认 |
 | 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
@@ -401,6 +401,57 @@ protocol_evidence：transport=14、endpoints=3、framing=116、dispatch=236、gu
 持续存在，UDP `127.0.0.1:8283`/`8285` 和 TCP `127.0.0.1:8284` 均保持绑定/监听。
 这只能说明本轮协议编译期间服务稳定，不代表任一样本的业务帧已经发送。
 
+### 3.14 候选路由复核 Agent Loop 增量实现
+
+23 项批次表明，11 个样本并不是“没有入口”，而是入口发现器同时找到了多个
+真实端点，却没有足够的业务分派证据把其中一个端点与当前 sink 唯一绑定。此前
+流程在这里直接进入歧义门禁；本次提交 `bd69184` 增加了独立的候选路由复核 loop。
+
+该 loop 的职责边界是：
+
+1. 只接收当前 finding、当前候选及其源码/设备证据，不读取历史 exemplar 或设备
+   事实库；
+2. 只允许 `read_file`、`grep`、`list_dir` 等源码读取工具，不生成协议字段、攻击
+   载荷或设备写命令；
+3. 候选已经提供源码区间时，先有界预读每个候选最多两个源码文件窗口，避免模型
+   第一轮直接 finalize 耗尽“必须先取证”的预算；
+4. 模型必须提交现有 candidate_id、可核验源码引用和选择理由；如果多个候选仍有
+   同等证据，只能 `defer`；
+5. 选择后不会把 `route_relevance=possible` 改写成 `direct`，复核证据只写入当前
+   route binding 的审计字段，后续描述符和契约校验仍然可以拒绝它。
+
+流程如下：
+
+```mermaid
+flowchart TD
+    A["入口发现：保留全部候选"] --> B{"是否已有明确 endpoint 或唯一 direct？"}
+    B -- 是 --> C["沿原有确定性选择"]
+    B -- 否 --> D["候选路由复核 Agent Loop"]
+    D --> E["预读候选源码窗口"]
+    E --> F["模型比较 handler/分派/sink"]
+    F --> G{"源码证据能区分一个候选？"}
+    G -- 是 --> H["选择现有 candidate_id，保留 possible 不确定性"]
+    G -- 否 --> I["defer：保留全部候选"]
+    H --> J["自动描述符与契约硬校验"]
+    I --> K["REQUIRES_PROTOCOL_REVIEW，等待补证，不发送业务帧"]
+```
+
+真实 DP-01 增量复验产物：
+
+```text
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_route_arbitration_dp01_retry2_20260922/DP-01
+结果：REQUIRES_PROTOCOL_REVIEW
+route_arbitration：deferred
+候选：8283/8284/8285 均保留
+复核原因：三者都能到达公共 HandleMsg，但当前源码没有证明哪一个端点的
+           收到字节会绑定到 LoadCmdWithLinkBreak 的 cmd 参数
+```
+
+这次 `defer` 是预期的安全结果，不是模型失败：它避免了把 8283、8284 或 8285
+中的任意一个按顺序猜成目标入口。复核审计中已经保存预读源码窗口、模型理由和
+三项候选的拒绝说明；后续若补齐命令分派或参数绑定证据，可在同一候选集合上重新
+复核，而无需修改样本专用规则。
+
 ---
 
 ## 4. 当前测试证据
@@ -461,6 +512,21 @@ python -m pytest -q \
 ```text
 105 passed in 0.31s
 ```
+
+候选路由复核增量回归：
+
+```text
+PYTHONPATH=libs/vulnfounder-core pytest -q libs/vulnfounder-core/tests/test_route_arbitration_loop.py libs/vulnfounder-core/tests/test_entry_discovery_loop.py libs/vulnfounder-core/tests/test_recon_loop.py libs/vulnfounder-core/tests/test_protocol_evidence.py libs/vulnfounder-core/tests/test_dynamic_runner_contract.py libs/vulnfounder-core/tests/test_generic_dynamic_oracles.py libs/vulnfounder-core/tests/test_artifact_serialization_contract.py
+```
+
+结果：72 passed in 0.17s。其中包括选择现有 candidate_id、拒绝越出候选源码
+范围的证据、模型无法区分时 defer、以及编译器在歧义门禁前调用 route arbitration
+的集成测试。
+
+真实开发板 DP-01 增量复验使用了当前设备的 SP_daemon 无参启动实例。复验前确认
+PID 25892 连续存在，并在两次间隔检查中确认 UDP 127.0.0.1:8283/8285 和 TCP
+127.0.0.1:8284 稳定。复验没有安装 HAP 或发送业务变异帧；它只验证协议编译和
+候选路由审计，因三端点同样缺少 sink 参数绑定证据而安全返回 deferred。
 
 Go 服务端回归：
 
@@ -582,3 +648,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `a4a4def` | 通用提取端口命名常量/字段赋值证据，避免只识别同一行 `htons(数字)`；新增端口常量回归并已推送 |
 | 2026-09-22 | `ee6cff5` | 新增官方 24 项阶段 2 clean-room 编译批处理器：自动发现样本、独立子进程、单项超时、逐项审计产物；已推送 |
 | 2026-09-22 | `eec8796` | 有界读取当前 route 的本地直接 include 头文件，DP-06 真实复验端点证据由 0 恢复为 3；回归 105 项通过并已推送 |
+| 2026-09-22 | `bd69184` | 新增证据门控的候选路由复核 Agent Loop；修复首轮直接 finalize 导致预算耗尽的问题；DP-01 真实增量复验安全 deferred；路由复核针对性回归 72 项通过；已推送 `origin/refactor/vulnfounder-brand` |
