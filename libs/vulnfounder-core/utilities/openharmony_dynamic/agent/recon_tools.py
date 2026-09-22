@@ -226,11 +226,19 @@ class ReconTools:
         rec = self.hdc.shell(argv, purpose="recon:shell")
         stdout = rec.stdout or ""
         if len(stdout) > MAX_CAT_BYTES:
-            # 大文件不静默截断——给出分页指令（head/tail 白名单内，LLM 可分页拼接）
+            # 长输出不静默截断——给出分页提示（head/tail 白名单内，LLM 可继续取证）。
+            # 只有 ``cat /absolute/path`` 才能生成带路径的分页命令；ps、id、
+            # /proc 网络表等命令可能只有一个 argv，不能无条件访问 argv[1]。
+            if argv[0] == "cat" and len(argv) >= 2:
+                paging_hint = (
+                    f"用 head/tail 分页读，例：head -n 200 {argv[1]} / "
+                    f"tail -n +201 {argv[1]} | head -n 200"
+                )
+            else:
+                paging_hint = "可用 head/tail 对原命令增加分页参数后重新读取"
             return {"ok": True, "truncated": True,
                     "output": stdout[:MAX_CAT_BYTES] + (
-                        f"\n\n[已截断：完整 {len(stdout)}B，用 head/tail 分页读，"
-                        f"例：head -n 200 {argv[1]} / tail -n +201 {argv[1]} | head -n 200]")}
+                        f"\n\n[已截断：完整 {len(stdout)}B；{paging_hint}]")}
         return {"ok": True, "output": stdout.strip() or "(空输出)", "truncated": False}
 
     # ------------------------------------------------------------------

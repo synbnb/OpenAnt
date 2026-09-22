@@ -117,6 +117,18 @@ def test_hdc_shell_allows_readonly_and_counts_budget():
     assert len(hdc.calls) == 3  # cat + date*2 成功执行 3 次（第4次被预算拒绝）
 
 
+def test_hdc_shell_truncates_long_single_argument_command_without_index_error():
+    # ps 在真实开发板上可能输出数千行，但 argv 只有一个元素；长输出提示不能
+    # 无条件访问 argv[1]，否则入口发现会把设备事实误报成 IndexError。
+    hdc = FakeHdc("pid cmd\n" + ("1 init\n" * 2000))
+    tools = rt.ReconTools(hdc=hdc, repo_root=Path("/tmp"), max_device_commands=10)
+    out = tools.call("hdc_shell", {"argv": ["ps"]})
+    assert out["ok"] is True
+    assert out["truncated"] is True
+    assert "IndexError" not in out["output"]
+    assert "完整" in out["output"]
+
+
 def test_hdc_shell_rejects_placeholder_and_dotdot():
     hdc = FakeHdc()
     tools = rt.ReconTools(hdc=hdc, repo_root=Path("/tmp"), max_device_commands=10)
