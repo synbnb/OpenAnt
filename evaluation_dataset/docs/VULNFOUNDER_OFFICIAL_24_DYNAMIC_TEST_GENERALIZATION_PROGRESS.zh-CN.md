@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`513a294`
+> 当前代码提交：`eec8796`
 
 ---
 
@@ -46,7 +46,7 @@ flowchart LR
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
-| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **DP-02 clean-room 冒烟已完成；全量 24 项仍待回归** | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；本轮自动生成了协议描述符，并诚实停在协议复核 | 尚需以 24 项为对象完成协议候选覆盖统计；不能把自动描述符生成通过等同于输入已送达或漏洞确认 |
+| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已完成 clean-room 编译；DP-02 仅保留既有基线** | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；23 项逐样本有独立产物，DP-06 复验验证了本地头文件端点证据扩展 | 23 项中只有 DP-16 达到 `ELIGIBLE`；其余停在协议复核，仍需后续输入载体与预言机阶段；不能把协议编译结果当作漏洞确认 |
 | 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
@@ -334,6 +334,69 @@ HDC：/Users/shiyu/harmonyos-sdk/openharmony/9/toolchains/hdc
 模型查找新证据、固化 note 或 finalize，而不会静默消耗设备/模型预算。该规则不识别
 服务名、端口或漏洞类别，也不会把“相似”动作误合并。
 
+### 3.12 阶段 2 官方其余 23 项 clean-room 编译批次
+
+考虑到 `DP-02` 已经有此前独立确认的成功运行，本轮没有重复把它当作泛化提升证据；
+批处理器自动从官方样本目录发现其余 `DP-01、DP-03～DP-18、HV-01～HV-06`，对每个
+样本执行相同的 clean-room 协议编译流程。批处理器本身不维护“样本 → 协议帧”映射，
+也不安装 HAP、发送业务变异帧或修改设备；每项在独立子进程内运行，单项 900 秒超时，
+最多两个并发，因而单项模型/设备异常不会覆盖其他样本的产物。
+
+```text
+批次产物：/Users/shiyu/.openant/dynamic_generalization_stage2_official23_20260922
+批次配置：batch_config.json
+逐项结果：<sample_id>/compile_summary.json
+设备命令：<sample_id>/hdc_ledger.jsonl
+模型/阶段事件：<sample_id>/events.jsonl、child.log
+汇总：summary.json、progress.json
+```
+
+批次终态（23/23 均有独立结果，0 超时，0 子进程错误）：
+
+| 终态 | 数量 | 样本 |
+|---|---:|---|
+| `ELIGIBLE` | 1 | `DP-16` |
+| `REQUIRES_PROTOCOL_REVIEW`（自动描述符已生成，但字段/载体/预言机契约未闭环） | 6 | `DP-06`、`DP-11`、`DP-12`、`HV-02`、`HV-05`、`HV-06` |
+| `REQUIRES_PROTOCOL_REVIEW`（多端点歧义，未静默选择端点） | 11 | `DP-01`、`DP-03`、`DP-04`、`DP-05`、`DP-08`、`DP-09`、`DP-13`、`DP-14`、`DP-15`、`HV-03`、`HV-04` |
+| `REQUIRES_PROTOCOL_REVIEW`（没有可匹配的协议族/入口线索） | 5 | `DP-07`、`DP-10`、`DP-17`、`DP-18`、`HV-01` |
+
+其中 7 项在批次中生成了 `auto_generated` 描述符（`DP-06`、`DP-11`、`DP-12`、
+`DP-16`、`HV-02`、`HV-05`、`HV-06`），但只有 `DP-16` 通过了整个契约编译闸门。
+这正是“自动生成协议描述符”与“已经能够安全发送一条完整测试帧”之间的差异：例如
+`DP-11/DP-12` 的描述符证据通过后，仍因交付物表单结构未闭合被拒绝；`HV-02/HV-06`
+需要 event_bus 的合法 argv 载体证据；`HV-05` 缺少完整第二帧；`DP-06` 的第一帧
+不满足源码要求的 `::` key/value 结构。
+
+批次原始结果中多端点样本都保留了全部候选及其 `route_relevance`，没有因为存在
+8283/8284/8285 三个端点就默认选第一个。该行为避免把同一服务的另一个入口错误地
+拼到当前 finding，但也明确暴露了下一步需要补强的能力：由当前候选攻击链、处理器
+和 sink 证据完成 route 选择，而不是让用户事后手工猜端点。
+
+### 3.13 本地协议头文件证据扩展复验
+
+提交 `eec8796` 后，协议证据提取器会从当前 route 源文件中有界跟踪仓库内的直接
+`#include "..."`，最多 32 个文件，不解析系统头、不按文件名全仓搜索，也不继续递归
+整棵公共头文件树。对 SmartPerf 的 `sp_server_socket.cpp`/`sp_thread_socket.cpp`
+route，证据现在能读取 `include/sp_server_socket.h` 中的：
+
+```text
+udpPort = 8283
+tcpPort = 8284
+udpExPort = 8285
+```
+
+DP-06 在该修改后的真实 clean-room 复验产物为：
+
+```text
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_dp06_after_include_fix
+descriptor：auto_5a17428c52bae350（APPROVED）
+protocol_evidence：transport=14、endpoints=3、framing=116、dispatch=236、guards=243
+最终状态：REQUIRES_PROTOCOL_REVIEW
+```
+
+这项复验只证明端点常量可以进入当前 route 的证据 bundle；它没有证明业务字段能够
+到达危险参数，更没有执行 HAP 或产生 `CONFIRMED`。
+
 ---
 
 ## 4. 当前测试证据
@@ -388,6 +451,21 @@ python -m pytest -q \
 系统不会再次调用工具，而是写入 `duplicate` 审计事件并把“请查新证据或 finalize”的
 反馈放回下一轮模型上下文。原有的“LLM 不可用”单测也改为显式注入空绑定，避免本机
 存在模型配置时意外发起网络请求；这只是测试隔离，不会改变生产环境的真实模型调用。
+
+在加入本地 route include 证据扩展后，重新执行同一组回归，结果为：
+
+```text
+105 passed in 0.31s
+```
+
+此外，官方 23 项批处理的真实执行结果见第 3.12 节；批次使用的命令为：
+
+```text
+PYTHONPATH=libs/vulnfounder-core python \
+  evaluation_dataset/vulnerability/run_official24_stage2_compile.py \
+  --output /Users/shiyu/.openant/dynamic_generalization_stage2_official23_20260922 \
+  --exclude DP-02 --workers 2 --timeout 900
+```
 
 ---
 
@@ -490,3 +568,7 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `8293baf` | 新增样本级 `dynamic_baseline.json`：冻结源码哈希、版本字段、候选线索与 clean-room 输入边界；新增 4 项基线测试，联同已有回归累计 86 项通过；已推送 `origin/refactor/vulnfounder-brand` |
 | 2026-09-22 | `f37dfea` | 阶段 1 收口：隔离 HDC ANSI/诊断噪声，增加两次连续服务驻留复核，并完成官方 24 项逐样本 L0 真机预检归档；针对性测试 87 项通过，Go 服务端测试通过；已推送 `origin/refactor/vulnfounder-brand` |
 | 2026-09-22 | `513a294` | 阶段 2 通用侦查循环改进：抑制相同 `tool + args` 重复动作、保留 duplicate 审计和模型反馈；DP-02 clean-room 真实协议编译冒烟完成但诚实停在 `REQUIRES_PROTOCOL_REVIEW`；阶段 2 相关回归 103 项通过，已推送 `origin/refactor/vulnfounder-brand` |
+| 2026-09-22 | `338576f` | 补充 DP-02 clean-room 冒烟产物、阻断原因和重复动作审计说明；已推送 |
+| 2026-09-22 | `a4a4def` | 通用提取端口命名常量/字段赋值证据，避免只识别同一行 `htons(数字)`；新增端口常量回归并已推送 |
+| 2026-09-22 | `ee6cff5` | 新增官方 24 项阶段 2 clean-room 编译批处理器：自动发现样本、独立子进程、单项超时、逐项审计产物；已推送 |
+| 2026-09-22 | `eec8796` | 有界读取当前 route 的本地直接 include 头文件，DP-06 真实复验端点证据由 0 恢复为 3；回归 105 项通过并已推送 |
