@@ -34,6 +34,9 @@ _RECON_SYSTEM_PROMPT = (
     '  {"tool": "list_dir", "args": {"path": "services"}}\n'
     '  {"tool": "hilog_grep", "args": {"tag": "FreezeDetector", "pattern": "create freezeExt"}}\n'
     '  {"tool": "hdc_shell", "args": {"argv": ["cat", "/system/etc/hiview/freeze_rules.xml"]}}   # 只读白名单\n'
+    "hdc_shell 的 argv 必须是一个白名单只读命令及其参数；禁止 sh/bash -c、分号、管道、"
+    "重定向或把多个 cat 拼成一条命令。需要多个设备文件时分轮分别调用 cat；工具拒绝后"
+    "不要重复越权组合命令，应改用允许的单条命令。\n"
     '  {"tool": "write_note", "args": {"text": "实测：hilog tag 为 C02d01/FreezeDetector（hilog_grep 证据）"}}\n'
     '  {"tool": "read_notes", "args": {}}\n'
     '  {"tool": "finalize", "args": {"draft": {...契约草案 JSON...}, "facts": {"hilog_tag": "..."}}}\n'

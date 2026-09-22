@@ -45,6 +45,9 @@ ENTRY_DISCOVERY_SYSTEM_PROMPT = (
     '{"tool":"read_notes","args":{}}\n'
     '{"tool":"finalize","args":{"candidates":[...],"missing_evidence":[...]}}\n'
     "工具仅可读取源码和设备事实；不得执行写入、启动、停止、安装、注入或破坏性命令。\n"
+    "hdc_shell 的 argv 必须是一个白名单只读命令及其参数；禁止使用 sh/bash -c、分号、管道、\n"
+    "重定向或把多个 cat 拼成一条命令。需要同时查看多个文件时，分轮分别调用 cat；工具拒绝后\n"
+    "不要重复同一越权组合命令，应改用允许的单条命令。\n"
     "候选格式：\n"
     '{"kind":"hap_udp|hap_tcp|unix_dgram|unix_stream|event_bus|cli",'
     '"endpoint":"127.0.0.1:8283 或 /dev/unix/socket/name 或 domain/id 或命令名",'
