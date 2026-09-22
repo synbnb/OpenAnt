@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`bd26ca9`
+> 当前代码提交：`1e57634`
 
 ---
 
@@ -591,6 +591,44 @@ PYTHONPATH=libs/vulnfounder-core .venv/bin/python3 -m pytest -q \
 当前定向复验的 `ELIGIBLE` 样本为 DP-06、DP-10、DP-11、DP-12、DP-16、DP-18；
 这仍然只是契约可执行性指标，不能替代 24 项动态效果确认。
 
+### 3.20 设备只读长输出修复与 HV-05 复验
+
+DP-10 之后继续复测 HV-05 时，入口发现模型选择了只读 `ps`。真实开发板的进程表约
+9.8KB，超过侦查工具的单次 4KB 回传上限。原实现只为 `cat /绝对路径` 设计分页提示，
+却对所有长输出无条件读取 `argv[1]`；而 `ps` 只有一个命令参数，因此把正常的长输出
+误报成 `IndexError`。这会让设备进程事实丢失，并可能把后续“未发现入口”误解成代码或
+服务不存在。
+
+现已将截断处理改为通用分支：
+
+- `cat` 且带绝对路径时，给出带路径的 `head/tail` 分页建议；
+- `ps`、`id`、`/proc/net/*` 等单参数或无参数命令只返回安全的通用分页提示；
+- 无论命令参数数量如何，都保留 `ok=true`、`truncated=true`、原始输出摘要和审计记录，
+  不再因提示文本构造触发异常。
+
+新增回归覆盖“单参数命令长输出”场景；侦查相关回归结果为：
+
+```text
+76 passed in 0.27s
+```
+
+随后在同一设备和 clean-room 条件下重跑 HV-05：
+
+```text
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_psfix_hv05_20260922/HV-05
+结果：REQUIRES_PROTOCOL_REVIEW
+入口候选：2 个 event_bus 候选
+路由复核：deferred（两个事件类型均进入相同 OnEvent → StartLogCollect → SYS_RQ 路径，
+                         当前源码不能唯一选择一个）
+设备命令：2 条只读命令，未再出现 IndexError
+设备变更：0；HAP/业务载荷：未发送
+```
+
+本次结果说明工具层缺陷已经修复，入口发现能够保留两个有源码证据的候选；最终没有
+静默选择 `PLUGIN_MAINTENANCE` 或 `TELEMETRY_EVENT`，因为当前证据尚未证明哪个事件
+发布者和权限能到达目标 `SYS_RQ` 分支。该样本仍需补充事件发布者、权限和设备事件事实，
+不能把 `REQUIRES_PROTOCOL_REVIEW` 解释成设备上不存在对应问题。
+
 ### 3.15 候选路由复核的官方 23 项全量复跑
 
 在候选路由复核 loop 完成后，重新对除 DP-02 外的其余 23 个官方样本执行同一份
@@ -889,3 +927,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `9928166` | 批处理器同时写入 `VULNFOUNDER_*` 与兼容的 `OPENANT_*` LLM 限制变量，确保品牌化配置不会覆盖本轮显式的超时/重试边界；OpenAI/描述符回归 `102 passed in 0.68s`；已推送 |
 | 2026-09-22 | `5711c7a` | 批处理器新增通用 `--samples` 子集选择器；六样本 clean-room 聚焦复验完成，6/6 有产物且 0 timeout/错误，其中 DP-18 达到 `ELIGIBLE`，其余阻断原因均按证据保留；代码已推送 |
 | 2026-09-22 | `bd26ca9` | 动态 Agent 新增 `FindingInput.to_prompt_dict()`，隔离 Stage 1 攻击叙述与协议恢复提示，仅保留当前 finding 的结构事实；新增提示边界回归后 75 项通过；DP-10 clean-room 重测达到 `ELIGIBLE`，自动描述符 `auto_b5967aaf8303d111` 并完成 UDP 8283 合法探针自证 |
+| 2026-09-22 | `1e57634` | 修复侦查工具对 `ps` 等单参数长输出的通用截断异常；新增回归后侦查相关测试 76 项通过；HV-05 真机 clean-room 复验不再出现 `IndexError`，保留 2 个 event_bus 候选并按证据 deferred |
