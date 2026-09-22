@@ -7,7 +7,9 @@ bundle 名固定为签名 profile 允许的 com.security.research.trigger。
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -135,9 +137,21 @@ class HapTransport:
             f"sdk.dir={_TOOLCHAIN_ROOT / 'sdk'}\nnodejs.dir={_NODE}\n", encoding="utf-8"
         )
 
+        # Hvigor 默认把全局缓存写到 ``$HOME/.hvigor``。在 Web/批量运行中，
+        # 该目录可能属于另一个用户、被系统策略设为只读，或者被多个并发
+        # 构建共享，最终表现为 HAP 尚未开始编译就因 EPERM 失败。把缓存
+        # 绑定到本次契约的隔离工作目录：
+        #   * 不修改宿主机用户目录；
+        #   * 不让不同样本共享项目缓存；
+        #   * build log 中可以根据 out_dir 复现同一份输入。
+        # Hvigor 6.23 的官方入口是 HVIGOR_USER_HOME，而不是仅设置 HOME。
+        hvigor_user_home = out_dir / ".hvigor-user"
+        hvigor_user_home.mkdir(parents=True, exist_ok=True)
+        self._stage_offline_hvigor_dependencies(project, hvigor_user_home)
         env = {
-            **dict(__import__("os").environ),
+            **dict(os.environ),
             "NODE_HOME": str(_NODE),
+            "HVIGOR_USER_HOME": str(hvigor_user_home),
         }
         build = subprocess.run(
             [str(_HVIGORW), "assembleApp", "--no-daemon"],
@@ -182,6 +196,64 @@ class HapTransport:
                 "签名未产出，日志尾部:\n" + sign.stdout.decode("utf-8", errors="replace")[-1500:]
             )
         return signed
+
+    @staticmethod
+    def _stage_offline_hvigor_dependencies(project: Path, hvigor_user_home: Path) -> None:
+        """为一次 HAP 构建准备工具链自带的离线依赖。
+
+        command-line-tools 包含 Hvigor 和 OpenHarmony 插件本体，但默认
+        ``hvigorw`` 仍会先尝试联网下载 pnpm；在离线、受限网络或 Web 服务
+        运行环境中，这会让一个没有第三方依赖的最小 HAP 也在构建前失败。
+        这里不把任何样本协议写入工程，只复用当前工具链的构建插件，并把
+        pnpm wrapper 放到本次运行自己的缓存目录。项目若声明了额外依赖，
+        仍由 Hvigor 正常报告其缺失，不会伪造安装结果。
+        """
+        hvigor_pkg = _TOOLCHAIN_ROOT / "hvigor/hvigor"
+        plugin_pkg = _TOOLCHAIN_ROOT / "hvigor/hvigor-ohos-plugin"
+        if not (hvigor_pkg.is_dir() and plugin_pkg.is_dir()):
+            return
+
+        ohos_modules = project / "node_modules" / "@ohos"
+        ohos_modules.mkdir(parents=True, exist_ok=True)
+        for name, target in (("hvigor", hvigor_pkg), ("hvigor-ohos-plugin", plugin_pkg)):
+            link = ohos_modules / name
+            if link.exists() or link.is_symlink():
+                continue
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError:
+                # 某些受限文件系统不允许符号链接；复制工具包仍比联网失败
+                # 可复现，但仅对这两个固定的工具链包做复制，不复制用户依赖。
+                shutil.copytree(target, link, dirs_exist_ok=True)
+
+        pnpm_bin = shutil.which("pnpm")
+        if not pnpm_bin:
+            embedded = _NODE / "lib/node_modules/corepack/shims/pnpm"
+            pnpm_bin = str(embedded) if embedded.exists() else None
+        if not pnpm_bin:
+            return
+
+        wrapper_tools = hvigor_user_home / "wrapper/tools"
+        wrapper_bin = wrapper_tools / "node_modules/.bin"
+        wrapper_bin.mkdir(parents=True, exist_ok=True)
+        pnpm_pkg = wrapper_tools / "node_modules/pnpm"
+        pnpm_pkg.mkdir(parents=True, exist_ok=True)
+        # hvigor 只用 require.resolve 判断 wrapper 是否已准备好；实际执行
+        # 仍通过 .bin/pnpm 指向当前主机已有的 pnpm，避免伪造命令输出。
+        (pnpm_pkg / "package.json").write_text(
+            '{"name":"pnpm","version":"10.33.2","main":"package.json"}\n',
+            encoding="utf-8",
+        )
+        pnpm_link = wrapper_bin / "pnpm"
+        if not pnpm_link.exists() and not pnpm_link.is_symlink():
+            try:
+                pnpm_link.symlink_to(pnpm_bin)
+            except OSError:
+                pnpm_link.write_text(
+                    f"#!/bin/sh\nexec {shlex.quote(pnpm_bin)} \"$@\"\n",
+                    encoding="utf-8",
+                )
+                pnpm_link.chmod(0o755)
 
     # ------------------------------------------------------------------
     def install_and_start(self, hap: Path) -> SendResult:

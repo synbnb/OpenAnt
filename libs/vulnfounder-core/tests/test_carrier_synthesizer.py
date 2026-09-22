@@ -161,3 +161,56 @@ def test_native_synthesize_offline(tmp_path, monkeypatch):
     assert res.status == "REQUIRES_HUMAN_APPROVAL"
     assert res.errors and "交叉编译失败" in res.errors[0]
     assert "交叉编译器不存在" in res.build_log_tail
+
+
+def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
+    """L2 自定义载体不能绕过 HAP 传输层的离线/隔离构建设置。"""
+    import utilities.openharmony_dynamic.transports.hap as hap
+
+    template = tmp_path / "template"
+    (template / "Entry/src/main/ets/pages").mkdir(parents=True)
+    (template / "Entry/src/main/ets/pages/Index.ets").write_text("old", encoding="utf-8")
+    monkeypatch.setattr(cs, "_HAP_PROJECT", template)
+
+    toolchain = tmp_path / "toolchain"
+    hvigorw = toolchain / "hvigor/bin/hvigorw"
+    node = toolchain / "node"
+    sign_jar = toolchain / "hap-sign-tool.jar"
+    sdk = toolchain / "sdk"
+    for path in (hvigorw, node, sign_jar):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    sdk.mkdir()
+    cert_dir = tmp_path / "cert"
+    cert_dir.mkdir()
+    monkeypatch.setattr(hap, "_HVIGORW", hvigorw)
+    monkeypatch.setattr(hap, "_NODE", node)
+    monkeypatch.setattr(hap, "_SIGN_JAR", sign_jar)
+    monkeypatch.setattr(hap, "_TOOLCHAIN_ROOT", toolchain)
+    monkeypatch.setattr(hap, "CERT_DIR", cert_dir)
+    monkeypatch.setattr(cs, "_TOOLCHAIN_ROOT", toolchain)
+
+    staged = []
+    monkeypatch.setattr(
+        hap.HapTransport,
+        "_stage_offline_hvigor_dependencies",
+        staticmethod(lambda project, home: staged.append((project, home))),
+    )
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        if argv[0] == str(hvigorw):
+            (Path(kwargs["cwd"]) / "entry-default-unsigned.hap").write_bytes(b"unsigned")
+        else:
+            out_file = Path(argv[argv.index("-outFile") + 1])
+            out_file.write_bytes(b"signed")
+        return type("Completed", (), {"stdout": b"ok", "returncode": 0})()
+
+    monkeypatch.setattr(cs.subprocess, "run", fake_run)
+    signed, log = cs._build_hap(GOOD_ETS, contract_id="carrier-cache", out_root=tmp_path / "runs")
+
+    assert signed is not None and signed.read_bytes() == b"signed"
+    assert staged and staged[0][1].name == ".hvigor-user"
+    assert calls[0][1]["env"]["HVIGOR_USER_HOME"] == str(staged[0][1])
+    assert calls[0][1]["env"]["NODE_HOME"] == str(node)

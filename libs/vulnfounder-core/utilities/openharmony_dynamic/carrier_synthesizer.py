@@ -233,6 +233,7 @@ def validate_native_carrier(source: str) -> tuple[dict[str, Any], list[str]]:
 def _build_hap(source: str, *, contract_id: str, out_root: Path | None = None) -> tuple[Path | None, str]:
     """载体 Index.ets → hvigor 构建 → 签名。返回 (signed_hap | None, log_tail)。"""
     from .transports.hap import (
+        HapTransport,
         _HVIGORW, _NODE, _SIGN_JAR, _TEMPLATE_PROJECT, CERT_DIR, KEY_ALIAS, KEY_PWD,
     )
 
@@ -250,9 +251,20 @@ def _build_hap(source: str, *, contract_id: str, out_root: Path | None = None) -
     (project / "local.properties").write_text(
         f"sdk.dir={_TOOLCHAIN_ROOT / 'sdk'}\nnodejs.dir={_NODE}\n", encoding="utf-8")
 
+    # 载体合成和普通 HAP 传输必须使用同一套隔离构建环境。否则普通
+    # 探针已经能离线构建，但 L2 自定义 Index.ets 又会落回宿主机
+    # ~/.hvigor，并在权限或联网受限时失败。
+    hvigor_user_home = out_dir / ".hvigor-user"
+    hvigor_user_home.mkdir(parents=True, exist_ok=True)
+    HapTransport._stage_offline_hvigor_dependencies(project, hvigor_user_home)
+
     import os
 
-    env = {**dict(os.environ), "NODE_HOME": str(_NODE)}
+    env = {
+        **dict(os.environ),
+        "NODE_HOME": str(_NODE),
+        "HVIGOR_USER_HOME": str(hvigor_user_home),
+    }
     build = subprocess.run(
         [str(_HVIGORW), "assembleApp", "--no-daemon"], cwd=str(project), env=env,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

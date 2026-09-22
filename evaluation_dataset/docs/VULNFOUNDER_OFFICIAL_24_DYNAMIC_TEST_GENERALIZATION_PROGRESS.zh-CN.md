@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`bd69184`
+> 当前代码提交：`bd69184`（本轮离线构建隔离改动尚未提交）
 
 ---
 
@@ -47,7 +47,7 @@ flowchart LR
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
 | 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已完成 clean-room 编译；DP-02 仅保留既有基线** | entry discovery loop、候选路由复核 loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；23 项逐样本有独立产物，DP-06 复验验证了本地头文件端点证据扩展，DP-01 增量复验记录了多端点安全 defer | 23 项中只有 DP-16 达到 `ELIGIBLE`；其余停在协议复核，仍需后续输入载体与预言机阶段；不能把协议编译结果当作漏洞确认 |
-| 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
+| 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入；HAP 与 L2 自定义载体均已接入隔离/离线 Hvigor 构建 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示；DP-06 已完成一次真机合法探针闭环 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体；合法探针送达不等于风险效果确认 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
 
@@ -489,6 +489,54 @@ clean-room 阶段 2 编译流程。批处理不安装 HAP、不发送业务帧�
 DP-01 的本轮入口发现返回 `no_candidate`，审计中记录了设备 TCP 端点未核实、组合
 shell 查询被 HDC 白名单拒绝以及 socket 到 sink 参数绑定未证明等缺口。该样本没有
 被错误升级为可执行协议，也没有因此判定设备上不存在对应风险。
+
+### 3.16 HAP 构建隔离与 DP-06 真机合法探针复验
+
+阶段 2 产物中 DP-06 已经达到 `ELIGIBLE`，因此本轮对它执行了一次真实设备运行，
+目的仅是验证“自动契约 → HAP 构建 → 安装 → 启动 → 发送合法探针 → 设备日志自证”
+这一条通用载体链路，不把合法探针当成漏洞利用载荷。
+
+本轮先修复了 HAP 构建的两个通用问题：
+
+1. `HapTransport.build()` 为每个契约建立独立的 `HVIGOR_USER_HOME`，不再依赖宿主机
+   用户目录下可能不可写或被并发任务共享的 `.hvigor` 缓存。
+2. HAP 传输和 L2 自定义载体合成器都复用工具链自带的 Hvigor/OpenHarmony 插件，
+   并在本轮缓存目录准备本地 pnpm wrapper；不向 npm registry 发起安装请求。项目
+   自己声明的额外依赖仍由 Hvigor 正常报告，不会伪造安装成功。
+
+代码级回归：
+
+```text
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python3 -m pytest -q \
+  libs/vulnfounder-core/tests/test_carrier_synthesizer.py \
+  libs/vulnfounder-core/tests/test_hap_transport_build_cache.py \
+  libs/vulnfounder-core/tests/test_hap_transport.py
+结果：21 passed in 0.11s
+```
+
+DP-06 真实设备复验：
+
+```text
+运行 ID：vf-20260922165930-a2ae5e
+设备：150100424a5444345209d945be14b900
+契约：GEN-DP-06
+端点：UDP 127.0.0.1:8283
+载体：签名 HAP（自动生成描述符快照的合法探针）
+设备证据：HAP_POC_START GEN-DP-06；HAP_POC_SENT GEN-DP-06
+实际帧：app_start_collect；app_start_collect
+终态：INPUT_DELIVERED / SINK_CONTROLLED / EFFECT_ABSENT / NOT_REPRODUCED
+预言机：resource_delta（RSS before=0、after=0、delta=0）
+```
+
+这次运行证明 HAP 载体和设备交付链路已经越过此前的 EPERM/网络依赖阻断，且发送
+的帧来自当前自动描述符的 `legal_probe`，不是历史样本帧或人工攻击帧。但它没有产生
+资源变化，因此不能写成 `CONFIRMED`，也不能说明 DP-06 的风险在设备上存在或不存在。
+它只说明：当协议契约能够提供无害探针时，运行器可以在当前开发板上完成一次可审计的
+合法请求闭环。
+
+复验结束后设备服务状态仍正常：`SP_daemon` PID 为 `27045`，UDP `127.0.0.1:8283`
+和 `127.0.0.1:8285`、TCP `127.0.0.1:8284` 均处于监听状态。本轮没有重启服务，
+因为它在检查时已经运行。
 
 ---
 
