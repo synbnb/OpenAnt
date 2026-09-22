@@ -87,6 +87,8 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
     process_service = next(item for item in fp.services if item.kind == "process")
     assert process_service.binary_path == "/system/bin/service_daemon"
     assert process_service.binary_sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    assert fp.service_health["status"] == "READY"
+    assert fp.service_health["ready"] is True
 
     missing = _FakeHDC(outputs)
     fp2 = collect_device_fingerprint(
@@ -96,6 +98,7 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
         reference={"source_revision": "source-1"},
     )
     assert fp2.status == SERVICE_UNAVAILABLE
+    assert fp2.service_health["status"] == "NOT_READY"
 
     unknown = _FakeHDC(outputs)
     fp3 = collect_device_fingerprint(unknown, targets=[])

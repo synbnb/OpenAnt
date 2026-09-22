@@ -275,6 +275,9 @@ class DeviceFingerprint:
     raw_hashes: dict[str, str] = field(default_factory=dict)
     status: str = UNKNOWN
     status_reasons: list[str] = field(default_factory=list)
+    # 仅表示本次只读采集观察到的服务状态；不会把“端点不存在”解释成
+    # 协议错误，也不会在没有显式授权时自动启动服务。
+    service_health: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -295,6 +298,7 @@ class DeviceFingerprint:
             "raw_hashes": dict(self.raw_hashes),
             "status": self.status,
             "status_reasons": list(self.status_reasons),
+            "service_health": dict(self.service_health),
         }
 
 
@@ -352,6 +356,37 @@ def _classify(
     if expected_source or expected_device:
         return MATCHED, ["版本字段和目标服务证据均通过"]
     return VERSION_UNVERIFIED, ["未提供可比对的源码或设备版本基线"]
+
+
+def summarize_service_health(services: Iterable[ServiceObservation]) -> dict[str, Any]:
+    """根据已经采集的服务观察生成通用健康状态。
+
+    这一步只聚合事实，不执行启动、重启或探测载荷。目标服务没有提供时
+    返回 ``NOT_OBSERVED``；有明确缺失时返回 ``NOT_READY``；全部目标均已
+    观察到且正在运行才返回 ``READY``。状态单独记录，避免把环境问题混入
+    ``MISMATCH`` 或协议编译错误。
+    """
+    rows = [item for item in services if item.kind in {"process", "unix", "inet"}]
+    if not rows:
+        return {"status": "NOT_OBSERVED", "targets": [], "missing": [], "ready": False}
+    missing = [item.target for item in rows if item.present is False or item.running is False]
+    unknown = [item.target for item in rows if item.present is None or item.running is None]
+    if missing:
+        state = "NOT_READY"
+    elif unknown:
+        state = "UNKNOWN"
+    else:
+        state = "READY"
+    return {
+        "status": state,
+        "ready": state == "READY",
+        "targets": [item.target for item in rows],
+        "missing": missing,
+        "unknown": unknown,
+        "observations": [item.to_dict() for item in rows],
+        "mutation_performed": False,
+        "mutation_policy": "read_only_preflight",
+    }
 
 
 def collect_device_fingerprint(
@@ -458,6 +493,7 @@ def collect_device_fingerprint(
 
     # 将原始命令输出只保存摘要哈希，避免把完整进程/网络表重复塞进每个模型提示。
     fp.raw_hashes = {key: _sha256(value) for key, value in outputs.items() if value}
+    fp.service_health = summarize_service_health(fp.services)
     fp.status, fp.status_reasons = _classify(fp, reference=reference)
     return fp
 
@@ -477,5 +513,6 @@ __all__ = [
     "MATCHED", "MISMATCH", "UNKNOWN", "SERVICE_UNAVAILABLE", "VERSION_UNVERIFIED",
     "DeviceFingerprint", "ServiceObservation", "collect_device_fingerprint",
     "extract_targets", "normalize_endpoint", "parse_properties", "parse_ps",
-    "parse_proc_net_table", "parse_proc_net_unix", "persist_fingerprint",
+    "parse_proc_net_table", "parse_proc_net_unix", "summarize_service_health",
+    "persist_fingerprint",
 ]

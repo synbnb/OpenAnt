@@ -712,6 +712,11 @@ class ScanDynamicResult:
     record: dict[str, Any] = field(default_factory=dict)
     contract: dict[str, Any] = field(default_factory=dict)
     deliverables: dict[str, Any] = field(default_factory=dict)
+    # 计划要求的每样本标准化产物。即使在契约编译前被阻断，也会生成
+    # protocol_contract/probe/payload/oracle/input_influence/dynamic/cleanup
+    # 七个状态文件，明确区分 NOT_RUN、BLOCKED、PASSED 和 UNKNOWN，避免
+    # 前端只看到一个没有上下文的 error。
+    standard_artifacts: dict[str, Any] = field(default_factory=dict)
     clean_room: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -740,6 +745,7 @@ class ScanDynamicResult:
             "record": self.record,
             "contract": self.contract,
             "deliverables": self.deliverables,
+            "standard_artifacts": self.standard_artifacts,
             "clean_room": self.clean_room,
             "context_mode": "clean_room" if self.clean_room else "assisted",
             "context_sources": (
@@ -822,6 +828,15 @@ def _emit_compile_diagnostics(emit, compile_result) -> None:
             })
         except Exception:  # noqa: BLE001 — 进度展示不能影响主流程
             pass
+    for error in list(getattr(compile_result, "errors", []) or []):
+        try:
+            emit({
+                "event": "compile_error",
+                "detail": str(error),
+                "record": {"kind": "compile_error", "status": compile_result.compile_status},
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _run_device_preflight(
@@ -876,16 +891,138 @@ def _run_device_preflight(
         except Exception:  # noqa: BLE001 — 进度展示不能影响动态测试
             pass
 
-    for error in list(getattr(compile_result, "errors", []) or []):
-        try:
-            emit({
-                "event": "compile_error",
-                "detail": str(error),
-                "record": {"kind": "compile_error", "status": compile_result.compile_status},
-            })
-        except Exception:  # noqa: BLE001
-            pass
     return payload
+
+
+def _standard_artifact_payloads(result: ScanDynamicResult, *, phase: str,
+                                 reason: str = "") -> dict[str, dict[str, Any]]:
+    """构造计划规定的七个可复查产物。
+
+    这里刻意不把 ``effect_observed`` 推导成 ``input_influence``：文件变化
+    只能说明预言机看到变化，不能单独证明指定外部字段控制了危险参数。只有
+    Runner/旧动态执行器明确写入输入影响证据时才标记为 proven，其余保持
+    unknown/unproven。
+    """
+    now = __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime())
+    base = {
+        "schema_version": "vf.dynamic_artifact.v1",
+        "generated_at": now,
+        "phase": phase,
+        "sample": result.entry.sample,
+        "function_analyzed": result.entry.function_analyzed,
+        "target_id": result.entry.target_id,
+        "reason": reason,
+    }
+    compile_status = result.compile_status or "NOT_STARTED"
+    contract_ready = bool(result.contract)
+    protocol = dict(base)
+    protocol.update({
+        "status": "READY" if contract_ready else "NOT_READY",
+        "compile_status": compile_status,
+        "contract": result.contract if contract_ready else None,
+        "descriptor_resolution": result.descriptor_resolution,
+        "protocol_evidence": result.protocol_evidence,
+    })
+    notes = [str(item) for item in result.compile_notes]
+    probe_status = "NOT_RUN"
+    if any("合法报文自证通过" in item for item in notes):
+        probe_status = "PASSED"
+    elif any("合法探测" in item or "自证" in item for item in notes) or result.descriptor_resolution:
+        probe_status = "FAILED" if result.compile_status not in {"ELIGIBLE", ""} else "UNKNOWN"
+    probe = dict(base)
+    probe.update({
+        "status": probe_status,
+        "source": "contract_compiler",
+        "descriptor_resolution": result.descriptor_resolution,
+        "notes": notes,
+    })
+    observations = list((result.record or {}).get("observations") or [])
+    payload = dict(base)
+    payload.update({
+        "status": "CAPTURED" if observations else "NOT_RUN",
+        "source": "run_record.observations",
+        "frames": [
+            {
+                "observation_id": item.get("observation_id", ""),
+                "transport": item.get("transport", {}),
+                "response_excerpt": item.get("response_excerpt", ""),
+            }
+            for item in observations if isinstance(item, dict)
+        ],
+        "contract_id": result.contract.get("contract_id", "") if result.contract else "",
+    })
+    verdict = result.verdict if isinstance(result.verdict, dict) else {}
+    oracle_value = verdict.get("oracle") if isinstance(verdict.get("oracle"), dict) else {}
+    oracle = dict(base)
+    oracle.update({
+        "status": "OBSERVED" if oracle_value.get("effect_observed") is True else (
+            "ABSENT" if oracle_value else "NOT_RUN"
+        ),
+        "kind": oracle_value.get("kind", ""),
+        "effect_observed": oracle_value.get("effect_observed"),
+        "forms": oracle_value.get("forms", {}),
+        "details": oracle_value.get("details", {}),
+        "refutation_checks": oracle_value.get("refutation_checks", []),
+    })
+    influence_value = str(verdict.get("influence", "") or "")
+    if influence_value == "SINK_CONTROLLED":
+        influence_status = "PROVEN"
+    elif influence_value == "SINK_REACHED_UNCONTROLLED":
+        influence_status = "UNPROVEN"
+    elif influence_value:
+        influence_status = "UNKNOWN"
+    else:
+        influence_status = "NOT_RUN"
+    influence = dict(base)
+    influence.update({
+        "status": influence_status,
+        "influence": influence_value,
+        "evidence": verdict.get("input_influence_evidence", {})
+            if isinstance(verdict, dict) else {},
+        "limitations": [
+            "设备效果与输入影响分别记录；本文件不因文件差分自动宣称参数可控。"
+        ],
+    })
+    dynamic = dict(base)
+    dynamic.update({
+        "status": result.status or ("BLOCKED" if phase in {"adapter", "compile"} else "NOT_RUN"),
+        "compile_status": compile_status,
+        "run_id": result.run_id,
+        "pattern": result.pattern,
+        "verdict": verdict,
+        "device_fingerprint_status": (result.device_fingerprint or {}).get("status", "UNKNOWN"),
+    })
+    cleanup = dict(base)
+    cleanup_record = (result.record or {}).get("cleanup")
+    cleanup.update({
+        "status": "RECORDED" if cleanup_record is not None else (
+            "NOT_RUN" if phase in {"adapter", "compile"} else "UNKNOWN"
+        ),
+        "details": cleanup_record if cleanup_record is not None else {},
+    })
+    return {
+        "protocol_contract.json": protocol,
+        "probe_result.json": probe,
+        "payload_manifest.json": payload,
+        "input_influence.json": influence,
+        "oracle_result.json": oracle,
+        "dynamic_result.json": dynamic,
+        "cleanup_result.json": cleanup,
+    }
+
+
+def _persist_standard_artifacts(result: ScanDynamicResult, progress_path: str | Path | None,
+                                *, phase: str, reason: str = "") -> None:
+    """写入七个标准化动态测试产物，并回填可展示的路径状态。"""
+    payloads = _standard_artifact_payloads(result, phase=phase, reason=reason)
+    result.standard_artifacts = {
+        name: {"status": value.get("status", ""), "phase": phase}
+        for name, value in payloads.items()
+    }
+    if not progress_path:
+        return
+    for name, payload in payloads.items():
+        _write_run_snapshot(progress_path, name, payload)
 
 
 def _maybe_build_deliverables(result: ScanDynamicResult, *, progress_path: str | Path | None,
@@ -995,6 +1132,11 @@ def run_dynamic_from_scan(
     result.adapter_warnings = list(adapter.warnings)
     _write_run_snapshot(progress_path, "finding_adapter.json", adapter.to_dict())
     if adapter.status != "CONVERTED" or adapter.finding is None:
+        result.status = "BLOCKED_ADAPTER"
+        _persist_standard_artifacts(
+            result, progress_path, phase="adapter",
+            reason="Stage 1 finding 适配未通过，尚未进入设备协议编译。",
+        )
         raise ScanBridgeError(
             f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
         )
@@ -1018,6 +1160,24 @@ def run_dynamic_from_scan(
         finding=finding, hdc=hdc, repo_root=resolved_repo_root,
         progress_path=progress_path, emit=emit,
     )
+    health = result.device_fingerprint.get("service_health", {})
+    if health.get("status") == "NOT_READY":
+        result.compile_status = "SERVICE_UNAVAILABLE"
+        result.status = "BLOCKED_SERVICE_UNAVAILABLE"
+        message = "；".join(str(item) for item in health.get("missing", []) or []) or "目标服务未就绪"
+        compile_snapshot = {
+            "compile_status": result.compile_status,
+            "errors": [f"L0 只读前置确认未通过：{message}"],
+            "entry_discovery": {}, "descriptor_resolution": {},
+            "protocol_evidence": {}, "contract": None,
+            "blocked_before_protocol_compile": True,
+        }
+        _write_run_snapshot(progress_path, "compile_summary.json", compile_snapshot)
+        if emit is not None:
+            emit({"event": "service_unavailable", "detail": message,
+                  "record": result.device_fingerprint})
+        _persist_standard_artifacts(result, progress_path, phase="preflight", reason=message)
+        raise ScanBridgeError(f"设备目标服务未就绪（SERVICE_UNAVAILABLE）：{message}")
     # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
     # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。
     try:
@@ -1046,6 +1206,12 @@ def run_dynamic_from_scan(
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
+        result.status = "BLOCKED_PROTOCOL"
+        _persist_standard_artifacts(
+            result, progress_path, phase="compile",
+            reason=("契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
+                    "该状态不等同于漏洞不存在。"),
+        )
         raise ScanBridgeError(
             f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
             f"{'；'.join(compile_result.errors) or '未知原因'}"
@@ -1101,6 +1267,8 @@ def run_dynamic_from_scan(
         _write_run_snapshot(progress_path, "run_record.json", result.record)
     _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
                               hdc=hdc, progress_emit=emit)
+    _persist_standard_artifacts(result, progress_path, phase="run",
+                                reason="设备执行已返回 RunRecord。")
     return result
 
 
@@ -1171,6 +1339,11 @@ def run_dynamic_from_webui(
     result.adapter_warnings = list(adapter.warnings)
     _write_run_snapshot(progress_path, "finding_adapter.json", adapter.to_dict())
     if adapter.status != "CONVERTED" or adapter.finding is None:
+        result.status = "BLOCKED_ADAPTER"
+        _persist_standard_artifacts(
+            result, progress_path, phase="adapter",
+            reason="Stage 1 finding 适配未通过，尚未进入设备协议编译。",
+        )
         raise ScanBridgeError(
             f"适配未通过（{adapter.status}）：{'；'.join(adapter.errors) or '未知原因'}"
         )
@@ -1194,6 +1367,24 @@ def run_dynamic_from_webui(
         finding=finding, hdc=hdc, repo_root=resolved_repo_root,
         progress_path=progress_path, emit=emit,
     )
+    health = result.device_fingerprint.get("service_health", {})
+    if health.get("status") == "NOT_READY":
+        result.compile_status = "SERVICE_UNAVAILABLE"
+        result.status = "BLOCKED_SERVICE_UNAVAILABLE"
+        message = "；".join(str(item) for item in health.get("missing", []) or []) or "目标服务未就绪"
+        compile_snapshot = {
+            "compile_status": result.compile_status,
+            "errors": [f"L0 只读前置确认未通过：{message}"],
+            "entry_discovery": {}, "descriptor_resolution": {},
+            "protocol_evidence": {}, "contract": None,
+            "blocked_before_protocol_compile": True,
+        }
+        _write_run_snapshot(progress_path, "compile_summary.json", compile_snapshot)
+        if emit is not None:
+            emit({"event": "service_unavailable", "detail": message,
+                  "record": result.device_fingerprint})
+        _persist_standard_artifacts(result, progress_path, phase="preflight", reason=message)
+        raise ScanBridgeError(f"设备目标服务未就绪（SERVICE_UNAVAILABLE）：{message}")
     # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
     # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。
     try:
@@ -1220,6 +1411,12 @@ def run_dynamic_from_webui(
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
+        result.status = "BLOCKED_PROTOCOL"
+        _persist_standard_artifacts(
+            result, progress_path, phase="compile",
+            reason=("契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
+                    "该状态不等同于漏洞不存在。"),
+        )
         raise ScanBridgeError(
             f"编译未达 ELIGIBLE（{compile_result.compile_status}）："
             f"{'；'.join(compile_result.errors) or '未知原因'}"
@@ -1275,4 +1472,6 @@ def run_dynamic_from_webui(
         _write_run_snapshot(progress_path, "run_record.json", result.record)
     _maybe_build_deliverables(result, progress_path=progress_path, finding=finding,
                               hdc=hdc, progress_emit=emit)
+    _persist_standard_artifacts(result, progress_path, phase="run",
+                                reason="设备执行已返回 RunRecord。")
     return result

@@ -582,7 +582,7 @@
           <div class="live-overview-card primary"><div class="lo-label">当前在做什么</div><div id="overview-current" class="lo-value">等待启动</div><div id="overview-detail" class="lo-note">启动后这里会用通俗语言说明当前阶段。</div></div>
           <div class="live-overview-card"><div class="lo-label">阶段进度</div><div id="overview-stage" class="lo-value">0 / 7</div><div class="lo-note">按阶段逐步推进</div></div>
           <div class="live-overview-card"><div class="lo-label">设备命令</div><div id="overview-commands" class="lo-value">0</div><div class="lo-note">已记录到命令账本</div></div>
-          <div class="live-overview-card"><div class="lo-label">中间产物</div><div id="overview-artifacts" class="lo-value">0 / 10</div><div class="lo-note">可点击查看内容</div></div>
+          <div class="live-overview-card"><div class="lo-label">中间产物</div><div id="overview-artifacts" class="lo-value">0 / 17</div><div class="lo-note">可点击查看内容</div></div>
         </div>
         <div class="live-tools">
           <span class="hint" style="margin:0">页面会自动更新；原始详情只在展开后显示。</span>
@@ -1196,7 +1196,7 @@
       $('overview-detail').textContent = '启动后这里会用通俗语言说明当前阶段。';
       $('overview-stage').textContent = '0 / '+STAGES.length;
       $('overview-commands').textContent = '0';
-      $('overview-artifacts').textContent = '0 / 10';
+      $('overview-artifacts').textContent = '0 / 17';
       $('progress-error').hidden = true;
       $('result-panel').hidden = true;
       state.cmds = []; state.events = []; state.artifacts = []; state.phasesSeen = {}; state.runDone = false; state.lastEvent = null; state.historyLoadedRun = '';
@@ -1981,7 +1981,7 @@
       group.appendChild(body); parent.appendChild(group);
     }
     function appendDossierArtifactLinks(parent, runId) {
-      const names = ['contract.json','finding_adapter.json','entry_discovery.json','compile_summary.json','hdc_commands.json','ledger.jsonl','cli.log','run_record.json','verdict.json','result.json'];
+      const names = ['protocol_contract.json','probe_result.json','payload_manifest.json','input_influence.json','oracle_result.json','dynamic_result.json','cleanup_result.json','contract.json','finding_adapter.json','entry_discovery.json','compile_summary.json','hdc_commands.json','ledger.jsonl','cli.log','run_record.json','verdict.json','result.json'];
       const manual = state.artifacts.filter(a=>a && /^manual_replay_[0-9]{8,20}\.(md|txt)$/.test(a.name));
       const candidates = names.map(name=>dossierArtifactByName(name)).filter(Boolean).concat(manual);
       const links = el('div','dossier-artifacts');
