@@ -700,6 +700,7 @@ class ScanDynamicResult:
     entry_discovery: dict[str, Any] = field(default_factory=dict)
     descriptor_resolution: dict[str, Any] = field(default_factory=dict)
     protocol_evidence: dict[str, Any] = field(default_factory=dict)
+    probe_result: dict[str, Any] = field(default_factory=dict)
     # L0 只读设备/版本/服务前置确认。它与协议编译、漏洞判定分开保存，
     # 避免把设备不存在误读成协议或预言机失败。
     device_fingerprint: dict[str, Any] = field(default_factory=dict)
@@ -735,6 +736,7 @@ class ScanDynamicResult:
             "entry_discovery": self.entry_discovery,
             "descriptor_resolution": self.descriptor_resolution,
             "protocol_evidence": self.protocol_evidence,
+            "probe_result": self.probe_result,
             "device_fingerprint": self.device_fingerprint,
             "run_id": self.run_id,
             "pattern": self.pattern,
@@ -977,8 +979,11 @@ def _standard_artifact_payloads(result: ScanDynamicResult, *, phase: str,
     })
     notes = [str(item) for item in result.compile_notes]
     probe_status = "NOT_RUN"
-    if any("合法报文自证通过" in item for item in notes):
+    probe_record_status = str((result.probe_result or {}).get("status", ""))
+    if probe_record_status == "PASSED" or any("合法报文自证通过" in item for item in notes):
         probe_status = "PASSED"
+    elif probe_record_status in {"BLOCKED", "NOT_DELIVERED", "NOT_CONFIRMED", "ERROR"}:
+        probe_status = probe_record_status
     elif any("合法探测" in item or "自证" in item for item in notes) or result.descriptor_resolution:
         probe_status = "FAILED" if result.compile_status not in {"ELIGIBLE", ""} else "UNKNOWN"
     probe = dict(base)
@@ -986,6 +991,7 @@ def _standard_artifact_payloads(result: ScanDynamicResult, *, phase: str,
         "status": probe_status,
         "source": "contract_compiler",
         "descriptor_resolution": result.descriptor_resolution,
+        "probe_result": result.probe_result,
         "notes": notes,
     })
     observations = list((result.record or {}).get("observations") or [])
@@ -1262,8 +1268,10 @@ def run_dynamic_from_scan(
     result.entry_discovery = dict(compile_result.entry_discovery)
     result.descriptor_resolution = dict(compile_result.descriptor_resolution)
     result.protocol_evidence = dict(compile_result.protocol_evidence)
+    result.probe_result = dict(getattr(compile_result, "probe_result", {}) or {})
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
     _write_run_snapshot(progress_path, "protocol_evidence.json", result.protocol_evidence)
+    _write_run_snapshot(progress_path, "probe_result.json", result.probe_result)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
@@ -1469,8 +1477,10 @@ def run_dynamic_from_webui(
     result.entry_discovery = dict(compile_result.entry_discovery)
     result.descriptor_resolution = dict(compile_result.descriptor_resolution)
     result.protocol_evidence = dict(compile_result.protocol_evidence)
+    result.probe_result = dict(getattr(compile_result, "probe_result", {}) or {})
     _write_run_snapshot(progress_path, "entry_discovery.json", result.entry_discovery)
     _write_run_snapshot(progress_path, "protocol_evidence.json", result.protocol_evidence)
+    _write_run_snapshot(progress_path, "probe_result.json", result.probe_result)
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:

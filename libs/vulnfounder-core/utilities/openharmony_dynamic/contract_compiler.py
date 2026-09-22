@@ -152,6 +152,9 @@ class CompileResult:
     # 当前路由源码中提取的协议结构证据；它是候选证据，不等于已批准的
     # descriptor，也不直接决定设备发送帧。
     protocol_evidence: dict[str, Any] = field(default_factory=dict)
+    # 自动描述符合法探针的设备侧自证。仅在实际调用载体后写入，不能由
+    # descriptor JSON 的存在性推导“已送达”。
+    probe_result: dict[str, Any] = field(default_factory=dict)
     # clean-room 运行标记：用于审计本轮是否禁用了历史 exemplar/设备事实库。
     clean_room: bool = False
 
@@ -165,6 +168,7 @@ class CompileResult:
             "entry_discovery": dict(self.entry_discovery),
             "descriptor_resolution": dict(self.descriptor_resolution),
             "protocol_evidence": dict(self.protocol_evidence),
+            "probe_result": dict(self.probe_result),
             "clean_room": self.clean_room,
             "context_mode": "clean_room" if self.clean_room else "assisted",
             "context_sources": (
@@ -337,18 +341,38 @@ def _device_endpoint_present(hdc, endpoint: str, mode: str) -> bool:
     return False
 
 
-def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> list[str]:
+def _run_legal_protocol_self_test(
+    contract: Contract,
+    hdc,
+    notes: list[str],
+    *,
+    probe_result: dict[str, Any] | None = None,
+) -> list[str]:
     """自动描述符注册后发送一条无害合法报文，失败则阻止 ELIGIBLE。"""
     snapshot = dict(contract.protocol.descriptor_snapshot or {})
+    if probe_result is not None:
+        probe_result.update({
+            "status": "STARTED",
+            "source": "descriptor_snapshot.legal_probe",
+            "descriptor_id": contract.protocol.descriptor_id,
+            "entry_kind": str(getattr(contract.entry, "kind", "") or ""),
+            "endpoint": str(contract.entry.endpoint or ""),
+        })
     if not snapshot:
+        if probe_result is not None:
+            probe_result.update({"status": "BLOCKED", "reason": "descriptor_snapshot_missing"})
         return ["描述符没有快照，无法执行设备侧合法报文自证"]
     try:
         probe = _legal_probe_values(snapshot)
     except ValueError as exc:
+        if probe_result is not None:
+            probe_result.update({"status": "BLOCKED", "reason": str(exc)})
         return [str(exc)]
     mode = str(probe.get("mode", ""))
     endpoint = str(contract.entry.endpoint or "")
     if not _device_endpoint_present(hdc, endpoint, mode):
+        if probe_result is not None:
+            probe_result.update({"status": "BLOCKED", "reason": "endpoint_not_listening", "mode": mode})
         return [f"设备端点未监听，未发送合法探测报文: {endpoint}"]
     fields = dict(probe)
     selftest_target = f"SELFTEST-{contract.contract_id}"
@@ -369,6 +393,11 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
             # HAP_POC_SENT 让一个没有真正运行的合法报文“自证通过”。
             clear = hdc.shell(["hilog", "-r"], purpose="descriptor-selftest:hilog-clear")
             if clear.returncode != 0:
+                if probe_result is not None:
+                    probe_result.update({
+                        "status": "BLOCKED", "reason": "hilog_clear_failed",
+                        "returncode": int(clear.returncode),
+                    })
                 return [f"无法清空设备日志，不能排除旧 HAP_POC_SENT：{clear.stderr[:160]}"]
             send = transport.build_and_run(
                 fields, contract_id=selftest_target, wait_seconds=2.0,
@@ -396,6 +425,8 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
 
             command = probe.get("command_argv", probe.get("argv"))
             if not isinstance(command, list):
+                if probe_result is not None:
+                    probe_result.update({"status": "BLOCKED", "reason": "command_argv_missing"})
                 return [f"{entry_kind} 合法探测缺少 command_argv 数组"]
             probe_protocol = ProtocolSpec(
                 descriptor_id=contract.protocol.descriptor_id,
@@ -412,8 +443,20 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
                 purpose="descriptor-selftest:command-send",
             )
         else:
+            if probe_result is not None:
+                probe_result.update({"status": "BLOCKED", "reason": "unsupported_probe_carrier"})
             return [f"自动描述符入口 {entry_kind} 暂无合法探针载体，不能伪造设备侧自证"]
+        if probe_result is not None:
+            probe_result.update({
+                "transport": dict(getattr(send, "transport", {}) or {}),
+                "reachability": str(getattr(send, "reachability", "")),
+                "detail": str(getattr(send, "detail", "")),
+                "response_excerpt": str(getattr(send, "response_excerpt", "") or ""),
+                "probe_fields": sorted(str(key) for key, value in fields.items() if value not in (None, "")),
+            })
         if send.reachability != "INPUT_DELIVERED":
+            if probe_result is not None:
+                probe_result["status"] = "NOT_DELIVERED"
             return [f"{entry_kind} 合法探测未送达: {send.detail}"]
         if entry_kind in {"hap_udp", "hap_tcp"}:
             # 只查询 HAP POC 自己的 tag，避免设备长期 hilog 积压把本次关键行
@@ -422,6 +465,11 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
                             purpose="descriptor-selftest:hilog")
             expected = f"HAP_POC_SENT {selftest_target}"
             if log.returncode != 0 or expected not in (log.stdout or ""):
+                if probe_result is not None:
+                    probe_result.update({
+                        "status": "NOT_CONFIRMED", "expected_evidence": expected,
+                        "evidence_output": str(log.stdout or "")[-4096:],
+                    })
                 return [f"设备侧未观察到本次 {expected}，自证不能确认报文已发送"]
         elif entry_kind in {"native_unix", "unix_dgram", "unix_stream"}:
             expected = "native_unix_client result=0"
@@ -432,8 +480,14 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
             f"frame_keys={[k for k in ('first', 'second', 'third', 'payload') if fields.get(k)]} "
             f"evidence={expected}"
         )
+        if probe_result is not None:
+            probe_result.update({"status": "PASSED", "expected_evidence": expected})
         return []
     except Exception as exc:  # noqa: BLE001 — 自证失败必须显式阻断，不伪造成功
+        if probe_result is not None:
+            probe_result.update({
+                "status": "ERROR", "reason": f"{type(exc).__name__}: {str(exc)[:240]}"
+            })
         return [f"设备侧合法报文自证异常: {type(exc).__name__}: {str(exc)[:240]}"]
     finally:
         try:
@@ -896,6 +950,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         "auto_attempted": False,
     }
     protocol_evidence: dict[str, Any] = {}
+    probe_result: dict[str, Any] = {}
     if clean_room:
         notes.append("clean-room: 已禁用历史 exemplar 与设备事实库，仅使用当前 finding/源码证据")
 
@@ -903,6 +958,7 @@ def compile_contract(finding: FindingInput, *, hdc=None,
         kwargs.setdefault("clean_room", clean_room)
         kwargs.setdefault("descriptor_resolution", dict(descriptor_resolution))
         kwargs.setdefault("protocol_evidence", dict(protocol_evidence))
+        kwargs.setdefault("probe_result", dict(probe_result))
         return CompileResult(**kwargs)
 
     # 2. vuln_class → oracle 映射（未实现 → ORACLE_UNAVAILABLE，诚实降级）
@@ -1258,7 +1314,9 @@ def compile_contract(finding: FindingInput, *, hdc=None,
     # 发送一条声明中的无害合法报文。内置描述符保持历史兼容路径；只有本轮新
     # 合成的 auto_* 描述符要求通过该自证。
     if descriptor_id.startswith("auto_") and hdc is not None:
-        self_test_errors = _run_legal_protocol_self_test(contract, hdc, notes)
+        self_test_errors = _run_legal_protocol_self_test(
+            contract, hdc, notes, probe_result=probe_result,
+        )
         if self_test_errors:
             apply_compile_gate(contract, [f"协议描述符设备侧自证未通过: {e}" for e in self_test_errors])
             return _result(
