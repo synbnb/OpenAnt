@@ -2715,13 +2715,17 @@
       if (sourceKinds.length) {
         sourceBox.appendChild(el('div','sec-t','完整源码（在线浏览与下载）'));
         sourceBox.appendChild(el('div','hint','源码快照来自本次 HAP 构建工程；构建缓存、签名材料和本机 SDK 路径已排除。可在线查看文件，也可下载 ZIP 离线复核。'));
+        // 先把交付物卡片挂到结果面板，再异步读取源码清单。源码预览是
+        // 增强信息，不能阻塞用户看到 PoC/Exp 下载入口；设备端接口慢或
+        // 暂时不可用时，交付物仍然必须立即可见。
+        body.appendChild(s);
       }
       for (const item of sourceKinds) {
         const explorer = await renderSourceExplorer(runId, item[0], item[1]);
         sourceBox.appendChild(explorer);
       }
-      if (sourceKinds.length) s.appendChild(sourceBox);
-      body.appendChild(s);
+      if (sourceKinds.length && !sourceBox.parentNode) s.appendChild(sourceBox);
+      if (!s.parentNode) body.appendChild(s);
       if (isCurrent && !isCurrent()) {
         s.remove();
         return;

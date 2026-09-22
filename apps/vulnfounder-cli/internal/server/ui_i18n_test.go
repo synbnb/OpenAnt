@@ -40,6 +40,22 @@ func TestWebTemplatesParseAfterRedesign(t *testing.T) {
 	}
 }
 
+func TestDynamicTestDeliverablesAreMountedBeforeSourcePreview(t *testing.T) {
+	body := readUITemplate(t, "dynamic-test.html")
+	quick := strings.Index(body, "const quickNames")
+	mount := strings.Index(body[quick:], "body.appendChild(s);")
+	if mount >= 0 {
+		mount += quick
+	}
+	preview := strings.Index(body, "await renderSourceExplorer(runId")
+	if quick < 0 || mount < 0 || preview < 0 {
+		t.Fatalf("dynamic-test.html is missing the deliverable/source preview markers")
+	}
+	if mount > preview {
+		t.Fatalf("deliverable card is mounted only after the slow source preview")
+	}
+}
+
 func TestWebTemplatesUseSharedVisualLanguage(t *testing.T) {
 	for _, name := range []string{
 		"index.html",
