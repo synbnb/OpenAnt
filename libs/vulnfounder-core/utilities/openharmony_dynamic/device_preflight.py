@@ -38,6 +38,7 @@ _HEX_PORT_RE = re.compile(r"(?P<addr>[0-9A-Fa-f]{8,32}):(?P<port>[0-9A-Fa-f]{4})
 _IP_PORT_RE = re.compile(r"(?P<host>\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:]+\]):(?P<port>\d{1,5})")
 _PID_RE = re.compile(r"\b(\d+)\b")
 _KEY_VALUE_RE = re.compile(r"^\s*([^=\s]+)\s*=\s*(.*?)\s*$")
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _now() -> str:
@@ -223,6 +224,22 @@ def parse_identity(text: str) -> dict[str, str]:
 
 def _record_output(record: Any) -> str:
     return str(getattr(record, "stdout", "") or "")
+
+
+def _first_device_line(text: str) -> str:
+    """取设备命令的第一条有效业务行，隔离 HDC 诊断噪声。
+
+    部分 HDC 版本会把 ``FreeChannelContinue`` 等带 ANSI 颜色的诊断信息
+    追加到 stdout。它不是设备事实；如果直接拼到 readlink/SELinux/hash
+    字段，会让版本比较和进程归属产生假差异。原始命令仍由 ledger 保存，
+    这里只在结构化字段解析时丢弃诊断行。
+    """
+    for raw in str(text or "").splitlines():
+        value = _ANSI_RE.sub("", raw).strip()
+        if not value or "FreeChannelContinue" in value:
+            continue
+        return value
+    return ""
 
 
 @dataclass
@@ -541,6 +558,60 @@ def summarize_service_health(services: Iterable[ServiceObservation]) -> dict[str
     }
 
 
+def verify_service_stability(
+    hdc: Any,
+    *,
+    targets: Iterable[str] | None = None,
+    process_names: Iterable[str] | None = None,
+    source_revision: str = "",
+    reference: dict[str, Any] | None = None,
+    repo_root: str | Path | None = None,
+    checks: int = 2,
+    interval_seconds: float = 0.5,
+) -> dict[str, Any]:
+    """连续复核目标服务是否驻留。
+
+    一次 ``ps`` 或网络表命中只能证明“采集瞬间观察到服务”。动态测试需要在
+    发送前确认服务没有立即退出，因此这里重复同一套只读采集并保留每次结果。
+    该函数不启动服务、不发送业务报文；``checks`` 和间隔由调用方控制，最多
+    五轮，避免设备异常时无限等待。
+    """
+    count = max(1, min(int(checks or 1), 5))
+    interval = max(0.0, min(float(interval_seconds or 0.0), 10.0))
+    observations: list[dict[str, Any]] = []
+    for index in range(count):
+        fingerprint = collect_device_fingerprint(
+            hdc,
+            targets=targets,
+            process_names=process_names,
+            source_revision=source_revision,
+            reference=reference,
+            repo_root=repo_root,
+        )
+        health = dict(fingerprint.service_health or {})
+        observations.append({
+            "index": index + 1,
+            "status": health.get("status", "NOT_OBSERVED"),
+            "ready": bool(health.get("ready", False)),
+            "missing": list(health.get("missing", []) or []),
+            "unknown": list(health.get("unknown", []) or []),
+            "targets": list(health.get("targets", []) or []),
+            "fingerprint_status": fingerprint.status,
+        })
+        if index + 1 < count and interval:
+            time.sleep(interval)
+    ready = bool(observations) and all(item["ready"] for item in observations)
+    any_unknown = any(item["status"] in {"UNKNOWN", "NOT_OBSERVED"} for item in observations)
+    status = "STABLE" if ready else ("UNKNOWN" if any_unknown else "UNSTABLE")
+    return {
+        "status": status,
+        "stable": ready,
+        "required_checks": count,
+        "interval_seconds": interval,
+        "checks": observations,
+    }
+
+
 def collect_device_fingerprint(
     hdc: Any,
     *,
@@ -580,7 +651,7 @@ def collect_device_fingerprint(
 
     props = run("getprop", ["getprop"])
     fp.system.update(parse_properties(props))
-    uname = run("uname", ["uname", "-a"]).strip()
+    uname = _first_device_line(run("uname", ["uname", "-a"]))
     if uname:
         fp.system["uname"] = uname
     fp.device_revision = (
@@ -612,7 +683,7 @@ def collect_device_fingerprint(
             reason="进程存在并运行" if rows else "ps -A 未找到该进程",
         )
         for pid in observation.pids[:4]:
-            attr = run(f"selinux:{pid}", ["cat", f"/proc/{pid}/attr/current"]).strip()
+            attr = _first_device_line(run(f"selinux:{pid}", ["cat", f"/proc/{pid}/attr/current"]))
             if attr:
                 observation.selinux_domain = attr
                 observation.evidence.append(f"/proc/{pid}/attr/current")
@@ -620,11 +691,11 @@ def collect_device_fingerprint(
         if observation.pids:
             # 版本核对只读采集：先从 proc 得到设备真实可执行文件，再尝试
             # sha256sum。任何失败都保留空值/命令错误，不把路径或哈希猜出来。
-            exe = run(f"exe:{observation.pids[0]}", ["readlink", f"/proc/{observation.pids[0]}/exe"]).strip()
+            exe = _first_device_line(run(f"exe:{observation.pids[0]}", ["readlink", f"/proc/{observation.pids[0]}/exe"]))
             if exe:
                 observation.binary_path = exe
                 observation.evidence.append(f"/proc/{observation.pids[0]}/exe")
-                digest = run(f"sha256:{observation.pids[0]}", ["sha256sum", exe]).strip()
+                digest = _first_device_line(run(f"sha256:{observation.pids[0]}", ["sha256sum", exe]))
                 digest_match = re.match(r"^([0-9A-Fa-f]{64})\b", digest)
                 if digest_match:
                     observation.binary_sha256 = digest_match.group(1).lower()
@@ -666,5 +737,5 @@ __all__ = [
     "DeviceFingerprint", "ServiceObservation", "collect_device_fingerprint",
     "extract_targets", "normalize_endpoint", "parse_properties", "parse_ps",
     "parse_proc_net_table", "parse_proc_net_unix", "summarize_service_health",
-    "persist_fingerprint",
+    "verify_service_stability", "persist_fingerprint",
 ]

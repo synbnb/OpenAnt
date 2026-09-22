@@ -852,7 +852,11 @@ def _run_device_preflight(
     ``UNKNOWN``/错误明细的快照，让后续编译器根据证据决定是否可继续。
     """
     try:
-        from openharmony_dynamic.device_preflight import collect_device_fingerprint
+        from openharmony_dynamic.device_preflight import (
+            SERVICE_UNAVAILABLE,
+            collect_device_fingerprint,
+            verify_service_stability,
+        )
 
         hints = list(getattr(finding, "entry_hints", []) or [])
         context = getattr(finding, "analysis_context", None)
@@ -872,6 +876,23 @@ def _run_device_preflight(
             reference=reference if isinstance(reference, dict) else None,
             repo_root=repo_root,
         )
+        # 首次命中不能直接开始发送；连续只读复核两次，确认进程/端点仍然驻留。
+        if fingerprint.service_health.get("status") == "READY":
+            stability = verify_service_stability(
+                hdc,
+                targets=hints,
+                process_names=process_names,
+                source_revision=str(context.get("source_revision", "")) if isinstance(context, dict) else "",
+                reference=reference if isinstance(reference, dict) else None,
+                repo_root=repo_root,
+                checks=2,
+                interval_seconds=0.5,
+            )
+            fingerprint.service_health["stability"] = stability
+            if not stability.get("stable"):
+                fingerprint.service_health.update({"status": "NOT_READY", "ready": False})
+                fingerprint.status = SERVICE_UNAVAILABLE
+                fingerprint.status_reasons.append("目标服务未连续通过驻留复核")
         # 服务启动命令只能来自当前 finding 的结构化设备上下文，并且必须
         # 是参数数组；不接受字符串 shell 命令，也不为任何服务名内置命令。
         start_commands = context.get("service_start_commands", []) if isinstance(context, dict) else []
@@ -904,15 +925,24 @@ def _run_device_preflight(
                 observations.append({"index": index + 1, "status": refreshed.service_health.get("status"),
                                      "ready": refreshed.service_health.get("ready", False)})
                 fingerprint = refreshed
-                if refreshed.service_health.get("status") == "READY":
-                    break
+            stable_after_start = bool(observations) and all(item["ready"] for item in observations)
             fingerprint.service_health = dict(fingerprint.service_health or {})
             fingerprint.service_health.update({
                 "start_attempts": attempts,
                 "health_checks_after_start": observations,
+                "stability": {
+                    "status": "STABLE" if stable_after_start else "UNSTABLE",
+                    "stable": stable_after_start,
+                    "required_checks": 2,
+                    "checks": observations,
+                },
                 "mutation_performed": True,
                 "mutation_policy": "explicit_finding_commands_and_user_opt_in",
             })
+            if not stable_after_start:
+                fingerprint.service_health.update({"status": "NOT_READY", "ready": False})
+                fingerprint.status = SERVICE_UNAVAILABLE
+                fingerprint.status_reasons.append("启动后目标服务未连续通过驻留复核")
         elif health.get("status") == "NOT_READY":
             health["start_attempts"] = []
             health["health_checks_after_start"] = []

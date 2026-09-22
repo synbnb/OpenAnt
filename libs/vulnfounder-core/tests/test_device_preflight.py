@@ -13,6 +13,7 @@ from utilities.openharmony_dynamic.device_preflight import (
     parse_proc_net_table,
     parse_proc_net_unix,
     parse_ps,
+    verify_service_stability,
 )
 
 
@@ -69,9 +70,9 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
         "/proc/net/tcp6": "",
         "/proc/net/udp": "",
         "/proc/net/udp6": "",
-        "/proc/42/attr/current": "u:r:service:s0\n",
-        "/proc/42/exe": "/system/bin/service_daemon\n",
-        "/system/bin/service_daemon": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  /system/bin/service_daemon\n",
+        "/proc/42/attr/current": "u:r:service:s0\n\x1b[1;33m[W] FreeChannelContinue handle->data is nullptr\n",
+        "/proc/42/exe": "/system/bin/service_daemon\n\x1b[1;33m[W] FreeChannelContinue handle->data is nullptr\n",
+        "/system/bin/service_daemon": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  /system/bin/service_daemon\n\x1b[1;33m[W] FreeChannelContinue handle->data is nullptr\n",
     }
     fake = _FakeHDC(outputs)
     fp = collect_device_fingerprint(
@@ -165,3 +166,45 @@ def test_missing_reference_fact_is_version_unverified_not_mismatch():
     assert fp.status == VERSION_UNVERIFIED
     assert fp.version_check["status"] == "unknown"
     assert fp.version_check["unknown_fields"] == 1
+
+
+def test_verify_service_stability_requires_all_observations_ready():
+    outputs = {
+        "getprop": "[ro.build.version.release]: [6.1]\n",
+        "uname": "OpenHarmony test\n",
+        "id": "uid=0(root) gid=0(root)\n",
+        "ps": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
+        "-A": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
+        "/proc/net/unix": "Num RefCount Protocol Flags Type St Inode Path\n"
+        "0: 2 0 10000 1 01 1 /dev/unix/socket/example\n",
+        "/proc/net/tcp": "sl local rem st\n",
+        "/proc/net/tcp6": "",
+        "/proc/net/udp": "",
+        "/proc/net/udp6": "",
+        "/proc/42/attr/current": "u:r:service:s0\n",
+        "/proc/42/exe": "/system/bin/service_daemon\n",
+        "/system/bin/service_daemon": "",
+    }
+    stable = verify_service_stability(
+        _FakeHDC(outputs),
+        targets=["/dev/unix/socket/example"],
+        process_names=["service_daemon"],
+        checks=2,
+        interval_seconds=0,
+    )
+    assert stable["status"] == "STABLE"
+    assert stable["stable"] is True
+    assert len(stable["checks"]) == 2
+
+    missing_outputs = dict(outputs)
+    missing_outputs["ps"] = "UID PID PPID CMD\n"
+    missing_outputs["-A"] = "UID PID PPID CMD\n"
+    unstable = verify_service_stability(
+        _FakeHDC(missing_outputs),
+        targets=["/dev/unix/socket/example"],
+        process_names=["service_daemon"],
+        checks=2,
+        interval_seconds=0,
+    )
+    assert unstable["status"] == "UNSTABLE"
+    assert unstable["stable"] is False

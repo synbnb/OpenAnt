@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前 Git 提交：`8293baf`
+> 当前 Git 提交：`待本阶段提交后更新`
 
 ---
 
@@ -45,7 +45,7 @@ flowchart LR
 | 阶段 | 目标 | 当前状态 | 已有证据 | 尚未完成 |
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
-| 阶段 1 | 设备指纹、服务健康、版本比较 | 已实现基础能力 | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实和专门测试 | 尚需对当前连接开发板执行 24 项 L0 采集并归档；SP_daemon 连续健康检查的全量回归尚未完成 |
+| 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
 | 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | 已有主要能力；CLI/event 契约入口和合法探针已接入 | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；CLI/event 的命令数组形状校验和设备自证 | 尚需以 24 项为对象完成协议候选覆盖统计，不能只依赖已有注册描述符 |
 | 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
@@ -229,6 +229,60 @@ finding 适配完成后立即写入 `dynamic_baseline.json`。该快照不执行
 可以在线查看和下载。源码文件不存在、重复 `sample_id` 等异常会被显式记录或拒绝，
 不会静默覆盖另一个样本的基线。
 
+### 3.9 阶段 1 服务稳定性复核
+
+在样本进入协议恢复或载荷发送前，前置确认现在会把“瞬时发现服务”与“服务连续驻留”
+分开记录。首次采集发现目标进程/端点后，系统再执行两次只读 HDC 采集；只有两次均
+为 `READY` 才写入 `stability.status=STABLE`。如果进程或端点中途消失，状态会降为
+`NOT_READY/UNSTABLE`，动态测试在协议阶段之前停止，并保留缺失目标和两次采集结果。
+
+这条规则对所有服务通用，不依赖服务名称、端口或协议族。服务启动仍然只接受当前
+finding 提供的参数数组且需要显式授权；启动命令返回 0 不再等价于服务已经稳定。
+另外，针对部分 HDC 版本把 `FreeChannelContinue` 诊断信息混入 stdout 的情况，
+结构化解析现在只取第一条有效业务行并去除 ANSI 控制序列；完整原始输出仍留在命令
+账本中，避免把诊断噪声拼入 PID、SELinux 域、可执行路径或哈希字段。
+
+### 3.10 阶段 1 官方 24 项真机预检
+
+在上述代码变更后，已针对官方历史样本清单逐项执行一次真实开发板 L0 预检。该轮使用
+当前连接设备的固定序列号和 HDC 可执行文件，**只读取设备事实**：每个样本采集进程、
+Unix/IPv4/IPv6 TCP/UDP 表、UID、SELinux 域、可执行路径和哈希；第一次观察到服务后，
+再执行两次间隔 0.5 秒的只读驻留复核。此轮没有安装 HAP、没有发送业务帧、没有启动或
+停止服务，也没有写入设备文件。
+
+```text
+设备 serial：150100424a5444345209d945be14b900
+HDC：/Users/shiyu/harmonyos-sdk/openharmony/9/toolchains/hdc
+产物：/Users/shiyu/.openant/dynamic_generalization_stage1_20260922_rerun
+```
+
+全量结果为 24/24 项均有独立的 `device_fingerprint.json` 和 HDC 命令账本，汇总写入
+该目录的 `summary.json`。当时设备上的 `SP_daemon` 尚未运行，因此 SmartPerf 相关样本
+按“服务不可用”安全停止；这不是“样本不存在”或“漏洞不存在”的结论。HiView 样本的
+服务进程可见，但本轮没有提供可比对的源码/设备版本参考，所以状态为
+`VERSION_UNVERIFIED`，而不是版本匹配。
+
+| 样本范围 | 样本编号 | 服务/入口事实 | 预检终态 | 健康状态 | 驻留复核 | 处理说明 |
+|---|---|---|---|---|---|---|
+| SmartPerf | DP-01～DP-18（18 项） | 目标为 `SP_daemon` 及 `127.0.0.1:8283/8284` | `SERVICE_UNAVAILABLE`（18） | `NOT_READY`（18） | 未执行（初次观察即缺失） | 未发现 `SP_daemon` 进程和对应端点，协议恢复与载荷阶段未启动 |
+| HiView | HV-01～HV-06（6 项） | 事件总线入口，关联 `hiview` | `VERSION_UNVERIFIED`（6） | `READY`（6） | `STABLE`（6，均 2/2） | 进程/运行事实连续可见；缺少版本参考，保留后续版本核验任务 |
+
+逐样本清单如下，避免把分组统计误认为只测试了一个样本：
+
+- SmartPerf：`DP-01`、`DP-02`、`DP-03`、`DP-04`、`DP-05`、`DP-06`、`DP-07`、
+  `DP-08`、`DP-09`、`DP-10`、`DP-11`、`DP-12`、`DP-13`、`DP-14`、`DP-15`、
+  `DP-16`、`DP-17`、`DP-18`；
+- HiView：`HV-01`、`HV-02`、`HV-03`、`HV-04`、`HV-05`、`HV-06`。
+
+本轮还验证了 HDC 版本会把 `FreeChannelContinue` 等 ANSI 诊断行混入 stdout 的实际情形：
+结构化字段不再把这类文本拼进 `hiview` 的 SELinux 域、可执行路径和版本哈希，原始命令
+输出仍留在账本中。随后为后续动态运行手动以无参数方式启动了
+`/system/bin/SP_daemon`，独立核验到 PID 和 8283/8284/8285 三个端点；该启动属于后续
+设备准备，不改变上述“24 项 L0 预检为只读”的统计口径。
+
+这项验收只说明设备前置审计和服务驻留判断能够对 24 项逐样本产出可复查结果；它不等价
+于协议恢复成功、输入已送达、预言机命中或 `CONFIRMED`。
+
 ---
 
 ## 4. 当前测试证据
@@ -237,6 +291,9 @@ finding 适配完成后立即写入 `dynamic_baseline.json`。该快照不执行
 
 ```text
 python -m pytest -q \
+  libs/vulnfounder-core/tests/test_dynamic_baseline.py \
+  libs/vulnfounder-core/tests/test_scan_artifact_standard_artifacts.py \
+  libs/vulnfounder-core/tests/test_dynamic_command_transport.py \
   libs/vulnfounder-core/tests/test_device_preflight.py \
   libs/vulnfounder-core/tests/test_descriptor_synthesizer.py \
   libs/vulnfounder-core/tests/test_entry_discovery_loop.py \
@@ -248,10 +305,10 @@ python -m pytest -q \
 结果：
 
 ```text
-86 passed in 0.34s
+87 passed in 0.31s
 ```
 
-这 86 项覆盖的是样本基线哈希和 clean-room 边界、设备版本比较、协议描述符证据核验、入口/路由循环、HAP/native/CLI/event 载体校验、CLI/event 合法探针、通用预言机和运行器契约形状。它们证明代码级基础行为，但不等价于当前开发板上 24 个样本全部成功。
+这 87 项覆盖的是样本基线哈希和 clean-room 边界、设备版本比较、服务连续驻留复核、协议描述符证据核验、入口/路由循环、HAP/native/CLI/event 载体校验、CLI/event 合法探针、通用预言机和运行器契约形状。它们证明代码级基础行为，但不等价于当前开发板上 24 个样本全部成功。
 
 有一组更大范围的旧测试曾因网络/LLM 可用性测试等待超时，不能把该次未完成运行写成全通过。本进度文件只采用明确完成的针对性测试结果。
 
