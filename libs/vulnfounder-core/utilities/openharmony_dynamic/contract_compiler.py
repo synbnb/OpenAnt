@@ -100,6 +100,10 @@ _ENTRY_IDENTITY = {
     "unix_dgram": ("root_su", "root_su", "C"),
     "unix_stream": ("root_su", "root_su", "C"),
     "native_unix": ("root_su", "root_su", "C"),
+    # CLI/event_bus 的实际权限必须由当前 finding/设备上下文说明；在没有
+    # 更具体身份事实时保守使用 root_su/C，后续身份阶梯可以再降低权限。
+    "cli": ("root_su", "root_su", "C"),
+    "event_bus": ("root_su", "root_su", "C"),
 }
 
 # entry_hints / 描述符 transports → entry.kind 推断（确定性）
@@ -246,12 +250,30 @@ def _match_descriptor(finding: FindingInput) -> str:
 
 
 def _infer_entry_kind(descriptor_id: str, finding: FindingInput) -> str:
+    context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
+    for key in ("entry_kind", "transport_kind"):
+        value = context.get(key)
+        if isinstance(value, str) and value in _ENTRY_IDENTITY:
+            return value
+    protocol = context.get("protocol")
+    if isinstance(protocol, dict):
+        for key in ("entry_kind", "transport_kind"):
+            value = protocol.get(key)
+            if isinstance(value, str) and value in _ENTRY_IDENTITY:
+                return value
     kinds = _DESCRIPTOR_ENTRY_KIND.get(descriptor_id, [])
     hints = " ".join(finding.entry_hints).lower()
-    for kind in kinds:
-        if kind in hints:
+    for kind in (*kinds, "event_bus", "cli", "native_unix", "unix_stream", "unix_dgram"):
+        if re.search(rf"(?<![a-z0-9_]){re.escape(kind)}(?![a-z0-9_])", hints):
             return kind
-    return kinds[0] if kinds else ""
+    # 自动描述符的 transports 是当前源码/LLM 证据的结果，不是服务名猜测；
+    # 如果只有一个可用载体，才将它作为 skeleton 的 entry.kind。
+    try:
+        transports = list(get_descriptor(descriptor_id).transports)
+    except KeyError:
+        transports = []
+    candidates = [kind for kind in transports if kind in _ENTRY_IDENTITY]
+    return candidates[0] if len(candidates) == 1 else (kinds[0] if len(kinds) == 1 else "")
 
 
 def _infer_endpoint(descriptor_id: str, finding: FindingInput) -> str:
@@ -781,6 +803,17 @@ def _deterministic_skeleton(
     entry_kind = str(getattr(candidate, "kind", "")) if candidate is not None else ""
     entry_kind = entry_kind or _infer_entry_kind(descriptor_id, finding)
     identity = _ENTRY_IDENTITY.get(entry_kind, ("root_su", "root_su", "C"))
+    context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
+    requested_identity = context.get("execution_identity")
+    if isinstance(requested_identity, str):
+        requested_identity = requested_identity.strip()
+        for kind, values in _ENTRY_IDENTITY.items():
+            if requested_identity == values[0]:
+                identity = values
+                break
+    identity_ladder = context.get("identity_ladder_fallback")
+    if not isinstance(identity_ladder, str) or identity_ladder not in {"hap_app", "debug_app", "root_su"}:
+        identity_ladder = identity[1]
     endpoint = str(getattr(candidate, "endpoint", "")) if candidate is not None else ""
     try:
         descriptor_snapshot = get_descriptor(descriptor_id).to_dict()
@@ -799,7 +832,7 @@ def _deterministic_skeleton(
         },
         "identity": {
             "execution_identity": identity[0],
-            "identity_ladder_fallback": identity[1],
+            "identity_ladder_fallback": identity_ladder,
             "max_evidence_grade": identity[2],
         },
         "protocol": {"descriptor_id": descriptor_id, "descriptor_snapshot": descriptor_snapshot},
