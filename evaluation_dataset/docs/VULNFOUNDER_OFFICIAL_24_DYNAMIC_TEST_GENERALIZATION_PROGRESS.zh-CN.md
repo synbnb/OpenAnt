@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`5c50bed`
+> 当前代码提交：`a0bcd01`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `5c50bed fix: bound route variant compilation time` |
+| 最新提交 | `a0bcd01 fix: default official device batches to serial HDC` |
 | 工作区 | 已跟踪文件无未提交改动；设备产物和历史评测文件仍按约定留在本地未跟踪目录 |
 | 本轮聚焦 | 结构化失败反馈、fresh-session 重试和 LLM 请求边界的真实样本验收 |
 
@@ -954,3 +954,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | DP-10 route fan-out 真实复验 | 设备上的 `SP_daemon` 在本次入口只读取证前退出，入口 Agent 诚实产生空候选，未触发 route fan-out；随后已按无参方式重新启动服务，PID `31568`，8283/8284/8285 恢复监听。该结果记录为服务稳定性问题，不写成 DP-10 协议失败。真实复验产物：`/Users/shiyu/.openant/dynamic_generalization_route_fanout_dp10_20260922`。 |
 | 2026-09-22 | `5c50bed` | 为 route variant 增加独立 `--route-variant-timeout`（默认 180 秒，0 表示关闭该层上限），超时写成 `ROUTE_VARIANT_TIMEOUT`，不会留下无界的单样本进程；批处理外层样本超时仍独立保留。相关入口/自动化回归 53 项通过。 |
 | 2026-09-22 | 批处理可靠性修正 | 官方阶段 2 批处理默认 `workers` 从 2 调整为 1；单设备 HDC daemon 在并发读取时曾出现 `FreeChannelContinue handle->data is nullptr`，串行是默认的可复现实验口径，用户仍可显式提高并发。 |
+| 2026-09-22 | `a0bcd01` | 批处理器代码已推送；相关入口发现、路由复核、协议描述符和变体超时回归 53 项通过。全量历史 pytest 未作为本轮验收依据：其中包含旧环境依赖和长时间设备用例，运行时出现既有失败并已停止，未将其伪装成全绿。 |
