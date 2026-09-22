@@ -953,3 +953,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `3cd292d` | 多入口安全拆分：当当前 finding 同时得到多个经过源码/设备证据校验的 endpoint 时，主结果继续保持 `REQUIRES_PROTOCOL_REVIEW`，同时在 `route_variants/` 为每个非 unrelated 候选独立执行一次 clean-room 协议编译和合法探针自证；不自动选择首个端点，不发送业务变异帧。新增 `--no-route-fanout` 可关闭，默认开启；单元桩验证 2/2 variant 独立落盘。 |
 | 2026-09-22 | DP-10 route fan-out 真实复验 | 设备上的 `SP_daemon` 在本次入口只读取证前退出，入口 Agent 诚实产生空候选，未触发 route fan-out；随后已按无参方式重新启动服务，PID `31568`，8283/8284/8285 恢复监听。该结果记录为服务稳定性问题，不写成 DP-10 协议失败。真实复验产物：`/Users/shiyu/.openant/dynamic_generalization_route_fanout_dp10_20260922`。 |
 | 2026-09-22 | `5c50bed` | 为 route variant 增加独立 `--route-variant-timeout`（默认 180 秒，0 表示关闭该层上限），超时写成 `ROUTE_VARIANT_TIMEOUT`，不会留下无界的单样本进程；批处理外层样本超时仍独立保留。相关入口/自动化回归 53 项通过。 |
+| 2026-09-22 | 批处理可靠性修正 | 官方阶段 2 批处理默认 `workers` 从 2 调整为 1；单设备 HDC daemon 在并发读取时曾出现 `FreeChannelContinue handle->data is nullptr`，串行是默认的可复现实验口径，用户仍可显式提高并发。 |
