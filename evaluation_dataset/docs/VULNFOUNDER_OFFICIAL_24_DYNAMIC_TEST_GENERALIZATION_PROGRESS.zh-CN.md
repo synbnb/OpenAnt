@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`1e57634`
+> 当前代码提交：`b030bdf`
 
 ---
 
@@ -629,6 +629,23 @@ DP-10 之后继续复测 HV-05 时，入口发现模型选择了只读 `ps`。�
 发布者和权限能到达目标 `SYS_RQ` 分支。该样本仍需补充事件发布者、权限和设备事件事实，
 不能把 `REQUIRES_PROTOCOL_REVIEW` 解释成设备上不存在对应问题。
 
+### 3.21 侦查骨架的二次提示边界修复
+
+在完成 `FindingInput.to_prompt_dict()` 后再次审计模型上下文，发现侦查 prompt 还会
+显示“确定性骨架”。该骨架用于最终契约持久化，其中 `description` 原本直接继承 Stage 1
+自由文本；如果只过滤 finding 区块而保留它，攻击叙述仍可能从第二个上下文入口进入
+协议侦查模型。
+
+现已在送入侦查模型前只保留骨架的结构字段（contract、entry、identity、protocol、
+risk 和 route binding），从 prompt 中移除 `description`。完整 description 仍由编译器
+保留在契约、审计产物和后续 Stage 2 中，模型不依赖这段叙述恢复分帧或字段。新增回归
+直接构造带 shell 片段的 skeleton，确认它不会出现在首轮侦查 prompt；本轮动态相关测试
+为 `77 passed in 0.29s`。
+
+这项修复进一步明确了 clean-room 的含义：不是把漏洞类别或 sink 隐藏起来，而是禁止
+把已经写好的利用叙述当作协议答案。入口、字段、守卫、状态和合法探针仍必须由当前
+源码/设备事实和确定性校验闭环产生。
+
 ### 3.15 候选路由复核的官方 23 项全量复跑
 
 在候选路由复核 loop 完成后，重新对除 DP-02 外的其余 23 个官方样本执行同一份
@@ -928,3 +945,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `5711c7a` | 批处理器新增通用 `--samples` 子集选择器；六样本 clean-room 聚焦复验完成，6/6 有产物且 0 timeout/错误，其中 DP-18 达到 `ELIGIBLE`，其余阻断原因均按证据保留；代码已推送 |
 | 2026-09-22 | `bd26ca9` | 动态 Agent 新增 `FindingInput.to_prompt_dict()`，隔离 Stage 1 攻击叙述与协议恢复提示，仅保留当前 finding 的结构事实；新增提示边界回归后 75 项通过；DP-10 clean-room 重测达到 `ELIGIBLE`，自动描述符 `auto_b5967aaf8303d111` 并完成 UDP 8283 合法探针自证 |
 | 2026-09-22 | `1e57634` | 修复侦查工具对 `ps` 等单参数长输出的通用截断异常；新增回归后侦查相关测试 76 项通过；HV-05 真机 clean-room 复验不再出现 `IndexError`，保留 2 个 event_bus 候选并按证据 deferred |
+| 2026-09-22 | `b030bdf` | 进一步隔离侦查 prompt 中的确定性骨架，移除继承自 Stage 1 的自由文本 `description`，新增回归后动态相关测试 77 项通过；完整描述仍保留在契约和审计产物 |
