@@ -497,6 +497,33 @@ route_arbitration：deferred
 因此不能改写为 `CONFIRMED`。DP-11 的总耗时 505.7 秒、DP-16 为 328.1 秒，说明
 有限重试虽避免无限等待，但复杂样本仍需要后续减少无效侦查轮次或引入阶段级总预算。
 
+### 3.18 六样本自动描述符聚焦复验
+
+为验证上述修复不是只对 DP-11/DP-12/DP-16 有效，批处理器新增了通用
+`--samples` 选择器，并对上一轮已出现自动描述符或相关契约缺口的 6 个样本执行相同
+的 clean-room 编译：
+
+```text
+样本：DP-10、DP-13、DP-18、HV-03、HV-04、HV-05
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_retry_shape_auto6_20260922
+配置：workers=2、max_attempts=3、llm-timeout=60、llm-max-retries=0
+结果：6/6 有产物，0 timeout，0 子进程错误
+```
+
+| 样本 | 结果 | 首个可审计阻断/进展 |
+|---|---|---|
+| DP-10 | `REQUIRES_PROTOCOL_REVIEW` | 入口侦查的模型请求被上游安全策略以 HTTP 400 拒绝，未把模型拒绝误写成协议不存在 |
+| DP-13 | `REQUIRES_PROTOCOL_REVIEW` | 3 个真实端点均被发现，但 route arbitration 无法用当前源码唯一绑定到 sink，保持 `deferred` |
+| DP-18 | `ELIGIBLE` | 第 2 次 fresh session 修复首场 `ArtifactForm.form` 缺失；自动描述符 `auto_197f6076e17c1834`，UDP `127.0.0.1:8283`，两帧合法探针通过 `HAP_POC_SENT SELFTEST-GEN-DP-18` |
+| HV-03 | `REQUIRES_PROTOCOL_REVIEW` | 没有足够入口候选，未猜测事件发布端点或权限 |
+| HV-04 | `REQUIRES_PROTOCOL_REVIEW` | 2 个候选端点无法唯一归属当前 sink，保持 `deferred` |
+| HV-05 | `REQUIRES_PROTOCOL_REVIEW` | 自动描述符 `auto_9ae4f1a5a8812cd0` 生成，但 `event_argv` 仍包含不满足安全参数数组约束的内容；同时记录模型安全策略 400 和补证任务 |
+
+这批结果将阶段 2 的“可执行契约”与“协议仍需补证”明确分离：当前已在定向复验中
+达到 `ELIGIBLE` 的样本包括 DP-06、DP-11、DP-12、DP-16、DP-18；这不是 24 项
+全量 `ELIGIBLE` 率，也不是漏洞确认率。所有批次仍只发送自动描述符生成的合法自证探针，
+没有发送攻击变异帧。
+
 ### 3.15 候选路由复核的官方 23 项全量复跑
 
 在候选路由复核 loop 完成后，重新对除 DP-02 外的其余 23 个官方样本执行同一份
@@ -793,3 +820,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `281c2e8` | 修正进度文档中的当前提交与 tracked 工作区口径，并完成阶段记录 GitHub 同步；新增参数/结构修复后的三样本验收证据 |
 | 2026-09-22 | 工作区回归 | 新增批处理参数后执行动态相关回归：`188 passed in 0.88s`；未发现载体、协议校验、设备预检或 OpenAI 适配器回归 |
 | 2026-09-22 | `9928166` | 批处理器同时写入 `VULNFOUNDER_*` 与兼容的 `OPENANT_*` LLM 限制变量，确保品牌化配置不会覆盖本轮显式的超时/重试边界；OpenAI/描述符回归 `102 passed in 0.68s`；已推送 |
+| 2026-09-22 | `5711c7a` | 批处理器新增通用 `--samples` 子集选择器；六样本 clean-room 聚焦复验完成，6/6 有产物且 0 timeout/错误，其中 DP-18 达到 `ELIGIBLE`，其余阻断原因均按证据保留；代码已推送 |
