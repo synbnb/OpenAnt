@@ -397,6 +397,10 @@ protocol_evidence：transport=14、endpoints=3、framing=116、dispatch=236、gu
 这项复验只证明端点常量可以进入当前 route 的证据 bundle；它没有证明业务字段能够
 到达危险参数，更没有执行 HAP 或产生 `CONFIRMED`。
 
+批次结束后对同一设备又做了两次只读健康检查（间隔 1 秒）：`SP_daemon` PID 24869
+持续存在，UDP `127.0.0.1:8283`/`8285` 和 TCP `127.0.0.1:8284` 均保持绑定/监听。
+这只能说明本轮协议编译期间服务稳定，不代表任一样本的业务帧已经发送。
+
 ---
 
 ## 4. 当前测试证据
@@ -456,6 +460,12 @@ python -m pytest -q \
 
 ```text
 105 passed in 0.31s
+```
+
+Go 服务端回归：
+
+```text
+ok  github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server  (cached)
 ```
 
 此外，官方 23 项批处理的真实执行结果见第 3.12 节；批次使用的命令为：
