@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`db14677`
+> 当前代码提交：`待提交（本轮 LLM 超时边界改动）`
 
 ---
 
@@ -743,3 +743,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `bd69184`（真实回归） | 候选路由复核后的官方其余 23 项 clean-room 编译完成：23/23 有产物、0 超时/错误；DP-06 为 ELIGIBLE，22 项仍需协议复核；7 项安全 deferred、1 项 selected；本轮仅更新验收记录，代码沿用已推送实现 |
 | 2026-09-22 | `d44e945` | HAP 普通传输与 L2 自定义载体统一使用隔离的 `HVIGOR_USER_HOME` 和工具链离线依赖；新增构建缓存回归；DP-06 真机合法探针完成 HAP 构建/安装/发送闭环，但资源预言机无效果，诚实判定 `NOT_REPRODUCED`；21 项针对性测试通过。GitHub 推送因当前环境 DNS 无法解析 `github.com`，待网络恢复后补推 |
 | 2026-09-22 | `db14677` | 增加 fresh-session 重试阶段的通用 oracle 形状修复：过滤缺少 `form` 的 artifact 项和缺少 tag/pattern 的日志项，必要时使用当前漏洞类别已声明的观测骨架；首轮仍严格拒绝；新增回归后相关测试 48 项通过。GitHub 推送仍受 DNS 限制 |
+| 2026-09-22 | 待提交 | DP-12 bounded retry 真实模型请求在约 8 分钟内未返回，安全中止；未发送业务帧、未改变设备服务。为 OpenAI 兼容 provider 增加可由 `OPENANT/VULNFOUNDER_OPENAI_REQUEST_TIMEOUT_SECONDS` 覆盖的 180 秒有限默认超时；相关回归 123 项通过。该结果是上游响应阻断，不是契约形状修复失败 |
