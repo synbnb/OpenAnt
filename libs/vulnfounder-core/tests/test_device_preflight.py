@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from utilities.openharmony_dynamic.device_preflight import (
+    MISMATCH,
     MATCHED,
     SERVICE_UNAVAILABLE,
     VERSION_UNVERIFIED,
@@ -103,3 +104,64 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
     unknown = _FakeHDC(outputs)
     fp3 = collect_device_fingerprint(unknown, targets=[])
     assert fp3.status == VERSION_UNVERIFIED
+
+
+def test_reference_binary_and_system_facts_are_compared_independently():
+    outputs = {
+        "getprop": "[ro.build.version.release]: [6.1]\n[ro.product.name]: [rk3568]\n",
+        "uname": "OpenHarmony test\n",
+        "id": "uid=0(root) gid=0(root)\n",
+        "ps": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
+        "-A": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
+        "/proc/net/unix": "Num RefCount Protocol Flags Type St Inode Path\n",
+        "/proc/net/tcp": "sl local rem st\n",
+        "/proc/net/tcp6": "",
+        "/proc/net/udp": "",
+        "/proc/net/udp6": "",
+        "/proc/42/attr/current": "u:r:service:s0\n",
+        "/proc/42/exe": "/system/bin/service_daemon\n",
+        "/system/bin/service_daemon": "a" * 64 + "  /system/bin/service_daemon\n",
+    }
+    fp = collect_device_fingerprint(
+        _FakeHDC(outputs), process_names=["service_daemon"],
+        reference={
+            "system_properties": {"ro.build.version.release": "6.1", "ro.product.name": "rk3568"},
+            "processes": {"service_daemon": {"binary_sha256": "b" * 64}},
+        },
+    )
+    assert fp.status == MISMATCH
+    assert fp.version_check["status"] == "mismatch"
+    assert any(item["kind"].endswith("binary_sha256") and item["status"] == "mismatch"
+               for item in fp.version_check["checks"])
+
+    fp_match = collect_device_fingerprint(
+        _FakeHDC(outputs), process_names=["service_daemon"],
+        reference={
+            "system_properties": {"ro.build.version.release": "6.1", "ro.product.name": "rk3568"},
+            "processes": {"service_daemon": {"binary_sha256": "a" * 64}},
+        },
+    )
+    assert fp_match.status == MATCHED
+    assert fp_match.version_check["matched_fields"] == 3
+
+
+def test_missing_reference_fact_is_version_unverified_not_mismatch():
+    outputs = {
+        "getprop": "[ro.build.version.release]: [6.1]\n",
+        "uname": "OpenHarmony test\n",
+        "id": "uid=0(root) gid=0(root)\n",
+        "ps": "UID PID PPID CMD\n",
+        "-A": "UID PID PPID CMD\n",
+        "/proc/net/unix": "Num RefCount Protocol Flags Type St Inode Path\n",
+        "/proc/net/tcp": "sl local rem st\n",
+        "/proc/net/tcp6": "",
+        "/proc/net/udp": "",
+        "/proc/net/udp6": "",
+    }
+    fp = collect_device_fingerprint(
+        _FakeHDC(outputs),
+        reference={"system_properties": {"ro.build.version.incremental": "missing-on-board"}},
+    )
+    assert fp.status == VERSION_UNVERIFIED
+    assert fp.version_check["status"] == "unknown"
+    assert fp.version_check["unknown_fields"] == 1

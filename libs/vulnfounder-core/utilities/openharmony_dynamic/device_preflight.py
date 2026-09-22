@@ -275,6 +275,10 @@ class DeviceFingerprint:
     raw_hashes: dict[str, str] = field(default_factory=dict)
     status: str = UNKNOWN
     status_reasons: list[str] = field(default_factory=list)
+    # 版本/构建事实的逐项比较结果。status_reasons 仍保留面向用户的摘要，
+    # 这里保存机器可审计的 expected/observed/status/evidence，不把“未提供
+    # 基线”和“明确不匹配”混为同一种结果。
+    version_check: dict[str, Any] = field(default_factory=dict)
     # 仅表示本次只读采集观察到的服务状态；不会把“端点不存在”解释成
     # 协议错误，也不会在没有显式授权时自动启动服务。
     service_health: dict[str, Any] = field(default_factory=dict)
@@ -298,6 +302,7 @@ class DeviceFingerprint:
             "raw_hashes": dict(self.raw_hashes),
             "status": self.status,
             "status_reasons": list(self.status_reasons),
+            "version_check": dict(self.version_check),
             "service_health": dict(self.service_health),
         }
 
@@ -325,6 +330,153 @@ def _match_endpoint(target: str, unix_rows: list[dict[str, Any]], inet_rows: lis
     return [row for row in inet_rows if row.get("endpoint") == target or row.get("endpoint", "").replace("[", "").replace("]", "") == target]
 
 
+def _reference_processes(reference: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """规范化参考进程/二进制声明。
+
+    评测数据和旧调用方使用过 ``processes``、``binaries``、
+    ``binary_sha256`` 三种形态；它们都只作为比较输入，不会据此猜测设备
+    上不存在的进程。返回值统一为 ``name -> {binary_sha256, binary_path}``。
+    """
+    raw = reference.get("processes", reference.get("binaries", {}))
+    result: dict[str, dict[str, str]] = {}
+    if isinstance(raw, dict):
+        for name, value in raw.items():
+            name = str(name or "").strip()
+            if not name:
+                continue
+            if isinstance(value, str):
+                result[name] = {"binary_sha256": value.strip().lower()}
+            elif isinstance(value, dict):
+                result[name] = {
+                    key: str(value.get(key) or "").strip().lower()
+                    for key in ("binary_sha256", "binary_path")
+                    if str(value.get(key) or "").strip()
+                }
+    elif isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("target") or "").strip()
+            if not name:
+                continue
+            result[name] = {
+                key: str(item.get(key) or "").strip().lower()
+                for key in ("binary_sha256", "binary_path")
+                if str(item.get(key) or "").strip()
+            }
+    # 顶层 binary_sha256 是单进程旧格式；只有存在唯一进程时才绑定，避免
+    # 把同一个 hash 错配到多个服务。
+    top_hash = str(reference.get("binary_sha256") or "").strip().lower()
+    top_name = str(reference.get("process_name") or reference.get("target_process") or "").strip()
+    if top_hash and top_name:
+        result.setdefault(top_name, {})["binary_sha256"] = top_hash
+    return result
+
+
+def _compare_reference(
+    fingerprint: DeviceFingerprint,
+    reference: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """逐项比较源码/设备/构建事实，返回可序列化的审计结果。
+
+    ``matched`` 只表示声明过的每一项都拿到相同观察值；没有声明基线时是
+    ``unverified``，声明存在但当前命令无法取得值时是 ``unknown``。这一步
+    不负责判定服务是否运行，服务可用性仍由 ``service_health`` 单独表达。
+    """
+    reference = reference or {}
+    checks: list[dict[str, Any]] = []
+
+    def add(kind: str, expected: Any, observed: Any, *, evidence: str = "") -> None:
+        expected_text = str(expected or "").strip()
+        observed_text = str(observed or "").strip()
+        if not expected_text:
+            status = "unverified"
+        elif not observed_text:
+            status = "unknown"
+        else:
+            status = "matched" if expected_text.lower() == observed_text.lower() else "mismatch"
+        item: dict[str, Any] = {
+            "kind": kind, "expected": expected, "observed": observed,
+            "status": status,
+        }
+        if evidence:
+            item["evidence"] = evidence
+        checks.append(item)
+
+    add("source_revision", reference.get("source_revision"), fingerprint.source_revision, evidence="local git rev-parse")
+    add("device_revision", reference.get("device_revision"), fingerprint.device_revision, evidence="getprop/uname")
+
+    expected_system = reference.get("system_properties", reference.get("system", {}))
+    if isinstance(expected_system, dict):
+        for key, expected in expected_system.items():
+            key = str(key or "").strip()
+            if not key:
+                continue
+            add(f"system:{key}", expected, fingerprint.system.get(key, ""), evidence="getprop/uname")
+
+    observed_services = {
+        str(item.target): item for item in fingerprint.services if item.kind == "process"
+    }
+    expected_processes = _reference_processes(reference)
+    for name, expected in expected_processes.items():
+        observation = observed_services.get(name)
+        if observation is None:
+            # 允许 basename/路径声明与 ps 输出的 basename 对齐；若仍没有，
+            # 记录 unknown，而不是凭参考数据把服务伪造为存在。
+            basename = Path(name).name
+            observation = next(
+                (item for target, item in observed_services.items()
+                 if Path(target).name == basename), None
+            )
+        if observation is None:
+            for key, expected_value in expected.items():
+                add(f"process:{name}:{key}", expected_value, "", evidence="ps -A 未取得对应目标")
+            continue
+        if "binary_sha256" in expected:
+            add(
+                f"process:{name}:binary_sha256", expected["binary_sha256"],
+                observation.binary_sha256, evidence="/proc/<pid>/exe + sha256sum",
+            )
+        if "binary_path" in expected:
+            add(
+                f"process:{name}:binary_path", expected["binary_path"],
+                observation.binary_path, evidence="/proc/<pid>/exe",
+            )
+
+    expected_endpoints = reference.get("required_endpoints", reference.get("endpoints", []))
+    if isinstance(expected_endpoints, str):
+        expected_endpoints = [expected_endpoints]
+    if isinstance(expected_endpoints, list):
+        for endpoint in expected_endpoints:
+            endpoint = normalize_endpoint(str(endpoint or ""))
+            if not endpoint:
+                continue
+            matches = _match_endpoint(endpoint, fingerprint.unix_sockets, fingerprint.inet_sockets)
+            add(
+                f"endpoint:{endpoint}", endpoint,
+                endpoint if matches else "", evidence="/proc/net/unix,tcp*,udp*",
+            )
+
+    explicit = [item for item in checks if item["status"] != "unverified"]
+    if not explicit:
+        status = "unverified"
+    elif any(item["status"] == "mismatch" for item in explicit):
+        status = "mismatch"
+    elif any(item["status"] == "unknown" for item in explicit):
+        status = "unknown"
+    else:
+        status = "matched"
+    return {
+        "status": status,
+        "checks": checks,
+        "expected_fields": len(explicit),
+        "matched_fields": sum(item["status"] == "matched" for item in checks),
+        "mismatch_fields": sum(item["status"] == "mismatch" for item in checks),
+        "unknown_fields": sum(item["status"] == "unknown" for item in checks),
+        "unverified_fields": sum(item["status"] == "unverified" for item in checks),
+    }
+
+
 def _classify(
     fingerprint: DeviceFingerprint,
     *,
@@ -332,20 +484,17 @@ def _classify(
 ) -> tuple[str, list[str]]:
     reference = reference or {}
     reasons: list[str] = []
-    expected_source = str(reference.get("source_revision") or "").strip()
-    expected_device = str(reference.get("device_revision") or "").strip()
-    if expected_source and fingerprint.source_revision and expected_source != fingerprint.source_revision:
-        reasons.append(f"源码版本不匹配：期望 {expected_source}，当前 {fingerprint.source_revision}")
+    fingerprint.version_check = _compare_reference(fingerprint, reference)
+    version_status = fingerprint.version_check.get("status")
+    for check in fingerprint.version_check.get("checks", []):
+        if check.get("status") == "mismatch":
+            reasons.append(
+                f"{check.get('kind')} 不匹配：期望 {check.get('expected')}，当前 {check.get('observed')}"
+            )
+        elif check.get("status") == "unknown":
+            reasons.append(f"{check.get('kind')} 无法取得当前设备值")
+    if version_status == "mismatch":
         return MISMATCH, reasons
-    if expected_device and fingerprint.device_revision and expected_device != fingerprint.device_revision:
-        reasons.append(f"设备版本不匹配：期望 {expected_device}，当前 {fingerprint.device_revision}")
-        return MISMATCH, reasons
-    if expected_source and not fingerprint.source_revision:
-        reasons.append("无法取得当前源码版本")
-        return VERSION_UNVERIFIED, reasons
-    if expected_device and not fingerprint.device_revision:
-        reasons.append("设备版本字段缺失，不能宣称版本一致")
-        return VERSION_UNVERIFIED, reasons
     unavailable = [item for item in fingerprint.services if item.present is False]
     if unavailable:
         reasons.extend(f"目标未发现或未监听：{item.target}" for item in unavailable)
@@ -353,7 +502,10 @@ def _classify(
     if fingerprint.command_errors:
         reasons.append("部分设备事实采集命令失败，结果只能作为未知")
         return UNKNOWN, reasons
-    if expected_source or expected_device:
+    if version_status == "unknown":
+        reasons.append("版本参考字段已提供，但设备侧缺少可核验值")
+        return VERSION_UNVERIFIED, reasons
+    if version_status == "matched":
         return MATCHED, ["版本字段和目标服务证据均通过"]
     return VERSION_UNVERIFIED, ["未提供可比对的源码或设备版本基线"]
 
