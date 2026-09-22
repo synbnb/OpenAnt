@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前 Git 提交：`4de39e2`
+> 当前 Git 提交：`8293baf`
 
 ---
 
@@ -353,4 +353,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `4f8ef03` | 接入 CLI/event_bus 通用 argv 载体、契约校验和运行器分支；新增针对性测试后累计 78 项通过并已推送 |
 | 2026-09-22 | `0e5f98e` | 扩展 CLI/event_bus 合法探针自证，并完善自动 skeleton 的通用载体/身份识别；新增针对性测试后累计 80 项通过并已推送 |
 | 2026-09-22 | `f8ca6b4` | 将合法探针的实际载体、回执和失败原因写入 `probe_result` 与 `probe_result.json`；阶段测试累计 82 项通过并已推送 |
-| 2026-09-22 | 待提交 | 新增样本级 `dynamic_baseline.json`：冻结源码哈希、版本字段、候选线索与 clean-room 输入边界；新增 4 项基线测试，联同已有回归累计 86 项通过，待提交并推送 |
+| 2026-09-22 | `8293baf` | 新增样本级 `dynamic_baseline.json`：冻结源码哈希、版本字段、候选线索与 clean-room 输入边界；新增 4 项基线测试，联同已有回归累计 86 项通过；已推送 `origin/refactor/vulnfounder-brand` |
