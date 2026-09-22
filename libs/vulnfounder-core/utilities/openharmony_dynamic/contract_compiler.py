@@ -1418,6 +1418,7 @@ def _merge_recon_draft(draft: dict[str, Any], finding: FindingInput,
     _normalize_draft_shapes(draft)
     if repair_missing_oracle:
         _repair_optional_hilog_shape_for_retry(draft)
+        _repair_optional_artifact_shape_for_retry(draft, finding)
     # 兼容旧草案/旧产物把完整 marker 路径和 marker 文件名重复拼接的形状。
     # 该归一化只修正占位符语义，不替模型决定协议字段或攻击载荷。
     normalize_marker_path_placeholders(draft)
@@ -2852,10 +2853,19 @@ def _repair_optional_hilog_shape_for_retry(draft: dict[str, Any]) -> None:
         return
     raw = oracle.get("hilog_expectations")
     if isinstance(raw, list):
-        invalid_count = sum(not isinstance(item, dict) for item in raw)
+        # V7 要求每条日志期望至少提供 tag 或 pattern。空对象虽然是 dict，
+        # 但同样无法执行；只在 fresh-session 修复阶段丢弃它们，首轮仍由
+        # validator 报出原始格式错误，避免把模型错误静默吞掉。
+        valid_items = [
+            item for item in raw
+            if isinstance(item, dict)
+            and (str(item.get("tag") or "").strip()
+                 or str(item.get("pattern") or "").strip())
+        ]
+        invalid_count = len(raw) - len(valid_items)
         if not invalid_count:
             return
-        oracle["hilog_expectations"] = [item for item in raw if isinstance(item, dict)]
+        oracle["hilog_expectations"] = valid_items
     else:
         invalid_count = 1
         oracle["hilog_expectations"] = []
@@ -2865,3 +2875,53 @@ def _repair_optional_hilog_shape_for_retry(draft: dict[str, Any]) -> None:
     )
     evidence = str(oracle.get("evidence") or "").strip()
     oracle["evidence"] = f"{evidence}; {note}" if evidence else note
+
+
+def _repair_optional_artifact_shape_for_retry(
+    draft: dict[str, Any], finding: FindingInput,
+) -> None:
+    """在重试时修复模型把 artifact form 写成不完整对象的情况。
+
+    ``ArtifactForm`` 的 ``form`` 是必需字段；如果模型只输出了
+    ``{"path": ...}``，旧代码会在反序列化阶段抛 ``TypeError``，从而把一次
+    可反馈的契约形状问题表现成不可诊断的结构异常。首轮保持严格，重试时仅
+    保留合法 form；若所有条目都没有 form，则使用当前 vuln_class 已声明的
+    通用观测骨架。该骨架只定义观测形态和占位符，不生成服务命令或攻击帧。
+    """
+    oracle = draft.get("oracle")
+    if not isinstance(oracle, dict) or "artifact_forms" not in oracle:
+        return
+    raw = oracle.get("artifact_forms")
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raw = []
+    valid_forms = {"create", "exfil", "delete", "attr"}
+    kept: list[dict[str, Any]] = []
+    invalid_count = 0
+    for item in raw:
+        if not isinstance(item, dict) or str(item.get("form") or "") not in valid_forms:
+            invalid_count += 1
+            continue
+        kept.append(item)
+
+    # 只在模型没有交付任何可执行观测形态时使用类别映射的声明骨架；这与
+    # _merge_recon_draft 原有的“缺失 oracle 结构修复”保持同一安全边界。
+    if not kept:
+        declared = _VULNCLASS_ORACLE.get(getattr(finding, "vuln_class", ""), {}).get("forms")
+        if isinstance(declared, list):
+            for item in declared:
+                if not isinstance(item, dict) or str(item.get("form") or "") not in valid_forms:
+                    continue
+                form = {
+                    key: value for key, value in item.items()
+                    if key in ("form", "path", "output_surface", "output_is_dir")
+                }
+                if form.get("form") in {"create", "exfil"}:
+                    form["content_contains"] = "__RUN_PATTERN__"
+                kept.append(form)
+    oracle["artifact_forms"] = kept
+    if invalid_count:
+        evidence = str(oracle.get("evidence") or "").strip()
+        note = f"retry-shape-repair: 忽略 {invalid_count} 条缺少合法 form 的 artifact 观测"
+        oracle["evidence"] = f"{evidence}; {note}" if evidence else note

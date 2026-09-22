@@ -668,6 +668,30 @@ def test_merge_recon_draft_normalizes_runtime_preplant_paths():
     ]
 
 
+def test_retry_repairs_incomplete_artifact_forms_from_class_shape():
+    """重试只修复观测形状，不凭空生成服务帧。"""
+    finding = cc.FindingInput(
+        finding_id="demo-artifact-repair", unit_id="demo", vuln_class="command_injection",
+        description="demo", sink="demo sink",
+    )
+    draft = {
+        "protocol": {"field_values": {}, "param_space": {}},
+        "oracle": {
+            "kind": "artifact_differential",
+            "artifact_forms": [{"path": "__MARKER__"}, {"form": "not-a-form"}],
+            "hilog_expectations": [{}, "not-an-object"],
+        },
+    }
+    merged = cc._merge_recon_draft(draft, finding, {
+        "entry": {"kind": "hap_udp"},
+        "protocol": {"descriptor_id": "sp_daemon_text", "descriptor_snapshot": {}},
+    }, repair_missing_oracle=True)
+    forms = merged["oracle"]["artifact_forms"]
+    assert forms and all(item.get("form") in {"create", "exfil", "delete", "attr"} for item in forms)
+    assert merged["oracle"]["hilog_expectations"] == []
+    assert "retry-shape-repair" in merged["oracle"]["evidence"]
+
+
 def test_missing_oracle_is_structured_review_error(monkeypatch):
     finding = cc.FindingInput(
         finding_id="demo-003", unit_id="demo", vuln_class="command_injection",
