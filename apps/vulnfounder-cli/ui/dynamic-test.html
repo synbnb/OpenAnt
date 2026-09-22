@@ -1573,7 +1573,9 @@
         const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/result');
         // 结果页包含交付物和源码清单等异步分区。等待渲染完成后再滚动，
         // 避免页面先滚到空的结果容器，随后 PoC 被追加到用户视口之外。
-        await renderResult(data);
+        // 显式传入当前请求对应的 run_id。历史页面恢复过程中 state.detail
+        // 可能还在切换；结果渲染不能因为这个短暂状态而丢失 PoC 交付物。
+        await renderResult(data, runId);
         $('result-panel').hidden = false;
         $('result-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
       } catch(e) {
@@ -2207,11 +2209,15 @@
       node.appendChild(el('div','cn-v', humanStageValue(value)));
       return node;
     }
-    async function renderResult(data) {
+    async function renderResult(data, runIdHint) {
       const r = data.result || {};
       const body = $('result-body'); body.replaceChildren();
       const renderToken = String(Date.now())+'-'+Math.random();
       state.resultRenderToken = renderToken;
+      // run_id 的优先级来自当前请求，其次才是结果 envelope 和页面状态。
+      // 这样刷新历史会话时，不会因为 state.detail 尚未完成初始化而跳过
+      // /deliverables 读取。
+      const renderRunId = runIdHint || data.run_id || r.run_id || (state.detail && state.detail.runId) || '';
       const v = r.verdict || {};
       const status = r.status || (data.run_status==='error' ? 'ERROR' : '—');
       updateOverview(status==='—'?'执行结果':humanStatus(status), status==='—'?'等待结果文件。':'动态测试已结束，可查看下方判定和证据。');
@@ -2228,7 +2234,32 @@
       body.appendChild(hero);
       // 交付物是用户最需要确认的结果，放在状态卡片之后而不是长篇证据之后。
       // renderDeliverables 在没有交付物时保持静默，因此兼容旧运行记录。
-      await renderDeliverables(state.detail && state.detail.runId, r.deliverables, body, () => state.resultRenderToken === renderToken);
+      try {
+        await renderDeliverables(renderRunId, r.deliverables, body, () => state.resultRenderToken === renderToken);
+      } catch (err) {
+        // 源码目录预览属于增强展示，不能让单个预览接口异常覆盖已经
+        // 生成的 PoC。这里保留文件清单，用户仍可直接下载并复核。
+        const d = r.deliverables || {};
+        const files = Array.isArray(d.files) ? d.files : [];
+        if (files.length) {
+          const fallback = el('div','sec sec-green');
+          fallback.appendChild(el('div','sec-t','动态测试交付物（PoC / Exp）'));
+          fallback.appendChild(el('div','deliverable-status','交付物已生成；源码在线预览暂时失败，但文件仍可下载。'));
+          const list = el('ul','ev');
+          files.forEach(file => {
+            const name = file && (file.name || file.path) ? (file.name || file.path) : String(file);
+            const li = el('li');
+            if (renderRunId && name && !name.includes('/')) {
+              const a = document.createElement('a');
+              a.href = '/scan-artifact/runs/'+encodeURIComponent(renderRunId)+'/deliverables/'+encodeURIComponent(name);
+              a.textContent = name; a.download = name; a.className = 'dl-link';
+              li.appendChild(a);
+            } else li.textContent = name;
+            list.appendChild(li);
+          });
+          fallback.appendChild(list); body.appendChild(fallback);
+        }
+      }
       if (state.resultRenderToken !== renderToken) return;
       if (v.gap) body.appendChild(el('div','hint','判定缺口：'+v.gap));
       const allErrors = [...(r.adapter_errors||[]), ...(r.compile_errors||[]), ...(data.errors||[]), data.run_error?[data.run_error]:[]]
@@ -2379,7 +2410,7 @@
         appendTriggerFlow(s, ct, r, frameEntries);
         body.appendChild(s);
       }
-      appendDetailedExecutionDossier(body, state.detail && state.detail.runId, data);
+      appendDetailedExecutionDossier(body, renderRunId, data);
       const descriptorResolution = (r.compile && r.compile.descriptor_resolution) || r.descriptor_resolution || {};
       const descriptorSourceText = descriptorSourceLabel(descriptorResolution);
       const metaPairs = [
