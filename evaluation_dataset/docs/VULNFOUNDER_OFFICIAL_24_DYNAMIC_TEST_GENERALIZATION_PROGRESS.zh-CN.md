@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`3cd292d`
+> 当前代码提交：`5c50bed`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `3cd292d feat: fan out ambiguous dynamic routes safely` |
+| 最新提交 | `5c50bed fix: bound route variant compilation time` |
 | 工作区 | 已跟踪文件无未提交改动；设备产物和历史评测文件仍按约定留在本地未跟踪目录 |
 | 本轮聚焦 | 结构化失败反馈、fresh-session 重试和 LLM 请求边界的真实样本验收 |
 
@@ -952,3 +952,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | 串行优先样本复验 | 停止并发 HDC 后无参重启 `SP_daemon`（PID `31070`），确认 8283/8284/8285 均监听；对 DP-06/DP-10/DP-11/DP-12/DP-16/DP-18 使用 `--workers 1 --timeout 300 --llm-timeout 60 --max-attempts 2` 串行复验。DP-06/DP-10/DP-18 为 `REQUIRES_PROTOCOL_REVIEW`，DP-11/DP-12/DP-16 超时，未将并发或超时结果写成漏洞不存在。产物：`/Users/shiyu/.openant/dynamic_generalization_priority_retry_serial_20260922`。 |
 | 2026-09-22 | `3cd292d` | 多入口安全拆分：当当前 finding 同时得到多个经过源码/设备证据校验的 endpoint 时，主结果继续保持 `REQUIRES_PROTOCOL_REVIEW`，同时在 `route_variants/` 为每个非 unrelated 候选独立执行一次 clean-room 协议编译和合法探针自证；不自动选择首个端点，不发送业务变异帧。新增 `--no-route-fanout` 可关闭，默认开启；单元桩验证 2/2 variant 独立落盘。 |
 | 2026-09-22 | DP-10 route fan-out 真实复验 | 设备上的 `SP_daemon` 在本次入口只读取证前退出，入口 Agent 诚实产生空候选，未触发 route fan-out；随后已按无参方式重新启动服务，PID `31568`，8283/8284/8285 恢复监听。该结果记录为服务稳定性问题，不写成 DP-10 协议失败。真实复验产物：`/Users/shiyu/.openant/dynamic_generalization_route_fanout_dp10_20260922`。 |
+| 2026-09-22 | `5c50bed` | 为 route variant 增加独立 `--route-variant-timeout`（默认 180 秒，0 表示关闭该层上限），超时写成 `ROUTE_VARIANT_TIMEOUT`，不会留下无界的单样本进程；批处理外层样本超时仍独立保留。相关入口/自动化回归 53 项通过。 |
