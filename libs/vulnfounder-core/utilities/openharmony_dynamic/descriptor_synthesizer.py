@@ -65,9 +65,9 @@ _SYNTH_SYSTEM_PROMPT = (
     '  "structure_evidence": "<整体布局一句话+证据>",\n'
     '  "encoder_kind": "raw_text|key_value|json|custom",\n'
     '  "wire_format": {"pair_separator":"::", "record_separator":"\\n", "terminator":""}\n'
-    '  "legal_probe": {"mode":"udp|tcp|local", "host":"...", "port":0,\n'
+    '  "legal_probe": {"mode":"udp|tcp|local|cli|event_bus", "host":"...", "port":0,\n'
     '                   "first":"无害合法帧", "second":"", "third":"",\n'
-    '                   "evidence":"<file.cpp:行>"}\n'
+    '                   "command_argv":["设备命令","参数"], "evidence":"<file.cpp:行>"}\n'
     "}\n"
     "硬规则：\n"
     "1. fields[].name 必须逐字出现在源码 struct 定义或键常量表中——会被 grep 核对，"
@@ -419,6 +419,18 @@ def _validate_legal_probe(probe: dict[str, Any]) -> list[str]:
     if not probe:
         return ["缺少 legal_probe：自动描述符必须提供一条无害合法请求"]
     errors: list[str] = []
+    mode = str(probe.get("mode", ""))
+    if mode in {"cli", "event_bus"}:
+        from .transports.command import validate_command_argv
+
+        command = probe.get("command_argv", probe.get("argv"))
+        if validate_command_argv(command) != command:
+            errors.append(
+                "legal_probe.command_argv 必须是无 shell 控制字符的字符串数组，"
+                "且不能使用 sh -c"
+            )
+        if any(token in str(item) for item in (command or []) for token in ("__", "marker", "canary")):
+            errors.append("CLI/event_bus 合法探测命令不得包含运行期 marker/canary")
     for key in ("first", "second", "third", "payload"):
         value = probe.get(key)
         if value is None or value == "":
@@ -428,9 +440,8 @@ def _validate_legal_probe(probe: dict[str, Any]) -> list[str]:
             errors.append(f"legal_probe.{key} 含攻击/模板控制字符，必须是无害合法报文")
         if re.search(r"\b(echo|popen|system|exec)\b", text, re.IGNORECASE):
             errors.append(f"legal_probe.{key} 含命令执行词，禁止用于合法自证")
-    mode = str(probe.get("mode", ""))
-    if mode not in {"udp", "tcp", "local"}:
-        errors.append("legal_probe.mode 必须是 udp、tcp 或 local")
+    if mode not in {"udp", "tcp", "local", "cli", "event_bus"}:
+        errors.append("legal_probe.mode 必须是 udp、tcp、local、cli 或 event_bus")
     if mode in {"udp", "tcp"}:
         try:
             port = int(probe.get("port", 0))
@@ -440,7 +451,9 @@ def _validate_legal_probe(probe: dict[str, Any]) -> list[str]:
             errors.append("legal_probe.port 不在合法端口范围")
         if not str(probe.get("host", "")):
             errors.append("legal_probe.host 不能为空")
-    if not any(probe.get(key) for key in ("first", "second", "third", "payload")):
+    if mode not in {"cli", "event_bus"} and not any(
+        probe.get(key) for key in ("first", "second", "third", "payload")
+    ):
         errors.append("legal_probe 至少需要一条 first/second/third/payload")
     return errors
 

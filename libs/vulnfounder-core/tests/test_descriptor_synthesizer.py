@@ -338,6 +338,72 @@ def test_verify_fields_accepts_line_ranged_evidence_paths(tmp_path):
     assert check["verified"] == ["command"]
 
 
+def test_legal_probe_accepts_cli_argv_but_rejects_shell_form():
+    assert ds._validate_legal_probe({
+        "mode": "cli",
+        "command_argv": ["hidumper", "-s", "123", "-a", "status"],
+        "evidence": "cli_handler.cpp:10",
+    }) == []
+    errors = ds._validate_legal_probe({
+        "mode": "event_bus",
+        "command_argv": ["sh", "-c", "event-publisher"],
+        "evidence": "event_handler.cpp:10",
+    })
+    assert any("command_argv" in error for error in errors)
+
+
+def test_cli_legal_probe_uses_declared_device_command(monkeypatch):
+    from utilities.openharmony_dynamic.models import (
+        CleanupSpec, Contract, EntrySpec, FaultSpec, IdentitySpec, OracleSpec,
+        ProtocolSpec, RiskSpec,
+    )
+
+    contract = Contract(
+        contract_id="cli-selftest",
+        finding_ids=["finding"],
+        unit_id="unit",
+        vuln_class="command_injection",
+        entry=EntrySpec(kind="cli"),
+        identity=IdentitySpec(),
+        protocol=ProtocolSpec(
+            descriptor_id="sp_daemon_text",
+            descriptor_snapshot={
+                "descriptor_id": "sp_daemon_text",
+                "legal_probe": {
+                    "mode": "cli",
+                    "command_argv": ["hidumper", "-s", "123", "-a", "status"],
+                    "evidence": "cli_handler.cpp:10",
+                },
+            },
+        ),
+        fault=FaultSpec(operator="payload_value_substitution"),
+        oracle=OracleSpec(),
+        risk=RiskSpec(target_process="demo"),
+        cleanup=CleanupSpec(),
+    )
+
+    class FakeHdc:
+        def __init__(self):
+            self.commands = []
+
+        def shell(self, argv, *, purpose="", **kwargs):
+            self.commands.append((list(argv), purpose))
+            return SimpleNamespace(
+                returncode=0, stdout="status=ok", stderr="",
+                to_dict=lambda: {"argv": list(argv), "returncode": 0, "purpose": purpose},
+            )
+
+    hdc = FakeHdc()
+    notes = []
+    errors = cc._run_legal_protocol_self_test(contract, hdc, notes)
+    assert errors == []
+    assert hdc.commands == [(
+        ["hidumper", "-s", "123", "-a", "status"],
+        "descriptor-selftest:command-send",
+    )]
+    assert any("cli command returncode=0" in note for note in notes)
+
+
 def test_legal_probe_is_separate_from_attack_payload():
     probe = cc._legal_probe_values({
         "descriptor_id": "auto_demo",

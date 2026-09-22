@@ -291,7 +291,10 @@ def _legal_probe_values(descriptor_snapshot: dict[str, Any]) -> dict[str, Any]:
     if errors:
         raise ValueError("无害合法报文校验失败：" + "; ".join(errors))
     result: dict[str, Any] = {}
-    for key in ("mode", "host", "port", "local_path", "first", "second", "third", "payload"):
+    for key in (
+        "mode", "host", "port", "local_path", "first", "second", "third", "payload",
+        "command_argv", "argv",
+    ):
         if key in probe:
             result[key] = probe[key]
     return result
@@ -366,6 +369,26 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
                 drop_privs=contract.identity.drop_privs,
                 purpose="descriptor-selftest:unix-send",
             )
+        elif entry_kind in {"cli", "event_bus"}:
+            from .transports.command import DeviceCommandTransport  # noqa: PLC0415
+
+            command = probe.get("command_argv", probe.get("argv"))
+            if not isinstance(command, list):
+                return [f"{entry_kind} 合法探测缺少 command_argv 数组"]
+            probe_protocol = ProtocolSpec(
+                descriptor_id=contract.protocol.descriptor_id,
+                field_values={},
+                descriptor_snapshot=dict(contract.protocol.descriptor_snapshot),
+                param_space={
+                    "cli_argv" if entry_kind == "cli" else "event_argv": list(command),
+                },
+            )
+            transport = DeviceCommandTransport(hdc, kind=entry_kind)
+            send = transport.send(
+                probe_protocol,
+                get_descriptor(contract.protocol.descriptor_id),
+                purpose="descriptor-selftest:command-send",
+            )
         else:
             return [f"自动描述符入口 {entry_kind} 暂无合法探针载体，不能伪造设备侧自证"]
         if send.reachability != "INPUT_DELIVERED":
@@ -378,8 +401,10 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
             expected = f"HAP_POC_SENT {selftest_target}"
             if log.returncode != 0 or expected not in (log.stdout or ""):
                 return [f"设备侧未观察到本次 {expected}，自证不能确认报文已发送"]
-        else:
+        elif entry_kind in {"native_unix", "unix_dgram", "unix_stream"}:
             expected = "native_unix_client result=0"
+        else:
+            expected = f"{entry_kind} command returncode=0"
         notes.append(
             f"自动描述符设备侧合法报文自证通过: endpoint={endpoint} mode={mode} "
             f"frame_keys={[k for k in ('first', 'second', 'third', 'payload') if fields.get(k)]} "
