@@ -170,7 +170,11 @@ def run_route_arbitration_loop(
 
     binding, simple_text = binding_pair
     tools = ReconTools(hdc=None, repo_root=repo_root)
-    finding_dict = finding.to_dict() if hasattr(finding, "to_dict") else dict(finding)
+    finding_dict = (
+        finding.to_prompt_dict()
+        if hasattr(finding, "to_prompt_dict")
+        else finding.to_dict() if hasattr(finding, "to_dict") else dict(finding)
+    )
     # 只把当前候选及其证据交给模型；不加载历史事实、exemplar 或设备资产。
     context = [
         "当前 finding:", json.dumps(finding_dict, ensure_ascii=False, indent=2)[:12000],

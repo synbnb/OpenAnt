@@ -501,7 +501,12 @@ def run_recon_loop(
         for item in current_evidence
     ]
     context_parts = [
-        "finding:", json.dumps(finding.to_dict(), ensure_ascii=False, indent=2),
+        "finding（仅保留协议恢复所需的结构事实；完整 Stage 1 叙述不进入本轮模型上下文）:",
+        json.dumps(
+            finding.to_prompt_dict() if hasattr(finding, "to_prompt_dict") else finding.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+        ),
         "",
         "当前源码路由观察（先读这一节建立待核对的源码行索引；这里不使用服务/漏洞"
         "关键词打分，也不自动判断接收、解析、状态或危险操作。这些行只是索引，绝不等同于已确认调用边。finalize 前必须回到下面的"

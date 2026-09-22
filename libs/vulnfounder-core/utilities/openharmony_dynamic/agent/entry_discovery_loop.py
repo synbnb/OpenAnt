@@ -404,7 +404,11 @@ def run_entry_discovery_loop(
         result.audit = [a.to_dict() for a in tools.audit]
         return result
     binding, simple_text = binding_pair
-    finding_dict = finding.to_dict() if hasattr(finding, "to_dict") else dict(finding)
+    finding_dict = (
+        finding.to_prompt_dict()
+        if hasattr(finding, "to_prompt_dict")
+        else finding.to_dict() if hasattr(finding, "to_dict") else dict(finding)
+    )
     context = [
         "目标 finding（可能包含 Stage 1 原始上下文；只能把它作为检索线索，不能替代源码/设备证据）:",
         json.dumps(finding_dict, ensure_ascii=False, indent=2),

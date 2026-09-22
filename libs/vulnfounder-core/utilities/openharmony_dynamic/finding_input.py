@@ -47,6 +47,64 @@ class FindingInput:
             "analysis_context": dict(self.analysis_context),
         }
 
+    def to_prompt_dict(self) -> dict[str, Any]:
+        """Return the bounded structural view used by dynamic LLM agents.
+
+        Stage 1 findings often contain a long ``reasoning``/``attack_scenario``
+        narrative, including shell syntax or exploit strings.  That material is
+        useful in the audit artifact, but it is not required to recover a
+        server protocol and can trigger an upstream safety filter before the
+        model gets to inspect the current source.  Dynamic agents instead need
+        the stable identity, sink, source ranges, candidate routes and a small
+        allow-list of evidence metadata.  The full finding remains available
+        to deterministic persistence and later Stage 2 analysis via
+        :meth:`to_dict`.
+        """
+        context = self.analysis_context if isinstance(self.analysis_context, dict) else {}
+        safe_context: dict[str, Any] = {}
+        for key in (
+            "source_evidence",
+            "missing_evidence",
+            "candidate_entry_path_ids",
+            "entry_path_ids",
+            "top_level_entry",
+            "status",
+            "graph_status",
+            "source_revision",
+            "reference_revision",
+            "候选攻击链",
+        ):
+            if key in context:
+                safe_context[key] = context[key]
+        stage_finding = context.get("stage1_finding")
+        if isinstance(stage_finding, dict):
+            # Keep location/category/evidence, omit prose fields that may carry
+            # a pre-written exploit recipe or shell payload.
+            safe_context["stage1_finding"] = {
+                key: stage_finding[key]
+                for key in (
+                    "function_analyzed",
+                    "file",
+                    "line_start",
+                    "line_end",
+                    "vulnerability_categories",
+                    "evidence",
+                    "missing_evidence",
+                )
+                if key in stage_finding
+            }
+        return {
+            "finding_id": self.finding_id,
+            "unit_id": self.unit_id,
+            "vuln_class": self.vuln_class,
+            "source_paths": list(self.source_paths),
+            "evidence_lines": [list(e) for e in self.evidence_lines],
+            "sink": self.sink,
+            "entry_hints": list(self.entry_hints),
+            "candidate_attack_chains": [list(path) for path in self.candidate_attack_chains],
+            "analysis_context": safe_context,
+        }
+
 
 def finding_from_dict(raw: dict[str, Any]) -> FindingInput:
     return FindingInput(
