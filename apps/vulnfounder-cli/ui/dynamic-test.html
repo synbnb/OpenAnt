@@ -1597,8 +1597,8 @@
         // 避免页面先滚到空的结果容器，随后 PoC 被追加到用户视口之外。
         // 显式传入当前请求对应的 run_id。历史页面恢复过程中 state.detail
         // 可能还在切换；结果渲染不能因为这个短暂状态而丢失 PoC 交付物。
+        // renderResult 会先显示结果面板；源码快照和在线预览随后异步追加。
         await renderResult(data, runId);
-        $('result-panel').hidden = false;
         $('result-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
       } catch(e) {
         if (state.runDone) {
@@ -2336,6 +2336,10 @@
       const body = $('result-body'); body.replaceChildren();
       const renderToken = String(Date.now())+'-'+Math.random();
       state.resultRenderToken = renderToken;
+      // 先显示结果面板，再读取交付物源码目录等较慢的异步分区。
+      // poc.hap 等交付物由独立文件接口提供，不能因源码预览较慢而让用户
+      // 看到空白页面；后续分区仍会在同一 renderToken 下异步追加。
+      $('result-panel').hidden = false;
       // run_id 的优先级来自当前请求，其次才是结果 envelope 和页面状态。
       // 这样刷新历史会话时，不会因为 state.detail 尚未完成初始化而跳过
       // /deliverables 读取。
