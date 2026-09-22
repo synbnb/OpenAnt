@@ -90,6 +90,10 @@ class EntryCandidate:
     state_flow: list[str] = field(default_factory=list)
     route_evidence: list[str] = field(default_factory=list)
     reason: str = ""
+    # 当前运行内的候选路由复核证据；不参与 candidate_id 计算，避免同一
+    # 入口在复核前后身份漂移。它只记录为何在多候选场景中选择了该入口。
+    arbitration_evidence: list[str] = field(default_factory=list)
+    arbitration_reason: str = ""
 
     @property
     def candidate_id(self) -> str:
@@ -121,6 +125,8 @@ class EntryCandidate:
             "state_flow": list(self.state_flow),
             "route_evidence": list(self.route_evidence),
             "reason": self.reason,
+            "arbitration_evidence": list(self.arbitration_evidence),
+            "arbitration_reason": self.arbitration_reason,
         }
 
 
@@ -265,6 +271,10 @@ def _merge_candidates(candidates: list[EntryCandidate]) -> list[EntryCandidate]:
             ):
                 old.route_relevance = candidate.route_relevance
             old.route_evidence = list(dict.fromkeys(old.route_evidence + candidate.route_evidence))[:12]
+            old.arbitration_evidence = list(
+                dict.fromkeys(old.arbitration_evidence + candidate.arbitration_evidence)
+            )[:12]
+            old.arbitration_reason = old.arbitration_reason or candidate.arbitration_reason
             old.dispatch_conditions = list(dict.fromkeys(old.dispatch_conditions + candidate.dispatch_conditions))[:12]
             old.state_flow = list(dict.fromkeys(old.state_flow + candidate.state_flow))[:12]
             old.handler = old.handler or candidate.handler

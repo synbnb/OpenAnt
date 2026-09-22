@@ -552,7 +552,7 @@ def _entry_candidate_to_dict(candidate: Any) -> dict[str, Any]:
         "kind", "endpoint", "hint", "confidence", "source_evidence",
         "device_evidence", "candidate_id", "route_relevance", "handler",
         "target_sink", "dispatch_conditions", "state_flow", "route_evidence",
-        "reason",
+        "reason", "arbitration_evidence", "arbitration_reason",
     ):
         value = getattr(candidate, key, None)
         if value is not None:
@@ -596,8 +596,14 @@ def _route_binding_from_candidate(finding: FindingInput, candidate: Any | None) 
         evidence=list(dict.fromkeys(
             list(getattr(candidate, "source_evidence", []) or [])
             + list(getattr(candidate, "route_evidence", []) or [])
+            + list(getattr(candidate, "arbitration_evidence", []) or [])
         ))[:24],
-        assumptions=[str(getattr(candidate, "reason", ""))] if getattr(candidate, "reason", "") else [],
+        assumptions=[
+            value for value in (
+                str(getattr(candidate, "reason", "")),
+                str(getattr(candidate, "arbitration_reason", "")),
+            ) if value
+        ],
         missing_evidence=[] if str(getattr(candidate, "route_relevance", "unknown")) in {"direct", "possible"}
         else ["尚未确认入口与目标 sink 的服务端分派关系"],
     )
@@ -1008,6 +1014,8 @@ def compile_contract(finding: FindingInput, *, hdc=None,
                         state_flow=list(raw.get("state_flow") or []),
                         route_evidence=list(raw.get("route_evidence") or []),
                         reason=str(raw.get("reason", "")),
+                        arbitration_evidence=list(raw.get("arbitration_evidence") or []),
+                        arbitration_reason=str(raw.get("arbitration_reason", "")),
                     ))
             except (ImportError, TypeError, ValueError):
                 cached_entry_candidates = []
@@ -1076,6 +1084,64 @@ def compile_contract(finding: FindingInput, *, hdc=None,
                     "当前运行重试恢复已选路由候选: "
                     f"{getattr(recovered, 'candidate_id', '') or getattr(recovered, 'hint', '')}"
                 )
+        # 没有明确 Stage1 端点且多个候选都只是 possible/unknown 时，先运行
+        # 一个独立的候选路由复核 loop。它只比较当前 finding 的候选和源码，
+        # 不生成协议字段、不发送设备报文；若不能证明唯一关系，继续保持歧义
+        # 门禁。这样不会因模型在入口发现阶段过早 finalize 而把首个端点当成
+        # 目标路由，也不会把同服务的多个 endpoint 粗暴拼成一条攻击链。
+        arbitration_candidates = [
+            candidate for candidate in merged_candidates
+            if str(getattr(candidate, "route_relevance", "unknown")) != "unrelated"
+        ]
+        if (
+            selected_route_candidate is None
+            and not initial_entry_hints
+            and len(arbitration_candidates) > 1
+            and binding_pair is not None
+        ):
+            from .agent.route_arbitration_loop import run_route_arbitration_loop  # noqa: PLC0415
+
+            arbitration = run_route_arbitration_loop(
+                finding=finding,
+                candidates=arbitration_candidates,
+                repo_root=entry_root,
+                binding_pair=binding_pair,
+                on_event=on_event,
+            )
+            entry_discovery_data["route_arbitration"] = arbitration.to_dict()
+            notes.append(
+                f"候选路由复核 loop: {arbitration.status} "
+                f"turns={arbitration.turns_used} "
+                f"selected={arbitration.selected_candidate_id or 'none'}"
+            )
+            if arbitration.status == "selected":
+                selected_route_candidate = next(
+                    (
+                        candidate for candidate in arbitration_candidates
+                        if str(getattr(candidate, "candidate_id", ""))
+                        == arbitration.selected_candidate_id
+                    ),
+                    None,
+                )
+                if selected_route_candidate is not None:
+                    # 复核证据只附加到当前运行对象；candidate_id 不包含它，
+                    # retry 缓存可稳定恢复同一端点，route_binding 则能展示选择
+                    # 的源码依据和模型理由。
+                    known_refs = list(getattr(selected_route_candidate, "arbitration_evidence", []) or [])
+                    selected_route_candidate.arbitration_evidence = list(
+                        dict.fromkeys([*known_refs, *arbitration.evidence])
+                    )[:12]
+                    selected_route_candidate.arbitration_reason = arbitration.reason
+                    entry_discovery_data["selected_candidate_id"] = str(
+                        getattr(selected_route_candidate, "candidate_id", "")
+                    )
+                    entry_discovery_data["selected_route_binding"] = _route_binding_from_candidate(
+                        finding, selected_route_candidate,
+                    )
+                    notes.append(
+                        "候选路由复核选择当前 endpoint；原始 route_relevance 保持 "
+                        f"{getattr(selected_route_candidate, 'route_relevance', 'unknown')}"
+                    )
         if isinstance(current_context, dict) and merged_candidates:
             current_context["_dynamic_current_run_entry_candidates"] = [
                 _entry_candidate_to_dict(candidate) for candidate in merged_candidates

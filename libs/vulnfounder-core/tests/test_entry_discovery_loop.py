@@ -365,6 +365,63 @@ def test_compile_does_not_silently_choose_ambiguous_endpoints(monkeypatch, tmp_p
     assert len(finding.entry_hints) == 2
 
 
+def test_compile_runs_route_arbitration_before_ambiguous_gate(monkeypatch, tmp_path):
+    """多端点场景先交给路由复核，复核选择后才进入描述符匹配。"""
+    (tmp_path / "sp_thread_socket.cpp").write_text(
+        "void HandleA() {}\nvoid HandleB() {}\n", encoding="utf-8"
+    )
+    finding = _finding(tmp_path, hints=[])
+    first = ed.EntryCandidate(
+        kind="hap_udp", endpoint="127.0.0.1:8283", confidence="high",
+        source_evidence=["sp_thread_socket.cpp:1-2"],
+        route_relevance="possible", handler="HandleA",
+        target_sink=finding.sink, route_evidence=["sp_thread_socket.cpp:1-2"],
+    )
+    second = ed.EntryCandidate(
+        kind="hap_udp", endpoint="127.0.0.1:8285", confidence="high",
+        source_evidence=["sp_thread_socket.cpp:1-2"],
+        route_relevance="possible", handler="HandleB",
+        target_sink=finding.sink, route_evidence=["sp_thread_socket.cpp:1-2"],
+    )
+    fake_entry = type("EntryResult", (), {
+        "status": "finalized", "candidates": [first, second], "notes": [],
+        "turns_used": 2, "device_commands_used": 0,
+        "to_dict": lambda self: {
+            "status": self.status,
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+        },
+    })()
+    fake_arbitration = type("Arbitration", (), {
+        "status": "selected",
+        "selected_candidate_id": first.candidate_id,
+        "evidence": ["sp_thread_socket.cpp:1-2"],
+        "reason": "HandleA 是当前候选中唯一关联 sink 的处理函数",
+        "turns_used": 2,
+        "to_dict": lambda self: {
+            "status": self.status,
+            "selected_candidate_id": self.selected_candidate_id,
+            "evidence": self.evidence,
+            "reason": self.reason,
+        },
+    })()
+    monkeypatch.setattr(cc, "_llm_binding", lambda: ("binding", lambda *a, **k: "{}"))
+    monkeypatch.setattr(
+        "utilities.openharmony_dynamic.agent.entry_discovery_loop.run_entry_discovery_loop",
+        lambda **kwargs: fake_entry,
+    )
+    monkeypatch.setattr(
+        "utilities.openharmony_dynamic.agent.route_arbitration_loop.run_route_arbitration_loop",
+        lambda **kwargs: fake_arbitration,
+    )
+    monkeypatch.setattr(cc, "_try_auto_descriptor", lambda *a, **k: "")
+    result = cc.compile_contract(finding, hdc=None)
+    assert result.compile_status == "REQUIRES_PROTOCOL_REVIEW"
+    assert result.entry_discovery["route_arbitration"]["status"] == "selected"
+    assert result.entry_discovery["selected_candidate_id"] == first.candidate_id
+    assert any("候选路由复核 loop: selected" in note for note in result.notes)
+    assert "hap_udp 127.0.0.1:8283" in finding.entry_hints
+
+
 def test_compile_retry_does_not_bypass_ambiguous_entry_gate(monkeypatch, tmp_path):
     finding = _finding(tmp_path, hints=[])
     fake = type("CompileResult", (), {
