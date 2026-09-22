@@ -955,3 +955,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `5c50bed` | 为 route variant 增加独立 `--route-variant-timeout`（默认 180 秒，0 表示关闭该层上限），超时写成 `ROUTE_VARIANT_TIMEOUT`，不会留下无界的单样本进程；批处理外层样本超时仍独立保留。相关入口/自动化回归 53 项通过。 |
 | 2026-09-22 | 批处理可靠性修正 | 官方阶段 2 批处理默认 `workers` 从 2 调整为 1；单设备 HDC daemon 在并发读取时曾出现 `FreeChannelContinue handle->data is nullptr`，串行是默认的可复现实验口径，用户仍可显式提高并发。 |
 | 2026-09-22 | `a0bcd01` | 批处理器代码已推送；相关入口发现、路由复核、协议描述符和变体超时回归 53 项通过。全量历史 pytest 未作为本轮验收依据：其中包含旧环境依赖和长时间设备用例，运行时出现既有失败并已停止，未将其伪装成全绿。 |
+| 2026-09-22 | 最终串行 24 项回归（运行中） | 使用当前代码 `a0bcd01`、`workers=1`、单样本 300 秒、LLM 请求 60 秒、route variant 120 秒启动 clean-room 阶段 2 批处理；当前已进入 DP-01，设备 PID `31568` 和 8283/8284/8285 均监听。产物目录：`/Users/shiyu/.openant/dynamic_generalization_final_serial_20260922`。完成前不宣称 24 项结果。 |
