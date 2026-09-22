@@ -255,6 +255,11 @@
     .recon { background:#f6f8ff; border:1px solid #dbe3ff; border-left:4px solid var(--accent); border-radius:6px; padding:9px 12px; font-size:13px; white-space:pre-wrap; margin-top:4px; max-height:200px; overflow:auto; }
     .deliverable-status { display:flex; gap:5px; align-items:baseline; flex-wrap:wrap; margin:8px 0; padding:8px 10px; border:1px solid #cfe7d9; border-radius:7px; background:#fbfffc; color:#344054; font-size:12px; line-height:1.5; }
     .deliverable-status strong { color:#146c43; }
+    .deliverable-quick { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:9px 0 10px; padding:9px 10px; border:1px solid #a9ddc0; border-radius:8px; background:#f2fbf6; }
+    .deliverable-quick .quick-label { color:#146c43; font-size:12px; font-weight:800; margin-right:2px; }
+    .deliverable-quick a { display:inline-flex; align-items:center; min-height:27px; padding:4px 9px; border:1px solid #8fc8aa; border-radius:6px; background:#fff; color:#146c43; font-size:11.5px; font-weight:700; text-decoration:none; }
+    .deliverable-quick a:hover { background:#e7f6ef; }
+    .deliverable-quick .quick-note { color:#53627a; font-size:11px; }
     /* PoC 线路帧与面向用户的触发说明 */
     .frame-list { display:grid; gap:9px; margin-top:8px; }
     .frame-card { border:1px solid #c9d8f6; border-radius:9px; background:#fff; padding:10px 12px; }
@@ -2637,6 +2642,31 @@
         const reason = el('div','hint');
         reason.textContent = '说明：'+d.reason;
         s.appendChild(reason);
+      }
+      // 把最关键的 PoC 入口固定放在交付物卡片顶部。历史会话内容很长，
+      // 用户不应必须滚动到表格或源码浏览器才能找到可下载的 PoC。
+      const quickNames = [
+        ['poc.hap','下载 PoC HAP'],
+        ['contract_poc.json','查看 PoC 契约'],
+        ['poc_source.zip','下载 PoC 源码'],
+        ['README.md','查看使用说明'],
+        ['exp.hap','下载 Exp HAP'],
+      ];
+      const availableNames = new Set(files.map(f=>String(f && f.name || '')));
+      const quickFiles = quickNames.filter(item=>availableNames.has(item[0]));
+      if (quickFiles.length) {
+        const quick = el('div','deliverable-quick');
+        quick.appendChild(el('span','quick-label','快速入口：'));
+        quickFiles.forEach(([name,label])=>{
+          const file = files.find(f=>String(f && f.name || '')===name) || {name};
+          const a = document.createElement('a');
+          a.href = file.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/'+encodeURIComponent(name));
+          a.textContent = label;
+          a.download = name;
+          quick.appendChild(a);
+        });
+        quick.appendChild(el('span','quick-note','这些链接直接指向本轮会话产物，不依赖浏览器缓存或旧会话。'));
+        s.appendChild(quick);
       }
       const bits = [];
       if (d.victim_path) bits.push('Exp 目标文件 '+(d.victim_path)+(d.victim_source==='llm'?'（模型推断后经设备校验）':'（默认/回退路径）'));
