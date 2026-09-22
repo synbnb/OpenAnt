@@ -1571,7 +1571,9 @@
       if (!runId) return;
       try {
         const data = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/result');
-        renderResult(data);
+        // 结果页包含交付物和源码清单等异步分区。等待渲染完成后再滚动，
+        // 避免页面先滚到空的结果容器，随后 PoC 被追加到用户视口之外。
+        await renderResult(data);
         $('result-panel').hidden = false;
         $('result-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
       } catch(e) {
@@ -2205,9 +2207,11 @@
       node.appendChild(el('div','cn-v', humanStageValue(value)));
       return node;
     }
-    function renderResult(data) {
+    async function renderResult(data) {
       const r = data.result || {};
       const body = $('result-body'); body.replaceChildren();
+      const renderToken = String(Date.now())+'-'+Math.random();
+      state.resultRenderToken = renderToken;
       const v = r.verdict || {};
       const status = r.status || (data.run_status==='error' ? 'ERROR' : '—');
       updateOverview(status==='—'?'执行结果':humanStatus(status), status==='—'?'等待结果文件。':'动态测试已结束，可查看下方判定和证据。');
@@ -2222,6 +2226,10 @@
       sub.textContent = 'run '+(r.run_id||data.run_id||'—')+' · '+contextLabel+' · 契约 '+(v.contract_id||'—')+' · 漏洞类 '+(r.vuln_class||'—')+' · pattern '+(r.pattern||'—');
       hero.appendChild(sub);
       body.appendChild(hero);
+      // 交付物是用户最需要确认的结果，放在状态卡片之后而不是长篇证据之后。
+      // renderDeliverables 在没有交付物时保持静默，因此兼容旧运行记录。
+      await renderDeliverables(state.detail && state.detail.runId, r.deliverables, body, () => state.resultRenderToken === renderToken);
+      if (state.resultRenderToken !== renderToken) return;
       if (v.gap) body.appendChild(el('div','hint','判定缺口：'+v.gap));
       const allErrors = [...(r.adapter_errors||[]), ...(r.compile_errors||[]), ...(data.errors||[]), data.run_error?[data.run_error]:[]]
         .filter(x => x !== undefined && x !== null && String(x).trim() !== '');
@@ -2388,7 +2396,6 @@
       ];
       body.appendChild(el('div','sec-t sec-pipeline-t','管线元信息'));
       body.appendChild(kvGrid(metaPairs));
-      renderDeliverables(state.detail && state.detail.runId, r.deliverables);
       const fsRows = [];
       for (const o of (r.record&&r.record.observations||[])) {
         for (const [path, info] of Object.entries(o.filesystem||{})) fsRows.push([path, info]);
@@ -2448,8 +2455,8 @@
       'poc_source_manifest.json': 'PoC 源码清单与 SHA-256',
       'exp_source_manifest.json': 'Exp 源码清单与 SHA-256',
     };
-    async function renderDeliverables(runId, deliverables) {
-      const body = $('result-body');
+    async function renderDeliverables(runId, deliverables, targetBody, isCurrent) {
+      const body = targetBody || $('result-body');
       if (!runId) return;
       let files = [];
       const d = deliverables || {};
@@ -2464,6 +2471,7 @@
         } catch(e) { /* 无交付物：静默（非 CONFIRMED / 旧 run） */ }
       }
       if (!files.length && !hasStatus) return;
+      if (isCurrent && !isCurrent()) return;
       const s = el('div','sec sec-green');
       s.appendChild(el('div','sec-t','动态测试交付物（PoC / Exp）'));
       const statusText = {
@@ -2531,6 +2539,10 @@
       }
       if (sourceKinds.length) s.appendChild(sourceBox);
       body.appendChild(s);
+      if (isCurrent && !isCurrent()) {
+        s.remove();
+        return;
+      }
     }
 
     async function renderSourceExplorer(runId, kind, title) {

@@ -122,6 +122,9 @@ func scanArtifactJSON(w http.ResponseWriter, status int, payload any) {
 
 func (s *Server) handleScanArtifactIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 动态测试结果页包含随运行变化的交付物清单。禁止浏览器复用旧 HTML，
+	// 否则新生成的 PoC 入口可能仍加载旧版脚本。
+	w.Header().Set("Cache-Control", "no-store")
 	if err := s.tmplScanArtifact.Execute(w, scanArtifactPageData{CSRF: s.csrfToken}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -129,6 +132,7 @@ func (s *Server) handleScanArtifactIndex(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleScanArtifactHistoryIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	if err := s.tmplScanArtifactHistory.Execute(w, scanArtifactPageData{CSRF: s.csrfToken}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
