@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 
 _SOURCE_REF_RE = re.compile(r"^(?P<path>.+?)(?::\d+(?:-\d+)?)?$")
+_LOCAL_INCLUDE_RE = re.compile(r"^\s*#\s*include\s*\"(?P<path>[^\"]+)\"")
 _UNIX_RE = re.compile(r"/dev/(?:unix/)?socket/[A-Za-z0-9_.-]+")
 _ENDPOINT_RE = re.compile(r"(?:(?:127\.0\.0\.1|0\.0\.0\.0|localhost):\d{1,5})")
 _PORT_RE = re.compile(r"\b(?:htons|ntohs)\s*\(\s*(\d{1,5})\s*\)")
@@ -132,6 +133,54 @@ def _resolve_paths(source_paths: Iterable[str], repo_root: Path) -> list[Path]:
     return resolved[:16]
 
 
+def _expand_local_includes(paths: Iterable[Path], repo_root: Path) -> list[Path]:
+    """有界扩展当前 route 的本地引号 include。
+
+    协议常量和消息结构经常放在同一服务的头文件/生成头中。只沿当前已选
+    route 文件的仓库内 ``#include \"...\"`` 扩展，最多 32 个文件；只扫描
+    原始 route 文件的直接依赖，不继续沿头文件递归。不解析系统头、不按文件名
+    全仓搜索，避免把其它服务的协议事实混入当前 route。
+    """
+    root = repo_root.resolve()
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for path in list(paths):
+        if len(result) >= 32:
+            break
+        try:
+            path = path.resolve()
+            path.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not path.is_file() or path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            match = _LOCAL_INCLUDE_RE.match(line)
+            if not match:
+                continue
+            include = Path(match.group("path"))
+            candidates = (path.parent / include, root / include)
+            for candidate in candidates:
+                try:
+                    candidate = candidate.resolve()
+                    candidate.relative_to(root)
+                except (OSError, ValueError):
+                    continue
+                if candidate.is_file() and candidate not in seen and len(result) < 32:
+                    # 只收录为当前 route 的直接依赖；新加入的头文件不会再次
+                    # 作为 include 源，从而避免把整棵公共头文件树带入证据。
+                    seen.add(candidate)
+                    result.append(candidate)
+                    break
+    return result
+
+
 def _item(category: str, signal: str, path: Path, repo_root: Path, line_no: int, line: str) -> ProtocolEvidenceItem:
     try:
         rel = path.relative_to(repo_root).as_posix()
@@ -157,7 +206,7 @@ def infer_protocol_evidence(
     读取范围，也不会把函数名直接当作入口证据。
     """
     root = Path(repo_root).resolve()
-    paths = _resolve_paths(source_paths, root)
+    paths = _expand_local_includes(_resolve_paths(source_paths, root), root)
     result = ProtocolEvidence(source_paths=[p.relative_to(root).as_posix() for p in paths])
     seen: dict[str, set[tuple[str, str, str, int]]] = {
         key: set() for key in ("transport", "endpoints", "framing", "dispatch", "guards")

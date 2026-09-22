@@ -55,3 +55,16 @@ def test_protocol_evidence_extracts_symbolic_port_constants(tmp_path):
     assert {item["signal"] for item in result["endpoints"]} == {
         "udpPort=8283", "tcpPort=8284", "udpExPort=8285",
     }
+
+
+def test_protocol_evidence_follows_route_local_include(tmp_path):
+    header = tmp_path / "socket.h"
+    header.write_text("const int servicePort = 9001;\n", encoding="utf-8")
+    source = tmp_path / "server.cpp"
+    source.write_text(
+        '#include "socket.h"\nint Server(int fd) { return bind(fd, nullptr, 0); }\n',
+        encoding="utf-8",
+    )
+    result = infer_protocol_evidence(["server.cpp"], repo_root=tmp_path).to_dict()
+    assert any(item["signal"] == "servicePort=9001" for item in result["endpoints"])
+    assert "socket.h" in result["source_paths"]
