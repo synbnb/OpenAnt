@@ -37,3 +37,21 @@ def test_protocol_evidence_reports_missing_categories(tmp_path):
     assert result.status == "partial"
     assert "未找到接收/发送/绑定调用证据" in result.missing_evidence
     assert "未找到端点、Unix socket 名称或端口常量" in result.missing_evidence
+
+
+def test_protocol_evidence_extracts_symbolic_port_constants(tmp_path):
+    source = tmp_path / "socket.h"
+    source.write_text(
+        """class Socket {
+    const int udpPort = 8283;
+    const int tcpPort = 8284;
+    const int udpExPort = 8285;
+};
+""",
+        encoding="utf-8",
+    )
+    result = infer_protocol_evidence(["socket.h"], repo_root=tmp_path).to_dict()
+    assert result["counts"]["endpoints"] == 3
+    assert {item["signal"] for item in result["endpoints"]} == {
+        "udpPort=8283", "tcpPort=8284", "udpExPort=8285",
+    }

@@ -17,6 +17,14 @@ _SOURCE_REF_RE = re.compile(r"^(?P<path>.+?)(?::\d+(?:-\d+)?)?$")
 _UNIX_RE = re.compile(r"/dev/(?:unix/)?socket/[A-Za-z0-9_.-]+")
 _ENDPOINT_RE = re.compile(r"(?:(?:127\.0\.0\.1|0\.0\.0\.0|localhost):\d{1,5})")
 _PORT_RE = re.compile(r"\b(?:htons|ntohs)\s*\(\s*(\d{1,5})\s*\)")
+# OpenHarmony 服务通常把端口放在 `tcpPort`/`udpPort` 等成员常量中，绑定处
+# 只出现 `htons(sockPort)`。这里仅提取“名称明确以 port 结尾的字段/常量赋值”，
+# 不把任意整数或函数参数当成端点；最终是否属于当前 route 仍由 Agent 用类型、
+# 绑定对象和协议分支核对。
+_PORT_ASSIGN_RE = re.compile(
+    r"\b(?P<name>(?:[A-Za-z_][A-Za-z0-9_]*port|port))\b\s*(?:=|:)\s*(?P<port>\d{1,5})\b",
+    re.IGNORECASE,
+)
 
 # 名称是语义类别，不是服务类型。表达式只用于定位行，最终关系仍需 Agent
 # 结合类型/注册对象/命令值核对。
@@ -169,6 +177,13 @@ def infer_protocol_evidence(
                 _append_unique(result.endpoints, _item("endpoint", match.group(0), path, root, line_no, line), seen["endpoints"])
             for match in _PORT_RE.finditer(line):
                 _append_unique(result.endpoints, _item("port_literal", match.group(1), path, root, line_no, line), seen["endpoints"])
+            for match in _PORT_ASSIGN_RE.finditer(line):
+                _append_unique(
+                    result.endpoints,
+                    _item("port_constant", f"{match.group('name')}={match.group('port')}",
+                          path, root, line_no, line),
+                    seen["endpoints"],
+                )
             for signal, pattern in _FRAMING_PATTERNS:
                 if pattern.search(line):
                     _append_unique(result.framing, _item("framing", signal, path, root, line_no, line), seen["framing"])
