@@ -381,6 +381,8 @@ class Runner:
                 hilog_hits=hits,
                 process_before=process_before,
                 process_after=process_after,
+                response_before="",
+                response_after=str(getattr(send_result, "response_excerpt", "") or ""),
                 state_before=process_before,
                 state_after=process_after,
             )
@@ -410,6 +412,7 @@ class Runner:
                 syscalls=[],
                 filesystem={p: s.to_dict() for p, s in mutated_files.items()},
                 hilog_hits=hits,
+                response_excerpt=str(getattr(send_result, "response_excerpt", "") or ""),
             )
             rec.observations.append(observation.to_dict())
             rec.state = "OBSERVED"
@@ -593,7 +596,22 @@ class Runner:
             pids = [value for value in rec.stdout.split() if value.isdigit()]
         except Exception:  # noqa: BLE001 — 观测失败保留未知
             return {"alive": None, "pids": [], "unknown": True, "target": name}
-        result: dict[str, Any] = {"target": name, "pids": pids, "alive": bool(pids), "fd_count": 0, "rss_kb": 0}
+        result: dict[str, Any] = {
+            "target": name,
+            "pids": pids,
+            "alive": bool(pids),
+            "fd_count": 0,
+            "rss_kb": 0,
+            "faultlog_tail": "",
+        }
+        try:
+            faultlog = self.hdc.shell(
+                ["sh", "-c", "ls -l /data/log/faultlog/faultlogger-*.log 2>&1 | tail -n 32"],
+                purpose=purpose + ":faultlog",
+            )
+            result["faultlog_tail"] = str(faultlog.stdout or "")
+        except Exception:  # noqa: BLE001 — 故障日志不可读时保留未知
+            result["faultlog_unknown"] = True
         for pid in pids[:8]:
             try:
                 fd = self.hdc.shell(["sh", "-c", f"ls /proc/{pid}/fd 2>/dev/null | wc -l"], purpose=purpose + ":fd")

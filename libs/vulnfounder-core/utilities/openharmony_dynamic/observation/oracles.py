@@ -214,12 +214,21 @@ def evaluate_declared_oracle(
         before_alive = bool((process_before or {}).get("alive", (process_before or {}).get("pids")))
         after_alive = bool((process_after or {}).get("alive", (process_after or {}).get("pids")))
         crashed = before_alive and not after_alive
-        faultlog = bool((process_after or {}).get("faultlog_match"))
+        before_faultlog = str((process_before or {}).get("faultlog_tail", ""))
+        after_faultlog = str((process_after or {}).get("faultlog_tail", ""))
+        faultlog = bool((process_after or {}).get("faultlog_match")) or bool(
+            after_faultlog and after_faultlog != before_faultlog
+        )
         passed = crashed and (kind == "process_liveness" or faultlog or bool(spec.config.get("allow_unattributed_crash")))
         result = OracleResult(
             kind=kind, effect_observed=passed,
             forms={"process_exit": passed},
-            details={"before_alive": before_alive, "after_alive": after_alive, "faultlog_match": faultlog},
+            details={
+                "before_alive": before_alive,
+                "after_alive": after_alive,
+                "faultlog_match": faultlog,
+                "faultlog_changed": bool(after_faultlog and after_faultlog != before_faultlog),
+            },
         )
     elif kind in {"resource_delta", "fd_delta", "memory_delta"}:
         before = process_before or {}

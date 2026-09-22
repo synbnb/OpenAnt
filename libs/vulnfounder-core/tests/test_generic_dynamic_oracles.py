@@ -58,6 +58,19 @@ def test_crash_oracle_requires_fault_correlation_by_default():
     assert result.details["faultlog_match"] is False
 
 
+def test_crash_oracle_accepts_new_faultlog_snapshot():
+    spec = OracleSpec(kind="crash_correlated")
+    result = evaluate_declared_oracle(
+        spec,
+        {},
+        {},
+        process_before={"alive": True, "faultlog_tail": "old"},
+        process_after={"alive": False, "faultlog_tail": "new faultlogger entry"},
+    )
+    assert result.effect_observed is True
+    assert result.details["faultlog_changed"] is True
+
+
 def test_state_oracle_preserves_changed_keys():
     spec = OracleSpec(kind="state_differential", config={"keys": ["mode"]})
     result = evaluate_declared_oracle(
