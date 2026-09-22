@@ -790,3 +790,5 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `db14677` | 增加 fresh-session 重试阶段的通用 oracle 形状修复：过滤缺少 `form` 的 artifact 项和缺少 tag/pattern 的日志项，必要时使用当前漏洞类别已声明的观测骨架；首轮仍严格拒绝；新增回归后相关测试 48 项通过。GitHub 推送仍受 DNS 限制 |
 | 2026-09-22 | `d89e870` | DP-12 bounded retry 真实模型请求在约 8 分钟内未返回，安全中止；未发送业务帧、未改变设备服务。为 OpenAI 兼容 provider 增加可由 `OPENANT/VULNFOUNDER_OPENAI_REQUEST_TIMEOUT_SECONDS` 覆盖的 180 秒有限默认超时；相关回归 123 项通过。该结果是上游响应阻断，不是契约形状修复失败 |
 | 2026-09-22 | `75185cb` | 官方阶段 2 批处理器新增 `--max-attempts`、`--llm-timeout`、`--llm-max-retries`，将契约 fresh-session 重试与 SDK 重试分离；DP-11/DP-12/DP-16 clean-room 真实复验均达到 `ELIGIBLE`，自动描述符和设备侧合法探针自证通过；DP-11 首场 oracle 结构错误经第 3 次重试修复；代码与进度文档已提交，待推送远端 |
+| 2026-09-22 | `281c2e8` | 修正进度文档中的当前提交与 tracked 工作区口径，并完成阶段记录 GitHub 同步；新增参数/结构修复后的三样本验收证据 |
+| 2026-09-22 | 工作区回归 | 新增批处理参数后执行动态相关回归：`188 passed in 0.88s`；未发现载体、协议校验、设备预检或 OpenAI 适配器回归 |
