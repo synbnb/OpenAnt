@@ -11,7 +11,18 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .models import Contract, ORACLE_ARTIFACT_DIFFERENTIAL, RISK_TIERS
+from .models import (
+    Contract,
+    ORACLE_ARTIFACT_DIFFERENTIAL,
+    ORACLE_CRASH_CORRELATED,
+    ORACLE_HILOG_EXPECTATION,
+    ORACLE_PERMISSION_DIFFERENTIAL,
+    ORACLE_PROCESS_LIVENESS,
+    ORACLE_READBACK_DIFFERENTIAL,
+    ORACLE_RESOURCE_DELTA,
+    ORACLE_STATE_DIFFERENTIAL,
+    RISK_TIERS,
+)
 from .observation.oracles import OracleError, _validate_spec
 from .protocols import get_descriptor
 
@@ -142,12 +153,20 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
     if contract.risk.risk_tier == "boot_critical" and contract.risk.crash_oracle_allowed:
         errors.append("V6 风险: boot_critical 目标不允许 crash_oracle_allowed=true")
 
-    # V7 预言机合法
-    if contract.oracle.kind != ORACLE_ARTIFACT_DIFFERENTIAL:
-        errors.append(
-            f"V7 预言机: oracle.kind={contract.oracle.kind} 当前仅实现 "
-            f"{ORACLE_ARTIFACT_DIFFERENTIAL}（其余按方案 §3.3 诚实降级）"
-        )
+    # V7 预言机合法。不同漏洞类型使用不同观测器；kind 通过统一 evaluator
+    # 分派，不能再把资源、崩溃、权限和状态样本一律挡在编译阶段。
+    supported_oracles = {
+        ORACLE_ARTIFACT_DIFFERENTIAL, ORACLE_HILOG_EXPECTATION,
+        ORACLE_READBACK_DIFFERENTIAL, ORACLE_PERMISSION_DIFFERENTIAL,
+        ORACLE_CRASH_CORRELATED, ORACLE_RESOURCE_DELTA,
+        ORACLE_STATE_DIFFERENTIAL, ORACLE_PROCESS_LIVENESS,
+        "log_signal", "response_match", "fd_delta", "memory_delta",
+        "identity_differential", "race_differential",
+    }
+    if contract.oracle.kind not in supported_oracles:
+        errors.append(f"V7 预言机: oracle.kind={contract.oracle.kind} 不在支持集合 {sorted(supported_oracles)}")
+    if not isinstance(contract.oracle.config, dict):
+        errors.append("V7 预言机: oracle.config 必须是对象")
     if not contract.oracle.refutation:
         errors.append("V7 预言机: refutation 为空")
     errors.extend(_validate_hilog_expectations(contract.oracle.hilog_expectations))

@@ -31,7 +31,8 @@ from .protocols import get_descriptor, register
 
 # ---------------------------------------------------------------------------
 # §3.3 漏洞类 → 预言机映射（确定性表；未实现的预言机诚实降级）
-# 首选 oracle 以 artifact_differential forms 组合表达（当前唯一实现）。
+# 预言机类型由漏洞类别驱动；每种类型仍须由设备 before/during/after 观测
+# 实例化，不能把“已声明”误认为“已确认”。
 # ---------------------------------------------------------------------------
 
 _VULNCLASS_ORACLE: dict[str, dict[str, Any]] = {
@@ -70,11 +71,26 @@ _VULNCLASS_ORACLE: dict[str, dict[str, Any]] = {
         "impl": True,
         "ref": "HV-05",
     },
-    "permission_bypass": {"impl": False, "reason": "permission_differential 未实现（需双身份）"},
-    "fd_leak": {"impl": False, "reason": "resource_delta 未实现"},
-    "resource_exhaustion": {"impl": False, "reason": "resource_delta 未实现"},
-    "parcel_check_missing": {"impl": False, "reason": "readback_differential / crash_correlated 未实现"},
-    "race_condition": {"impl": False, "reason": "state_differential 重复性判定未实现"},
+    "permission_bypass": {
+        "kind": "permission_differential", "config": {"expected_before": "denied", "expected_after": "allowed"},
+        "impl": True, "reason": "需要普通身份与授权身份的对照观测",
+    },
+    "fd_leak": {
+        "kind": "resource_delta", "config": {"metric": "fd_count", "min_delta": 1},
+        "impl": True, "reason": "需要重复请求前后的文件描述符快照",
+    },
+    "resource_exhaustion": {
+        "kind": "resource_delta", "config": {"metric": "rss_kb", "min_delta": 1},
+        "impl": True, "reason": "需要重复请求前后的资源快照",
+    },
+    "parcel_check_missing": {
+        "kind": "crash_correlated", "config": {"allow_unattributed_crash": False},
+        "impl": True, "reason": "需要目标服务存活与 faultlog 关联证据",
+    },
+    "race_condition": {
+        "kind": "state_differential", "config": {"keys": []},
+        "impl": True, "reason": "需要重复/并发请求前后的状态差分",
+    },
 }
 
 # entry.kind → 身份（当前身份阶梯；后续身份合成扩展再放宽）
@@ -1167,7 +1183,12 @@ def _merge_recon_draft(draft: dict[str, Any], finding: FindingInput,
             and isinstance(oracle_spec.get("forms"), list)):
         oracle = merged.setdefault("oracle", {})
         if isinstance(oracle, dict):
-            oracle.setdefault("kind", "artifact_differential")
+            oracle.setdefault("kind", oracle_spec.get("kind", "artifact_differential"))
+            if oracle_spec.get("config"):
+                config = oracle.setdefault("config", {})
+                if isinstance(config, dict):
+                    for key, value in oracle_spec["config"].items():
+                        config.setdefault(key, value)
             forms = oracle.get("artifact_forms")
             if not isinstance(forms, list) or not forms:
                 forms = []
@@ -1404,7 +1425,13 @@ def _merge_recon_draft(draft: dict[str, Any], finding: FindingInput,
                         ps.pop("src_file_dir", None)
     if "oracle" in merged:
         oracle = merged["oracle"]
-        oracle.setdefault("kind", "artifact_differential")
+        oracle_spec = _VULNCLASS_ORACLE.get(finding.vuln_class, {})
+        oracle.setdefault("kind", oracle_spec.get("kind", "artifact_differential"))
+        if oracle_spec.get("config"):
+            config = oracle.setdefault("config", {})
+            if isinstance(config, dict):
+                for key, value in oracle_spec["config"].items():
+                    config.setdefault(key, value)
         # 标准否证集（V7 必填，可推导项）
         oracle.setdefault("refutation", list(_DEFAULT_REFUTATION))
         for f in oracle.get("artifact_forms") or []:

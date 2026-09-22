@@ -93,6 +93,7 @@ def contract_from_dict(raw: dict[str, Any]) -> Contract:
         pattern_key=oracle_raw.get("pattern_key", "run_pattern"),
         refutation=list(oracle_raw.get("refutation", [])),
         evidence=oracle_raw.get("evidence", ""),
+        config=dict(oracle_raw.get("config") or {}),
     )
     risk = RiskSpec(**raw["risk"])
     cleanup = CleanupSpec(**raw["cleanup"])

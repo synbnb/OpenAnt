@@ -1614,6 +1614,17 @@
       log_signal:'设备日志信号',
       hilog_signal:'设备日志信号',
       process_state:'进程状态变化',
+      process_liveness:'进程存活状态变化',
+      crash_correlated:'崩溃与故障日志关联',
+      resource_delta:'资源使用量变化',
+      fd_delta:'文件描述符数量变化',
+      memory_delta:'内存占用变化',
+      permission_differential:'权限前后对照',
+      identity_differential:'身份前后对照',
+      state_differential:'服务状态前后对照',
+      race_differential:'并发状态差分',
+      hilog_expectation:'设备日志期望',
+      readback_differential:'响应回读差分',
       response_match:'服务响应内容匹配',
       marker_file:'标记文件检查',
       composite:'多项证据综合判断',
@@ -2074,6 +2085,17 @@
       if (signals.length) {
         parent.appendChild(el('div','dossier-section-title','日志预期信号'));
         const chips = el('div','dossier-signal-list'); signals.forEach(signal=>chips.appendChild(el('span','dossier-signal',dossierReadableValue(signal)))); parent.appendChild(chips);
+      }
+      if (oracle && oracle.config && typeof oracle.config === 'object' && Object.keys(oracle.config).length) {
+        parent.appendChild(el('div','dossier-section-title','通用观测参数'));
+        const config = el('div','dossier-field-grid');
+        Object.entries(oracle.config).forEach(([key,value]) => {
+          const card = el('div','dossier-field-card');
+          card.appendChild(el('div','dossier-field-name',String(key)));
+          card.appendChild(el('div','dossier-field-value',dossierReadableValue(value)));
+          config.appendChild(card);
+        });
+        parent.appendChild(config);
       }
       if (oracle && oracle.evidence) parent.appendChild(el('div','dossier-explain','预言机来源说明：'+String(oracle.evidence)));
       parent.appendChild(el('div','dossier-explain','判定顺序：先确认输入到达，再确认危险操作受到输入影响，最后确认文件、日志或其他设备状态出现与本轮图案绑定的效果。仅有“帧已发送”或“函数可能被调用”不能单独构成成功证明。'));

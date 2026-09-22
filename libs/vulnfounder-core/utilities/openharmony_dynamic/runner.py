@@ -24,6 +24,7 @@ from .models import ArtifactForm, Contract, Observation, OracleResult, Verdict, 
 from .observation.oracles import (
     OracleError,
     clear_artifacts,
+    evaluate_declared_oracle,
     evaluate_artifact_differential,
     plant_exfil_file,
 )
@@ -197,6 +198,8 @@ class Runner:
         rec.pattern = _random_pattern()
         run_dir = f"{_RUN_DIR_ROOT}/{run_id}-{contract.contract_id}"
         transport = None
+        process_before: dict[str, Any] = {}
+        process_after: dict[str, Any] = {}
         self._emit("run_started", f"{run_id} 契约 {contract.contract_id}")
         # 预检必须发生在 try/finally 设备阶段之前：格式错误的契约不应为了
         # “清理”而向设备发送 rm、force-stop 等命令，更不能先安装 HAP 再报错。
@@ -215,6 +218,14 @@ class Runner:
             # 1. 参数解析：契约模板占位符 → 具体值（含 run 唯一图案回填）
             params = self._resolve_params(contract, run_id, run_dir, rec.pattern)
             rec.state = "ANCHORED"
+
+            # 资源/崩溃/状态类预言机需要在发送前保存目标进程快照；普通文件
+            # 差分保持原有路径，不因为增加观测器而改变载荷。
+            if contract.oracle.kind in {
+                "resource_delta", "fd_delta", "memory_delta", "process_liveness",
+                "crash_correlated", "state_differential", "race_differential",
+            }:
+                process_before = self._snapshot_target_process(contract, f"{run_id}:process-before")
 
             # 2. 传输层构造
             transport = self._make_transport(contract)
@@ -339,6 +350,11 @@ class Runner:
 
             # 8. 执行后快照 + hilog 终态采集（轮询期已缓存命中则复用）
             mutated_files = snapshot_paths(self.hdc, oracle_paths, purpose=f"{run_id}:after")
+            if contract.oracle.kind in {
+                "resource_delta", "fd_delta", "memory_delta", "process_liveness",
+                "crash_correlated", "state_differential", "race_differential",
+            }:
+                process_after = self._snapshot_target_process(contract, f"{run_id}:process-after")
             hilog_after = dump_hilog(self.hdc, purpose=f"{run_id}:hilog")
             hits: list[dict[str, Any]] = []
             for expect in runtime_hilog_expectations:
@@ -359,9 +375,14 @@ class Runner:
             # 设备版本、日志级别或缓冲区都可能使它不出现。不能让一个没有
             # 明确 required=true 的辅助提示否决已经通过的文件/输出差分。
             # 手工契约若确实把日志作为必要条件，应显式设置 required=true。
-            oracle_result = evaluate_artifact_differential(
+            oracle_result = evaluate_declared_oracle(
                 contract.oracle, baseline_files, mutated_files,
                 hdc=self.hdc, run_pattern=rec.pattern,
+                hilog_hits=hits,
+                process_before=process_before,
+                process_after=process_after,
+                state_before=process_before,
+                state_after=process_after,
             )
             if runtime_hilog_expectations:
                 required_expects = [
@@ -406,8 +427,8 @@ class Runner:
                 execution_identity=contract.identity.execution_identity,
                 influence_blocker=blocker,
                 baselined=baselined,
-                status_reason_code="artifact_differential",
-                gap="" if oracle_result.effect_observed else "oracle 无信号：声明 form 未全部通过",
+                status_reason_code=contract.oracle.kind,
+                gap="" if oracle_result.effect_observed else "oracle 无信号：当前观测器未得到可归因的设备变化",
                 limitations=list(contract.limitations),
             )
             rec.verdict = verdict.__dict__.copy()
@@ -555,6 +576,38 @@ class Runner:
 
             return HapTransport(self.hdc)
         raise OracleError(f"未知 entry.kind: {contract.entry.kind}")
+
+    def _snapshot_target_process(self, contract: Contract, purpose: str) -> dict[str, Any]:
+        """采集进程存活、RSS、FD 数和 faultlog 尾部。
+
+        目标名来自当前契约的 risk.target_process；无法安全解析时返回带
+        ``unknown`` 的快照，绝不把 sink 文本直接拼进设备命令。
+        """
+        raw = str(contract.risk.target_process or "").strip()
+        name_match = re.search(r"[A-Za-z_][A-Za-z0-9_.-]{2,}", raw)
+        name = name_match.group(0) if name_match else ""
+        if not name or name.lower() in {"unknown", "popen", "system", "process"}:
+            return {"alive": None, "pids": [], "unknown": True}
+        try:
+            rec = self.hdc.shell(["pidof", name], purpose=purpose + ":pidof")
+            pids = [value for value in rec.stdout.split() if value.isdigit()]
+        except Exception:  # noqa: BLE001 — 观测失败保留未知
+            return {"alive": None, "pids": [], "unknown": True, "target": name}
+        result: dict[str, Any] = {"target": name, "pids": pids, "alive": bool(pids), "fd_count": 0, "rss_kb": 0}
+        for pid in pids[:8]:
+            try:
+                fd = self.hdc.shell(["sh", "-c", f"ls /proc/{pid}/fd 2>/dev/null | wc -l"], purpose=purpose + ":fd")
+                result["fd_count"] += int((fd.stdout or "0").strip() or 0)
+            except Exception:  # noqa: BLE001 — 单项指标失败不影响其它指标
+                pass
+            try:
+                status = self.hdc.shell(["cat", f"/proc/{pid}/status"], purpose=purpose + ":status")
+                match = re.search(r"(?m)^VmRSS:\s+(\d+)\s+kB", status.stdout or "")
+                if match:
+                    result["rss_kb"] += int(match.group(1))
+            except Exception:  # noqa: BLE001
+                pass
+        return result
 
     def _persist(self, rec: RunRecord) -> None:
         out = self.artifacts_root / f"{rec.run_id}-{rec.contract_id}.json"

@@ -210,6 +210,9 @@ class OracleSpec:
     pattern_key: str = "run_pattern"             # 观测值中携带 run 唯一图案的键
     refutation: list[str] = field(default_factory=list)
     evidence: str = ""
+    # 非文件差分预言机的声明参数。它只描述观测方式和阈值，不携带样本
+    # 专用命令；运行器依据该声明读取进程、资源、响应或状态快照。
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -282,6 +285,7 @@ class Contract:
                 "pattern_key": self.oracle.pattern_key,
                 "refutation": list(self.oracle.refutation),
                 "evidence": self.oracle.evidence,
+                "config": dict(self.oracle.config),
             },
             "risk": self.risk.__dict__,
             "cleanup": self.cleanup.__dict__,

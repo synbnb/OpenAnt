@@ -160,6 +160,115 @@ def evaluate_artifact_differential(
     return result
 
 
+def evaluate_declared_oracle(
+    spec: OracleSpec,
+    baseline: dict[str, FileSnapshot],
+    mutated: dict[str, FileSnapshot],
+    *,
+    hdc: "HDCClient | None" = None,
+    run_pattern: str = "",
+    hilog_hits: list[dict[str, Any]] | None = None,
+    process_before: dict[str, Any] | None = None,
+    process_after: dict[str, Any] | None = None,
+    response_before: str = "",
+    response_after: str = "",
+    state_before: dict[str, Any] | None = None,
+    state_after: dict[str, Any] | None = None,
+) -> OracleResult:
+    """按契约声明分派通用预言机。
+
+    旧实现把所有漏洞类型压成 ``artifact_differential``，导致资源、崩溃、
+    权限和状态样本在契约编译阶段直接 ``ORACLE_UNAVAILABLE``。这里保留
+    文件差分的既有实现，并为其余类型提供同一套 before/during/after/
+    refutation 结构。没有足够观测值时返回未通过且明确写出缺口，不伪造
+    effect；调用方仍会据此产生 INCONCLUSIVE/UNPROVEN，而不是误报 CONFIRMED。
+    """
+    kind = str(spec.kind or "artifact_differential")
+    if kind == "artifact_differential":
+        result = evaluate_artifact_differential(
+            spec, baseline, mutated, hdc=hdc, run_pattern=run_pattern,
+        )
+    elif kind in {"hilog_expectation", "log_signal"}:
+        hits = list(hilog_hits or [])
+        required = [item for item in spec.hilog_expectations if isinstance(item, dict) and item.get("required") is not False]
+        minimum = max([int(item.get("min_count", 1)) for item in required] or [1])
+        passed = len(hits) >= minimum
+        result = OracleResult(
+            kind=kind, effect_observed=passed,
+            forms={"log_signal": passed},
+            details={"hits": hits, "required_count": len(required), "minimum": minimum},
+        )
+    elif kind in {"readback_differential", "response_match"}:
+        needle = str(spec.config.get("content_contains") or run_pattern or "")
+        passed = bool(needle and needle in str(response_after or "") and needle not in str(response_before or ""))
+        result = OracleResult(
+            kind=kind, effect_observed=passed,
+            forms={"response": passed},
+            details={
+                "needle_source": "config" if spec.config.get("content_contains") else "run_pattern",
+                "before_contains": bool(needle and needle in str(response_before or "")),
+                "after_contains": bool(needle and needle in str(response_after or "")),
+            },
+        )
+    elif kind in {"process_liveness", "crash_correlated"}:
+        before_alive = bool((process_before or {}).get("alive", (process_before or {}).get("pids")))
+        after_alive = bool((process_after or {}).get("alive", (process_after or {}).get("pids")))
+        crashed = before_alive and not after_alive
+        faultlog = bool((process_after or {}).get("faultlog_match"))
+        passed = crashed and (kind == "process_liveness" or faultlog or bool(spec.config.get("allow_unattributed_crash")))
+        result = OracleResult(
+            kind=kind, effect_observed=passed,
+            forms={"process_exit": passed},
+            details={"before_alive": before_alive, "after_alive": after_alive, "faultlog_match": faultlog},
+        )
+    elif kind in {"resource_delta", "fd_delta", "memory_delta"}:
+        before = process_before or {}
+        after = process_after or {}
+        metric = str(spec.config.get("metric") or "fd_count")
+        try:
+            before_value = float(before.get(metric, 0))
+            after_value = float(after.get(metric, 0))
+            threshold = float(spec.config.get("min_delta", 1))
+        except (TypeError, ValueError):
+            before_value = after_value = 0.0
+            threshold = 1.0
+        delta = after_value - before_value
+        passed = bool((before or after) and delta >= threshold)
+        result = OracleResult(
+            kind=kind, effect_observed=passed,
+            forms={"resource_growth": passed},
+            details={"metric": metric, "before": before_value, "after": after_value, "delta": delta, "threshold": threshold},
+        )
+    elif kind in {"permission_differential", "identity_differential"}:
+        before = str((state_before or {}).get("outcome", ""))
+        after = str((state_after or {}).get("outcome", ""))
+        expected = str(spec.config.get("expected_after") or "allowed")
+        denied = str(spec.config.get("expected_before") or "denied")
+        passed = bool(after == expected and (not before or before == denied))
+        result = OracleResult(
+            kind=kind, effect_observed=passed,
+            forms={"permission_change": passed},
+            details={"before_outcome": before, "after_outcome": after, "expected_before": denied, "expected_after": expected},
+        )
+    elif kind in {"state_differential", "race_differential"}:
+        before = state_before or {}
+        after = state_after or {}
+        keys = list(spec.config.get("keys") or sorted(set(before) | set(after)))
+        changes = {key: {"before": before.get(key), "after": after.get(key)} for key in keys if before.get(key) != after.get(key)}
+        passed = bool(changes)
+        result = OracleResult(kind=kind, effect_observed=passed, forms={"state_changed": passed}, details={"changes": changes})
+    else:
+        result = OracleResult(kind=kind, effect_observed=False, forms={}, details={"error": f"unsupported oracle kind: {kind}"})
+
+    # 所有通用 oracle 都带有可审计的反事实说明；这不是把失败升级成成功，
+    # 只是记录哪些否证条件已经被检查。
+    if result.effect_observed:
+        result.refutation_checks.append({"check": "run_pattern_bound", "passed": bool(run_pattern)})
+    else:
+        result.refutation_checks.append({"check": "oracle_signal_present", "passed": False})
+    return result
+
+
 def _exfil_surface_scan(
     hdc: "HDCClient | None",
     form: ArtifactForm,
