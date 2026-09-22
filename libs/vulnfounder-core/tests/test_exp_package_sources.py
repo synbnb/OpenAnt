@@ -9,7 +9,7 @@ from pathlib import Path
 _CORE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_CORE_ROOT))
 
-from core.exp_package import _package_source_snapshot  # noqa: E402
+from core.exp_package import _package_poc_only, _package_source_snapshot  # noqa: E402
 
 
 def test_package_source_snapshot_contains_project_and_excludes_host_files(tmp_path: Path):
@@ -39,3 +39,32 @@ def test_package_source_snapshot_contains_project_and_excludes_host_files(tmp_pa
         assert "poc_source/Entry/src/main/ets/pages/Index.ets" in names
         assert "poc_source/local.properties.example" in names
         assert all("build/" not in name for name in names)
+
+
+def test_package_poc_only_keeps_poc_when_exp_template_is_unavailable(tmp_path: Path):
+    project = tmp_path / "poc-build" / "project"
+    (project / "Entry/src/main/ets/pages").mkdir(parents=True)
+    (project / "Entry/src/main/ets/pages/Index.ets").write_text(
+        "const FIRST = 'set_pkgName::test';\n", encoding="utf-8")
+    hap = project.parent / "entry-default-signed.hap"
+    hap.write_bytes(b"fake-hap")
+    out = tmp_path / "deliverables"
+    out.mkdir()
+    contract = {
+        "contract_id": "GEN-test",
+        "protocol": {"descriptor_id": "dynamic_text"},
+    }
+
+    pkg = _package_poc_only(
+        out_dir=out, poc_contract=contract, poc_hap=hap,
+        reason="没有可验证的升级模板",
+    )
+
+    assert pkg.status == "poc_only"
+    names = {item["name"] for item in pkg.files}
+    assert {"poc.hap", "contract_poc.json", "README.md",
+            "poc_source.zip", "poc_source_manifest.json"} <= names
+    assert not (out / "exp.hap").exists()
+    readme = (out / "README.md").read_text(encoding="utf-8")
+    assert "仅 PoC" in readme
+    assert "未经验证的" in readme and "Exp" in readme

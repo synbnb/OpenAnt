@@ -147,7 +147,7 @@ def _extract_guards_from_poc(poc_contract: dict[str, Any]) -> tuple[str, ...]:
 class ExpPackage:
     """一次交付物打包的结果（成功/失败皆可序列化）。"""
 
-    status: str = ""                    # packaged / skipped / failed
+    status: str = ""                    # packaged / poc_only / skipped / failed
     reason: str = ""                    # skipped/failed 原因
     deliverables_dir: str = ""          # 落盘目录
     files: list[dict[str, Any]] = field(default_factory=list)  # [{name, path, bytes}]
@@ -277,6 +277,76 @@ def _register_source_snapshot_files(out_dir: Path, snapshot: dict[str, Any],
         path = out_dir / name
         if path.is_file():
             files.append({"name": name, "path": str(path), "bytes": path.stat().st_size})
+
+
+def _package_poc_only(*, out_dir: Path, poc_contract: dict[str, Any],
+                      poc_hap: Path | None, reason: str) -> ExpPackage:
+    """交付可执行的 PoC，即使当前漏洞类型没有通用 Exp 模板。
+
+    PoC 和 Exp 是两个独立交付物：没有安全、可验证的 Exp 升级方式时，不能
+    用空文件或猜测性的载荷冒充 Exp；但这不应导致已经成功构建的 PoC、协议
+    契约和源码从结果页消失。该函数只复制真实存在的构建产物，并保留明确的
+    ``poc_only`` 状态，供前端展示和后续人工扩展。
+    """
+    files: list[dict[str, Any]] = []
+
+    def register(path: Path, name: str) -> None:
+        if not path.is_file():
+            return
+        target = out_dir / name
+        if path.resolve() != target.resolve():
+            shutil.copy2(path, target)
+        files.append({"name": name, "path": str(target), "bytes": target.stat().st_size})
+
+    if poc_hap is not None:
+        register(poc_hap, "poc.hap")
+    (out_dir / "contract_poc.json").write_text(
+        json.dumps(poc_contract, ensure_ascii=False, indent=2), encoding="utf-8")
+    register(out_dir / "contract_poc.json", "contract_poc.json")
+
+    source_snapshots: dict[str, Any] = {}
+    poc_snapshot = _package_source_snapshot(
+        (poc_hap.parent / "project") if poc_hap else None, out_dir, "poc")
+    if poc_snapshot:
+        source_snapshots["poc"] = poc_snapshot
+        _register_source_snapshot_files(out_dir, poc_snapshot, files)
+
+    readme = out_dir / "README.md"
+    contract_id = str(poc_contract.get("contract_id", ""))
+    protocol = str(poc_contract.get("protocol", {}).get("descriptor_id", ""))
+    readme.write_text(
+        "\n".join([
+            "# VulnFounder 动态测试交付物",
+            "",
+            f"- 交付状态：**仅 PoC**（{reason}）",
+            f"- PoC 契约：`{contract_id}`（协议 `{protocol}`）",
+            "- Exp：本轮未生成。系统没有用未经验证的模板或空文件冒充 Exp。",
+            "",
+            "## 已生成文件",
+            "",
+            "| 文件 | 说明 |",
+            "|---|---|",
+            "| poc.hap | 已构建、可安装的 PoC 触发应用（如文件存在） |",
+            "| contract_poc.json | 本轮实际使用的协议、帧序列、守卫和预言机契约 |",
+            "| poc_source/ | PoC 构建工程的安全源码快照（如文件存在） |",
+            "| poc_source.zip | PoC 源码离线压缩包（如文件存在） |",
+            "| poc_source_manifest.json | 源码文件清单与 SHA-256（如文件存在） |",
+            "",
+            "## 复现步骤",
+            "",
+            "1. 安装：`hdc -t <serial> install poc.hap`；",
+            "2. 按动态测试记录启动 PoC 应用并观察设备日志；",
+            "3. 使用 `contract_poc.json` 中的帧序列和预言机检查触发效果；",
+            "4. Exp 需要在确认漏洞类型具有安全升级载荷后单独生成。",
+            "",
+            "本交付物仅用于已授权设备上的安全研究与验证。",
+            "",
+        ]), encoding="utf-8")
+    register(readme, "README.md")
+    return ExpPackage(
+        status="poc_only", reason=reason, deliverables_dir=str(out_dir),
+        files=files, source_snapshots=source_snapshots,
+    )
 
 
 def _llm_victim_path(binding_pair, finding: Any, contract_dict: dict[str, Any]) -> str | None:
@@ -653,8 +723,12 @@ def build_deliverables(
         else:
             exp_contract = _build_exp_contract(poc_contract, vuln_class, victim, dst)
         if exp_contract is None:
-            return ExpPackage(status="skipped", reason=f"vuln_class {vuln_class} 暂无 Exp 载荷模板",
-                              deliverables_dir=str(out_dir))
+            return _package_poc_only(
+                out_dir=out_dir,
+                poc_contract=poc_contract,
+                poc_hap=poc_hap,
+                reason=f"vuln_class {vuln_class} 暂无已验证的 Exp 载荷模板",
+            )
         if vuln_class in ("path_traversal", "information_disclosure"):
             # path_traversal 的 Exp 执行验证在 _build_path_traversal_exp 内已完成
             # （native 载体直发 + 输出面指纹核对），此处只落契约与证据文件。

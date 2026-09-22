@@ -253,6 +253,8 @@
     .o-card .o-content { margin-top:6px; background:#f7f9fc; border-radius:6px; padding:7px 9px; font:12px ui-monospace,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; max-height:130px; overflow:auto; }
     .notes li { margin-bottom:6px; font-size:13px; }
     .recon { background:#f6f8ff; border:1px solid #dbe3ff; border-left:4px solid var(--accent); border-radius:6px; padding:9px 12px; font-size:13px; white-space:pre-wrap; margin-top:4px; max-height:200px; overflow:auto; }
+    .deliverable-status { display:flex; gap:5px; align-items:baseline; flex-wrap:wrap; margin:8px 0; padding:8px 10px; border:1px solid #cfe7d9; border-radius:7px; background:#fbfffc; color:#344054; font-size:12px; line-height:1.5; }
+    .deliverable-status strong { color:#146c43; }
     /* PoC 线路帧与面向用户的触发说明 */
     .frame-list { display:grid; gap:9px; margin-top:8px; }
     .frame-card { border:1px solid #c9d8f6; border-radius:9px; background:#fff; padding:10px 12px; }
@@ -2450,55 +2452,85 @@
       const body = $('result-body');
       if (!runId) return;
       let files = [];
+      const d = deliverables || {};
+      const hasStatus = Boolean(d.status || d.reason || d.deliverables_dir);
       // result.json 内嵌的 deliverables 元数据优先；缺失时回退列表端点
-      if (deliverables && deliverables.status === 'packaged' && (deliverables.files||[]).length) {
-        files = deliverables.files;
-      } else if (!deliverables || deliverables.status === 'packaged') {
+      if (Array.isArray(d.files) && d.files.length) {
+        files = d.files;
+      } else {
         try {
           const listing = await get('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables');
           files = listing.files || [];
         } catch(e) { /* 无交付物：静默（非 CONFIRMED / 旧 run） */ }
       }
-      if (!files.length) return;
-      const s = el('div','sec sec-green'); s.appendChild(el('div','sec-t','交付物下载（PoC + Exp 完整利用包）'));
-      const d = deliverables || {};
-      if (d.status === 'packaged') {
-        const bits = [];
-        if (d.victim_path) bits.push('受害文件 '+(d.victim_path)+(d.victim_source==='llm'?'（LLM 推断）':'（模板默认）'));
-        if (d.exp_verdict && d.exp_verdict.effect_observed) bits.push('✓ Exp 效果已在板卡实证');
-        else if (d.exp_verdict) bits.push('⚠ Exp 效果未观测（证据已留档）');
-        if (bits.length) { const h = el('div','hint'); h.textContent = bits.join(' · '); s.appendChild(h); }
-        if (d.exp_payload) { const p = el('div','recon'); p.textContent = 'Exp 载荷：'+d.exp_payload; s.appendChild(p); }
+      if (!files.length && !hasStatus) return;
+      const s = el('div','sec sec-green');
+      s.appendChild(el('div','sec-t','动态测试交付物（PoC / Exp）'));
+      const statusText = {
+        packaged: 'PoC 与 Exp 均已生成，可在线查看或下载。',
+        poc_only: 'PoC 已生成；当前漏洞类型没有经过验证的 Exp 升级载荷。',
+        skipped: '本轮未生成交付文件。',
+        failed: '交付物生成失败，但不影响动态测试判定。',
+      }[d.status] || (files.length ? '交付文件已生成。' : '本轮没有可下载文件。');
+      const status = el('div','deliverable-status');
+      status.appendChild(el('strong',null,'交付状态：'+(d.status||'未生成')));
+      status.appendChild(el('span',null,' · '+statusText));
+      s.appendChild(status);
+      if (d.reason) {
+        const reason = el('div','hint');
+        reason.textContent = '说明：'+d.reason;
+        s.appendChild(reason);
       }
-      const t = el('table','fs-table'); const tb = el('tbody');
-      const trh = el('tr');
-      ['文件','说明','大小','操作'].forEach(h=>trh.appendChild(el('th',null,h)));
-      const thead = el('thead'); thead.appendChild(trh); t.appendChild(thead);
-      for (const f of files) {
-        const tr = el('tr');
-        const nameTd = el('td'); const a = document.createElement('a');
-        a.href = f.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/'+encodeURIComponent(f.name));
-        a.textContent = f.name; a.download = f.name; a.className='dl-link'; nameTd.appendChild(a); tr.appendChild(nameTd);
-        tr.appendChild(el('td',null,DELIV_LABEL[f.name]||''));
-        tr.appendChild(el('td',null, f.bytes!=null ? (f.bytes>=1024?(f.bytes/1024).toFixed(1)+' KB':f.bytes+' B') : '—'));
-        const opTd = el('td');
-        if (DELIV_PREVIEWABLE[f.name]) {
-          const vb = el('button','view-btn','在线预览');
-          vb.addEventListener('click', () => openDelivViewer(runId, f));
-          opTd.appendChild(vb);
-        } else { opTd.textContent = '—'; }
-        tr.appendChild(opTd);
-        tb.appendChild(tr);
+      const bits = [];
+      if (d.victim_path) bits.push('Exp 目标文件 '+(d.victim_path)+(d.victim_source==='llm'?'（模型推断后经设备校验）':'（默认/回退路径）'));
+      if (d.exp_verdict && d.exp_verdict.effect_observed) bits.push('✓ Exp 效果已在板卡实证');
+      else if (d.exp_verdict && d.status === 'packaged') bits.push('⚠ Exp 效果未观测（验证证据已留档）');
+      if (bits.length) { const h = el('div','hint'); h.textContent = bits.join(' · '); s.appendChild(h); }
+      if (d.exp_payload) {
+        const p = el('div','recon'); p.textContent = 'Exp 载荷：'+d.exp_payload; s.appendChild(p);
       }
-      t.appendChild(tb); s.appendChild(t);
+      if (files.length) {
+        const t = el('table','fs-table'); const tb = el('tbody');
+        const trh = el('tr');
+        ['文件','说明','大小','操作'].forEach(h=>trh.appendChild(el('th',null,h)));
+        const thead = el('thead'); thead.appendChild(trh); t.appendChild(thead);
+        for (const f of files) {
+          const tr = el('tr');
+          const nameTd = el('td'); const a = document.createElement('a');
+          a.href = f.url || ('/scan-artifact/runs/'+encodeURIComponent(runId)+'/deliverables/'+encodeURIComponent(f.name));
+          a.textContent = f.name; a.download = f.name; a.className='dl-link'; nameTd.appendChild(a); tr.appendChild(nameTd);
+          tr.appendChild(el('td',null,DELIV_LABEL[f.name]||'交付物文件'));
+          tr.appendChild(el('td',null, f.bytes!=null ? (f.bytes>=1024?(f.bytes/1024).toFixed(1)+' KB':f.bytes+' B') : '—'));
+          const opTd = el('td');
+          if (DELIV_PREVIEWABLE[f.name]) {
+            const vb = el('button','view-btn','在线预览');
+            vb.addEventListener('click', () => openDelivViewer(runId, f));
+            opTd.appendChild(vb);
+          } else { opTd.textContent = '下载'; }
+          tr.appendChild(opTd);
+          tb.appendChild(tr);
+        }
+        t.appendChild(tb); s.appendChild(t);
+      } else {
+        s.appendChild(el('div','source-empty','本轮没有可下载文件；如果状态为“仅 PoC”，说明本轮未生成可验证的 Exp，而不是页面丢失了交付物。'));
+      }
       const sourceBox = el('div','source-explorers');
-      sourceBox.appendChild(el('div','sec-t','完整源码（在线浏览与下载）'));
-      sourceBox.appendChild(el('div','hint','源码快照来自本次 HAP 构建工程；构建缓存、签名材料和本机 SDK 路径已排除。可展开文件树查看，也可下载 ZIP 离线复核。'));
-      for (const item of [['poc','PoC 完整源码'],['exp','Exp 完整源码']]) {
+      const sourceKinds = [];
+      for (const kind of ['poc','exp']) {
+        const hasKind = Boolean((d.source_snapshots||{})[kind]) || files.some(f =>
+          String(f.name||'').startsWith(kind+'_source'));
+        if (hasKind) sourceKinds.push([kind, kind === 'poc' ? 'PoC 完整源码' : 'Exp 完整源码']);
+      }
+      if (sourceKinds.length) {
+        sourceBox.appendChild(el('div','sec-t','完整源码（在线浏览与下载）'));
+        sourceBox.appendChild(el('div','hint','源码快照来自本次 HAP 构建工程；构建缓存、签名材料和本机 SDK 路径已排除。可在线查看文件，也可下载 ZIP 离线复核。'));
+      }
+      for (const item of sourceKinds) {
         const explorer = await renderSourceExplorer(runId, item[0], item[1]);
         sourceBox.appendChild(explorer);
       }
-      s.appendChild(sourceBox); body.appendChild(s);
+      if (sourceKinds.length) s.appendChild(sourceBox);
+      body.appendChild(s);
     }
 
     async function renderSourceExplorer(runId, kind, title) {
