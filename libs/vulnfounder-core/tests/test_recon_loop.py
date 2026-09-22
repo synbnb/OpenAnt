@@ -241,6 +241,28 @@ def test_recon_loop_finalize_with_facts():
     assert result.turns_used == 3
 
 
+def test_recon_prompt_does_not_reintroduce_skeleton_attack_description():
+    script = [json.dumps({"tool": "finalize", "args": {"draft": {}, "facts": {}}})]
+    finding = _finding()
+    finding.description = "攻击叙述 shell; echo should stay out of protocol prompt"
+    bind = _bind(script)
+    result = rl.run_recon_loop(
+        finding=finding,
+        skeleton={
+            "contract_id": "GEN-T-01",
+            "description": finding.description,
+            "entry": {"kind": "hap_udp", "endpoint": "127.0.0.1:8283"},
+        },
+        descriptor_dict={"descriptor_id": "auto-test"},
+        repo_root=CORE,
+        hdc=None,
+        binding_pair=bind,
+    )
+    assert result.status == "finalized"
+    assert "攻击叙述 shell" not in bind[1].prompts[0]
+    assert '"contract_id": "GEN-T-01"' in bind[1].prompts[0]
+
+
 def test_recon_loop_budget_exhausted_honest_stop():
     script = [json.dumps({"tool": "read_notes", "args": {}}) for _ in range(5)]
     result = rl.run_recon_loop(

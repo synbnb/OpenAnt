@@ -524,7 +524,14 @@ def run_recon_loop(
         json.dumps(descriptor_dict, ensure_ascii=False, indent=2),
         "",
         "确定性骨架（已填充，禁止改动）:",
-        json.dumps(skeleton, ensure_ascii=False, indent=2),
+        # skeleton 用于最终契约持久化，其中的 description 继承自 Stage 1，
+        # 可能含有攻击叙述或 shell 片段。动态侦查只需要结构字段；完整骨架
+        # 仍由调用方保留并在 finalize 后合并，不能通过该区块绕过 prompt 边界。
+        json.dumps(
+            {key: value for key, value in skeleton.items() if key != "description"},
+            ensure_ascii=False,
+            indent=2,
+        ),
         "",
     ]
     if oracle_forms:
