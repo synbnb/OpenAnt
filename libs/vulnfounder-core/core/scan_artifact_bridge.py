@@ -1210,6 +1210,20 @@ def run_dynamic_from_scan(
     result.vuln_class = finding.vuln_class
     result.sink = finding.sink
     result.entry_hints = list(finding.entry_hints)
+    try:
+        from openharmony_dynamic.baseline import baseline_item  # noqa: PLC0415
+
+        _write_run_snapshot(
+            progress_path,
+            "dynamic_baseline.json",
+            baseline_item(finding, clean_room=clean_room),
+        )
+    except Exception as exc:  # noqa: BLE001 — 审计快照失败不改变主流程
+        _write_run_snapshot(progress_path, "dynamic_baseline.json", {
+            "schema_version": "vf.dynamic.baseline.v1",
+            "status": "ERROR",
+            "error": f"{type(exc).__name__}: {exc}",
+        })
 
     emit = _progress_emitter(progress_path)
     cmd_emit = (lambda rec: emit({"event": "device_cmd", "detail": rec.get("purpose", ""),
@@ -1421,6 +1435,20 @@ def run_dynamic_from_webui(
     result.vuln_class = finding.vuln_class
     result.sink = finding.sink
     result.entry_hints = list(finding.entry_hints)
+    try:
+        from openharmony_dynamic.baseline import baseline_item  # noqa: PLC0415
+
+        _write_run_snapshot(
+            progress_path,
+            "dynamic_baseline.json",
+            baseline_item(finding, clean_room=clean_room),
+        )
+    except Exception as exc:  # noqa: BLE001
+        _write_run_snapshot(progress_path, "dynamic_baseline.json", {
+            "schema_version": "vf.dynamic.baseline.v1",
+            "status": "ERROR",
+            "error": f"{type(exc).__name__}: {exc}",
+        })
 
     emit = _progress_emitter(progress_path)
     cmd_emit = (lambda rec: emit({"event": "device_cmd", "detail": rec.get("purpose", ""),

@@ -57,6 +57,7 @@ var scanArtifactRunArtifactSpecs = map[string]struct {
 	"contract.json":           {"设备测试契约", "最终交给 HAP 载荷和设备执行器的结构化契约。", "json", 16 << 20},
 	"protocol_contract.json":  {"标准化协议契约", "按计划统一保存的协议、描述符来源和路由证据；阻断时也会记录缺口。", "json", 16 << 20},
 	"probe_result.json":       {"合法报文自证", "自动描述符生成后的无害合法报文设备侧自证结果。", "json", 8 << 20},
+	"dynamic_baseline.json":  {"独立评测基线", "当前样本、源码快照和 clean-room 输入边界的冻结记录。", "json", 8 << 20},
 	"payload_manifest.json":   {"实际载荷清单", "本轮实际发送的帧、传输方式和设备响应摘要。", "json", 16 << 20},
 	"input_influence.json":    {"输入影响证据", "指定输入是否影响危险参数的独立结论；不会由效果信号自动代替。", "json", 16 << 20},
 	"oracle_result.json":      {"预言机结果", "文件、日志、响应、进程或资源观测器的结构化结果。", "json", 16 << 20},

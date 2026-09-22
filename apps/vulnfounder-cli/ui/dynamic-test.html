@@ -2007,7 +2007,7 @@
       group.appendChild(body); parent.appendChild(group);
     }
     function appendDossierArtifactLinks(parent, runId) {
-      const names = ['protocol_contract.json','probe_result.json','payload_manifest.json','input_influence.json','oracle_result.json','dynamic_result.json','cleanup_result.json','contract.json','finding_adapter.json','entry_discovery.json','compile_summary.json','hdc_commands.json','ledger.jsonl','cli.log','run_record.json','verdict.json','result.json'];
+      const names = ['dynamic_baseline.json','protocol_contract.json','probe_result.json','payload_manifest.json','input_influence.json','oracle_result.json','dynamic_result.json','cleanup_result.json','contract.json','finding_adapter.json','entry_discovery.json','compile_summary.json','hdc_commands.json','ledger.jsonl','cli.log','run_record.json','verdict.json','result.json'];
       const manual = state.artifacts.filter(a=>a && /^manual_replay_[0-9]{8,20}\.(md|txt)$/.test(a.name));
       const candidates = names.map(name=>dossierArtifactByName(name)).filter(Boolean).concat(manual);
       const links = el('div','dossier-artifacts');
