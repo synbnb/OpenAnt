@@ -61,6 +61,7 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
         "uname": "OpenHarmony test\n",
         "id": "uid=0(root) gid=0(root)\n",
         "ps": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
+        "-A": "UID PID PPID CMD\nroot 42 1 service_daemon\n",
         "/proc/net/unix": "Num RefCount Protocol Flags Type St Inode Path\n"
         "0: 2 0 10000 1 01 1 /dev/unix/socket/example\n",
         "/proc/net/tcp": "sl local rem st\n0: 0100007F:205B 00000000:0 0A\n",
@@ -68,11 +69,14 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
         "/proc/net/udp": "",
         "/proc/net/udp6": "",
         "/proc/42/attr/current": "u:r:service:s0\n",
+        "/proc/42/exe": "/system/bin/service_daemon\n",
+        "/system/bin/service_daemon": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  /system/bin/service_daemon\n",
     }
     fake = _FakeHDC(outputs)
     fp = collect_device_fingerprint(
         fake,
         targets=["/dev/unix/socket/example", "127.0.0.1:8283"],
+        process_names=["service_daemon"],
         source_revision="source-1",
         reference={"source_revision": "source-1"},
     )
@@ -80,6 +84,9 @@ def test_collect_fingerprint_distinguishes_version_and_service_state():
     assert fp.services[0].present is True
     assert fp.services[1].present is True
     assert fp.device_revision == "6.1"
+    process_service = next(item for item in fp.services if item.kind == "process")
+    assert process_service.binary_path == "/system/bin/service_daemon"
+    assert process_service.binary_sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
     missing = _FakeHDC(outputs)
     fp2 = collect_device_fingerprint(

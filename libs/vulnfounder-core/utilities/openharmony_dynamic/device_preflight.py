@@ -234,6 +234,8 @@ class ServiceObservation:
     pids: list[str] = field(default_factory=list)
     uid: str = ""
     selinux_domain: str = ""
+    binary_path: str = ""
+    binary_sha256: str = ""
     endpoints: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     reason: str = ""
@@ -247,6 +249,8 @@ class ServiceObservation:
             "pids": list(self.pids),
             "uid": self.uid,
             "selinux_domain": self.selinux_domain,
+            "binary_path": self.binary_path,
+            "binary_sha256": self.binary_sha256,
             "endpoints": list(self.endpoints),
             "evidence": list(self.evidence),
             "reason": self.reason,
@@ -426,6 +430,17 @@ def collect_device_fingerprint(
                 observation.selinux_domain = attr
                 observation.evidence.append(f"/proc/{pid}/attr/current")
                 break
+        if observation.pids:
+            # 版本核对只读采集：先从 proc 得到设备真实可执行文件，再尝试
+            # sha256sum。任何失败都保留空值/命令错误，不把路径或哈希猜出来。
+            exe = run(f"exe:{observation.pids[0]}", ["readlink", f"/proc/{observation.pids[0]}/exe"]).strip()
+            if exe:
+                observation.binary_path = exe
+                observation.evidence.append(f"/proc/{observation.pids[0]}/exe")
+                digest = run(f"sha256:{observation.pids[0]}", ["sha256sum", exe]).strip()
+                digest_match = re.match(r"^([0-9A-Fa-f]{64})\b", digest)
+                if digest_match:
+                    observation.binary_sha256 = digest_match.group(1).lower()
         fp.services.append(observation)
 
     for target in target_list:

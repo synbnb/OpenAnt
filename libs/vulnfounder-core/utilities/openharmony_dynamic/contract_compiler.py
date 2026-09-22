@@ -26,7 +26,7 @@ from .contract_validator import (
 )
 from .contracts.registry import contract_from_dict
 from .finding_input import FindingInput
-from .models import Contract, RouteBinding
+from .models import Contract, ProtocolSpec, RouteBinding
 from .protocols import get_descriptor, register
 
 # ---------------------------------------------------------------------------
@@ -305,33 +305,61 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
     endpoint = str(contract.entry.endpoint or "")
     if not _device_endpoint_present(hdc, endpoint, mode):
         return [f"设备端点未监听，未发送合法探测报文: {endpoint}"]
-    from .transports.hap import HapTransport  # noqa: PLC0415
-
     fields = dict(probe)
     selftest_target = f"SELFTEST-{contract.contract_id}"
     # target 同时用于 HAP 日志标识和测试契约名；必须显式带 SELFTEST 前缀，
     # 这样精确日志匹配才能区分本轮合法报文与历史动态测试。
     fields.setdefault("target", selftest_target)
     fields.setdefault("marker", "")
-    transport = HapTransport(hdc)
+    transport = None
     try:
-        # 清空旧日志，随后必须命中本次 SELFTEST contract_id，不能用历史
-        # HAP_POC_SENT 让一个没有真正运行的合法报文“自证通过”。
-        clear = hdc.shell(["hilog", "-r"], purpose="descriptor-selftest:hilog-clear")
-        if clear.returncode != 0:
-            return [f"无法清空设备日志，不能排除旧 HAP_POC_SENT：{clear.stderr[:160]}"]
-        send = transport.build_and_run(
-            fields, contract_id=selftest_target, wait_seconds=2.0,
-        )
+        # 旧回归夹具只提供 endpoint；缺少 kind 时按历史自动描述符的 HAP
+        # 载体兼容处理，但真实 Contract 始终会带明确 entry.kind。
+        entry_kind = str(getattr(contract.entry, "kind", "hap_udp") or "")
+        if entry_kind in {"hap_udp", "hap_tcp"}:
+            from .transports.hap import HapTransport  # noqa: PLC0415
+
+            transport = HapTransport(hdc)
+            # 清空旧日志，随后必须命中本次 SELFTEST contract_id，不能用历史
+            # HAP_POC_SENT 让一个没有真正运行的合法报文“自证通过”。
+            clear = hdc.shell(["hilog", "-r"], purpose="descriptor-selftest:hilog-clear")
+            if clear.returncode != 0:
+                return [f"无法清空设备日志，不能排除旧 HAP_POC_SENT：{clear.stderr[:160]}"]
+            send = transport.build_and_run(
+                fields, contract_id=selftest_target, wait_seconds=2.0,
+            )
+        elif entry_kind in {"native_unix", "unix_dgram", "unix_stream"}:
+            from .transports.native_unix import NativeUnixTransport  # noqa: PLC0415
+
+            transport = NativeUnixTransport(hdc)
+            # Unix 描述符的合法探针必须通过与正式输入相同的编码器和 native
+            # helper 发送；不能为了复用 HAP 自证而伪造端口字段。
+            probe_protocol = ProtocolSpec(
+                descriptor_id=contract.protocol.descriptor_id,
+                field_values=fields,
+                descriptor_snapshot=dict(contract.protocol.descriptor_snapshot),
+            )
+            send = transport.send(
+                probe_protocol,
+                get_descriptor(contract.protocol.descriptor_id),
+                socket_path=endpoint,
+                drop_privs=contract.identity.drop_privs,
+                purpose="descriptor-selftest:unix-send",
+            )
+        else:
+            return [f"自动描述符入口 {entry_kind} 暂无合法探针载体，不能伪造设备侧自证"]
         if send.reachability != "INPUT_DELIVERED":
-            return [f"HAP 合法探测未送达: {send.detail}"]
-        # 只查询 HAP POC 自己的 tag，避免设备长期 hilog 积压把本次关键行
-        # 截断在 HDCClient 的输出上限之外。
-        log = hdc.shell(["hilog", "-x", "-T", "VulnFounderHapPoc"],
-                        purpose="descriptor-selftest:hilog")
-        expected = f"HAP_POC_SENT {selftest_target}"
-        if log.returncode != 0 or expected not in (log.stdout or ""):
-            return [f"设备侧未观察到本次 {expected}，自证不能确认报文已发送"]
+            return [f"{entry_kind} 合法探测未送达: {send.detail}"]
+        if entry_kind in {"hap_udp", "hap_tcp"}:
+            # 只查询 HAP POC 自己的 tag，避免设备长期 hilog 积压把本次关键行
+            # 截断在 HDCClient 的输出上限之外。
+            log = hdc.shell(["hilog", "-x", "-T", "VulnFounderHapPoc"],
+                            purpose="descriptor-selftest:hilog")
+            expected = f"HAP_POC_SENT {selftest_target}"
+            if log.returncode != 0 or expected not in (log.stdout or ""):
+                return [f"设备侧未观察到本次 {expected}，自证不能确认报文已发送"]
+        else:
+            expected = "native_unix_client result=0"
         notes.append(
             f"自动描述符设备侧合法报文自证通过: endpoint={endpoint} mode={mode} "
             f"frame_keys={[k for k in ('first', 'second', 'third', 'payload') if fields.get(k)]} "
@@ -342,7 +370,8 @@ def _run_legal_protocol_self_test(contract: Contract, hdc, notes: list[str]) -> 
         return [f"设备侧合法报文自证异常: {type(exc).__name__}: {str(exc)[:240]}"]
     finally:
         try:
-            transport.cleanup()
+            if transport is not None and hasattr(transport, "cleanup"):
+                transport.cleanup()
         except Exception:
             pass
 
