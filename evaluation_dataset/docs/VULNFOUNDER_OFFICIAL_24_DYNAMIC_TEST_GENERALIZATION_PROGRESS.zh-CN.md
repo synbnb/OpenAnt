@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前 Git 提交：`f37dfea`
+> 当前代码提交：`513a294`
 
 ---
 
@@ -46,7 +46,7 @@ flowchart LR
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
-| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | 已有主要能力；CLI/event 契约入口和合法探针已接入 | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；CLI/event 的命令数组形状校验和设备自证 | 尚需以 24 项为对象完成协议候选覆盖统计，不能只依赖已有注册描述符 |
+| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **DP-02 clean-room 冒烟已完成；全量 24 项仍待回归** | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；本轮自动生成了协议描述符，并诚实停在协议复核 | 尚需以 24 项为对象完成协议候选覆盖统计；不能把自动描述符生成通过等同于输入已送达或漏洞确认 |
 | 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
@@ -283,6 +283,57 @@ HDC：/Users/shiyu/harmonyos-sdk/openharmony/9/toolchains/hdc
 这项验收只说明设备前置审计和服务驻留判断能够对 24 项逐样本产出可复查结果；它不等价
 于协议恢复成功、输入已送达、预言机命中或 `CONFIRMED`。
 
+### 3.11 阶段 2 DP-02 clean-room 真实冒烟
+
+在阶段 1 预检之后，使用当前官方 `DP-02` 的既有扫描 finding 和源码范围执行了一次
+真实协议编译冒烟。该轮使用真实模型绑定（`llm_used=true`），不是 mock；启用
+`clean_room=true`，明确不向模型提供历史 exemplar、历史成功帧或设备事实库，只允许
+使用当前 finding、当前源码证据和本轮设备只读回执。为控制设备与模型成本，本轮只做
+`compile_contract_with_retry`，没有安装 HAP、没有发送业务变异帧，也没有写入设备文件。
+
+```text
+样本：DP-02
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_smoke_dp02
+主产物：compile_summary.json、hdc_ledger.jsonl
+重试上限：2
+耗时：约 663.6 秒
+```
+
+本轮真正完成的步骤是：
+
+1. 入口发现 Agent Loop 从当前源码中恢复出 `127.0.0.1:8283`、`127.0.0.1:8284` 和
+   `127.0.0.1:8285` 三个候选，并把 `SpThreadSocket::HandleMsg` 作为处理器候选；
+2. 协议证据提取器从 socket 创建、绑定、`recvfrom`/`recv`、拆包、命令表和守卫中提取
+   当前 route 的证据；
+3. 自动描述符合成器生成并批准了描述符
+   `auto_b1a8d9b46053fa5d`，来源标记为 `auto_generated`，没有回退到人工注册的
+   `sp_daemon_text`；
+4. 侦查 Agent Loop 重新核对了 `set_pkgName` 守卫、消息分派、`LoadCmd` 到 `popen`
+   的下游关系，并将设备端口事实写入审计记录；
+5. 确定性校验和两次失败反馈后，结果停在 `REQUIRES_PROTOCOL_REVIEW`。
+
+描述符生成“通过”与协议编译“完成”在本轮被明确区分：
+
+| 项目 | 本轮结果 | 含义 |
+|---|---|---|
+| 入口候选 | 3 个 | 三个端点均有源码和设备绑定证据；只代表候选入口，不代表同一条攻击路径 |
+| 自动描述符 | `APPROVED` | 描述符字段和源码证据引用通过确定性校验；不是人工协议回退 |
+| 协议证据 | `partial` | transport 14、framing 151、dispatch 61、guards 197；endpoint 0，端点常量尚未被证据提取器归类 |
+| 最终编译状态 | `REQUIRES_PROTOCOL_REVIEW` | 当前证据不足以安全生成可影响危险参数的变异帧 |
+| 设备业务交互 | 未执行 | 没有 HAP 安装、没有业务帧发送、没有设备文件变更 |
+
+阻断原因不是“模型没找到 socket”，而是**模型和源码校验都没有证明外部字段能够到达
+`SPUtils::LoadCmd(cmd)` 的危险参数**。当前源码能证明：`set_pkgName` 帧必须包含字面量
+`smartperf`；网络、抓取和桌面路径传入 `LoadCmd` 的命令主要来自内部命令表或固定字符串。
+在缺少真实字段流证据时，系统拒绝凭经验拼出一条看似可利用的命令帧，因而没有把
+`NOT_REPRODUCED` 或 `CONFIRMED` 伪造出来。
+
+这次真实冒烟还暴露出一个与具体服务无关的 Agent Loop 问题：协议侦查模型可能重复读取
+相同文件窗口或重复执行相同工具参数。已在提交 `513a294` 中加入按完整
+`tool + args` 序列化键去重的通用抑制器；重复动作会记录为 `duplicate` 审计事件并反馈
+模型查找新证据、固化 note 或 finalize，而不会静默消耗设备/模型预算。该规则不识别
+服务名、端口或漏洞类别，也不会把“相似”动作误合并。
+
 ---
 
 ## 4. 当前测试证据
@@ -311,6 +362,32 @@ python -m pytest -q \
 这 87 项覆盖的是样本基线哈希和 clean-room 边界、设备版本比较、服务连续驻留复核、协议描述符证据核验、入口/路由循环、HAP/native/CLI/event 载体校验、CLI/event 合法探针、通用预言机和运行器契约形状。它们证明代码级基础行为，但不等价于当前开发板上 24 个样本全部成功。
 
 有一组更大范围的旧测试曾因网络/LLM 可用性测试等待超时，不能把该次未完成运行写成全通过。本进度文件只采用明确完成的针对性测试结果。
+
+本次通用侦查循环和阶段 2 相关回归另行执行：
+
+```text
+python -m pytest -q \
+  libs/vulnfounder-core/tests/test_recon_loop.py \
+  libs/vulnfounder-core/tests/test_descriptor_synthesizer.py \
+  libs/vulnfounder-core/tests/test_entry_discovery_loop.py \
+  libs/vulnfounder-core/tests/test_protocol_evidence.py \
+  libs/vulnfounder-core/tests/test_dynamic_runner_contract.py \
+  libs/vulnfounder-core/tests/test_dynamic_command_transport.py \
+  libs/vulnfounder-core/tests/test_device_preflight.py \
+  libs/vulnfounder-core/tests/test_stage_context_contract.py \
+  libs/vulnfounder-core/tests/test_stage_finding_adapter.py
+```
+
+结果：
+
+```text
+103 passed in 0.29s
+```
+
+其中新增的重复动作测试验证：同一 session 内再次提交完全相同的 `tool + args` 时，
+系统不会再次调用工具，而是写入 `duplicate` 审计事件并把“请查新证据或 finalize”的
+反馈放回下一轮模型上下文。原有的“LLM 不可用”单测也改为显式注入空绑定，避免本机
+存在模型配置时意外发起网络请求；这只是测试隔离，不会改变生产环境的真实模型调用。
 
 ---
 
@@ -412,3 +489,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `f8ca6b4` | 将合法探针的实际载体、回执和失败原因写入 `probe_result` 与 `probe_result.json`；阶段测试累计 82 项通过并已推送 |
 | 2026-09-22 | `8293baf` | 新增样本级 `dynamic_baseline.json`：冻结源码哈希、版本字段、候选线索与 clean-room 输入边界；新增 4 项基线测试，联同已有回归累计 86 项通过；已推送 `origin/refactor/vulnfounder-brand` |
 | 2026-09-22 | `f37dfea` | 阶段 1 收口：隔离 HDC ANSI/诊断噪声，增加两次连续服务驻留复核，并完成官方 24 项逐样本 L0 真机预检归档；针对性测试 87 项通过，Go 服务端测试通过；已推送 `origin/refactor/vulnfounder-brand` |
+| 2026-09-22 | `513a294` | 阶段 2 通用侦查循环改进：抑制相同 `tool + args` 重复动作、保留 duplicate 审计和模型反馈；DP-02 clean-room 真实协议编译冒烟完成但诚实停在 `REQUIRES_PROTOCOL_REVIEW`；阶段 2 相关回归 103 项通过，已推送 `origin/refactor/vulnfounder-brand` |
