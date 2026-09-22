@@ -142,6 +142,9 @@ func TestScanArtifactLatestAndDerivedResult(t *testing.T) {
 	if resultRec.Code != http.StatusOK || !strings.Contains(resultRec.Body.String(), `"CONFIRMED"`) {
 		t.Fatalf("derived result status=%d body=%s", resultRec.Code, resultRec.Body.String())
 	}
+	if got := resultRec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("derived result cache policy = %q, want no-store", got)
+	}
 }
 
 func TestScanArtifactRunHistoryListsAllMatchingRuns(t *testing.T) {

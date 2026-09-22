@@ -624,7 +624,10 @@
     function fmtTs(ts){ if(!ts) return ''; try { const d=new Date(ts*1000); return d.toLocaleTimeString('zh-CN',{hour12:false})+'.'+String(d.getMilliseconds()).padStart(3,'0'); } catch(_) { return ''; } }
     function showNotice(text, kind) { const n=$('notice'); n.textContent=text||''; n.className=kind||''; }
     async function get(path) {
-      const response = await fetch(path, {credentials:'same-origin'});
+      // Run status, result and deliverable listings change during one run.
+      // Always bypass the browser HTTP cache so a refresh cannot resurrect a
+      // pre-deliverable response and hide an already-built PoC.
+      const response = await fetch(path, {credentials:'same-origin', cache:'no-store'});
       const text = await response.text();
       let data; try { data=JSON.parse(text); } catch(_) { throw new Error(text || ('请求失败（'+response.status+'）')); }
       if (!response.ok) throw new Error(data.error || text || ('请求失败（'+response.status+'）'));

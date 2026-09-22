@@ -118,6 +118,11 @@ func (s *Server) scanArtifactRoot() (string, error) {
 
 func scanArtifactJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// Scan-artifact responses are live run state.  A browser may first read a
+	// result while deliverables are still being produced and then revisit the
+	// same URL after the run completes.  Without an explicit no-store policy,
+	// that earlier response can hide the now-existing PoC on refresh.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }

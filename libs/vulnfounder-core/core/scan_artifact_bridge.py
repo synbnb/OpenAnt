@@ -839,9 +839,17 @@ def _run_device_preflight(
         hints = list(getattr(finding, "entry_hints", []) or [])
         context = getattr(finding, "analysis_context", None)
         reference = context.get("device_reference") if isinstance(context, dict) else None
+        process_names: list[str] = []
+        if isinstance(context, dict):
+            raw_processes = context.get("target_processes", context.get("target_process", []))
+            if isinstance(raw_processes, str):
+                process_names.append(raw_processes)
+            elif isinstance(raw_processes, (list, tuple)):
+                process_names.extend(str(item) for item in raw_processes if str(item).strip())
         fingerprint = collect_device_fingerprint(
             hdc,
             targets=hints,
+            process_names=process_names,
             source_revision=str(context.get("source_revision", "")) if isinstance(context, dict) else "",
             reference=reference if isinstance(reference, dict) else None,
             repo_root=repo_root,
