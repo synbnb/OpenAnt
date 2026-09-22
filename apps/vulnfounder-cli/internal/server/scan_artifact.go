@@ -1800,6 +1800,11 @@ func (s *Server) handleScanArtifactRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	allowServiceStart, err := parseScanArtifactCleanRoom(r.FormValue("allow_service_start"))
+	if err != nil {
+		http.Error(w, "allow_service_start must be boolean", http.StatusBadRequest)
+		return
+	}
 	// Two input modes: webui scan (--scan-id) or legacy aggregate dir
 	// (--result-dir + --round). Exactly one must be selected.
 	if scanID != "" {
@@ -1883,6 +1888,9 @@ func (s *Server) handleScanArtifactRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if cleanRoom {
 		args = append(args, "--clean-room")
+	}
+	if allowServiceStart {
+		args = append(args, "--allow-service-start")
 	}
 	if repoRoot := strings.TrimSpace(r.FormValue("repo_root")); repoRoot != "" && len(repoRoot) <= 4096 {
 		args = append(args, "--repo-root", repoRoot)

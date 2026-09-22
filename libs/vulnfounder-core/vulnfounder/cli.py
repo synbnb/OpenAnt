@@ -268,6 +268,7 @@ def cmd_scan_artifact_run(args):
             ledger_path=args.ledger,
             progress_path=getattr(args, "progress_file", None),
             clean_room=bool(getattr(args, "clean_room", False)),
+            allow_service_start=bool(getattr(args, "allow_service_start", False)),
         )
         # --scan-id 提供时走 webui 扫描目录输入；否则走聚合产物目录输入。
         if getattr(args, "scan_id", None):
@@ -3286,6 +3287,10 @@ def build_parser() -> argparse.ArgumentParser:
     sa_run.add_argument(
         "--clean-room", action="store_true",
         help="隔离历史 exemplar 与设备事实库；仅使用当前 finding、源码证据和本轮临时探测结果",
+    )
+    sa_run.add_argument(
+        "--allow-service-start", action="store_true",
+        help="仅当当前 finding 提供参数数组形式的 service_start_commands 时，允许前置阶段执行并复核启动命令",
     )
     sa_run.set_defaults(func=cmd_scan_artifact_run)
 

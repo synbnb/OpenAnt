@@ -842,6 +842,7 @@ def _emit_compile_diagnostics(emit, compile_result) -> None:
 def _run_device_preflight(
     *, finding: Any, hdc: Any, repo_root: str | Path | None,
     progress_path: str | Path | None, emit: Any,
+    allow_service_start: bool = False,
 ) -> dict[str, Any]:
     """运行 L0 只读设备确认并落盘快照。
 
@@ -869,6 +870,57 @@ def _run_device_preflight(
             reference=reference if isinstance(reference, dict) else None,
             repo_root=repo_root,
         )
+        # 服务启动命令只能来自当前 finding 的结构化设备上下文，并且必须
+        # 是参数数组；不接受字符串 shell 命令，也不为任何服务名内置命令。
+        start_commands = context.get("service_start_commands", []) if isinstance(context, dict) else []
+        valid_start_commands = [
+            [str(part) for part in command]
+            for command in (start_commands if isinstance(start_commands, list) else [])
+            if isinstance(command, (list, tuple)) and command and all(str(part).strip() for part in command)
+        ]
+        health = dict(fingerprint.service_health or {})
+        if health.get("status") == "NOT_READY" and valid_start_commands and allow_service_start:
+            attempts: list[dict[str, Any]] = []
+            for command in valid_start_commands[:4]:
+                rec = hdc.shell(command, purpose="preflight:service-start")
+                attempts.append({
+                    "argv": list(command), "returncode": getattr(rec, "returncode", -1),
+                    "stdout": str(getattr(rec, "stdout", "") or "")[:512],
+                    "stderr": str(getattr(rec, "stderr", "") or "")[:512],
+                })
+            # 启动后必须重新采集两次，不能因启动命令返回 0 就宣称服务就绪。
+            import time as _time
+            observations = []
+            for index in range(2):
+                _time.sleep(0.5)
+                refreshed = collect_device_fingerprint(
+                    hdc, targets=hints, process_names=process_names,
+                    source_revision=str(context.get("source_revision", "")) if isinstance(context, dict) else "",
+                    reference=reference if isinstance(reference, dict) else None,
+                    repo_root=repo_root,
+                )
+                observations.append({"index": index + 1, "status": refreshed.service_health.get("status"),
+                                     "ready": refreshed.service_health.get("ready", False)})
+                fingerprint = refreshed
+                if refreshed.service_health.get("status") == "READY":
+                    break
+            fingerprint.service_health = dict(fingerprint.service_health or {})
+            fingerprint.service_health.update({
+                "start_attempts": attempts,
+                "health_checks_after_start": observations,
+                "mutation_performed": True,
+                "mutation_policy": "explicit_finding_commands_and_user_opt_in",
+            })
+        elif health.get("status") == "NOT_READY":
+            health["start_attempts"] = []
+            health["health_checks_after_start"] = []
+            health["start_command_available"] = bool(valid_start_commands)
+            health["mutation_performed"] = False
+            health["mutation_policy"] = (
+                "not_authorized" if valid_start_commands and not allow_service_start
+                else "no_structured_start_command"
+            )
+            fingerprint.service_health = health
         payload = fingerprint.to_dict()
     except Exception as exc:  # noqa: BLE001 — 前置诊断失败不应吞掉主错误
         payload = {
@@ -1085,6 +1137,7 @@ def run_dynamic_from_scan(
     unit_id: str | None = None,
     progress_path: str | Path | None = None,
     clean_room: bool = False,
+    allow_service_start: bool = False,
 ) -> ScanDynamicResult:
     """扫描中间产物条目 → 适配 → 编译契约 → 真机执行，全链一气呵成。
 
@@ -1159,6 +1212,7 @@ def run_dynamic_from_scan(
     result.device_fingerprint = _run_device_preflight(
         finding=finding, hdc=hdc, repo_root=resolved_repo_root,
         progress_path=progress_path, emit=emit,
+        allow_service_start=allow_service_start,
     )
     health = result.device_fingerprint.get("service_health", {})
     if health.get("status") == "NOT_READY":
@@ -1284,6 +1338,7 @@ def run_dynamic_from_webui(
     unit_id: str | None = None,
     progress_path: str | Path | None = None,
     clean_room: bool = False,
+    allow_service_start: bool = False,
 ) -> ScanDynamicResult:
     """webui 扫描条目（~/.openant/webui/<scan_id>/results.json）→ 适配 →
     编译契约 → 真机执行。serial 必须显式给出（绝不隐式选择板卡）。"""
@@ -1366,6 +1421,7 @@ def run_dynamic_from_webui(
     result.device_fingerprint = _run_device_preflight(
         finding=finding, hdc=hdc, repo_root=resolved_repo_root,
         progress_path=progress_path, emit=emit,
+        allow_service_start=allow_service_start,
     )
     health = result.device_fingerprint.get("service_health", {})
     if health.get("status") == "NOT_READY":

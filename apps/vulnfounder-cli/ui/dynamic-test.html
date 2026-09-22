@@ -567,6 +567,13 @@
               <span id="clean-room-help" class="mode-help">不读取历史设备事实库和 exemplar，也不把本轮 CONFIRMED 契约写入历史 exemplar；适合做可重复、无历史提示污染的评测。</span>
             </label>
           </div>
+          <div class="full mode-option">
+            <input id="allow-service-start" type="checkbox" aria-describedby="allow-service-start-help">
+            <label for="allow-service-start">
+              <span class="mode-title">允许按当前条目声明启动服务</span>
+              <span id="allow-service-start-help" class="mode-help">默认只读检查；只有扫描条目提供参数数组形式的启动命令时，才会在启动后做两次健康复核。</span>
+            </label>
+          </div>
           <div id="run-mode-hint" class="full run-mode-hint">当前模式：辅助运行（assisted）。会使用当前设备的历史事实库和同类 exemplar。</div>
           <div class="full"><button id="run" type="submit">执行动态测试</button></div>
         </form>
@@ -1147,6 +1154,7 @@
         const values = { scan_id: state.detail.scanId, sample: state.detail.sampleId, device: serial };
         if ($('hdc-select').value) values.hdc = $('hdc-select').value;
         values.clean_room = $('clean-room').checked ? 'true' : 'false';
+        values.allow_service_start = $('allow-service-start').checked ? 'true' : 'false';
         const data = await post('/scan-artifact/run', values);
         state.detail.runId = data.run_id;
         localStorage.setItem(RUN_KEY(state.detail.scanId, state.detail.sampleId), data.run_id);
