@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`6e4acb6`
+> 当前代码提交：`2914492`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `6e4acb6 docs: record device service recovery and regression` |
+| 最新提交 | `2914492 fix: include reused samples in batch summaries` |
 | 工作区 | 已跟踪文件无未提交改动；设备产物和历史评测文件仍按约定留在本地未跟踪目录 |
 | 本轮聚焦 | 结构化失败反馈、fresh-session 重试和 LLM 请求边界的真实样本验收 |
 
@@ -948,3 +948,5 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | `b030bdf` | 进一步隔离侦查 prompt 中的确定性骨架，移除继承自 Stage 1 的自由文本 `description`，新增回归后动态相关测试 77 项通过；完整描述仍保留在契约和审计产物 |
 | 2026-09-22 | 工作区回归与设备复核 | 在最新代码 `dd9a178` 上执行动态相关回归，`108 passed`；发现设备上的 `SP_daemon` 已退出后按无参方式启动，PID `29996`，并通过 `netstat` 复核 `127.0.0.1:8283/8285` UDP 与 `127.0.0.1:8284` TCP 均处于监听状态。本次只确认设备服务与测试基础设施恢复，不将其计为漏洞样本确认。 |
 | 2026-09-22 | DP-06 clean-room 真实复验 | 在代码 `6e4acb6`、设备 PID `29996` 上单样本执行阶段 2 契约编译；`compile_status=ELIGIBLE`，自动描述符 `auto_16c7e5a858aef0cc`，入口候选 3 个且选定当前 route，transport/endpoint/framing/dispatch/guards 证据计数为 14/3/116/236/243，UDP 8283 合法探针 `app_start_collect:::` 通过。产物：`/Users/shiyu/.openant/dynamic_generalization_continue_dp06_20260922/DP-06`。该结果只证明契约可执行，不计为漏洞效果确认。 |
+| 2026-09-22 | 最新 24 项 clean-room 阶段 2 矩阵 | 使用代码 `2914492` 前的最新实现、`--workers 2 --timeout 300 --llm-timeout 60 --max-attempts 1` 完成 24 项调度：21 项生成明确 `REQUIRES_PROTOCOL_REVIEW`，DP-11/DP-16/HV-01 触发单样本硬超时，0 个子进程错误。主要阻断为多端点无法唯一归属或自动描述符证据不足；产物：`/Users/shiyu/.openant/dynamic_generalization_latest24_stage2_20260922`。该批次发现并发 HDC 会偶发 `FreeChannelContinue handle->data is nullptr`，不能作为设备事实验收依据。 |
+| 2026-09-22 | 串行优先样本复验 | 停止并发 HDC 后无参重启 `SP_daemon`（PID `31070`），确认 8283/8284/8285 均监听；对 DP-06/DP-10/DP-11/DP-12/DP-16/DP-18 使用 `--workers 1 --timeout 300 --llm-timeout 60 --max-attempts 2` 串行复验。DP-06/DP-10/DP-18 为 `REQUIRES_PROTOCOL_REVIEW`，DP-11/DP-12/DP-16 超时，未将并发或超时结果写成漏洞不存在。产物：`/Users/shiyu/.openant/dynamic_generalization_priority_retry_serial_20260922`。 |
