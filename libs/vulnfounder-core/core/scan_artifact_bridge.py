@@ -1036,9 +1036,16 @@ def _standard_artifact_payloads(result: ScanDynamicResult, *, phase: str,
         ],
     })
     dynamic = dict(base)
+    entry_payload = result.entry.to_dict() if hasattr(result.entry, "to_dict") else {
+        "sample": result.entry.sample,
+        "function_analyzed": result.entry.function_analyzed,
+        "target_id": result.entry.target_id,
+    }
     dynamic.update({
         "status": result.status or ("BLOCKED" if phase in {"adapter", "compile"} else "NOT_RUN"),
         "compile_status": compile_status,
+        "entry": entry_payload,
+        "bridge": result.bridge,
         "run_id": result.run_id,
         "pattern": result.pattern,
         "verdict": verdict,

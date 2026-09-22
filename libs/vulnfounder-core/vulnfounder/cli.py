@@ -280,6 +280,26 @@ def cmd_scan_artifact_run(args):
         # Exit 1 mirrors dynamic-test: a confirmed device effect is a finding.
         return 1 if result.status == "CONFIRMED" else 0
     except ScanBridgeError as exc:
+        # 契约/设备前置阻断不是未捕获异常：bridge 已在 progress run 目录
+        # 写入 dynamic_result.json、compile_summary.json 等标准化产物时，
+        # 这里返回可展示的 success envelope。Go/Web 因而显示 BLOCKED_* 与
+        # 证据缺口，而不是把“服务未就绪/协议待复核”误报成泛化 ERROR。
+        progress = getattr(args, "progress_file", None)
+        if progress:
+            root = Path(progress).expanduser().resolve().parent
+            snapshot = root / "dynamic_result.json"
+            if snapshot.is_file():
+                try:
+                    dynamic = json.loads(snapshot.read_text(encoding="utf-8"))
+                    _output_json({
+                        "status": "success",
+                        "result": dynamic,
+                        "errors": [str(exc)],
+                        "structured_block": True,
+                    })
+                    return 0
+                except (OSError, json.JSONDecodeError):
+                    pass
         _output_json({"status": "error", "errors": [str(exc)]})
         return 2
     except Exception as exc:
