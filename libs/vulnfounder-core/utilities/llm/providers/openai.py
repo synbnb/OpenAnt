@@ -319,6 +319,12 @@ _DEFAULT_REASONING_EFFORT = first_env(
     "VULNFOUNDER_OPENAI_REASONING_EFFORT", "OPENANT_OPENAI_REASONING_EFFORT"
 ) or "medium"
 
+# 动态测试的 Agent Loop 必须有请求级墙钟上限。此前未设置环境变量时把
+# ``timeout`` 留给 SDK 默认值，DNS/代理/上游半连接可能让单个样本无限等待，
+# 进而阻塞 bounded retry 和整个批次。允许部署按模型延迟调整，但默认值必须
+# 有限且可审计；180 秒覆盖常见推理请求，同时不会把一次网络故障拖到数分钟。
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
+
 
 def _map_openai_exception(exc: Exception, *, report_rl: bool) -> "LLMError":
     """Map an ``openai`` SDK exception to the unified taxonomy (secrets redacted).
@@ -407,8 +413,10 @@ class OpenAIAdapter:
         )
         kwargs: dict[str, Any] = {"max_retries": effective_retries}
         request_timeout = _env_positive_float("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS")
-        if request_timeout is not None:
-            kwargs["timeout"] = request_timeout
+        kwargs["timeout"] = (
+            request_timeout if request_timeout is not None
+            else _DEFAULT_REQUEST_TIMEOUT_SECONDS
+        )
         if api_key is not None:
             kwargs["api_key"] = api_key
         if base_url is not None:

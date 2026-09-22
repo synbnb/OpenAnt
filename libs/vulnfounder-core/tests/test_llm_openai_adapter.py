@@ -420,6 +420,20 @@ def test_sdk_request_limits_are_environment_overridable(monkeypatch):
     assert captured["timeout"] == 120.0
 
 
+def test_sdk_request_timeout_has_finite_default(monkeypatch):
+    captured = {}
+
+    def fake_openai(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(openai, "OpenAI", fake_openai)
+    monkeypatch.delenv("OPENANT_OPENAI_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("VULNFOUNDER_OPENAI_REQUEST_TIMEOUT_SECONDS", raising=False)
+    OpenAIAdapter(api_key="test-key", base_url="https://example.invalid/v1")
+    assert captured["timeout"] == 180.0
+
+
 def test_tools_omitted_when_none():
     # helpers.simple_text calls complete() with no tools; must not send tools=[]
     adapter, client = _stub_resp(lambda **kw: _resp(output=[_msg_item(_text_part("x"))]))
