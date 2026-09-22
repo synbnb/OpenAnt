@@ -136,6 +136,7 @@ class ReconResult:
     notes: list[str] = field(default_factory=list)
     turns_used: int = 0
     device_commands_used: int = 0
+    duplicate_actions: int = 0
     error: str = ""
     audit: list[dict[str, Any]] = field(default_factory=list)
 
@@ -147,6 +148,7 @@ class ReconResult:
             "notes": list(self.notes),
             "turns_used": self.turns_used,
             "device_commands_used": self.device_commands_used,
+            "duplicate_actions": self.duplicate_actions,
             "error": self.error,
             "audit": list(self.audit),
         }
@@ -598,6 +600,10 @@ def run_recon_loop(
         return f"侦查第 {turn} 轮：{kind}"
 
     transcript: list[str] = [""]
+    # 入口发现 loop 已经会拒绝相同的 tool+args；协议侦查 loop 也必须保持
+    # 同一语义，否则模型在源码窗口/grep 结果上来回读取，会消耗有限轮次而
+    # 不增加事实。参数完整序列化后去重，不按函数名或服务名猜测“相似动作”。
+    action_keys: set[str] = set()
     for turn in range(1, max_turns + 1):
         result.turns_used = turn
         # L1 压缩：上下文 = 静态部分 + 最近 6 轮工具输出 + 全部 notes（§11.1）
@@ -639,6 +645,18 @@ def run_recon_loop(
                        note=text.strip()[:160])
             continue
         tool, args = action["tool"], action["args"]
+        action_key = json.dumps([tool, args], ensure_ascii=False, sort_keys=True)
+        if tool != "finalize" and action_key in action_keys:
+            result.duplicate_actions += 1
+            transcript.append(
+                f"[turn {turn}] 重复动作已执行：{tool}；请改查新证据、固化 note 或 finalize"
+            )
+            _emit_turn(
+                turn, "duplicate", tool, args,
+                note="该 tool+args 已在本 session 执行过，动作被抑制",
+            )
+            continue
+        action_keys.add(action_key)
         if tool == "finalize":
             # 【闸门】申报 insufficient（声称"某字段/标识符不可控，无法构造契约"）前，
             # 必须先对涉事标识符做过全仓 grep——否则假否定会循环固化（82fe/979a 实测：

@@ -255,6 +255,22 @@ def test_recon_loop_invalid_output_then_finalize():
     assert result.turns_used == 2
 
 
+def test_recon_loop_suppresses_duplicate_tool_actions():
+    script = [
+        json.dumps({"tool": "read_notes", "args": {}}),
+        json.dumps({"tool": "read_notes", "args": {}}),
+        json.dumps({"tool": "finalize", "args": {"draft": {}, "facts": {}}}),
+    ]
+    result = rl.run_recon_loop(
+        finding=_finding(), skeleton=_skeleton(),
+        descriptor_dict={"descriptor_id": "sp_daemon_text"}, repo_root=CORE,
+        hdc=None, binding_pair=_bind(script), max_turns=4,
+    )
+    assert result.status == "finalized"
+    assert result.turns_used == 3
+    assert result.duplicate_actions == 1
+
+
 def test_recon_loop_finalize_without_draft_rejected():
     script = [
         json.dumps({"tool": "finalize", "args": {}}),
@@ -268,16 +284,16 @@ def test_recon_loop_finalize_without_draft_rejected():
     assert result.status == "finalized"
 
 
-def test_recon_loop_llm_unavailable():
+def test_recon_loop_llm_unavailable(monkeypatch):
+    # 不依赖本机是否配置了真实模型；否则该单测会意外发起网络请求，
+    # 把“无绑定时的诚实终态”变成一个不可控的集成测试。
+    monkeypatch.setattr(rl, "_llm_binding", lambda: None)
     result = rl.run_recon_loop(
         finding=_finding(), skeleton=_skeleton(),
         descriptor_dict={"descriptor_id": "sp_daemon_text"}, repo_root=CORE,
-        hdc=None, binding_pair=None,  # 且真实注册表不可用（测试环境无配置）
+        hdc=None, binding_pair=None,
     )
-    assert result.status in ("llm_unavailable", "finalized", "budget_exhausted")
-    # 测试环境没有 LLM 配置文件时应诚实返回 llm_unavailable
-    if rl._llm_binding() is None:
-        assert result.status == "llm_unavailable"
+    assert result.status == "llm_unavailable"
 
 
 def test_recon_loop_device_facts_injected_into_prompt():
