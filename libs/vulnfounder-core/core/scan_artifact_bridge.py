@@ -699,6 +699,9 @@ class ScanDynamicResult:
     compile_notes: list[str] = field(default_factory=list)
     entry_discovery: dict[str, Any] = field(default_factory=dict)
     descriptor_resolution: dict[str, Any] = field(default_factory=dict)
+    # L0 只读设备/版本/服务前置确认。它与协议编译、漏洞判定分开保存，
+    # 避免把设备不存在误读成协议或预言机失败。
+    device_fingerprint: dict[str, Any] = field(default_factory=dict)
     run_id: str = ""
     pattern: str = ""
     status: str = ""
@@ -725,6 +728,7 @@ class ScanDynamicResult:
             "compile_notes": self.compile_notes,
             "entry_discovery": self.entry_discovery,
             "descriptor_resolution": self.descriptor_resolution,
+            "device_fingerprint": self.device_fingerprint,
             "run_id": self.run_id,
             "pattern": self.pattern,
             "status": self.status,
@@ -816,6 +820,52 @@ def _emit_compile_diagnostics(emit, compile_result) -> None:
             })
         except Exception:  # noqa: BLE001 — 进度展示不能影响主流程
             pass
+
+
+def _run_device_preflight(
+    *, finding: Any, hdc: Any, repo_root: str | Path | None,
+    progress_path: str | Path | None, emit: Any,
+) -> dict[str, Any]:
+    """运行 L0 只读设备确认并落盘快照。
+
+    该阶段不做服务启动或载荷安装；即使某个设备命令失败，也返回带有
+    ``UNKNOWN``/错误明细的快照，让后续编译器根据证据决定是否可继续。
+    """
+    try:
+        from openharmony_dynamic.device_preflight import collect_device_fingerprint
+
+        hints = list(getattr(finding, "entry_hints", []) or [])
+        context = getattr(finding, "analysis_context", None)
+        reference = context.get("device_reference") if isinstance(context, dict) else None
+        fingerprint = collect_device_fingerprint(
+            hdc,
+            targets=hints,
+            source_revision=str(context.get("source_revision", "")) if isinstance(context, dict) else "",
+            reference=reference if isinstance(reference, dict) else None,
+            repo_root=repo_root,
+        )
+        payload = fingerprint.to_dict()
+    except Exception as exc:  # noqa: BLE001 — 前置诊断失败不应吞掉主错误
+        payload = {
+            "schema_version": "vf.device_fingerprint.v1",
+            "serial": str(getattr(hdc, "serial", "unknown")),
+            "observed_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+            "status": "UNKNOWN",
+            "status_reasons": [f"前置确认异常：{type(exc).__name__}: {exc}"],
+            "command_errors": [{"command": "preflight", "error": str(exc)}],
+            "command_count": 0,
+        }
+    _write_run_snapshot(progress_path, "device_fingerprint.json", payload)
+    if emit is not None:
+        try:
+            emit({
+                "event": "device_preflight",
+                "detail": f"L0 设备前置确认：{payload.get('status', 'UNKNOWN')}",
+                "record": payload,
+            })
+        except Exception:  # noqa: BLE001 — 进度展示不能影响动态测试
+            pass
+
     for error in list(getattr(compile_result, "errors", []) or []):
         try:
             emit({
@@ -825,6 +875,7 @@ def _emit_compile_diagnostics(emit, compile_result) -> None:
             })
         except Exception:  # noqa: BLE001
             pass
+    return payload
 
 
 def _maybe_build_deliverables(result: ScanDynamicResult, *, progress_path: str | Path | None,
@@ -950,6 +1001,12 @@ def run_dynamic_from_scan(
         serial=serial,
         ledger_path=Path(ledger_path) if ledger_path else None,
         on_command=cmd_emit,
+    )
+    # L0：先确认设备版本、端点和目标进程，再进入协议/PoC 编译。该阶段只读，
+    # 不因为未知就伪造匹配，也不自动启动服务。
+    result.device_fingerprint = _run_device_preflight(
+        finding=finding, hdc=hdc, repo_root=resolved_repo_root,
+        progress_path=progress_path, emit=emit,
     )
     # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
     # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。
@@ -1118,6 +1175,12 @@ def run_dynamic_from_webui(
         serial=serial,
         ledger_path=Path(ledger_path) if ledger_path else None,
         on_command=cmd_emit,
+    )
+    # 与目录扫描入口保持同一 L0 前置确认语义，避免 Web 路径和 CLI 路径
+    # 因为少了一次设备/版本检查而产生不同结论。
+    result.device_fingerprint = _run_device_preflight(
+        finding=finding, hdc=hdc, repo_root=resolved_repo_root,
+        progress_path=progress_path, emit=emit,
     )
     # P0-1 降级闭环重试：侦查降级 → fresh session 自动重跑一次；同一缺口签名
     # 独立失败超限 → 收敛 final-failure（failure_log 由进程级缓存跨 run 传递）。

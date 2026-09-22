@@ -1368,6 +1368,12 @@
         const rec = row.record || {};
         const suffix = rec.turn!=null ? '（第 '+rec.turn+' / '+(rec.max_turns||'?')+' 轮）' : '';
         appendEvent('源码侦查', (row.detail||'')+suffix, row.ts, rec);
+      } else if (kind === 'device_preflight') {
+        // L0 设备前置确认是协议恢复之前的独立阶段，不能混成“协议失败”。
+        markStage('start','done','已启动');
+        markStage('compile','active','设备前置确认 / 入口发现');
+        const rec = row.record || {};
+        appendEvent('设备前置确认', (row.detail||'')+' · '+(rec.status||'UNKNOWN'), row.ts, rec);
       } else if (kind === 'run_started') {
         markStage('start','done','已启动');
         markStage('compile','active','侦查 / 编译中');
@@ -1629,6 +1635,47 @@
     }
     function humanObserved(value) { return value ? '已观察到预期变化' : '尚未观察到预期变化'; }
     function humanPassed(value) { return value ? '已通过' : '未通过'; }
+    function appendDevicePreflight(parent, fingerprint) {
+      const fp = fingerprint && typeof fingerprint === 'object' ? fingerprint : {};
+      if (!Object.keys(fp).length) return;
+      const section = el('div','sec sec-cyan');
+      section.appendChild(el('div','sec-t','L0 设备、版本与服务前置确认'));
+      const status = String(fp.status||'UNKNOWN');
+      const labels = {
+        MATCHED:'版本与目标服务均有证据支持',
+        MISMATCH:'版本或目标与评测基线不一致',
+        UNKNOWN:'设备证据不完整，暂不能定论',
+        SERVICE_UNAVAILABLE:'目标服务未发现或当前未监听',
+        VERSION_UNVERIFIED:'目标存在，但版本尚未完成比对',
+      };
+      const grid = el('div','dossier-grid');
+      dossierCard(grid,'环境结论',status+' · '+(labels[status]||'需要进一步核验'));
+      dossierCard(grid,'设备序列号',fp.serial||'未记录');
+      dossierCard(grid,'设备版本',fp.device_revision||'未取得');
+      dossierCard(grid,'源码版本',fp.source_revision||'未取得');
+      dossierCard(grid,'只读命令数',fp.command_count!=null?String(fp.command_count):'—');
+      dossierCard(grid,'进程事实',Array.isArray(fp.processes)?(fp.processes.length+' 个进程记录'):'未记录');
+      dossierCard(grid,'Unix 端点',Array.isArray(fp.unix_sockets)?(fp.unix_sockets.length+' 条'):'未记录');
+      dossierCard(grid,'TCP/UDP 端点',Array.isArray(fp.inet_sockets)?(fp.inet_sockets.length+' 条'):'未记录');
+      section.appendChild(grid);
+      if (Array.isArray(fp.status_reasons) && fp.status_reasons.length) {
+        const reason = el('div','hint'); reason.textContent='结论依据：'+fp.status_reasons.join('；'); section.appendChild(reason);
+      }
+      const services = Array.isArray(fp.services) ? fp.services : [];
+      if (services.length) {
+        const ul = el('ul','ev');
+        services.forEach(item => {
+          const present = item.present === true ? '已发现' : (item.present === false ? '未发现' : '未知');
+          const detail = [item.target, present, item.pids&&item.pids.length?('PID '+item.pids.join(',')):null, item.selinux_domain||null].filter(Boolean).join(' · ');
+          ul.appendChild(el('li',null,detail));
+        });
+        section.appendChild(el('div','kv-sub','当前条目关联的目标服务/端点')); section.appendChild(ul);
+      }
+      if (Array.isArray(fp.command_errors) && fp.command_errors.length) {
+        const err = el('div','hint'); err.style.color='var(--bad)'; err.textContent='采集异常：'+fp.command_errors.map(x=>x.command+': '+x.error).join('；'); section.appendChild(err);
+      }
+      parent.appendChild(section);
+    }
     function recordTransport(r) {
       const observations = (r && r.record && Array.isArray(r.record.observations)) ? r.record.observations : [];
       for (const observation of observations) {
@@ -2232,6 +2279,7 @@
       sub.textContent = 'run '+(r.run_id||data.run_id||'—')+' · '+contextLabel+' · 契约 '+(v.contract_id||'—')+' · 漏洞类 '+(r.vuln_class||'—')+' · pattern '+(r.pattern||'—');
       hero.appendChild(sub);
       body.appendChild(hero);
+      appendDevicePreflight(body, r.device_fingerprint);
       // 交付物是用户最需要确认的结果，放在状态卡片之后而不是长篇证据之后。
       // renderDeliverables 在没有交付物时保持静默，因此兼容旧运行记录。
       try {

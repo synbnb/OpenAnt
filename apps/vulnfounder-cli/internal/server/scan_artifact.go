@@ -51,6 +51,7 @@ var scanArtifactRunArtifactSpecs = map[string]struct {
 	"bridge.json":          {"输入桥接快照", "扫描条目如何转换为动态测试输入。", "json", 4 << 20},
 	"finding_adapter.json": {"漏洞适配结果", "漏洞类型、危险操作点和入口线索的适配结果。", "json", 8 << 20},
 	"entry_discovery.json": {"入口发现结果", "协议匹配前 Agent Loop 找到的设备入口与待补证据。", "json", 8 << 20},
+	"device_fingerprint.json": {"设备前置确认", "本轮只读采集的设备版本、服务端点、进程身份与环境结论。", "json", 32 << 20},
 	"compile_summary.json": {"契约编译摘要", "侦查、校验和编译状态的中间摘要。", "json", 16 << 20},
 	"contract.json":        {"设备测试契约", "最终交给 HAP 载荷和设备执行器的结构化契约。", "json", 16 << 20},
 	"verdict.json":         {"判定快照", "可达性、影响力和效果观察的阶段性判定。", "json", 16 << 20},
