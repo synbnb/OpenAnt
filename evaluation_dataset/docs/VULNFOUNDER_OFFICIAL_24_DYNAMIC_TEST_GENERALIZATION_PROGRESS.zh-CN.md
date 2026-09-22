@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`75185cb`
+> 当前代码提交：`bd26ca9`
 
 ---
 
@@ -524,6 +524,73 @@ route_arbitration：deferred
 全量 `ELIGIBLE` 率，也不是漏洞确认率。所有批次仍只发送自动描述符生成的合法自证探针，
 没有发送攻击变异帧。
 
+### 3.19 清洁环境提示上下文隔离与 DP-10 复验
+
+此前某些样本在入口发现或侦查阶段收到上游模型的 HTTP 400 安全策略拒绝。审计发现，
+动态 Agent 原先直接把 Stage 1 finding 的完整叙述交给协议恢复模型；其中可能包含
+`attack_scenario`、shell 片段或预先写好的利用描述。它们虽然应当留在审计和后续漏洞
+分析产物中，却不是恢复 socket 协议所必需的结构事实，可能让模型在尚未读取当前源码前
+就触发提供方的安全拦截。
+
+本轮没有修改 finding 的持久化内容，也没有删除 Stage 1 证据；新增的是一个通用的
+`FindingInput.to_prompt_dict()` 边界视图。它只向动态入口发现、源码侦查和路由复核
+Agent 提供：
+
+- finding/unit 身份、漏洞类别和源码路径/行号；
+- sink、入口提示和候选攻击链的结构化路径标识；
+- 当前源码证据、缺失证据、图/版本状态和顶层入口元数据；
+- Stage 1 中的函数位置、类别、证据和缺失证据字段。
+
+以下内容继续保留在磁盘产物和 Stage 2 审计中，但不进入本轮协议模型提示：完整
+`description`、`reasoning`、`attack_scenario`、`preconditions` 以及其他可能包含
+攻击载荷的自由文本。这样做不是把模型结果“洗成安全”，而是把“协议恢复”和“漏洞
+利用叙述”分成两个事实边界：模型仍必须从当前源码和设备证据恢复入口、分帧、字段和
+分派，运行器仍通过确定性校验和设备合法探针验证结果。
+
+边界示意：
+
+```mermaid
+flowchart LR
+    A["Stage 1 finding 完整产物\n含叙述与审计证据"] --> B["to_prompt_dict\n结构化、有限字段"]
+    B --> C["入口发现/源码侦查/路由复核 Agent"]
+    C --> D["源码与设备证据"]
+    D --> E["描述符/合法探针确定性校验"]
+    A --> F["持久化、Stage 2 和报告\n保留完整信息"]
+```
+
+代码回归：
+
+```text
+PYTHONPATH=libs/vulnfounder-core .venv/bin/python3 -m pytest -q \
+  libs/vulnfounder-core/tests/test_finding_input_prompt.py \
+  libs/vulnfounder-core/tests/test_entry_discovery_loop.py \
+  libs/vulnfounder-core/tests/test_route_arbitration_loop.py \
+  libs/vulnfounder-core/tests/test_recon_loop.py \
+  libs/vulnfounder-core/tests/test_descriptor_synthesizer.py
+结果：75 passed in 0.27s
+```
+
+在同一开发板和同一 clean-room 输入边界下，重新执行 DP-10：
+
+```text
+产物：/Users/shiyu/.openant/dynamic_generalization_stage2_prompt_sanitized_dp10_20260922/DP-10
+结果：ELIGIBLE
+描述符：auto_b5967aaf8303d111
+入口发现：3 个候选，9/10 个模型侦查轮完成后收敛
+协议证据：transport=14、endpoint=3、framing=159、dispatch=212
+设备侧合法探针：HAP_POC_SENT SELFTEST-GEN-DP-10，UDP 127.0.0.1:8283
+```
+
+该结果说明本次隔离确实绕开了此前的模型安全策略阻断，并让 DP-10 取得了可执行
+协议契约；它不代表漏洞已经触发，也不代表所有候选端点都属于同一条攻击路径。首次
+尝试中模型生成的 `set_pkgName` 草案未包含源码守卫要求的字面量 `smartperf`，运行器
+将其拒绝并把源码行反馈给第二个 fresh session；第二次才生成符合当前源码守卫的合法
+探针。这个失败—反馈—重试过程已经写入 `events.jsonl` 和 `compile_summary.json`，
+没有把失败的第一帧发送成业务载荷。
+
+当前定向复验的 `ELIGIBLE` 样本为 DP-06、DP-10、DP-11、DP-12、DP-16、DP-18；
+这仍然只是契约可执行性指标，不能替代 24 项动态效果确认。
+
 ### 3.15 候选路由复核的官方 23 项全量复跑
 
 在候选路由复核 loop 完成后，重新对除 DP-02 外的其余 23 个官方样本执行同一份
@@ -821,3 +888,4 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | 工作区回归 | 新增批处理参数后执行动态相关回归：`188 passed in 0.88s`；未发现载体、协议校验、设备预检或 OpenAI 适配器回归 |
 | 2026-09-22 | `9928166` | 批处理器同时写入 `VULNFOUNDER_*` 与兼容的 `OPENANT_*` LLM 限制变量，确保品牌化配置不会覆盖本轮显式的超时/重试边界；OpenAI/描述符回归 `102 passed in 0.68s`；已推送 |
 | 2026-09-22 | `5711c7a` | 批处理器新增通用 `--samples` 子集选择器；六样本 clean-room 聚焦复验完成，6/6 有产物且 0 timeout/错误，其中 DP-18 达到 `ELIGIBLE`，其余阻断原因均按证据保留；代码已推送 |
+| 2026-09-22 | `bd26ca9` | 动态 Agent 新增 `FindingInput.to_prompt_dict()`，隔离 Stage 1 攻击叙述与协议恢复提示，仅保留当前 finding 的结构事实；新增提示边界回归后 75 项通过；DP-10 clean-room 重测达到 `ELIGIBLE`，自动描述符 `auto_b5967aaf8303d111` 并完成 UDP 8283 合法探针自证 |
