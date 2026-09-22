@@ -8,7 +8,7 @@
 >
 > 当前分支：`refactor/vulnfounder-brand`
 >
-> 当前代码提交：`2914492`
+> 当前代码提交：`3cd292d`
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
 | 项目 | 结果 |
 |---|---|
 | 远端 | `origin/refactor/vulnfounder-brand` |
-| 最新提交 | `2914492 fix: include reused samples in batch summaries` |
+| 最新提交 | `3cd292d feat: fan out ambiguous dynamic routes safely` |
 | 工作区 | 已跟踪文件无未提交改动；设备产物和历史评测文件仍按约定留在本地未跟踪目录 |
 | 本轮聚焦 | 结构化失败反馈、fresh-session 重试和 LLM 请求边界的真实样本验收 |
 
@@ -950,3 +950,5 @@ transport，也会使用该证据，而不是按服务名猜测。CLI/event 没�
 | 2026-09-22 | DP-06 clean-room 真实复验 | 在代码 `6e4acb6`、设备 PID `29996` 上单样本执行阶段 2 契约编译；`compile_status=ELIGIBLE`，自动描述符 `auto_16c7e5a858aef0cc`，入口候选 3 个且选定当前 route，transport/endpoint/framing/dispatch/guards 证据计数为 14/3/116/236/243，UDP 8283 合法探针 `app_start_collect:::` 通过。产物：`/Users/shiyu/.openant/dynamic_generalization_continue_dp06_20260922/DP-06`。该结果只证明契约可执行，不计为漏洞效果确认。 |
 | 2026-09-22 | 最新 24 项 clean-room 阶段 2 矩阵 | 使用代码 `2914492` 前的最新实现、`--workers 2 --timeout 300 --llm-timeout 60 --max-attempts 1` 完成 24 项调度：21 项生成明确 `REQUIRES_PROTOCOL_REVIEW`，DP-11/DP-16/HV-01 触发单样本硬超时，0 个子进程错误。主要阻断为多端点无法唯一归属或自动描述符证据不足；产物：`/Users/shiyu/.openant/dynamic_generalization_latest24_stage2_20260922`。该批次发现并发 HDC 会偶发 `FreeChannelContinue handle->data is nullptr`，不能作为设备事实验收依据。 |
 | 2026-09-22 | 串行优先样本复验 | 停止并发 HDC 后无参重启 `SP_daemon`（PID `31070`），确认 8283/8284/8285 均监听；对 DP-06/DP-10/DP-11/DP-12/DP-16/DP-18 使用 `--workers 1 --timeout 300 --llm-timeout 60 --max-attempts 2` 串行复验。DP-06/DP-10/DP-18 为 `REQUIRES_PROTOCOL_REVIEW`，DP-11/DP-12/DP-16 超时，未将并发或超时结果写成漏洞不存在。产物：`/Users/shiyu/.openant/dynamic_generalization_priority_retry_serial_20260922`。 |
+| 2026-09-22 | `3cd292d` | 多入口安全拆分：当当前 finding 同时得到多个经过源码/设备证据校验的 endpoint 时，主结果继续保持 `REQUIRES_PROTOCOL_REVIEW`，同时在 `route_variants/` 为每个非 unrelated 候选独立执行一次 clean-room 协议编译和合法探针自证；不自动选择首个端点，不发送业务变异帧。新增 `--no-route-fanout` 可关闭，默认开启；单元桩验证 2/2 variant 独立落盘。 |
+| 2026-09-22 | DP-10 route fan-out 真实复验 | 设备上的 `SP_daemon` 在本次入口只读取证前退出，入口 Agent 诚实产生空候选，未触发 route fan-out；随后已按无参方式重新启动服务，PID `31568`，8283/8284/8285 恢复监听。该结果记录为服务稳定性问题，不写成 DP-10 协议失败。真实复验产物：`/Users/shiyu/.openant/dynamic_generalization_route_fanout_dp10_20260922`。 |
