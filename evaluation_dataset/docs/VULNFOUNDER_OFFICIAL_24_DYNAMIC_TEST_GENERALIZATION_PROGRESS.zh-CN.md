@@ -46,7 +46,7 @@ flowchart LR
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 已有样本级基线快照 | 已新增 `dynamic_baseline.json`，记录样本身份、源码哈希、版本字段、候选数量和输入边界；clean-room 不把候选攻击链注入模型上下文 | 仍需把官方 24 项统一清单批量冻结，并补齐设备 revision 采集结果 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | **L0 真机预检已完成** | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实、HDC 诊断噪声隔离、两次连续驻留复核；官方 24 项已逐样本执行并归档 | 当前批次只完成环境审计，不发送业务载荷；源码/设备版本参考未提供时仍保持 `VERSION_UNVERIFIED` |
-| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已完成 clean-room 编译；DP-02 仅保留既有基线** | entry discovery loop、候选路由复核 loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；23 项逐样本有独立产物，DP-06 复验验证了本地头文件端点证据扩展，DP-01 增量复验记录了多端点安全 defer | 23 项中只有 DP-16 达到 `ELIGIBLE`；其余停在协议复核，仍需后续输入载体与预言机阶段；不能把协议编译结果当作漏洞确认 |
+| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | **23 项新增样本已有 clean-room 编译基线；3 个结构修复样本已按 3 次有界 fresh-session 重试复验** | entry discovery loop、候选路由复核 loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；DP-11、DP-12、DP-16 均在当前源码和设备只读证据下自动生成描述符并完成合法探针自证 | 全量 24 项仍未完成设备业务载荷回归；`ELIGIBLE` 只表示契约可执行，不代表漏洞效果已确认；其余样本仍需按端点歧义、字段缺口和载体类型逐项补证 |
 | 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入；HAP 与 L2 自定义载体均已接入隔离/离线 Hvigor 构建 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示；DP-06 已完成一次真机合法探针闭环 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体；合法探针送达不等于风险效果确认 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
@@ -451,6 +451,51 @@ route_arbitration：deferred
 中的任意一个按顺序猜成目标入口。复核审计中已经保存预读源码窗口、模型理由和
 三项候选的拒绝说明；后续若补齐命令分派或参数绑定证据，可在同一候选集合上重新
 复核，而无需修改样本专用规则。
+
+### 3.17 预言机结构修复与动态模型请求边界复验
+
+阶段 2 批次暴露的 `oracle.hilog_expectations` 类型错误和 `artifact_forms` 缺少
+`form` 字段，不是某个样本的协议特例，而是 fresh-session 重试时模型可能返回不完整
+结构的通用问题。当前修复保持首轮严格门禁：首轮草案仍必须由模型提交合法对象列表；只有
+进入 fresh-session 重试时，编译器才会：
+
+1. 丢弃缺少 `tag`/`pattern` 的日志项；
+2. 丢弃缺少合法 `form` 的 artifact 项；
+3. 在没有可复用合法项时，根据当前漏洞类别已经声明的观测器骨架补齐安全的结构槽位；
+4. 将修复原因写入重试审计，不能把结构修复伪装成模型首轮成功。
+
+为避免 OpenAI SDK 自身重试掩盖阶段边界，官方阶段 2 批处理器现在支持三个显式参数：
+
+```text
+--max-attempts       契约 fresh-session 重试次数
+--llm-timeout        单次模型请求超时秒数
+--llm-max-retries    SDK 自身重试次数（默认 0）
+```
+
+这些限制只注入每个样本的独立子进程，并记录在 `compile_summary.json.retry_policy`；它们
+不会改变其他扫描阶段的 provider 设置。契约层负责有限的结构修复重试，SDK 层默认不再
+隐式叠加重试，因此一次 60 秒模型请求不会再被放大成无法解释的多分钟等待。
+
+在同一开发板、同一 clean-room 输入边界下，对此前出现结构问题的三个样本进行了真实复验：
+
+| 样本 | 重试配置 | 结果 | 自动描述符 | 设备侧合法探针 |
+|---|---|---|---|---|
+| DP-11 | `max_attempts=3`、`llm-timeout=60`、`llm-max-retries=0` | `ELIGIBLE`，第 3 次 fresh session 收敛；首场失败原因明确记录为 `hilog_expectations` 类型错误 | `auto_7730cc53d24f9388` | `HAP_POC_SENT SELFTEST-GEN-DP-11`，TCP `127.0.0.1:8284` |
+| DP-12 | `max_attempts=3`、`llm-timeout=60`、`llm-max-retries=0` | `ELIGIBLE`，单次 clean-room 通过 | `auto_d6e9ecb74058a642` | `HAP_POC_SENT SELFTEST-GEN-DP-12`，TCP `127.0.0.1:8284` |
+| DP-16 | `max_attempts=3`、`llm-timeout=60`、`llm-max-retries=0` | `ELIGIBLE`，自动描述符和侦查草案均闭环 | `auto_03e1234ea99d81f3` | `HAP_POC_SENT SELFTEST-GEN-DP-16`，UDP `127.0.0.1:8283` |
+
+对应独立产物目录为：
+
+```text
+/Users/shiyu/.openant/dynamic_generalization_stage2_retry_shape_dp11_20260922/DP-11
+/Users/shiyu/.openant/dynamic_generalization_stage2_retry_shape_dp12_20260922_timeout60
+/Users/shiyu/.openant/dynamic_generalization_stage2_retry_shape_dp16_20260922/DP-16
+```
+
+这三项结果证明的是“结构化失败反馈、有限 fresh-session 重试和自动描述符合法探针”
+能够在真实源码/设备证据下收敛；它们仍然没有发送漏洞变异帧，也没有观察到安全效果，
+因此不能改写为 `CONFIRMED`。DP-11 的总耗时 505.7 秒、DP-16 为 328.1 秒，说明
+有限重试虽避免无限等待，但复杂样本仍需要后续减少无效侦查轮次或引入阶段级总预算。
 
 ### 3.15 候选路由复核的官方 23 项全量复跑
 
