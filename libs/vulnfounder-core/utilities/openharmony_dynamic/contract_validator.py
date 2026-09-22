@@ -25,6 +25,7 @@ from .models import (
 )
 from .observation.oracles import OracleError, _validate_spec
 from .protocols import get_descriptor
+from .transports.command import command_argv_for, validate_command_argv
 
 COMPILE_GATE_STATUS = "REQUIRES_PROTOCOL_REVIEW"
 
@@ -128,6 +129,28 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
                 )
     except KeyError as exc:
         errors.append(f"V3 结构体: {exc}")
+
+    # CLI/event_bus 载体必须由契约提供参数数组。不能把整条设备命令放进
+    # shell 字符串，也不能让模型借助 ``sh -c`` 绕过设备命令边界。命令数组
+    # 是载体事实，不属于协议线路字段；实际值仍会在 runner 中经过运行期占位
+    # 符替换后再次由 DeviceCommandTransport 二次校验。
+    if contract.entry.kind in {"cli", "event_bus"}:
+        command_argv, source_key = command_argv_for(contract.protocol, contract.entry.kind)
+        if not command_argv:
+            errors.append(
+                f"V3 载体: entry.kind={contract.entry.kind} 必须提供字符串 argv 数组；"
+                f"建议放在 protocol.param_space.{source_key or ('cli_argv' if contract.entry.kind == 'cli' else 'event_argv')}"
+            )
+        elif validate_command_argv(command_argv) != command_argv:
+            errors.append(
+                f"V3 载体: {source_key or 'command_argv'} 含非法 shell 字符、控制字符、"
+                "空参数或 shell -c；必须使用安全的设备命令参数数组"
+            )
+        if source_key in contract.protocol.field_values:
+            # 兼容旧草案但显式提示迁移；不要让设备命令混进业务字段白名单。
+            contract.limitations.append(
+                f"validator-warning: {source_key} 位于 protocol.field_values，建议迁移到 param_space"
+            )
 
     # V4 入口存在性（可跳过，必须记录）
     if hdc is not None and contract.entry.kind in ("unix_dgram", "unix_stream", "native_unix"):

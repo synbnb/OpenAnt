@@ -46,8 +46,8 @@ flowchart LR
 |---|---|---|---|---|
 | 阶段 0 | 基线、样本标准化、clean-room 输入边界 | 部分完成 | 已有 finding/route/contract 结构；已有 clean-room 运行和历史产物机制 | 需要把官方 24 项统一清单、源码 revision、设备 revision 和 context_sources 冻结成一份本轮基线 |
 | 阶段 1 | 设备指纹、服务健康、版本比较 | 已实现基础能力 | `DeviceFingerprint`、版本比较状态、服务/端点/进程事实和专门测试 | 尚需对当前连接开发板执行 24 项 L0 采集并归档；SP_daemon 连续健康检查的全量回归尚未完成 |
-| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | 已有主要能力 | entry discovery loop、descriptor synthesizer、路由切片、字段证据和 legal probe 校验 | 尚需以 24 项为对象完成协议候选覆盖统计，不能只依赖已有注册描述符 |
-| 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | 已实现 HAP/native 基础能力 | HAP、Unix native、身份降权字段、载荷 manifest/交付物展示 | CLI/event_bus 通用载体和 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
+| 阶段 2 | 协议恢复 Agent Loop、字段/入口证据、失败反馈 | 已有主要能力；CLI/event 契约入口已接入 | entry discovery loop、descriptor synthesizer、路由切片、字段证据、legal probe 校验；CLI/event 的命令数组形状校验 | 尚需以 24 项为对象完成协议候选覆盖统计，不能只依赖已有注册描述符 |
+| 阶段 3 | HAP/native/CLI/event carrier 和身份阶梯 | HAP/native 已有基础能力；CLI/event 已完成通用命令载体基础接入 | HAP、Unix native、身份降权字段、CLI/event 安全 argv、载体发送结果和交付物展示 | 24 项载体选择回归仍待完成；HAP 不是所有协议的唯一载体 |
 | 阶段 4 | 输入影响与漏洞类别预言机 | 已实现多数观测器 | 文件、日志、回读、权限、崩溃、资源、状态和竞态类 oracle 代码及测试 | 24 项每个样本的 before/during/after/refutation 产物尚未重新汇总；输入到危险参数的独立证据还需逐项核查 |
 | 阶段 5 | 官方 24 项 clean-room 分批回归 | 未完成 | 现有历史运行产物可作为基线，不作为本轮通过证据 | 需要按 DP-02、SmartPerf、HiView 分批重跑，并生成逐样本验收表 |
 
@@ -164,6 +164,37 @@ HAP 不是动态测试的唯一载体。计划要求后续按契约选择 HAP、
 
 对应最新提交：`4de39e2`。
 
+### 3.7 CLI 与事件总线通用载体第一批接入
+
+本次按计划补上了此前 runner 对 `cli`/`event_bus` 直接报“未支持”的缺口。新增的
+`DeviceCommandTransport` 不识别服务名称，也不内置某个事件或命令；它只消费当前
+契约中的 `protocol.param_space.cli_argv`、`event_argv` 或统一的 `command_argv`。
+
+安全边界如下：
+
+- 命令必须是字符串列表，整条 shell 字符串会在 validator 阶段拒绝；
+- 禁止 NUL、控制字符、`;`、`|`、`&`、重定向、反引号和换行；
+- 禁止把 `sh -c`、`bash -c` 等派生 shell 当成载体命令；
+- runner 通过 HDC 参数数组执行，不将命令重新拼接成 shell；
+- 实际 argv、来源键、返回码、stdout/stderr 摘要和 HDC command record 都进入
+  `SendResult.transport`；
+- 设备命令执行失败被记录为 `INPUT_REJECTED`，主机/HDC 基础设施异常记录为
+  `INPUT_NOT_SENT`，不混写成漏洞效果失败。
+
+同时把 `ProtocolSpec.param_space` 正式纳入数据模型，避免过去由调用方动态挂属性，
+导致 JSON round-trip 与静态检查不一致。业务字段仍由协议描述符和 route 解释，设备
+命令不会混进业务字段白名单。
+
+本批次新增回归覆盖：
+
+1. shell 字符串、`sh -c` 和控制字符被拒绝；
+2. CLI 合法 argv 能执行并保存回执；
+3. event_bus 非零返回码被区分为设备拒绝；
+4. 缺少合法 argv 的 CLI 契约在设备交互前被拦截。
+
+本批次尚未声称任何具体事件总线协议已经在开发板上成功发送；协议字段、事件名和
+权限仍必须由当前 finding 的源码证据和合法探针恢复。
+
 ---
 
 ## 4. 当前测试证据
@@ -279,4 +310,4 @@ python -m pytest -q \
 | 日期 | 提交 | 进展 |
 |---|---|---|
 | 2026-09-22 | `4de39e2` | 完成基线同步；建立本进度文件；记录 L0、协议 Agent、HAP/native、oracle 和交付物现状；针对性测试 74 项通过 |
-
+| 2026-09-22 | 待提交 | 接入 CLI/event_bus 通用 argv 载体、契约校验和运行器分支；新增针对性测试后累计 78 项通过，待提交并推送 |

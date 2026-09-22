@@ -326,6 +326,17 @@ class Runner:
                 if abs(interval - 0.3) > 1e-9:
                     run_kwargs["frame_interval_seconds"] = interval
                 send_result = transport.build_and_run(field_values, **run_kwargs)
+            elif contract.entry.kind in ("cli", "event_bus"):
+                # CLI 与事件总线都由契约提供安全 argv 数组；业务字段仍由
+                # descriptor/route 负责解释，运行器不按服务名猜命令或事件。
+                from .transports.command import DeviceCommandTransport
+
+                assert isinstance(transport, DeviceCommandTransport)
+                send_result = transport.send(
+                    contract.protocol,
+                    descriptor,
+                    purpose=f"{run_id}:send",
+                )
             else:
                 raise OracleError(f"未支持的 entry.kind: {contract.entry.kind}")
             rec.reachability = send_result.reachability
@@ -578,6 +589,10 @@ class Runner:
             from .transports.hap import HapTransport
 
             return HapTransport(self.hdc)
+        if contract.entry.kind in ("cli", "event_bus"):
+            from .transports.command import DeviceCommandTransport
+
+            return DeviceCommandTransport(self.hdc, kind=contract.entry.kind)
         raise OracleError(f"未知 entry.kind: {contract.entry.kind}")
 
     def _snapshot_target_process(self, contract: Contract, purpose: str) -> dict[str, Any]:

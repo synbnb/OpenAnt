@@ -143,6 +143,11 @@ class ProtocolSpec:
     # 发送序列：多帧时按顺序；单帧省略。帧之间固定间隔秒数。
     frame_sequence: list[str] = field(default_factory=list)   # 字段值组合的键名列表
     inter_frame_delay_seconds: float = 0.3
+    # 非线路字段：载体命令数组、帧模板、预埋文件和效果窗口等。此前这里
+    # 由调用方动态挂属性，JSON round-trip 和静态类型检查都无法保证一致；
+    # 将其纳入模型后，CLI/event_bus 等通用载体可以复用同一份契约 schema，
+    # 仍不会把命令拼成 shell 字符串。
+    param_space: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -269,7 +274,7 @@ class Contract:
                 "inter_frame_delay_seconds": self.protocol.inter_frame_delay_seconds,
                 # param_space：非线路字段（帧模板/预埋目录/效果窗口），round-trip 必须保留
                 **({"param_space": dict(self.protocol.param_space)}
-                   if getattr(self.protocol, "param_space", None) else {}),
+                   if self.protocol.param_space else {}),
             },
             "fault": self.fault.__dict__,
             "oracle": {

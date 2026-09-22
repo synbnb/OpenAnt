@@ -7,6 +7,7 @@ from .base import (
     SendResult,
     TransportError,
 )
+from .command import DeviceCommandTransport, command_argv_for, validate_command_argv
 
 __all__ = [
     "INPUT_DELIVERED",
@@ -14,4 +15,7 @@ __all__ = [
     "INPUT_REJECTED",
     "SendResult",
     "TransportError",
+    "DeviceCommandTransport",
+    "command_argv_for",
+    "validate_command_argv",
 ]

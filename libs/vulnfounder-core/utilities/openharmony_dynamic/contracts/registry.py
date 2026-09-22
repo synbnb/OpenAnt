@@ -49,9 +49,8 @@ def contract_from_dict(raw: dict[str, Any]) -> Contract:
         descriptor_snapshot=dict(proto_raw.get("descriptor_snapshot") or {}),
         frame_sequence=list(proto_raw.get("frame_sequence", [])),
         inter_frame_delay_seconds=float(proto_raw.get("inter_frame_delay_seconds", 0.3)),
+        param_space=dict(proto_raw.get("param_space") or {}),
     )
-    if "param_space" in proto_raw:
-        protocol.param_space = dict(proto_raw["param_space"])
     snapshot = protocol.descriptor_snapshot
     if snapshot and snapshot.get("descriptor_id"):
         try:
