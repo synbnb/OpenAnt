@@ -1,11 +1,19 @@
 # 项目内 OpenHarmony 运行时
 
-本目录是 OpenHarmony command-line-tools 的项目内导入点。当前目标版本为
-OpenHarmony 7.0-Release，正式交付目标是 Linux x86_64；本次交付不下载、不内置
-Linux 二进制，仅保留清单和导入说明。部署方应将匹配版本的 Linux 工具包放在例如
-`linux-x64-7.0/`，目录内应包含 `hvigor/`、
-`tool/`、`sdk/` 等标准子目录，也可以通过 `VULNFOUNDER_DYNAMIC_TOOLCHAIN` 指向
-外部安装目录。
+本目录是 OpenHarmony 工具链的项目内导入点。当前目标版本为
+OpenHarmony 7.0-Release，正式交付目标是 Linux x86_64；本目录已经导入一份
+官方 7.0 macOS arm64 L2 SDK（`macos-arm64-7.0/`），用于本机 HDC、HAP 签名、
+Native/ETS/JS SDK 和 C/C++ PoC 验证。正式 Linux 交付不下载、不内置 Linux
+二进制，仅保留清单和导入说明。部署方应将匹配版本的 Linux 工具包放在例如
+`linux-x64-7.0/`，目录内应包含 `hvigor/`、`tool/`、`sdk/` 等标准子目录，也
+可以通过 `VULNFOUNDER_DYNAMIC_TOOLCHAIN` 指向外部安装目录。
+
+macOS 这份 L2 SDK 不包含 command-line-tools 中的 Hvigor/Node。需要构建 HAP
+工程时，必须另行取得与 7.0/API 26 匹配的 macOS command-line-tools；不能把
+`macos-arm64-6.1/` 中的 Hvigor/Node 与 7.0 SDK 混用。当前本机包已经具备
+`sdk/default/openharmony/toolchains/hdc`、`hap-sign-tool.jar`、
+`OpenHarmony.p12` 以及 Native SDK，因此可以运行设备资产发现、源码定位依赖的
+HDC 操作、原生 PoC 构建和签名验证。
 
 工作区中可能存在 `macos-arm64-6.1/` 历史本机验证运行包，但它只适用于 macOS
 arm64，且不是当前 7.0 运行时，不能复制到 Linux 主机，也不应被自动选择。若只有

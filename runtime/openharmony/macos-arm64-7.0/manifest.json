@@ -1,0 +1,36 @@
+{
+  "platform": "macos-arm64",
+  "openharmony_version": "7.0",
+  "openharmony_revision": "OpenHarmony-7.0-Release",
+  "api_version": "26",
+  "release_type": "Release",
+  "toolchain_kind": "public_l2_sdk",
+  "source": {
+    "provider": "repo.huaweicloud.com",
+    "url": "https://repo.huaweicloud.com/harmonyos/os/7.0-Release/L2-SDK-MAC-M1-PUBLIC_20260829.tar.gz",
+    "sha256": "a3a59a95e6250068016c770e501cc625684d3867be74ee8c355a4d8b8cf5e14f",
+    "package_version": "26.0.0.38",
+    "downloaded_at": "2026-10-13"
+  },
+  "toolchain_root": ".",
+  "components": {
+    "sdk_root": "sdk/default/openharmony",
+    "hdc": "sdk/default/openharmony/toolchains/hdc",
+    "hap_sign_tool": "sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar",
+    "hap_debug_keystore": "sdk/default/openharmony/toolchains/lib/OpenHarmony.p12",
+    "native": "sdk/default/openharmony/native",
+    "ets": "sdk/default/openharmony/ets",
+    "js": "sdk/default/openharmony/js",
+    "previewer": "sdk/default/openharmony/previewer"
+  },
+  "sha256": {
+    "hdc": "8dcc254599840b874ee72e415fed27c0c91f52018fa4cab3a51d913a020e60b4",
+    "hap_sign_tool": "a434b6747e6c5d0b14e73837a46b39f4816ab25b42d1833d6f767bf867cf616d",
+    "hap_debug_keystore": "7a5efc3ea9245596d157f6ccbbdc5b8ae7cd714e7086c3c1645986c9d495d071"
+  },
+  "optional_components": {
+    "hvigor": null,
+    "node": null,
+    "note": "官方 7.0 L2-SDK-MAC-M1 公共包提供 SDK、HDC 和签名工具；不包含 command-line-tools 中的 Hvigor/Node。需要 HAP 工程构建时，应另行导入同版本 command-line-tools，不能复用 6.1。"
+  }
+}
