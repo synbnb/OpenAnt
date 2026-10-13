@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-让 VulnFounder 在 Linux x86_64 交付目录中优先找到 OpenHarmony 动态验证所需的工具和资源，降低用户首次部署时手动寻找工具链、HDC 和 HAP 签名材料的成本；同时把 OpenGrok 地址、项目、版本和相关认证引用集中到设置页管理，避免扫描页面重复要求用户填写。本次不下载 Linux 工具包，只定义导入位置、版本清单和诊断规则。
+让 VulnFounder 在 Linux x86_64 交付目录中优先找到 OpenHarmony 动态验证所需的工具和资源，降低用户首次部署时手动寻找工具链、HDC 和 HAP 签名材料的成本；同时把 OpenGrok 地址、项目、版本和相关认证引用集中到设置页管理，避免扫描页面重复要求用户填写。本次不下载 Linux 工具包，只定义导入位置、版本清单和诊断规则。当前默认目标为 OpenHarmony-7.0-Release；6.1 清单仅保留用于历史扫描重放，必须显式选择，不能静默回退。
 
 本计划不把主机操作系统运行时（Python、Go、Java、系统动态库）伪装成“已经随项目交付”。这些组件受平台和许可影响，项目只负责检测、提示和使用；可以随项目分发的 OpenHarmony 工具、HAP 构建运行时和研究用签名材料，则采用项目内目录和清单管理。
 
@@ -20,7 +20,7 @@
 VulnFounder/
 ├─ runtime/
 │  └─ openharmony/
-│     └─ linux-x64-6.1/          # Linux 部署方导入的运行时包（本次不内置）
+│     └─ linux-x64-7.0/          # Linux 部署方导入的运行时包（本次不内置）
 │        ├─ hdc
 │        ├─ hvigor/bin/hvigorw
 │        ├─ tool/node/bin/node

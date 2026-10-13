@@ -69,6 +69,7 @@ def contract_from_dict(raw: dict[str, Any]) -> Contract:
                     on_send_transforms=[SendTransform(**dict(x))
                                         for x in snapshot.get("on_send_transforms", [])],
                     structure_evidence=str(snapshot.get("structure_evidence", "")),
+                    evidence_revision=str(snapshot.get("evidence_revision", "")),
                     encoder_kind=str(snapshot.get("encoder_kind", "custom")),
                     wire_format=dict(snapshot.get("wire_format") or {}),
                     legal_probe=dict(snapshot.get("legal_probe") or {}),

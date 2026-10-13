@@ -40,12 +40,12 @@ command-line-tools，只包含运行时清单和导入说明。Linux 部署方�
 工具包并放入：
 
 ```text
-runtime/openharmony/linux-x64-6.1/
+runtime/openharmony/linux-x64-7.0/
 ```
 
-该目录应包含 HDC、Hvigor、Node、SDK 和 HAP 签名工具。也可以设置
+该目录应包含与 OpenHarmony 7.0-Release 匹配的 HDC、Hvigor、Node、SDK 和 HAP 签名工具。也可以设置
 `VULNFOUNDER_DYNAMIC_TOOLCHAIN` 指向外部 Linux 工具目录。工作区中可能保留一份
-macOS arm64 验证包，但它不属于 Linux 交付物，不能跨平台复用。没有正式 HAP 证书时，系统会使用
+macOS arm64 验证包，但它不属于 Linux 交付物，不能跨平台复用。系统默认不会把 6.1 工具链当作 7.0 使用；如果确实要重放旧版本，必须显式设置版本和工具链路径。没有正式 HAP 证书时，系统会使用
 SDK 公开测试根材料，按当前 HDC serial 临时生成设备绑定的研究用 debug profile，
 无需用户手工寻找 p7b。它不等同于生产证书。
 

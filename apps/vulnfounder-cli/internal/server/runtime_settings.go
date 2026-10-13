@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -237,12 +238,59 @@ func projectToolchainCandidates(root string) []string {
 	return result
 }
 
-func expandToolchainRoot(candidate string) string {
+func runtimeTargetVersion() string {
+	raw := strings.TrimSpace(os.Getenv("VULNFOUNDER_OPENHARMONY_VERSION"))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("OPENANT_OPENHARMONY_VERSION"))
+	}
+	if raw == "" {
+		return "7.0"
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "openharmony-") {
+		raw = raw[len("OpenHarmony-"):]
+	}
+	if strings.HasSuffix(strings.ToLower(raw), "-release") {
+		raw = raw[:len(raw)-len("-Release")]
+	}
+	return strings.TrimSpace(raw)
+}
+
+func runtimeTargetRevision() string {
+	raw := strings.TrimSpace(os.Getenv("VULNFOUNDER_OPENHARMONY_REVISION"))
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("OPENANT_OPENHARMONY_REVISION"))
+	}
+	if raw != "" {
+		return raw
+	}
+	version := runtimeTargetVersion()
+	if strings.HasSuffix(strings.ToLower(version), "-lts") {
+		return "OpenHarmony-" + version
+	}
+	return "OpenHarmony-" + version + "-Release"
+}
+
+func runtimeManifestVersion(root string) string {
+	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		OpenHarmonyVersion string `json:"openharmony_version"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.OpenHarmonyVersion)
+}
+
+func expandToolchainRoot(candidate, targetVersion string, explicit bool) string {
 	info, err := os.Stat(candidate)
 	if err != nil || !info.IsDir() {
 		return ""
 	}
-	if _, err := os.Stat(filepath.Join(candidate, "sdk", "default", "openharmony", "toolchains")); err == nil {
+	if _, err := os.Stat(filepath.Join(candidate, "sdk", "default", "openharmony", "toolchains")); err == nil &&
+		(explicit || runtimeManifestVersion(candidate) == targetVersion || strings.Contains(filepath.Base(candidate), targetVersion)) {
 		return candidate
 	}
 	entries, _ := os.ReadDir(candidate)
@@ -251,7 +299,8 @@ func expandToolchainRoot(candidate string) string {
 			continue
 		}
 		child := filepath.Join(candidate, entry.Name())
-		if _, err := os.Stat(filepath.Join(child, "sdk", "default", "openharmony", "toolchains")); err == nil {
+		if _, err := os.Stat(filepath.Join(child, "sdk", "default", "openharmony", "toolchains")); err == nil &&
+			(explicit || runtimeManifestVersion(child) == targetVersion || strings.Contains(entry.Name(), targetVersion)) {
 			return child
 		}
 	}
@@ -263,8 +312,13 @@ func runtimeStatusData() map[string]any {
 	rootText := root
 	candidates := projectToolchainCandidates(rootText)
 	toolchain := ""
+	targetVersion := runtimeTargetVersion()
+	explicit := strings.TrimSpace(os.Getenv("VULNFOUNDER_DYNAMIC_TOOLCHAIN"))
+	if explicit == "" {
+		explicit = strings.TrimSpace(os.Getenv("OPENANT_DYNAMIC_TOOLCHAIN"))
+	}
 	for _, candidate := range candidates {
-		if resolved := expandToolchainRoot(candidate); resolved != "" {
+		if resolved := expandToolchainRoot(candidate, targetVersion, explicit != "" && candidate == explicit); resolved != "" {
 			toolchain = resolved
 			break
 		}
@@ -345,12 +399,14 @@ func runtimeStatusData() map[string]any {
 	}
 	sort.Slice(components, func(i, j int) bool { return components[i].Name < components[j].Name })
 	return map[string]any{
-		"project_root":         rootText,
-		"toolchain_root":       toolchain,
-		"toolchain_candidates": candidates,
-		"components":           components,
-		"host_dependencies":    host,
-		"cert_policy":          "签名私钥只在本机受保护目录使用，页面和日志不显示内容；目录或文件缺失会在签名前阻止构建。",
+		"project_root":                rootText,
+		"target_openharmony_version":  targetVersion,
+		"target_openharmony_revision": runtimeTargetRevision(),
+		"toolchain_root":              toolchain,
+		"toolchain_candidates":        candidates,
+		"components":                  components,
+		"host_dependencies":           host,
+		"cert_policy":                 "签名私钥只在本机受保护目录使用，页面和日志不显示内容；目录或文件缺失会在签名前阻止构建。",
 	}
 }
 

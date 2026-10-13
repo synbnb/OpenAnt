@@ -26,11 +26,12 @@ VulnFounder/
 └── result/                    # 运行产物（可重新生成）
 ```
 
-本机验证目录曾准备过 macOS arm64 的 OpenHarmony 6.1 command-line-tools，包含 HDC、
+本机验证目录曾准备过 macOS arm64 的旧版 OpenHarmony command-line-tools，包含 HDC、
 Hvigor、Node、SDK 和 HAP 签名工具；该目录不应复制到 Linux 主机，也不会进入本次
 Linux 交付包。Linux 交付包只包含运行时清单、导入说明和程序源码，部署方应将匹配
 版本的 Linux 工具包放到例如
-`runtime/openharmony/linux-x64-6.1/`，或在设置页/环境变量中指定外部目录。
+`runtime/openharmony/linux-x64-7.0/`，或在设置页/环境变量中指定外部目录。默认目标为
+`OpenHarmony-7.0-Release`；6.1 仅作为显式兼容版本，不会被自动回退使用。
 
 ## 2. 主机要求
 
@@ -127,11 +128,11 @@ oh_release.p12
 Linux 工具包导入后可用以下命令确认 HDC（路径以实际导入目录为准）：
 
 ```bash
-runtime/openharmony/linux-x64-6.1/sdk/default/openharmony/toolchains/hdc list targets
+runtime/openharmony/linux-x64-7.0/sdk/default/openharmony/toolchains/hdc list targets
 ```
 
 也可以在设置页的“运行环境诊断”中确认工具来源。若部署方使用外部目录，设置
-`VULNFOUNDER_DYNAMIC_TOOLCHAIN=/opt/openharmony-command-line-tools/linux-x64-6.1`；
+`VULNFOUNDER_DYNAMIC_TOOLCHAIN=/opt/openharmony-command-line-tools/linux-x64-7.0`；
 若只需要设备枚举，也可以单独设置 `VULNFOUNDER_HDC`。工具包必须与 Linux 架构、
 OpenHarmony 版本和 HAP 签名工具版本匹配，不能把 macOS 可执行文件重命名后使用。
 

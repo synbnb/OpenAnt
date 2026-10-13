@@ -1,6 +1,6 @@
 {
   "platform": "linux-x64",
-  "openharmony_version": "6.1",
+  "openharmony_version": "7.0",
   "toolchain_root": ".",
   "components": {
     "hdc": "sdk/default/openharmony/toolchains/hdc",

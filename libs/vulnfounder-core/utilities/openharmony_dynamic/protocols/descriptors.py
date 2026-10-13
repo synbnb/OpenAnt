@@ -17,6 +17,7 @@ HISYSEVENT_EVENTRAW = ProtocolDescriptor(
         "base/event_raw: int32 总长 + 80B 头 + int32 参数个数 + 参数序列；"
         "真机实测（2026-09-17，OpenHarmony 6.1.0.26）静默丢弃总长为 0 的报文"
     ),
+    evidence_revision="OpenHarmony-6.1-LTS",
     fields=[
         FieldSpec(name="domain", type="string", order=0, required=True, evidence="头 @0 17B"),
         FieldSpec(name="stringid", type="string", order=1, required=True, evidence="头 @17 33B"),
@@ -73,6 +74,7 @@ SP_DAEMON_TEXT = ProtocolDescriptor(
         "sp_thread_socket.cpp HandleMsg/HandleNullMsg：`key::value` 文本帧；"
         "真机实测：set_pkgName 与 catch_network_traffic 需两帧（300ms 间隔）"
     ),
+    evidence_revision="OpenHarmony-6.1-LTS",
     encoder_kind="key_value",
     # ``::`` 是命令字段的 key/value 分隔符；UDP token 采用独立的 ``:::`
     # 后缀（RemoveToken 先移除它，再交给 SplitMsg）。两者不能混为一种

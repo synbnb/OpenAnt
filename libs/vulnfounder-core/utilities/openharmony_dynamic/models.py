@@ -63,6 +63,9 @@ class ProtocolDescriptor:
     known_guards: list[Guard] = field(default_factory=list)
     on_send_transforms: list[SendTransform] = field(default_factory=list)
     structure_evidence: str = ""
+    # 证据采集所对应的 OpenHarmony 版本。空值表示自动生成描述符尚未完成
+    # 版本归属确认；运行时不得把带旧版本标记的内置描述符当成新版本已验证。
+    evidence_revision: str = ""
     # 通用协议编码器声明。内置描述符可以继续使用既有编码器；自动发现的
     # 描述符必须声明可解释的 wire_format，避免把协议族名称写死在运行器中。
     encoder_kind: str = "custom"       # raw_text | key_value | json | custom
@@ -81,6 +84,7 @@ class ProtocolDescriptor:
             "known_guards": [g.__dict__ for g in self.known_guards],
             "on_send_transforms": [t.__dict__ for t in self.on_send_transforms],
             "structure_evidence": self.structure_evidence,
+            "evidence_revision": self.evidence_revision,
             "encoder_kind": self.encoder_kind,
             "wire_format": dict(self.wire_format),
             "legal_probe": dict(self.legal_probe),

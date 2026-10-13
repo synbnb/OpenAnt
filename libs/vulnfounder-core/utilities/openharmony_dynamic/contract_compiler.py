@@ -253,6 +253,32 @@ def _match_descriptor(finding: FindingInput) -> str:
     return ""
 
 
+def _target_revision_for_finding(finding: FindingInput) -> str:
+    """Resolve the source/device revision used by the current dynamic run.
+
+    A finding may carry an explicit revision from the source-locator handoff;
+    otherwise the project runtime target is used. Keeping this in one place
+    prevents a 7.0 run from silently treating a 6.1 protocol snapshot as
+    current evidence.
+    """
+    context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
+    for key in ("target_revision", "openharmony_revision", "source_revision"):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    try:
+        from .toolchain import target_openharmony_revision  # noqa: PLC0415
+
+        return target_openharmony_revision()
+    except Exception:  # noqa: BLE001 — diagnostics must not block offline parsing
+        return ""
+
+
+def _revision_key(value: str) -> str:
+    """Normalize branch labels only for compatibility comparison."""
+    return re.sub(r"^openharmony-", "", str(value or "").strip(), flags=re.IGNORECASE)
+
+
 def _infer_entry_kind(descriptor_id: str, finding: FindingInput) -> str:
     context = finding.analysis_context if isinstance(finding.analysis_context, dict) else {}
     for key in ("entry_kind", "transport_kind"):
@@ -692,6 +718,7 @@ def _try_auto_descriptor(
         from .descriptor_synthesizer import synthesize_descriptor  # noqa: PLC0415
 
         route = _route_binding_from_candidate(finding, candidate)
+        route["target_revision"] = _target_revision_for_finding(finding)
         protocol_evidence = infer_protocol_evidence(
             source_paths, repo_root=repo_root, route_context=route,
         ).to_dict()
@@ -932,7 +959,9 @@ def _select_recon_context(*, finding: FindingInput, hdc=None,
             try:
                 from .agent.device_facts import DeviceFacts  # noqa: PLC0415
 
-                facts = DeviceFacts(serial)
+                from .toolchain import target_openharmony_revision  # noqa: PLC0415
+
+                facts = DeviceFacts(serial, target_revision=target_openharmony_revision())
             except Exception:  # noqa: BLE001 — 历史事实库不可读不影响本轮
                 facts = None
     return facts, _load_exemplar(finding.vuln_class)
@@ -1205,6 +1234,46 @@ def compile_contract(finding: FindingInput, *, hdc=None,
             entry_discovery=entry_discovery_data,
         )
     notes.append(f"描述符命中: {descriptor_id}")
+
+    # Built-in descriptors are historical evidence, not timeless protocol
+    # truth. When a real device is available, stop rather than send a 6.1
+    # frame to a 7.0 target. Offline/unit-test compilation keeps the contract
+    # inspectable but records the mismatch explicitly.
+    target_revision = _target_revision_for_finding(finding)
+    try:
+        selected_descriptor = get_descriptor(descriptor_id)
+        descriptor_revision = str(selected_descriptor.evidence_revision or "").strip()
+    except KeyError:
+        descriptor_revision = ""
+    if descriptor_revision and target_revision and _revision_key(descriptor_revision) != _revision_key(target_revision):
+        descriptor_resolution.update({
+            "target_revision": target_revision,
+            "evidence_revision": descriptor_revision,
+            "version_compatibility": "mismatch",
+        })
+        mismatch = (
+            f"协议描述符 {descriptor_id} 的源码/设备证据版本为 {descriptor_revision}，"
+            f"当前目标为 {target_revision}；需要重新生成并自证当前版本描述符"
+        )
+        notes.append("版本证据不匹配：" + mismatch)
+        if hdc is not None:
+            return _result(
+                contract=None, compile_status="SOURCE_FIRMWARE_MISMATCH",
+                errors=[mismatch], descriptor_hit=descriptor_id, llm_used=True,
+                notes=notes, entry_discovery=entry_discovery_data,
+            )
+    elif descriptor_revision:
+        descriptor_resolution.update({
+            "target_revision": target_revision,
+            "evidence_revision": descriptor_revision,
+            "version_compatibility": "matched",
+        })
+    else:
+        descriptor_resolution.update({
+            "target_revision": target_revision,
+            "evidence_revision": descriptor_revision,
+            "version_compatibility": "unknown",
+        })
 
     # clean-room/严格模式不能把内置库命中伪装成自动合成成功。普通 assisted
     # 模式仍可使用内置协议以保持历史兼容，但产物会明确标记 source=library_fallback。

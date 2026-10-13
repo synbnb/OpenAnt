@@ -21,7 +21,7 @@ type SourceLocatorSettings struct {
 func defaultSourceLocatorSettings() SourceLocatorSettings {
 	return SourceLocatorSettings{
 		Enabled:        true,
-		TargetRevision: "OpenHarmony-6.1-LTS",
+		TargetRevision: "OpenHarmony-7.0-Release",
 		Project:        "openharmony",
 		APIPrefix:      "/api/v1",
 		TimeoutSeconds: 20,

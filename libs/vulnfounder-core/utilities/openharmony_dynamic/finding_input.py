@@ -72,6 +72,8 @@ class FindingInput:
             "graph_status",
             "source_revision",
             "reference_revision",
+            "target_revision",
+            "openharmony_revision",
             "候选攻击链",
         ):
             if key in context:

@@ -51,6 +51,7 @@ libs/vulnfounder-core/utilities/dynamic_tester/fixtures/hap_smoke_app/signing/*.
 # should remain local rather than being uploaded with the application source.
 .hvigor/
 /source_code_base/
+/libs/vulnfounder-core/utilities/openharmony_dynamic/agent/contracts/generated/device_facts_*.json
 /result/*
 !/result/.gitkeep
 /debug_outputs/

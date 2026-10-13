@@ -8,6 +8,7 @@ staleness 语义：volatile 事实（PID 等）每次用前重验；stable 事�
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -19,11 +20,20 @@ _VOLATILE_KEYS = {"hiview_pid", "sp_daemon_pid", "running_processes"}
 
 
 class DeviceFacts:
-    """单个设备（serial）的事实集合，JSON 落盘持久化。"""
+    """单个设备和目标版本的事实集合，JSON 落盘持久化。
 
-    def __init__(self, serial: str, *, store_dir: Path | None = None) -> None:
+    ``target_revision`` 可选是为了兼容历史单元测试和离线侦查。真实动态
+    运行由调用方传入目标分支后，事实文件名会同时包含版本，刷写系统或切换
+    7.0 时不会继续读取同一 serial 的 6.1 stable facts。
+    """
+
+    def __init__(self, serial: str, *, store_dir: Path | None = None,
+                 target_revision: str = "") -> None:
         self.serial = serial
-        self.path = (store_dir or _FACTS_DIR) / f"device_facts_{serial[:16]}.json"
+        self.target_revision = str(target_revision or "").strip()
+        revision_tag = re.sub(r"[^A-Za-z0-9._+-]+", "_", self.target_revision).strip("._-")
+        suffix = f"_{revision_tag}" if revision_tag else ""
+        self.path = (store_dir or _FACTS_DIR) / f"device_facts_{serial[:16]}{suffix}.json"
         self._data: dict[str, Any] = {}
         if self.path.exists():
             try:
@@ -79,6 +89,8 @@ class DeviceFacts:
 
     def _flush(self) -> None:
         self._data["serial"] = self.serial
+        if self.target_revision:
+            self._data["target_revision"] = self.target_revision
         self._data["facts"] = self._facts
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2),

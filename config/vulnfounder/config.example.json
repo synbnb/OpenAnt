@@ -20,7 +20,7 @@
   },
   "source_locator": {
     "enabled": true,
-    "target_revision": "OpenHarmony-6.1-LTS",
+    "target_revision": "OpenHarmony-7.0-Release",
     "opengrok": {
       "base_url": "https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source",
       "project": "openharmony",
@@ -35,8 +35,8 @@
     },
     "manifest": {
       "source": "local",
-      "path": "config/openharmony/ohos-6.1-LTS.xml",
-      "manifest_file": "ohos-6.1-LTS.xml"
+      "path": "config/openharmony/ohos-7.0-Release.xml",
+      "manifest_file": "ohos-7.0-Release.xml"
     },
     "gitcode": {
       "allowed_hosts": ["gitcode.com"],
@@ -45,7 +45,7 @@
     }
   },
   "openharmony_runtime": {
-    "toolchain_root": "runtime/openharmony/linux-x64-6.1",
+    "toolchain_root": "runtime/openharmony/linux-x64-7.0",
     "hdc": "sdk/default/openharmony/toolchains/hdc",
     "hap_cert_dir": "config/hap_cert"
   }

@@ -188,6 +188,20 @@ def test_device_facts_rejects_bad_source(tmp_path):
         facts.put("k", "v", source=" hallucinated")
 
 
+def test_device_facts_are_separated_by_target_revision(tmp_path):
+    facts61 = df.DeviceFacts(
+        "SERIAL-TEST-VERSION", store_dir=tmp_path,
+        target_revision="OpenHarmony-6.1-LTS",
+    )
+    facts70 = df.DeviceFacts(
+        "SERIAL-TEST-VERSION", store_dir=tmp_path,
+        target_revision="OpenHarmony-7.0-Release",
+    )
+    assert facts61.path != facts70.path
+    facts61.put("socket_layout", "old", source="manual")
+    assert facts70.get("socket_layout") is None
+
+
 # ---------------------------------------------------------------------------
 # run_recon_loop：mock LLM 的终态语义
 # ---------------------------------------------------------------------------

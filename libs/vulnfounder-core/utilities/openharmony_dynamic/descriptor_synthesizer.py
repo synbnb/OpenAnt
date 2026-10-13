@@ -63,6 +63,7 @@ _SYNTH_SYSTEM_PROMPT = (
     '                    "checked_by": "<检查语义>", "guard_log_hints": ["<设备侧日志关键词>"]}],\n'
     '  "on_send_transforms": [],\n'
     '  "structure_evidence": "<整体布局一句话+证据>",\n'
+    '  "evidence_revision": "<证据对应的 OpenHarmony 分支/版本；未知时为空>",\n'
     '  "encoder_kind": "raw_text|key_value|json|custom",\n'
     '  "wire_format": {"pair_separator":"::", "record_separator":"\\n", "terminator":""}\n'
     '  "legal_probe": {"mode":"udp|tcp|local|cli|event_bus", "host":"...", "port":0,\n'
@@ -95,6 +96,8 @@ _SYNTH_SYSTEM_PROMPT = (
     "设备侧无法取得的 token，才应返回 insufficient。\n"
     "4d. 如果源码出现 SplitMsg、StrSplit 或按字符串分隔符拆包，不能用空 fields 的"
     "raw_text 草案逃避协议恢复；必须继续查找当前 route 的命令/消息表和分隔符证据。\n"
+    "4e. evidence_revision 必须来自当前源码/设备版本证据；旧版本内置描述符不能冒充"
+    "当前版本已验证。若当前版本未知，填空并在 facts/missing_evidence 中说明。\n"
     "5. 只输出一个 JSON 动作对象。"
 )
 
@@ -362,6 +365,7 @@ def _descriptor_from_draft(raw: dict[str, Any]) -> ProtocolDescriptor | None:
             known_guards=guards,
             on_send_transforms=transforms,
             structure_evidence=str(raw.get("structure_evidence", "")),
+            evidence_revision=str(raw.get("evidence_revision", "")),
             encoder_kind=str(raw.get("encoder_kind", "custom")),
             wire_format=dict(raw.get("wire_format") or {}),
             legal_probe=dict(raw.get("legal_probe") or {}),
