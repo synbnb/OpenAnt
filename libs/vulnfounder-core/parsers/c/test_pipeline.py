@@ -486,6 +486,9 @@ class CPipelineTest:
                         'callsite_ledger': call_graph_diagnostics.get(
                             'callsite_ledger', {}
                         ),
+                        'recovery_input': call_graph_diagnostics.get(
+                            'recovery_input', {}
+                        ),
                         'call_sites': call_graph_diagnostics.get(
                             'call_sites', []
                         ),
@@ -614,6 +617,23 @@ class CPipelineTest:
 
             # Write call graph for post-LLM reachability re-filtering
             self.call_graph_file = os.path.join(self.output_dir, 'call_graph.json')
+
+            # ``all`` deliberately keeps every unit, but it must not discard
+            # the structural entry-point facts that are needed by downstream
+            # call-graph recovery and by audit users.  Previously those facts
+            # were only written inside ``apply_reachability_filter``; because
+            # that filter is (correctly) skipped at level ``all``, an all-mode
+            # checkpoint looked as if the repository had no entry points at
+            # all.  Annotate the complete dataset without pruning it.  The
+            # same annotation is also persisted on call_graph.functions so an
+            # older consumer that reads only the graph can use the same seeds.
+            if self.processing_level == ProcessingLevel.ALL:
+                self._annotate_structural_entry_points(dataset, graph_result)
+                # The initial write happens before the graph checkpoint is
+                # produced.  Persist the annotation a second time so the
+                # user-facing dataset and the graph checkpoint cannot drift.
+                write_json(self.dataset_file, dataset)
+
             write_json(self.call_graph_file, graph_result)
 
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -630,11 +650,17 @@ class CPipelineTest:
                 summary['call_graph_diagnostics'] = {
                     'path': 'call_graph_residuals.json',
                     'status': call_graph_diagnostics.get('status', 'unknown'),
+                    'recovery_input': call_graph_diagnostics.get(
+                        'recovery_input', {}
+                    ),
                     **call_graph_diagnostics.get('summary', {}),
                 }
                 summary['callsite_ledger'] = {
                     'path': 'callsite_ledger.json',
                     'status': call_graph_diagnostics.get('status', 'unknown'),
+                    'recovery_input': call_graph_diagnostics.get(
+                        'recovery_input', {}
+                    ),
                     **call_graph_diagnostics.get('callsite_ledger', {}),
                 }
             if dispatch_recovery_diff is not None:
@@ -678,6 +704,103 @@ class CPipelineTest:
             }
             self.results['stages']['c_parser'] = result
             return False
+
+    def _annotate_structural_entry_points(
+        self,
+        dataset: Dict[str, Any],
+        graph_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist static entry labels while preserving an ``all`` dataset.
+
+        This is intentionally an annotation pass, not a reachability filter:
+        every parsed unit remains in ``dataset["units"]``.  The detector is
+        the same structural detector used by the normal reachability stage so
+        all processing levels share one entry-point definition.  LLM signals
+        are not involved here; this metadata is a reproducible parser fact.
+        """
+        functions = graph_result.get('functions', {})
+        if not isinstance(functions, dict):
+            functions = {}
+
+        normalized_functions: Dict[str, Dict[str, Any]] = {}
+        for func_id, func_data in functions.items():
+            if not isinstance(func_data, dict):
+                continue
+            normalized_functions[str(func_id)] = {
+                'name': func_data.get('name', ''),
+                'unitType': func_data.get(
+                    'unitType', func_data.get('unit_type', 'function')
+                ),
+                'code': func_data.get('code', ''),
+                'filePath': func_data.get(
+                    'filePath', func_data.get('file_path', '')
+                ),
+                'startLine': func_data.get(
+                    'startLine', func_data.get('start_line', 0)
+                ),
+                'endLine': func_data.get(
+                    'endLine', func_data.get('end_line', 0)
+                ),
+                'isExported': func_data.get(
+                    'isExported', func_data.get('is_exported', False)
+                ),
+                'isStatic': func_data.get(
+                    'isStatic', func_data.get('is_static', False)
+                ),
+            }
+
+        call_graph = graph_result.get('call_graph', {})
+        if not isinstance(call_graph, dict):
+            call_graph = {}
+        detector = EntryPointDetector(
+            normalized_functions,
+            call_graph,
+            platform=self.platform,
+            file_evidence=graph_result.get('openharmony_file_evidence', {})
+            if self.platform == 'openharmony'
+            else None,
+        )
+        entry_points = detector.detect_entry_points()
+        self.entry_points = set(entry_points)
+
+        details = detector.entry_point_details
+        entry_metadata = {
+            'source': 'static_entry_point_detector',
+            'detector': 'EntryPointDetector',
+            'processing_level': self.processing_level.value,
+            'filter_applied': False,
+            'entry_points': len(entry_points),
+            'entry_point_ids': sorted(entry_points),
+            'reasons': {
+                str(func_id): details.get(func_id, {}).get('reasons', [])
+                for func_id in sorted(entry_points)
+            },
+        }
+
+        for unit in dataset.get('units', []):
+            if not isinstance(unit, dict):
+                continue
+            unit_id = str(unit.get('id', ''))
+            unit['is_entry_point'] = unit_id in entry_points
+            unit.pop('entry_point_reason', None)
+            if unit_id in entry_points:
+                unit['entry_point_reason'] = detector.get_entry_point_reason(unit_id)
+
+        # Keep the graph-side function metadata in sync.  This is an additive
+        # annotation and never removes or rewrites native call edges.
+        for func_id, func_data in functions.items():
+            if not isinstance(func_data, dict):
+                continue
+            func_id = str(func_id)
+            func_data['is_entry_point'] = func_id in entry_points
+            func_data.pop('entry_point_reason', None)
+            if func_id in entry_points:
+                func_data['entry_point_reason'] = detector.get_entry_point_reason(
+                    func_id
+                )
+        graph_result['entry_point_detection'] = entry_metadata
+        dataset.setdefault('metadata', {})['entry_point_detection'] = entry_metadata
+        return entry_metadata
 
     def apply_reachability_filter(self) -> bool:
         """Filter dataset to only include units reachable from entry points."""

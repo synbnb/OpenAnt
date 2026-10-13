@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -33,14 +33,12 @@
   #loading { color: #888; font-size: 0.9rem; }
 </style>
 <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+<script src="/assets/vulnfounder-navigation.js" defer></script>
 </head>
 <body class="report-reader-page">
-<header>
-  <a href="/">← Home</a>
-  <span class="sep">/</span>
-  <a href="/scan/{{.ID}}">Scan</a>
-  <span class="sep">/</span>
-  <span class="title">Summary</span>
+<header class="topbar">
+  <div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>扫描摘要</h1><p>任务 {{.ID}}</p></div></div>
+  <div class="topbar-actions"><vulnfounder-workspace-nav current="home"></vulnfounder-workspace-nav><a href="/">返回首页</a><span class="sep">·</span><a href="/scan/{{.ID}}">扫描详情</a></div>
 </header>
 <div class="main">
   <div class="content" id="content">
@@ -65,7 +63,29 @@ const MD_SANITIZE = {
   ALLOW_DATA_ATTR: false
 };
 const markdown = {{.MarkdownJSON}};
-document.getElementById('content').innerHTML = DOMPurify.sanitize(marked.parse(markdown), MD_SANITIZE);
+const content = document.getElementById('content');
+content.innerHTML = DOMPurify.sanitize(marked.parse(markdown), MD_SANITIZE);
+
+// Chinese summaries intentionally omit billing information.  This defensive
+// display filter also keeps older summaries (generated before the prompt was
+// updated) consistent without changing the stored source artifact.  It only
+// matches Chinese stage/pipeline cost headings and leaves duration sections
+// and all other report content intact.
+function removeChineseStageCostSection(root) {
+  const headings = Array.from(root.querySelectorAll('h2'));
+  headings.forEach(function(heading) {
+    const title = (heading.textContent || '').trim();
+    if (!/[费用成本]/.test(title) || !/[阶段流水线管线]/.test(title)) return;
+    let node = heading.nextElementSibling;
+    heading.remove();
+    while (node && node.tagName !== 'H2') {
+      const next = node.nextElementSibling;
+      node.remove();
+      node = next;
+    }
+  });
+}
+removeChineseStageCostSection(content);
 </script>
 </body>
 </html>

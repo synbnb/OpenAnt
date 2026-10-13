@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/git"
+	"vulnfounder/apps/vulnfounder-cli/internal/languages"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
 )
 
 var initCmd = &cobra.Command{
@@ -20,7 +20,8 @@ var initCmd = &cobra.Command{
 	Short: "Initialize a project workspace",
 	Long: `Init sets up a project workspace for a repository.
 
-For remote URLs, the repo is cloned into ~/.vulnfounder/projects/{org}/{repo}/repo/.
+For remote URLs, the repo is cloned into <data-dir>/projects/{org}/{repo}/repo/;
+in a project checkout, <data-dir> is <project>/result.
 For local paths, the existing directory is referenced in place (no cloning).
 
 After init, all commands (parse, scan, etc.) work without path arguments.

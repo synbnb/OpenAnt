@@ -1,0 +1,11 @@
+{
+  "string": [
+    { "name": "module_label", "value": "TriggerApp" },
+    { "name": "ability_label", "value": "Trigger" },
+    { "name": "ability_desc", "value": "Trigger Ability" },
+    { "name": "service_label", "value": "TriggerService" },
+    { "name": "service_desc", "value": "Trigger Background Service" },
+    { "name": "module_desc", "value": "Security Research Trigger" },
+    { "name": "permission_internet_reason", "value": "Network access for testing" }
+  ]
+}

@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>VulnFounder · 设置</title>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+  <style>
+    body.settings-page{background:var(--oa-bg,#f4f7f8)}
+    .settings-shell{max-width:1180px;margin:0 auto;padding:2rem 2.2rem 4rem}
+    .settings-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:1.5rem;margin-bottom:1.4rem}
+    .settings-hero h1{margin:0;color:var(--oa-ink,#18323c);font-size:clamp(1.8rem,3vw,2.55rem);letter-spacing:-.03em}
+    .settings-hero p{max-width:700px;margin:.55rem 0 0;color:var(--oa-muted,#607781);line-height:1.7}
+    .settings-kicker{color:var(--oa-accent,#087f8c);font-size:.72rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase}
+    .settings-card{background:var(--oa-surface,#fff);border:1px solid var(--oa-line,#dbe6e8);border-radius:var(--oa-radius-lg,16px);box-shadow:0 10px 28px rgba(27,62,72,.08);padding:1.35rem;margin:1rem 0}
+    .settings-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1rem}
+    .settings-card h2{margin:0;color:var(--oa-ink,#18323c);font-size:1.12rem}
+    .settings-card-head p{margin:.35rem 0 0;color:var(--oa-muted,#607781);font-size:.9rem;line-height:1.55}
+    .settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+    .settings-field{display:flex;flex-direction:column;gap:.38rem}.settings-field.wide{grid-column:1/-1}
+    .settings-field label{color:var(--oa-ink,#18323c);font-weight:700;font-size:.83rem}
+    .settings-field small{color:var(--oa-muted,#607781);line-height:1.45}
+    .settings-field input,.settings-field select{width:100%;border:1px solid var(--oa-line,#cbdadd);border-radius:9px;background:#fbfdfd;color:var(--oa-ink,#18323c);padding:.7rem .75rem;font:inherit}
+    .settings-field input:focus,.settings-field select:focus{outline:3px solid rgba(8,127,140,.18);border-color:var(--oa-accent,#087f8c)}
+    .settings-actions{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;margin-top:1rem}
+    .settings-btn{border:1px solid #b8cacc;border-radius:8px;background:#fff;color:var(--oa-ink,#18323c);padding:.62rem .9rem;font:inherit;font-weight:700;cursor:pointer}
+    .settings-btn:hover{background:#eef7f7;border-color:#78aeb3}.settings-btn.primary{background:var(--oa-accent,#087f8c);border-color:var(--oa-accent,#087f8c);color:#fff}.settings-btn.danger{color:#a83b3b;border-color:#e2b5b5}.settings-btn:disabled{opacity:.55;cursor:not-allowed}
+    .settings-status{min-height:1.35rem;color:var(--oa-muted,#607781);font-size:.88rem}.settings-status.error{color:#a83b3b}.settings-status.ok{color:#1c7959}
+    .settings-notice{border-left:4px solid var(--oa-accent,#087f8c);border-radius:7px;background:#eff9f9;color:#375d64;padding:.75rem .9rem;line-height:1.6;font-size:.88rem}
+    .settings-meta{display:flex;gap:.7rem;flex-wrap:wrap;margin-top:.8rem;color:var(--oa-muted,#607781);font-size:.78rem}.settings-meta code{color:#315f69;overflow-wrap:anywhere}
+    .model-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:1rem}
+    .model-card{border:1px solid var(--oa-line,#dbe6e8);border-radius:12px;padding:1rem;background:linear-gradient(145deg,#fff,#f8fbfb)}
+    .model-card.current{border-color:#58aeb1;box-shadow:0 0 0 3px rgba(8,127,140,.1)}
+    .model-card-head{display:flex;justify-content:space-between;gap:.7rem;align-items:flex-start}.model-name{font-size:1rem;font-weight:800;color:var(--oa-ink,#18323c);overflow-wrap:anywhere}.model-sub{margin-top:.3rem;color:var(--oa-muted,#607781);font-size:.78rem}
+    .model-badges{display:flex;gap:.35rem;flex-wrap:wrap;justify-content:flex-end}.model-badge{border-radius:99px;padding:.22rem .55rem;background:#e7f2f3;color:#2f6269;font-size:.7rem;font-weight:800;white-space:nowrap}.model-badge.current{background:#d7f1e5;color:#21744f}.model-badge.builtin{background:#edf0f1;color:#5b6c70}
+    .model-providers{margin-top:.9rem;display:flex;flex-direction:column;gap:.5rem}.provider-row{border-top:1px solid #e6eeee;padding-top:.55rem;color:#496269;font-size:.8rem;line-height:1.5}.provider-row strong{color:#234b54}.provider-ok{color:#21744f}.provider-missing{color:#a36d22}.provider-url{overflow-wrap:anywhere}
+    .phase-list{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.75rem}.phase-chip{border:1px solid #d7e4e5;border-radius:6px;padding:.23rem .45rem;color:#496269;font: .72rem ui-monospace,SFMono-Regular,Menlo,monospace;background:#fbfdfd}
+    .model-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}.model-actions .settings-btn{font-size:.8rem;padding:.5rem .7rem}
+    .empty-state{padding:1.3rem;border:1px dashed #cbdadd;border-radius:10px;color:var(--oa-muted,#607781);text-align:center}
+    .runtime-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem}
+    .runtime-item{border:1px solid var(--oa-line,#dbe6e8);border-radius:10px;padding:.75rem;background:#fbfdfd;min-width:0}
+    .runtime-item strong{display:block;color:var(--oa-ink,#18323c);font-size:.82rem}.runtime-item small{display:block;margin-top:.3rem;color:var(--oa-muted,#607781);line-height:1.45;overflow-wrap:anywhere}.runtime-item.ok{border-color:#a6d8bd;background:#f4fcf7}.runtime-item.bad{border-color:#e7c2a4;background:#fffaf4}.runtime-path{font: .72rem ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;color:#315f69}
+    .settings-subtitle{margin:1rem 0 .6rem;color:var(--oa-ink,#18323c);font-size:.9rem;font-weight:800}
+    @media(max-width:700px){.settings-shell{padding:1.3rem 1rem 3rem}.settings-hero{display:block}.settings-grid{grid-template-columns:1fr}.settings-field.wide{grid-column:auto}}
+  </style>
+</head>
+<body class="settings-page">
+  <header class="topbar"><div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>项目设置</h1><p>集中管理所有阶段共用的模型与运行配置。</p></div></div><div class="topbar-actions"><span class="local-note">仅本机访问</span><vulnfounder-workspace-nav current="settings"></vulnfounder-workspace-nav><select id="language-select" hidden aria-hidden="true"></select></div></header>
+  <main class="settings-shell">
+    <section class="settings-hero">
+      <div><div class="settings-kicker">Workspace settings</div><h1>大模型管理</h1><p>模型选择只在这里维护。保存后，源码定位、上下文增强、漏洞分析、报告和动态验证等阶段都会使用当前默认配置；业务页面不再重复显示模型选择框。</p></div>
+      <button class="settings-btn" id="refresh-models" type="button">刷新配置</button>
+    </section>
+    <section class="settings-card">
+      <div class="settings-card-head"><div><h2>新增或更新模型配置</h2><p>一个配置会把同一模型绑定到所有标准阶段。更新已有名称会覆盖它的阶段绑定，但不会因页面留空而删除已保存的 API Key。</p></div><span class="model-badge">密钥不回显</span></div>
+      <div class="settings-notice">API Key 仅写入本机配置文件（权限 0600）或由环境变量提供。请勿把密钥放入截图、日志或提交记录。接口地址只允许 http/https，且不能携带用户名或密码。</div>
+      <form id="model-form" autocomplete="off">
+        <div class="settings-grid">
+          <div class="settings-field"><label for="model-name">配置名称</label><input id="model-name" name="name" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="例如：openharmony-live-gpt" required><small>只能使用字母、数字、点、下划线和连字符。</small></div>
+          <div class="settings-field"><label for="provider-name">服务商标识</label><input id="provider-name" name="provider_name" maxlength="128" placeholder="例如：autodl-openai" required><small>可以复用已有服务商；留空 API Key 会保留该服务商原有密钥。</small></div>
+          <div class="settings-field"><label for="provider-type">服务商类型</label><select id="provider-type" name="provider_type"><option value="openai">OpenAI 兼容接口</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="google">Google / Gemini</option><option value="bedrock">AWS Bedrock</option><option value="custom">其他兼容服务</option></select></div>
+          <div class="settings-field"><label for="model-id">模型名称</label><input id="model-id" name="model" maxlength="256" placeholder="例如：gpt-5.6-luna" required></div>
+          <div class="settings-field wide"><label for="base-url">接口地址（可选）</label><input id="base-url" name="base_url" maxlength="2048" placeholder="https://api.example.com/v1"><small>不填写时使用服务商默认地址；不要把 API Key 拼接到 URL 中。</small></div>
+          <div class="settings-field wide"><label for="api-key">API Key（可选）</label><input id="api-key" name="api_key" type="password" maxlength="4096" placeholder="新增时填写；编辑时留空表示保留现有密钥"><small>输入框永远不会回填已保存的密钥。</small></div>
+        </div>
+        <label class="settings-meta" style="cursor:pointer"><input id="make-default" name="make_default" type="checkbox"> 保存后设为所有阶段的当前默认模型</label>
+        <div class="settings-actions"><button class="settings-btn primary" id="save-model" type="submit">保存模型配置</button><span id="form-status" class="settings-status" role="status" aria-live="polite"></span></div>
+      </form>
+    </section>
+    <section class="settings-card">
+      <div class="settings-card-head"><div><h2>当前配置与已登记模型</h2><p>“当前使用”会作为所有没有单独覆盖的阶段配置。内置配置只能选择，不能删除或覆盖。</p></div><span id="current-model" class="model-badge current">读取中…</span></div>
+      <div id="model-list" class="model-list"><div class="empty-state">正在读取配置…</div></div>
+      <div id="list-status" class="settings-status" role="status" aria-live="polite" style="margin-top:1rem"></div>
+    </section>
+    <section class="settings-card">
+      <div class="settings-card-head"><div><h2>运行设置说明</h2><p>这里先集中展示不会被业务页面覆盖的全局约束，后续可以继续扩展为扫描默认值和设备策略。</p></div></div>
+      <div class="settings-grid">
+        <div class="settings-notice"><strong>模型生效范围</strong><br>新建扫描、源码定位、设备 Socket 资产发现、上下文增强、Stage 1 / Stage 2、报告和动态测试统一读取当前默认配置。</div>
+        <div class="settings-notice"><strong>安全边界</strong><br>本页面只管理本地配置；删除模型配置不会删除共享服务商条目，避免误删其他配置仍在使用的凭据。</div>
+      </div>
+      <div class="settings-meta"><span>配置文件：<code id="config-path">读取中…</code></span><span>阶段绑定：<code>analyze · enhance · verify · report · dynamic_test · llm_reach · app_context</code></span></div>
+    </section>
+    <section class="settings-card">
+      <div class="settings-card-head"><div><h2>OpenHarmony 源码定位设置</h2><p>OpenGrok 地址、项目和目标版本由这里统一保存，源码定位页面不再重复填写。认证只保存环境变量名，不保存令牌。</p></div><span id="opengrok-status-badge" class="model-badge">读取中…</span></div>
+      <form id="opengrok-form" autocomplete="off">
+        <div class="settings-grid">
+          <div class="settings-field"><label for="og-enabled">启用源码定位</label><select id="og-enabled" name="enabled"><option value="true">启用</option><option value="false">停用</option></select></div>
+          <div class="settings-field"><label for="og-revision">目标源码版本</label><input id="og-revision" name="target_revision" maxlength="128" placeholder="OpenHarmony-6.1-LTS"></div>
+          <div class="settings-field wide"><label for="og-url">OpenGrok 地址</label><input id="og-url" name="base_url" maxlength="2048" placeholder="https://example/source" required><small>仅接受 HTTPS，不允许把用户名、密码、令牌或查询参数写入地址。</small></div>
+          <div class="settings-field"><label for="og-project">OpenGrok 项目</label><input id="og-project" name="project" maxlength="128" placeholder="openharmony" required></div>
+          <div class="settings-field"><label for="og-api-prefix">API 前缀</label><input id="og-api-prefix" name="api_prefix" maxlength="256" placeholder="/api/v1" required></div>
+          <div class="settings-field"><label for="og-timeout">请求超时（秒）</label><input id="og-timeout" name="timeout_seconds" type="number" min="0.1" max="300" step="0.1"></div>
+          <div class="settings-field"><label for="og-retries">失败重试次数</label><select id="og-retries" name="max_retries"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+          <div class="settings-field"><label for="og-auth-mode">认证方式</label><select id="og-auth-mode" name="auth_mode"><option value="none">无认证</option><option value="bearer_env">Bearer 环境变量</option></select></div>
+          <div class="settings-field"><label for="og-token-env">令牌环境变量名</label><input id="og-token-env" name="token_env" maxlength="128" placeholder="OPENGROK_TOKEN"><small>仅填写名称；实际令牌由运行 VulnFounder 的进程环境提供。</small></div>
+          <label class="settings-meta"><input id="og-verify-tls" name="verify_tls" type="checkbox"> 校验 TLS 证书</label>
+        </div>
+        <div class="settings-actions"><button class="settings-btn primary" id="save-opengrok" type="submit">保存源码定位设置</button><span id="opengrok-form-status" class="settings-status" role="status" aria-live="polite"></span></div>
+      </form>
+    </section>
+    <section class="settings-card">
+      <div class="settings-card-head"><div><h2>运行环境诊断</h2><p>项目会优先使用目录内的 OpenHarmony 工具链；以下信息只展示路径、来源和是否可用，不展示证书内容或密钥。</p></div><button class="settings-btn" id="refresh-runtime" type="button">刷新诊断</button></div>
+      <div id="runtime-summary" class="settings-notice">正在检查项目内运行时…</div>
+      <div class="settings-subtitle">OpenHarmony 工具与 HAP 签名材料</div><div id="runtime-components" class="runtime-grid"><div class="empty-state">读取中…</div></div>
+      <div class="settings-subtitle">主机基础依赖</div><div id="runtime-host" class="runtime-grid"><div class="empty-state">读取中…</div></div>
+    </section>
+  </main>
+<script>
+(() => {
+  'use strict';
+  document.documentElement.lang = 'zh-CN'; try { localStorage.setItem('vulnfounder.ui.language', 'zh-CN'); } catch (_) {}
+  const csrf = document.querySelector('meta[name="csrf"]')?.content || '';
+  const $ = id => document.getElementById(id);
+  const languageSelect=$('language-select'); const savedLanguage='zh-CN'; languageSelect.value=savedLanguage; document.documentElement.lang=savedLanguage; languageSelect.addEventListener('change',()=>{languageSelect.value='zh-CN'; document.documentElement.lang='zh-CN';});
+  const esc = value => String(value ?? '');
+  const request = async (url, options = {}) => {
+    const headers = Object.assign({'Accept':'application/json','X-CSRF-Token':csrf}, options.headers || {});
+    const response = await fetch(url, Object.assign({}, options, {headers}));
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.status === 'error') throw new Error((payload.errors || []).join('; ') || `HTTP ${response.status}`);
+    return payload.data || {};
+  };
+  const phaseLabel = {analyze:'漏洞分析',enhance:'上下文增强',verify:'Stage 2 复核',report:'报告生成',dynamic_test:'动态测试',llm_reach:'可达性复核',app_context:'设备资产发现'};
+  function badge(text, cls=''){const span=document.createElement('span');span.className=`model-badge ${cls}`;span.textContent=text;return span;}
+  function render(data){
+    $('current-model').textContent = `当前使用：${esc(data.default_name || 'vulnfounder-default')}`;
+    $('config-path').textContent = esc(data.config_path || '由运行环境决定');
+    const root=$('model-list'); root.replaceChildren(); const rows=Array.isArray(data.configs)?data.configs:[];
+    if(!rows.length){root.append(Object.assign(document.createElement('div'),{className:'empty-state',textContent:'暂无可用模型配置。'}));return;}
+    rows.forEach(item=>{
+      const card=document.createElement('article'); card.className=`model-card${item.selected?' current':''}`;
+      const head=document.createElement('div'); head.className='model-card-head';
+      const title=document.createElement('div'); const name=document.createElement('div'); name.className='model-name'; name.textContent=esc(item.name); title.append(name);
+      const sub=document.createElement('div'); sub.className='model-sub'; sub.textContent=item.builtin?'VulnFounder 内置配置':'本地配置文件中的自定义配置'; title.append(sub); head.append(title);
+      const badges=document.createElement('div'); badges.className='model-badges'; if(item.selected) badges.append(badge('当前使用','current')); if(item.builtin) badges.append(badge('内置','builtin')); head.append(badges); card.append(head);
+      const phases=document.createElement('div'); phases.className='phase-list'; const phaseRows=Array.isArray(item.phases)?item.phases:[];
+      if(phaseRows.length){phaseRows.forEach(phase=>{const chip=document.createElement('span');chip.className='phase-chip';chip.textContent=`${phaseLabel[phase.phase]||phase.phase} · ${phase.provider}/${phase.model}`;phases.append(chip);});} else {const chip=document.createElement('span');chip.className='phase-chip';chip.textContent='由运行时使用内置阶段配置';phases.append(chip);} card.append(phases);
+      const providers=document.createElement('div'); providers.className='model-providers'; const providerRows=Array.isArray(item.providers)?item.providers:[];
+      providerRows.forEach(provider=>{const row=document.createElement('div');row.className='provider-row';const title=document.createElement('strong');title.textContent=esc(provider.name);row.append(title,document.createTextNode(` · ${esc(provider.type)}`),document.createElement('br'));const status=document.createElement('span');status.className=provider.credential_configured?'provider-ok':'provider-missing';status.textContent=provider.credential_configured?'已配置凭据':'未检测到凭据';row.append(status);if(provider.base_url){row.append(document.createElement('br'));const url=document.createElement('span');url.className='provider-url';url.textContent=`接口：${esc(provider.base_url)}`;row.append(url);}providers.append(row);}); card.append(providers);
+      const actions=document.createElement('div'); actions.className='model-actions';
+      if(!item.selected){const choose=document.createElement('button');choose.type='button';choose.className='settings-btn';choose.textContent='设为当前使用';choose.onclick=()=>setDefault(item.name);actions.append(choose);}
+      if(!item.builtin){const edit=document.createElement('button');edit.type='button';edit.className='settings-btn';edit.textContent='载入到编辑表单';edit.onclick=()=>fillForm(item);const remove=document.createElement('button');remove.type='button';remove.className='settings-btn danger';remove.textContent='删除配置';remove.onclick=()=>deleteConfig(item.name);actions.append(edit,remove);} card.append(actions); root.append(card);
+    });
+  }
+  function fillForm(item){$('model-name').value=item.name||'';const phase=Array.isArray(item.phases)&&item.phases[0];if(phase){$('provider-name').value=phase.provider||'';$('model-id').value=phase.model||'';}const provider=Array.isArray(item.providers)&&item.providers[0];if(provider){$('provider-type').value=provider.type||'custom';$('base-url').value=provider.base_url||'';}$('api-key').value='';$('make-default').checked=Boolean(item.selected);window.scrollTo({top:0,behavior:'smooth'});$('model-name').focus();}
+  function renderOpenGrok(data){$('og-enabled').value=String(Boolean(data.enabled));$('og-revision').value=esc(data.target_revision);$('og-url').value=esc(data.base_url);$('og-project').value=esc(data.project||'openharmony');$('og-api-prefix').value=esc(data.api_prefix||'/api/v1');$('og-timeout').value=String(data.timeout_seconds||20);$('og-retries').value=String(data.max_retries??1);$('og-auth-mode').value=esc(data.auth_mode||'none');$('og-token-env').value=esc(data.token_env);$('og-verify-tls').checked=data.verify_tls!==false;$('opengrok-status-badge').textContent=data.enabled?'已启用':'已停用';$('config-path').textContent=esc(data.config_path||$('config-path').textContent);}
+  function renderRuntime(data){const root=esc(data.project_root||'未识别');const tc=esc(data.toolchain_root||'未找到项目内工具链');$('runtime-summary').textContent=`项目根目录：${root}。当前工具链：${tc}。项目内运行时优先，PATH 仅作为最低能力回退。`;
+    const renderRows=(id,rows)=>{const box=$(id);box.replaceChildren();if(!Array.isArray(rows)||!rows.length){box.append(Object.assign(document.createElement('div'),{className:'empty-state',textContent:'没有可显示的组件'}));return;}rows.forEach(item=>{const card=document.createElement('div');card.className=`runtime-item ${item.found?'ok':'bad'}`;const title=document.createElement('strong');title.textContent=`${item.found?'✓':'!'} ${esc(item.name)}`;card.append(title);if(item.path){const path=document.createElement('small');path.className='runtime-path';path.textContent=item.path;card.append(path);}const note=document.createElement('small');const source=item.source?`来源：${item.source}`:'';const detail=item.note||'';note.textContent=item.found?[source,detail].filter(Boolean).join('；'):(detail||'未找到');card.append(note);box.append(card);});};
+    renderRows('runtime-components',data.components);renderRows('runtime-host',data.host_dependencies);
+  }
+  async function loadRuntime(){try{renderRuntime(await request('/settings/runtime'));}catch(error){$('runtime-summary').className='settings-notice settings-status error';$('runtime-summary').textContent=`运行环境诊断失败：${error.message}`;}}
+  async function setDefault(name){if(!confirm(`确定将“${name}”设为所有阶段的当前模型吗？`))return;try{const data=await request('/settings/llm/default',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});render(data);$('list-status').className='settings-status ok';$('list-status').textContent='当前默认模型已更新。';}catch(error){$('list-status').className='settings-status error';$('list-status').textContent=`更新失败：${error.message}`;}}
+  async function deleteConfig(name){if(!confirm(`确定删除模型配置“${name}”吗？共享服务商和密钥不会被自动删除。`))return;try{const data=await request(`/settings/llm/configs/${encodeURIComponent(name)}`,{method:'DELETE'});render(data);$('list-status').className='settings-status ok';$('list-status').textContent='模型配置已删除；若它是当前配置，系统已回退到内置默认。';}catch(error){$('list-status').className='settings-status error';$('list-status').textContent=`删除失败：${error.message}`;}}
+  $('model-form').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.currentTarget);const body={name:String(form.get('name')||'').trim(),provider_name:String(form.get('provider_name')||'').trim(),provider_type:String(form.get('provider_type')||'').trim(),model:String(form.get('model')||'').trim(),base_url:String(form.get('base_url')||'').trim(),api_key:String(form.get('api_key')||''),make_default:Boolean(form.get('make_default'))};$('save-model').disabled=true;$('form-status').className='settings-status';$('form-status').textContent='正在保存本地配置…';try{const data=await request('/settings/llm/configs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});render(data);$('form-status').className='settings-status ok';$('form-status').textContent='模型配置已保存。新建阶段会使用当前默认选择。';event.currentTarget.reset();}catch(error){$('form-status').className='settings-status error';$('form-status').textContent=`保存失败：${error.message}`;}finally{$('save-model').disabled=false;}});
+  $('refresh-models').addEventListener('click',async()=>{try{render(await request('/settings/llm'));$('list-status').textContent='已刷新。';}catch(error){$('list-status').className='settings-status error';$('list-status').textContent=`读取失败：${error.message}`;}});
+  $('opengrok-form').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.currentTarget);const body={enabled:String(form.get('enabled'))==='true',target_revision:String(form.get('target_revision')||'').trim(),base_url:String(form.get('base_url')||'').trim(),project:String(form.get('project')||'').trim(),api_prefix:String(form.get('api_prefix')||'').trim(),timeout_seconds:String(form.get('timeout_seconds')||'').trim(),max_retries:String(form.get('max_retries')||'').trim(),auth_mode:String(form.get('auth_mode')||'').trim(),token_env:String(form.get('token_env')||'').trim(),verify_tls:$('og-verify-tls').checked};$('save-opengrok').disabled=true;$('opengrok-form-status').className='settings-status';$('opengrok-form-status').textContent='正在保存源码定位设置…';try{renderOpenGrok(await request('/settings/opengrok',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));$('opengrok-form-status').className='settings-status ok';$('opengrok-form-status').textContent='源码定位设置已保存，下一次定位会使用新配置。';}catch(error){$('opengrok-form-status').className='settings-status error';$('opengrok-form-status').textContent=`保存失败：${error.message}`;}finally{$('save-opengrok').disabled=false;}});
+  $('refresh-runtime').addEventListener('click',loadRuntime);
+  request('/settings/llm').then(render).catch(error=>{$('model-list').replaceChildren(Object.assign(document.createElement('div'),{className:'empty-state',textContent:`读取模型配置失败：${error.message}`}));$('list-status').className='settings-status error';$('list-status').textContent=error.message;});
+  request('/settings/opengrok').then(renderOpenGrok).catch(error=>{$('opengrok-form-status').className='settings-status error';$('opengrok-form-status').textContent=`读取源码定位设置失败：${error.message}`;});
+  loadRuntime();
+})();
+</script>
+</body>
+</html>

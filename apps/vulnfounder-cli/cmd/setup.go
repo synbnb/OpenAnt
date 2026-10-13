@@ -11,9 +11,9 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/models"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/models"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
 )
 
 // errStdinClosed surfaces when reader.ReadString hits EOF without any

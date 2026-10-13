@@ -10,8 +10,8 @@ import (
 	"time"
 
 	isatty "github.com/mattn/go-isatty"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/git"
 )
 
 // modeOpts collects the inputs to selectMode. Flag values come from the

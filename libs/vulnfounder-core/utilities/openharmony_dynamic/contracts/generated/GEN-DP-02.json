@@ -1,0 +1,86 @@
+{
+  "schema_version": "vf.ohos.dynamic.contract.v2",
+  "contract_id": "GEN-DP-02",
+  "finding_ids": [
+    "DP-02"
+  ],
+  "unit_id": "developtoolsprofiler_dp-02",
+  "vuln_class": "command_injection",
+  "description": "SPUtils::LoadCmd 将攻击者可控数据未经校验直接传入 popen 执行，shell 元字符可导致守护进程执行任意命令。",
+  "entry": {
+    "kind": "hap_udp",
+    "endpoint": "127.0.0.1:8283",
+    "reachability_identity": "hap_app",
+    "evidence": ""
+  },
+  "identity": {
+    "execution_identity": "hap_app",
+    "identity_ladder_fallback": "hap_app",
+    "max_evidence_grade": "A",
+    "drop_privs": null
+  },
+  "protocol": {
+    "descriptor_id": "sp_daemon_text",
+    "field_values": {
+      "set_pkgName": "smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "catch_network_traffic": "x",
+      "mode": "udp",
+      "host": "127.0.0.1",
+      "port": 8283
+    },
+    "frame_sequence": [
+      "frame_first",
+      "frame_second"
+    ],
+    "inter_frame_delay_seconds": 0.3,
+    "param_space": {
+      "frame_first_template": "set_pkgName::smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "frame_second": "catch_network_traffic::x",
+      "note": "set_pkgName 帧先写入 Dubai::dubaiPkgName，catch_network_traffic 帧触发网络采集命令执行链；两帧间隔约 0.3 秒。"
+    }
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "set_pkgName 值包含 shell 分号、echo 命令及注释符；catch_network_traffic::x 作为第二帧触发执行。",
+    "evidence": "sp_utils.cpp:140-143 的 LoadCmd 调用 LoadCmdWithLinkBreak，后者将命令直接传给 popen(cmdExc.c_str(), \"r\")，未见 shell 元字符过滤；sp_thread_socket.cpp:668-673 要求 recvBuf 与 SplitMsg 返回值均包含大小写敏感字面量 smartperf，随后写入 Dubai::dubaiPkgName，未过滤分号。",
+    "expected_guards": [
+      "udp_token_check",
+      "set_pkgName_smartperf_substring_guard"
+    ]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "create",
+        "path": "__MARKER__",
+        "content_contains": "hack by nju",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [],
+    "pattern_key": "__RUN_PATTERN__",
+    "refutation": [
+      "marker_path_unique_per_run",
+      "baseline_absent"
+    ],
+    "evidence": "注入命令通过 shell 创建 marker 文件；发送载荷中的 marker 路径使用 runner 支持的 __MARKER_PATH__，oracle 路径使用 __MARKER__。设备侧 marker 全链路与 hilog 本轮未复核。"
+  },
+  "risk": {
+    "target_process": "popen(cmd,",
+    "risk_tier": "unknown",
+    "crash_oracle_allowed": false,
+    "restartable": false,
+    "rationale": ""
+  },
+  "cleanup": {
+    "remote_paths": [
+      "__RUN_DIR__"
+    ],
+    "restore_actions": [],
+    "verify": []
+  },
+  "compile_status": "ELIGIBLE",
+  "limitations": []
+}

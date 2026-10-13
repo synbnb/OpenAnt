@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>VulnFounder · 工作台总览</title>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+  <style>
+    body.dashboard-page { background: var(--oa-canvas); }
+    .dashboard-shell { width: min(1240px, 100%); margin: 0 auto; padding: 2.2rem clamp(1rem, 4vw, 3.25rem) 4rem; }
+    .dashboard-hero { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 1.2rem; align-items: stretch; }
+    .dashboard-hero-main, .dashboard-hero-aside { min-width: 0; border: 1px solid var(--oa-line); border-radius: var(--oa-radius-md); background: var(--oa-surface); box-shadow: var(--oa-shadow); }
+    .dashboard-hero-main { padding: clamp(1.5rem, 4vw, 2.65rem); background: linear-gradient(135deg, #fafdfe 0%, #eef8f8 100%); }
+    .dashboard-kicker { margin-bottom: .7rem; color: var(--oa-accent); font-size: .72rem; font-weight: 850; letter-spacing: .15em; text-transform: uppercase; }
+    .dashboard-hero h1 { max-width: 14ch; margin: 0; color: var(--oa-ink); font-size: clamp(2rem, 4.6vw, 3.7rem); line-height: 1.05; letter-spacing: -.055em; }
+    .dashboard-hero-main p { max-width: 680px; margin: 1rem 0 0; color: var(--oa-ink-soft); font-size: .98rem; line-height: 1.8; }
+    .dashboard-hero-aside { display: flex; flex-direction: column; justify-content: space-between; padding: 1.35rem; }
+    .dashboard-hero-aside h2 { margin: 0; color: var(--oa-ink); font-size: 1rem; }
+    .dashboard-hero-aside p { margin: .45rem 0 0; color: var(--oa-ink-soft); font-size: .8rem; line-height: 1.6; }
+    .dashboard-model { margin-top: 1.25rem; padding: .8rem; border: 1px solid #c7e1e2; border-radius: .65rem; background: #f0faf9; }
+    .dashboard-model-label { color: var(--oa-ink-faint); font-size: .7rem; }
+    .dashboard-model-name { margin-top: .28rem; color: #155966; font: 700 .84rem var(--oa-mono); overflow-wrap: anywhere; }
+    .dashboard-grid { display: grid; gap: 1rem; margin-top: 1rem; }
+    .dashboard-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .dashboard-kpis-primary, .dashboard-kpis-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .dashboard-card { min-width: 0; border: 1px solid var(--oa-line); border-radius: var(--oa-radius-md); background: var(--oa-surface); box-shadow: var(--oa-shadow); }
+    .dashboard-kpi { padding: 1rem 1.1rem; }
+    .dashboard-kpi-label { color: var(--oa-ink-faint); font-size: .75rem; }
+    .dashboard-kpi-value { margin-top: .3rem; color: var(--oa-ink); font-size: 1.75rem; font-weight: 850; letter-spacing: -.04em; }
+    .dashboard-kpi-note { margin-top: .22rem; color: var(--oa-ink-soft); font-size: .7rem; }
+    .dashboard-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.2rem 1.25rem .9rem; }
+    .dashboard-section-head h2 { margin: 0; color: var(--oa-ink); font-size: 1.05rem; }
+    .dashboard-section-head p { margin: .35rem 0 0; color: var(--oa-ink-soft); font-size: .78rem; line-height: 1.5; }
+    .dashboard-section-link { color: var(--oa-accent); font-size: .77rem; font-weight: 750; text-decoration: none; white-space: nowrap; }
+    .dashboard-section-link:hover { text-decoration: underline; }
+    .dashboard-stages { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .dashboard-stage { position: relative; display: flex; min-height: 170px; flex-direction: column; padding: 1.1rem; overflow: hidden; }
+    .dashboard-stage::after { position: absolute; right: -1rem; bottom: -1.5rem; width: 5rem; height: 5rem; border-radius: 50%; background: var(--stage-tint, #e4f2f3); content: ""; opacity: .75; }
+    .dashboard-stage-number { color: var(--stage-color, var(--oa-accent)); font: 850 1.35rem var(--oa-mono); }
+    .dashboard-stage h3 { margin: .55rem 0 .35rem; color: var(--oa-ink); font-size: .94rem; }
+    .dashboard-stage p { margin: 0; color: var(--oa-ink-soft); font-size: .76rem; line-height: 1.55; }
+    .dashboard-stage-link { position: relative; z-index: 1; display: inline-flex; margin-top: auto; padding-top: .8rem; color: var(--stage-color, var(--oa-accent)); font-size: .75rem; font-weight: 800; text-decoration: none; }
+    .dashboard-stage-link:hover { text-decoration: underline; }
+    .dashboard-stage.exposure { --stage-color: #087a79; --stage-tint: #dff2ee; }
+    .dashboard-stage.source { --stage-color: #3f64a8; --stage-tint: #e5ecfb; }
+    .dashboard-stage.static { --stage-color: #665a9d; --stage-tint: #ece9fa; }
+    .dashboard-stage.analysis { --stage-color: #996720; --stage-tint: #fff0d4; }
+    .dashboard-columns { grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); }
+    .dashboard-list { display: grid; gap: 0; padding: 0 .7rem .7rem; }
+    .dashboard-job { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .85rem; min-width: 0; padding: .82rem .55rem; border-top: 1px solid var(--oa-line); }
+    .dashboard-job:first-child { border-top: 0; }
+    .dashboard-job-repo { min-width: 0; color: var(--oa-ink); font-size: .8rem; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dashboard-job-id { margin-top: .2rem; color: var(--oa-ink-faint); font: .68rem var(--oa-mono); }
+    .dashboard-job-time { color: var(--oa-ink-faint); font-size: .7rem; white-space: nowrap; }
+    .dashboard-job-status { display: inline-flex; align-items: center; gap: .35rem; min-width: 4.2rem; color: var(--oa-ink-soft); font-size: .7rem; white-space: nowrap; }
+    .dashboard-job-status::before { width: .4rem; height: .4rem; border-radius: 50%; background: var(--oa-ink-faint); content: ""; }
+    .dashboard-job-status.running { color: #a46b12; }.dashboard-job-status.running::before { background: #d79725; }
+    .dashboard-job-status.done { color: var(--oa-success); }.dashboard-job-status.done::before { background: var(--oa-success); }
+    .dashboard-job-status.error { color: var(--oa-danger); }.dashboard-job-status.error::before { background: var(--oa-danger); }
+    .dashboard-job-action { color: var(--oa-accent); font-size: .72rem; font-weight: 800; text-decoration: none; white-space: nowrap; }
+    .dashboard-job-action:hover { text-decoration: underline; }
+    .dashboard-empty { margin: .25rem .55rem .55rem; padding: 1.35rem 1rem; border: 1px dashed var(--oa-line-strong); border-radius: .6rem; color: var(--oa-ink-soft); font-size: .8rem; line-height: 1.6; text-align: center; }
+    .dashboard-quick { display: grid; gap: .65rem; padding: 0 1.2rem 1.2rem; }
+    .dashboard-quick a { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .82rem .9rem; border: 1px solid var(--oa-line); border-radius: .6rem; color: var(--oa-ink); background: var(--oa-surface-soft); font-size: .78rem; font-weight: 750; text-decoration: none; }
+    .dashboard-quick a:hover { border-color: #8ab8c0; background: var(--oa-accent-soft); color: var(--oa-accent-hover); }
+    .dashboard-quick small { display: block; margin-top: .25rem; color: var(--oa-ink-soft); font-size: .69rem; font-weight: 500; }
+    .dashboard-quick-arrow { color: var(--oa-accent); font-size: 1rem; }
+    @media (max-width: 1080px) { .dashboard-kpis, .dashboard-kpis-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 900px) { .dashboard-hero, .dashboard-columns { grid-template-columns: 1fr; } .dashboard-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { .dashboard-shell { padding-top: 1.35rem; } .dashboard-kpis, .dashboard-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dashboard-job { grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .65rem; } .dashboard-job-time { grid-column: 1; } .dashboard-job-status { grid-column: 2; grid-row: 1; } .dashboard-job-action { grid-column: 2; grid-row: 2; } }
+    @media (max-width: 390px) { .dashboard-kpis, .dashboard-stages { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body class="dashboard-page">
+  <vulnfounder-workspace-nav current="dashboard"></vulnfounder-workspace-nav>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>vulnfounder</h1><p data-i18n="brand.subtitle">安全分析工作台总览</p></div></div>
+    <div class="topbar-actions"><span class="local-note">仅本机访问</span></div>
+  </header>
+  <main class="dashboard-shell">
+    <section class="dashboard-hero" aria-labelledby="dashboard-title">
+      <div class="dashboard-hero-main">
+        <div class="dashboard-kicker">VulnFounder Workbench</div>
+        <h1 id="dashboard-title">首页</h1>
+        <p>这里是项目的全局总览。先观察设备上的暴露面，再定位对应源码，随后进入静态分析、动态测试与报告审阅。每个阶段都保留可回溯的日志和中间产物。</p>
+      </div>
+      <aside class="dashboard-hero-aside" aria-label="当前运行配置">
+        <div><h2>当前工作区</h2><p>扫描任务和阶段产物保存在本机，可从最近任务继续查看。</p></div>
+        <div class="dashboard-model"><div class="dashboard-model-label">当前默认模型</div><div class="dashboard-model-name">{{.DefaultLLM}}</div></div>
+      </aside>
+    </section>
+
+    <section class="dashboard-grid dashboard-kpis dashboard-kpis-primary" aria-label="项目核心统计">
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">源码仓库数量</div><div class="dashboard-kpi-value">{{.SourceRepositories}}</div><div class="dashboard-kpi-note">source_code_base 一级仓库</div></div>
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">最新设备暴露面</div><div class="dashboard-kpi-value">{{.LatestExposureAssets}}</div><div class="dashboard-kpi-note">最近资产快照中的 Socket</div></div>
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">漏洞报告总数</div><div class="dashboard-kpi-value">{{.TotalVulnerabilityReports}}</div><div class="dashboard-kpi-note">包含已确认风险和待复核报告</div></div>
+    </section>
+    <section class="dashboard-grid dashboard-kpis dashboard-kpis-secondary" aria-label="扫描统计">
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">扫描任务总数</div><div class="dashboard-kpi-value">{{.TotalJobs}}</div><div class="dashboard-kpi-note">已记录的静态扫描任务</div></div>
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">正在运行</div><div class="dashboard-kpi-value">{{.RunningJobs}}</div><div class="dashboard-kpi-note">可以进入任务查看实时日志</div></div>
+      <div class="dashboard-card dashboard-kpi"><div class="dashboard-kpi-label">已完成扫描</div><div class="dashboard-kpi-value">{{.CompletedJobs}}</div><div class="dashboard-kpi-note">完成主流程的任务</div></div>
+    </section>
+
+    <section class="dashboard-grid dashboard-stages" aria-labelledby="stage-overview-title">
+      <h2 id="stage-overview-title" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">分析阶段</h2>
+      <article class="dashboard-card dashboard-stage exposure"><div class="dashboard-stage-number">01</div><h3>设备暴露面发现</h3><p>扫描开发板上的 Socket 资产，记录监听状态、权限和关联进程。</p><a class="dashboard-stage-link" href="/device-socket-assets">进入设备暴露面发现 →</a></article>
+      <article class="dashboard-card dashboard-stage source"><div class="dashboard-stage-number">02</div><h3>暴露面识别与源码定位</h3><p>围绕指定暴露面检索服务端实现、入口函数和可审阅源码证据。</p><a class="dashboard-stage-link" href="/exposure-locator">进入暴露面识别与源码定位 →</a></article>
+      <article class="dashboard-card dashboard-stage static"><div class="dashboard-stage-number">03</div><h3>静态扫描</h3><p>解析仓库、构建调用关系并执行可达性、上下文和漏洞分析。</p><a class="dashboard-stage-link" href="/scan">配置静态扫描 →</a></article>
+      <article class="dashboard-card dashboard-stage analysis"><div class="dashboard-stage-number">04</div><h3>动态测试</h3><p>执行设备侧验证并查看历史运行结果，辅助复核静态分析发现。</p><a class="dashboard-stage-link" href="/dynamic-test">进入动态测试 →</a></article>
+    </section>
+
+    <section class="dashboard-card" aria-labelledby="recent-scans-title">
+      <div class="dashboard-section-head"><div><h2 id="recent-scans-title">最近扫描</h2><p>从最近的任务继续查看日志、阶段产物和报告。</p></div><a class="dashboard-section-link" href="/scan#recent-title">查看全部 →</a></div>
+      {{if .RecentJobs}}
+      <div class="dashboard-list">
+        {{range .RecentJobs}}
+        <div class="dashboard-job">
+          <div><div class="dashboard-job-repo" title="{{.Repo}}">{{.Repo}}</div><div class="dashboard-job-id">{{.ID}}</div></div>
+          <span class="dashboard-job-status {{.StatusClass}}">{{.StatusLabel}}</span>
+          <span class="dashboard-job-time">{{.StartedAt}}</span>
+          <a class="dashboard-job-action" href="/scan/{{.ID}}">打开任务 →</a>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="dashboard-empty">还没有扫描任务。可以从左侧“静态扫描”阶段创建任务，也可以先从设备暴露面开始。</div>
+      {{end}}
+    </section>
+  </main>
+  <script>document.documentElement.lang = 'zh-CN';</script>
+</body>
+</html>

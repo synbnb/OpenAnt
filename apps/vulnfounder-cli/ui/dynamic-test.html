@@ -495,7 +495,7 @@
     <div id="list-view">
       <section class="panel">
         <h2>第一步 · 选择历史扫描</h2>
-        <p class="hint">自动列出本机的全部历史扫描（<code>~/.openant/webui/</code> 下每个目录对应一次扫描），无需手动输入路径。</p>
+        <p class="hint">自动列出项目 <code>result/webui/</code> 下的历史扫描，每个目录对应一次扫描，无需手动输入路径。</p>
         <button id="load-scans" type="button">加载扫描列表</button>
         <div id="scans" class="scan-grid"></div>
         <div id="notice" role="status"></div>
@@ -2550,7 +2550,7 @@
         ['侦查轮次', ((notes.find(n=>/侦查 loop: finalized/.test(n))||[]).match && (notes.find(n=>/侦查 loop: finalized/.test(n))||'').match(/turns=(\d+)/)||[])[1]],
         ['设备命令数', (r.record&&r.record.command_count!=null)?r.record.command_count:(state.cmds.length||null)],
         ['运行记录文件', r.record_path],
-        ['设备命令账本', state.detail&&state.detail.runId ? '~/.openant/webui/scan-artifact/runs/'+state.detail.runId+'/ledger.jsonl' : ''],
+        ['设备命令账本', state.detail&&state.detail.runId ? 'result/scan-artifact/runs/'+state.detail.runId+'/ledger.jsonl' : ''],
       ];
       body.appendChild(el('div','sec-t sec-pipeline-t','管线元信息'));
       body.appendChild(kvGrid(metaPairs));

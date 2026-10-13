@@ -144,6 +144,46 @@ def test_chinese_disclosure_localizes_contract_and_keeps_evidence():
     assert usage["total_tokens"] == 6
 
 
+def test_translation_localizes_long_prose_without_marker_fallback():
+    """Long source bundles must not fall back to an English-only narrative."""
+
+    class _Translator:
+        name = "offline"
+        supports_tools = False
+        pricing = {"offline-model": {"input": 1.0, "output": 1.0}}
+
+        def complete(self, *, model, system, messages, max_tokens, tools=None):
+            del model, system, max_tokens, tools
+            prompt = messages[0].content[0].text
+            marker = re.search(r"VULNFOUNDER_PROTECTED_LITERAL_0", prompt)
+            assert marker, "the fenced source must be protected"
+            return CompletionResult(
+                content=[TextBlock(
+                    "# 安全漏洞披露：测试\n\n"
+                    "## 漏洞说明\n\n"
+                    "### 触发说明\n\n"
+                    "该函数读取外部输入并在未验证时交给下游处理，可能造成安全影响。\n\n"
+                    + marker.group(0) + "\n"
+                )],
+                input_tokens=3,
+                output_tokens=9,
+                stop_reason="end_turn",
+            )
+
+    source = (
+        "# Security Disclosure: Test\n\n"
+        "## Core Vulnerability Evidence\n\n"
+        "### Vulnerability Description\n\n"
+        "The function reads external input and forwards it without validation.\n\n"
+        "```cpp\nint run(const char *value) { return sink(value); }\n```\n"
+    )
+    translated, usage = generator.translate_report_markdown(source, _binding(_Translator()))
+    assert "该函数读取外部输入" in translated
+    assert "The function reads" not in translated
+    assert "```cpp\nint run(const char *value) { return sink(value); }\n```" in translated
+    assert usage["total_tokens"] == 12
+
+
 def test_generate_all_writes_english_and_chinese_directories(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline_output.json"
     pipeline_path.write_text(json.dumps({

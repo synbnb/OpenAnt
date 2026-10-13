@@ -10,12 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 func writeCatalogProject(t *testing.T, home, name, repoPath, repoURL, source string) {
 	t.Helper()
-	projectDir := filepath.Join(home, ".openant", "projects", filepath.FromSlash(name))
+	dataRoot := strings.TrimSpace(os.Getenv(config.DataDirEnv))
+	if dataRoot == "" {
+		dataRoot = filepath.Join(home, "result")
+	}
+	projectDir := filepath.Join(dataRoot, "projects", filepath.FromSlash(name))
 	if err := os.MkdirAll(projectDir, 0700); err != nil {
 		t.Fatalf("mkdir project dir: %v", err)
 	}
@@ -39,6 +43,7 @@ func newCatalogServer(t *testing.T, home string) *Server {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv(config.DataDirEnv, filepath.Join(home, "result"))
 	// Keep catalog tests deterministic: the production resolver may otherwise
 	// discover the repository's real source_code_base from the test process's
 	// working directory.

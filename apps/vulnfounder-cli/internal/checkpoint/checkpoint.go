@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 const summaryFile = "_summary.json"

@@ -14,12 +14,17 @@ import sys
 from pathlib import Path
 
 from core.verdict_taxonomy import DISCLOSURE_ELIGIBLE
+from core.reporter import render_inconclusive_report
 from .generator import (
     _hydrate_pipeline_findings,
     generate_summary_report,
     generate_disclosure,
+    generate_disclosure_pair,
+    translate_report_markdown,
     generate_all,
 )
+
+_DEFAULT_GENERATE_DISCLOSURE = generate_disclosure
 from .schema import validate_pipeline_output, ValidationError
 from utilities.file_io import normalize_results, open_utf8, read_json
 from utilities.llm import (
@@ -102,25 +107,50 @@ def cmd_disclosures(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     chinese_output_dir = output_dir.with_name(output_dir.name + ".zh-CN")
 
-    report_binding = _build_report_binding()
-
     product_name = pipeline_data["repository"]["name"]
     count = 0
 
-    for i, finding in enumerate(pipeline_data["findings"], 1):
+    normal_disclosures = [
+        (i, finding) for i, finding in enumerate(pipeline_data["findings"], 1)
+        if finding.get("stage2_verdict") in DISCLOSURE_ELIGIBLE
+        and not (
+            finding.get("stage1_verdict") == "inconclusive"
+            and finding.get("stage2_verdict") == "unverified"
+        )
+    ]
+    # English inconclusive output is deterministic. The optional binding is
+    # used only to translate its Chinese sibling when normal disclosures are
+    # already using the report model.
+    report_binding = _build_report_binding() if normal_disclosures else None
+
+    for i, finding in normal_disclosures:
         # Disclosure eligibility is defined once in
         # core.verdict_taxonomy.DISCLOSURE_ELIGIBLE -- consistent with
         # core/reporter and report/generator.
-        if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE:
+        if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE or (
+            finding.get("stage1_verdict") == "inconclusive"
+            and finding.get("stage2_verdict") == "unverified"
+        ):
             continue
 
         print(f"Generating disclosure for {finding['short_name']}...")
-        disclosure, _usage = generate_disclosure(
-            finding,
-            product_name,
-            report_binding,
-            pipeline_data=pipeline_data,
-        )
+        if generate_disclosure is not _DEFAULT_GENERATE_DISCLOSURE:
+            # Preserve compatibility with callers that monkeypatch the legacy
+            # single-locale function (not used by production scans).
+            disclosure, _usage = generate_disclosure(
+                finding, product_name, report_binding, pipeline_data=pipeline_data
+            )
+            chinese_disclosure, _usage = generate_disclosure(
+                finding, product_name, report_binding,
+                pipeline_data=pipeline_data, language="zh-CN"
+            )
+        else:
+            disclosure, chinese_disclosure, _usage = generate_disclosure_pair(
+                finding,
+                product_name,
+                report_binding,
+                pipeline_data=pipeline_data,
+            )
 
         # Coerce to str, fall back to id, and basename so a null/typed/traversal
         # short_name can't crash disclosure generation (mirrors report/generator.py).
@@ -131,23 +161,44 @@ def cmd_disclosures(args):
             f.write(disclosure)
         print(f"  -> {output_dir / filename}")
 
-        chinese_disclosure, _usage = generate_disclosure(
-            finding,
-            product_name,
-            report_binding,
-            pipeline_data=pipeline_data,
-            language="zh-CN",
-        )
         chinese_output_dir.mkdir(parents=True, exist_ok=True)
         with open_utf8(chinese_output_dir / filename, "w") as f:
             f.write(chinese_disclosure)
         print(f"  -> {chinese_output_dir / filename}")
         count += 1
 
+    inconclusive_count = 0
+    for i, finding in enumerate(pipeline_data["findings"], 1):
+        if not (
+            finding.get("stage2_verdict") == "inconclusive"
+            or (
+                finding.get("stage1_verdict") == "inconclusive"
+                and finding.get("stage2_verdict") in {"unverified", ""}
+            )
+        ):
+            continue
+        safe_name = (os.path.basename(str(finding.get("short_name") or finding.get("id") or "inconclusive"))
+                     or "inconclusive").replace(" ", "_").upper()
+        filename = f"INCONCLUSIVE_{i:02d}_{safe_name}.md"
+        english_text = render_inconclusive_report(finding, language="en")
+        chinese_text, _translation_usage = translate_report_markdown(
+            english_text, report_binding, kind="inconclusive"
+        ) if report_binding is not None else (
+            render_inconclusive_report(finding, language="zh-CN"), {}
+        )
+        with open_utf8(output_dir / filename, "w") as f:
+            f.write(english_text)
+        chinese_output_dir.mkdir(parents=True, exist_ok=True)
+        with open_utf8(chinese_output_dir / filename, "w") as f:
+            f.write(chinese_text)
+        inconclusive_count += 1
+
     if count == 0:
         print("No confirmed vulnerabilities to generate disclosures for.")
     else:
         print(f"Generated {count} English and {count} Chinese disclosure(s).")
+    if inconclusive_count:
+        print(f"Generated {inconclusive_count} English and {inconclusive_count} Chinese inconclusive report(s).")
 
 
 def cmd_all(args):

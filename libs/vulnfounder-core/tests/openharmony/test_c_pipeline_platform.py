@@ -81,3 +81,47 @@ def test_call_graph_diagnostics_failure_is_recorded_without_failing_parser(
     assert dataset["metadata"]["openharmony_call_graph_diagnostics"][
         "status"
     ] == "failed"
+
+
+def test_all_mode_keeps_all_units_but_persists_structural_entry_labels(tmp_path):
+    """The all-units checkpoint must remain auditable without LLM reachability."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "entry.cpp").write_text(
+        """
+class Stub {
+public:
+    int OnRemoteRequest(unsigned int code) { return static_cast<int>(code); }
+};
+
+class Listener {
+public:
+    int OnReadable(int fd) {
+        char buffer[8] = {};
+        return recv(fd, buffer, sizeof(buffer), 0);
+    }
+};
+""",
+        encoding="utf-8",
+    )
+
+    pipeline = CPipelineTest(
+        str(repo),
+        output_dir=str(tmp_path / "out"),
+        processing_level=ProcessingLevel.ALL,
+        platform="openharmony",
+    )
+
+    assert pipeline.setup() is True
+    assert pipeline.run_parser_pipeline() is True
+    dataset = json.loads((tmp_path / "out" / "dataset.json").read_text())
+
+    units = {
+        unit["id"]: unit
+        for unit in dataset["units"]
+        if unit.get("is_entry_point") is True
+    }
+    assert any("OnRemoteRequest" in unit_id for unit_id in units)
+    assert any("OnReadable" in unit_id for unit_id in units)
+    assert len(dataset["units"]) >= 2
+    assert dataset["metadata"]["entry_point_detection"]["processing_level"] == "all"

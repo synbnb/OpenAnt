@@ -42,6 +42,8 @@ def test_hap_build_isolates_hvigor_user_home(tmp_path, monkeypatch):
     sdk.mkdir()
     cert_dir = tmp_path / "cert"
     cert_dir.mkdir()
+    for name in ("oh_release_chain.cer", "oh_profile8.p7b", "oh_release.p12"):
+        (cert_dir / name).write_bytes(b"test-signing-material")
 
     monkeypatch.setattr(hap, "_TEMPLATE_PROJECT", template)
     monkeypatch.setattr(hap, "_TEMPLATE_INDEX", template_index)
@@ -80,4 +82,3 @@ def test_hap_build_isolates_hvigor_user_home(tmp_path, monkeypatch):
     assert expected.is_dir()
     # 不覆盖调用方已有的环境变量，只增加本次构建的隔离变量。
     assert env["NODE_HOME"] == str(node)
-

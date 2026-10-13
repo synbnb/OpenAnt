@@ -277,6 +277,11 @@ class TestNoDriftInOtherDescriptions:
         "VULNFOUNDER.md",
     ]
 
+    # The delivery tree intentionally keeps only README.md. Historical design
+    # documents are archived outside the product; when present in a checkout,
+    # they are still checked for language-list drift.
+    LANGUAGE_CLAIM_DOCS = [doc for doc in LANGUAGE_CLAIM_DOCS if (REPO_ROOT / doc).is_file()]
+
     # Phrasings that assert a supported/applicable language SET. Kept broader
     # than "Supports X" because the drift does not confine itself to one
     # sentence shape: the instance this guard originally missed read "the same

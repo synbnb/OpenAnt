@@ -2,7 +2,7 @@ BINARY_NAME=vulnfounder
 LEGACY_BINARY_NAME=openant
 BUILD_DIR=bin
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS=-ldflags "-X github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd.version=$(VERSION)"
+LDFLAGS=-ldflags "-X vulnfounder/apps/vulnfounder-cli/cmd.version=$(VERSION)"
 
 .PHONY: build build-legacy clean test lint install
 

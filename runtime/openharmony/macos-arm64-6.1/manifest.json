@@ -1,0 +1,17 @@
+{
+  "platform": "macos-arm64",
+  "openharmony_version": "6.1",
+  "toolchain_root": ".",
+  "components": {
+    "hdc": "sdk/default/openharmony/toolchains/hdc",
+    "hvigor": "hvigor/bin/hvigorw",
+    "node": "tool/node/bin/node",
+    "hap_sign_tool": "sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
+  },
+  "sha256": {
+    "hdc": "808b1606a4c28db9c378a88f12ebbf98d8d092d7ed6d105f019f589ac23b62ce",
+    "hvigor": "6447d9acfff04aa14691baeb11df7d918f55df57c98be9967d62ff4541f83aa0",
+    "node": "b98965e9a1cb8efffde21f63d360d5e99d6ef1b0b826dad922c1554d5c86e644",
+    "hap_sign_tool": "91cea67369a8389e0cec60ebac6f2382d157515b9d96b0ef36b60b86ca528e9b"
+  }
+}

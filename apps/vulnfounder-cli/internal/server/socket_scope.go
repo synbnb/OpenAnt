@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 const socketScopeInvokeTimeout = 10 * time.Minute

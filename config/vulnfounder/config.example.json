@@ -43,5 +43,10 @@
       "allowed_orgs": ["openharmony"],
       "destination_root": "source_code_base"
     }
+  },
+  "openharmony_runtime": {
+    "toolchain_root": "runtime/openharmony/linux-x64-6.1",
+    "hdc": "sdk/default/openharmony/toolchains/hdc",
+    "hap_cert_dir": "config/hap_cert"
   }
 }

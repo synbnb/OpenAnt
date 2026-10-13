@@ -1,0 +1,114 @@
+{
+  "schema_version": "vf.ohos.dynamic.contract.v2",
+  "contract_id": "GEN-HV-06",
+  "finding_ids": [
+    "HV-06"
+  ],
+  "unit_id": "hiviewdfxhiview_hv-06",
+  "vuln_class": "information_disclosure",
+  "description": "未对事件字段派生的 cpuFile 进行路径校验，导致 freeze_detector 进程可能读取并泄露任意可读文件内容，且可能删除该文件。",
+  "entry": {
+    "kind": "unix_dgram",
+    "endpoint": "/dev/unix/socket/hisysevent",
+    "reachability_identity": "root_su",
+    "evidence": ""
+  },
+  "identity": {
+    "execution_identity": "root_su",
+    "identity_ladder_fallback": "root_su",
+    "max_evidence_grade": "C",
+    "drop_privs": null
+  },
+  "protocol": {
+    "descriptor_id": "hisysevent_eventraw",
+    "field_values": {
+      "domain": "GRAPHIC",
+      "stringid": "NO_DRAW",
+      "type": 1,
+      "PID": 1234,
+      "UID": 5523,
+      "PACKAGE_NAME": "com.example.victim",
+      "PROCESS_NAME": "com.example.victim",
+      "info_": "logPath:__STACK_FILE__",
+      "FREEZE_INFO_PATH": "__STACK_FILE__,__CPU_FILE__"
+    },
+    "frame_sequence": [],
+    "inter_frame_delay_seconds": 0.3,
+    "param_space": {
+      "src_file_dir": "/data/log/eventlog",
+      "preplant": [
+        "__STACK_FILE__"
+      ],
+      "effect_window_seconds": 15,
+      "note": "FREEZE_INFO_PATH 必须是逗号分隔且恰好两项，顺序为 stackFile,cpuFile。stackFile 必须是 info_ 的 logPath: 前缀引用的已存在文件，并满足 CheckFreezePathTraversal：不得包含路径遍历、/ 或反斜杠；随后还需满足 uid/200000 计算的 expectedPrefix、PathToRealPath 及前缀校验。cpuFile 不经过同等路径校验，必须位于 /data/log/eventlog 下的 hiview 可读目录；/data/local/tmp 受 SELinux 阻读。GetAppFreezeFile(cpuFile) 读取后在非延迟分支删除源文件。GRAPHIC/NO_DRAW 为单事件命中，窗口 15 秒。"
+    }
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "将 FREEZE_INFO_PATH 设置为 stack,cpu 双路径，其中 cpu 指向 /data/log/eventlog 下预埋的可读文件；cpuFile 直接进入 GetAppFreezeFile，读取后删除，内容随后与 stackInfo 一并写入 freeze_ext。发送时 SCM_CREDENTIALS 自动回填 header uid/pid。",
+    "evidence": "freeze_manager.cpp:204-257；freeze_detector_plugin.cpp:155；CheckFreezePathTraversal 仅检查 stackFile；EventRaw 总长度必须与报文一致。",
+    "expected_guards": [
+      "scm_credential_match",
+      "total_length_check",
+      "freeze_rule_window"
+    ]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "exfil",
+        "path": "__CPU_FILE__",
+        "content_contains": "__RUN_PATTERN__",
+        "output_surface": "/data/log/faultlog/freeze_ext",
+        "output_is_dir": true
+      },
+      {
+        "form": "delete",
+        "path": "__CPU_FILE__",
+        "content_contains": "",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [
+      {
+      "kind": "hilog_expectation",
+      "required": true,
+        "tag": "C02d01/FreezeDetector",
+        "pattern": "SaveFreezeExtInfoToFile: create freezeExt file=(\\S+) success",
+        "window": {
+          "from": "send",
+          "seconds": 20
+        },
+        "min_count": 1,
+        "capture_groups": [
+          "out"
+        ]
+      }
+    ],
+    "pattern_key": "run_pattern",
+    "refutation": [
+      "run_pattern_bound",
+      "baseline_absent",
+      "source_file_planted_by_run"
+    ],
+    "evidence": "验证 freeze_ext 输出文件包含本轮预埋 cpu 文件图案，同时预埋源文件被删除。"
+  },
+  "risk": {
+    "target_process": "FreezeManager::SaveFreezeExtInfoToFile",
+    "risk_tier": "unknown",
+    "crash_oracle_allowed": false,
+    "restartable": false,
+    "rationale": ""
+  },
+  "cleanup": {
+    "remote_paths": [
+      "__RUN_DIR__"
+    ],
+    "restore_actions": [],
+    "verify": []
+  },
+  "compile_status": "ELIGIBLE",
+  "limitations": []
+}

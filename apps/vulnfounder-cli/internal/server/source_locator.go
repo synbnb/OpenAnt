@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 const (
@@ -642,6 +642,12 @@ func (s *Server) handleSourceLocatorApprove(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	args := []string{"confirm", r.PathValue("id")}
+	if value, stringErr := sourceLocatorString(fields, "project_name", 128); stringErr != nil {
+		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{stringErr.Error()}})
+		return
+	} else if value != "" {
+		args = append(args, "--project-name", value)
+	}
 	if value, stringErr := sourceLocatorString(fields, "confirmation_id", 256); stringErr != nil {
 		sourceLocatorJSON(w, http.StatusBadRequest, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{stringErr.Error()}})
 		return

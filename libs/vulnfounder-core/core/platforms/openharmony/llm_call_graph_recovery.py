@@ -127,6 +127,24 @@ _COMMON_IDENTIFIER_TOKENS = {
     "handler",
 }
 
+_LEDGER_DYNAMIC_MARKERS = (
+    "callback",
+    "callable",
+    "function_pointer",
+    "member_function_pointer",
+    "std::function",
+    "std::invoke",
+    "invoke(",
+    "dispatch",
+    "handler",
+    "->second",
+    ".second",
+    "dlsym(",
+    "dlopen(",
+    "getprocaddress(",
+    "lambda",
+)
+
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
@@ -148,6 +166,142 @@ def _candidate_set_is_complete(site: Mapping[str, Any]) -> bool:
         site.get("candidate_completeness")
         or site.get("candidate_set_completeness")
     ) == "complete"
+
+
+def _ledger_recovery_admission(
+    site: Mapping[str, Any], *, include_candidate_sites: bool = False
+) -> tuple[bool, str]:
+    """Decide whether one ledger observation deserves semantic recovery.
+
+    The call-site ledger is intentionally broader than the recovery queue.  A
+    missing binding for an ordinary direct/member call is often a limitation
+    of the lightweight name index, not evidence of an indirect edge.  Queue
+    only observations that can change the effective graph or that carry an
+    explicit dynamic-dispatch signal.  The reason is persisted with the site
+    so the skipped/accepted boundary remains auditable.
+    """
+    graph_status = _text(site.get("graph_status"))
+    call_kind = _text(site.get("call_kind")).lower()
+    dispatch_status = _text(site.get("dispatch_status")).lower()
+    candidate_ids = site.get("candidate_target_ids", [])
+    linked_ids = site.get("linked_target_ids", [])
+    has_candidates = any(
+        isinstance(values, (list, tuple, set)) and any(_text(item) for item in values)
+        for values in (candidate_ids, linked_ids)
+    )
+
+    if graph_status == "edge_missing":
+        return True, "graph_gap"
+    if graph_status == "candidate_or_dynamic":
+        return True, "dynamic_graph_gap"
+    if call_kind == "indirect":
+        return True, "indirect_call"
+
+    # Do not inspect the whole caller body here.  A caller may contain an
+    # unrelated callback or dlsym call; only the site expression, reason and
+    # symbols can justify admitting this particular call site.
+    symbols = site.get("symbols")
+    symbol_text = " ".join(
+        _text(value) for value in symbols.values()
+    ) if isinstance(symbols, Mapping) else ""
+    site_text = " ".join(
+        (
+            _text(site.get("expression")),
+            _text(site.get("reason")),
+            symbol_text,
+        )
+    ).lower()
+    matched_marker = next(
+        (marker for marker in _LEDGER_DYNAMIC_MARKERS if marker in site_text),
+        "",
+    )
+    if matched_marker:
+        return True, f"dynamic_signal:{matched_marker}"
+
+    # A linked candidate can be revisited only when the producer explicitly
+    # says its candidate set is exhaustive.  An incomplete/unknown shortlist
+    # is a retrieval hint, not a reason to send every ordinary call to the
+    # model.
+    if (
+        include_candidate_sites
+        and has_candidates
+        and _candidate_set_is_complete(site)
+        and dispatch_status in {"partial", "unknown"}
+    ):
+        return True, "complete_candidate_review"
+
+    return False, "ordinary_ledger_call"
+
+
+def summarize_recovery_inputs(
+    diagnostics: Mapping[str, Any], *, include_candidate_sites: bool = False
+) -> dict[str, Any]:
+    """Summarize residual and ledger observations before queue construction.
+
+    Residual and ledger records intentionally have different meanings: a
+    parser residual is already an unresolved semantic observation, while a
+    ledger record is a complete call-site inventory.  The summary keeps both
+    counts separate and applies the same ledger admission predicate used by
+    ``build_recovery_worklist``.
+    """
+    if not isinstance(diagnostics, Mapping):
+        diagnostics = {}
+    residual_sites = diagnostics.get("unresolved_call_sites", [])
+    if not isinstance(residual_sites, list):
+        residual_sites = []
+    lambda_payload = diagnostics.get("lambda_dispatch")
+    lambda_sites = (
+        lambda_payload.get("call_sites", [])
+        if isinstance(lambda_payload, Mapping)
+        else []
+    )
+    if not isinstance(lambda_sites, list):
+        lambda_sites = []
+    ledger = diagnostics.get("callsite_ledger")
+    if isinstance(ledger, Mapping) and isinstance(ledger.get("call_sites"), list):
+        ledger_sites = ledger.get("call_sites", [])
+    else:
+        ledger_sites = diagnostics.get("call_sites", [])
+    if not isinstance(ledger_sites, list):
+        ledger_sites = []
+
+    def _counts(key: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for site in ledger_sites:
+            if not isinstance(site, Mapping):
+                continue
+            value = _text(site.get(key)) or "unknown"
+            counts[value] = counts.get(value, 0) + 1
+        return dict(sorted(counts.items()))
+
+    admission_counts: dict[str, int] = {}
+    admitted = 0
+    for site in ledger_sites:
+        if not isinstance(site, Mapping):
+            continue
+        accepted, reason = _ledger_recovery_admission(
+            site, include_candidate_sites=include_candidate_sites
+        )
+        if accepted:
+            admitted += 1
+        admission_counts[reason] = admission_counts.get(reason, 0) + 1
+
+    return {
+        "schema_version": 1,
+        "residual_sites": len([item for item in residual_sites if isinstance(item, Mapping)]),
+        "lambda_residual_sites": len([item for item in lambda_sites if isinstance(item, Mapping)]),
+        "ledger_sites": len([item for item in ledger_sites if isinstance(item, Mapping)]),
+        "ledger_admitted_sites": admitted,
+        "ledger_skipped_sites": max(
+            0,
+            len([item for item in ledger_sites if isinstance(item, Mapping)]) - admitted,
+        ),
+        "ledger_graph_status_counts": _counts("graph_status"),
+        "ledger_binding_status_counts": _counts("binding_status"),
+        "ledger_dispatch_status_counts": _counts("dispatch_status"),
+        "ledger_admission_counts": dict(sorted(admission_counts.items())),
+        "include_candidate_sites": bool(include_candidate_sites),
+    }
 
 
 def _function_code(function: Mapping[str, Any]) -> str:
@@ -588,7 +742,9 @@ def _graph_context(
     }
 
 
-def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[str, Any]]]:
+def _raw_sites(
+    diagnostics: Mapping[str, Any], *, include_candidate_sites: bool = False
+) -> Iterable[tuple[str, Mapping[str, Any]]]:
     """Yield residual and ledger-backed call sites for review.
 
     ``unresolved_call_sites`` is a parser-specific residual list.  It can be
@@ -596,8 +752,9 @@ def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[st
     the native graph (for example a uniquely named member call whose edge was
     dropped during graph construction).  The independent call-site ledger is
     therefore a second input to recovery.  Ledger records are only promoted
-    to review items when their binding/dispatch/graph status shows a gap; a
-    linked, fully resolved call is not sent to the model again.
+    when the shared admission policy says the observation can change the
+    effective graph; ordinary unresolved direct/member calls remain visible in
+    the ledger but do not consume recovery budget.
     """
     sites = diagnostics.get("unresolved_call_sites", [])
     if isinstance(sites, list):
@@ -631,16 +788,14 @@ def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[st
     for site in ledger_sites:
         if not isinstance(site, Mapping):
             continue
+        admitted, admission_reason = _ledger_recovery_admission(
+            site, include_candidate_sites=include_candidate_sites
+        )
+        if not admitted:
+            continue
         graph_status = _text(site.get("graph_status"))
         binding_status = _text(site.get("binding_status"))
         dispatch_status = _text(site.get("dispatch_status"))
-        needs_review = (
-            graph_status in {"edge_missing", "candidate_or_dynamic", "not_linked"}
-            or binding_status in {"partial", "unresolved"}
-            or dispatch_status in {"partial", "unknown"}
-        )
-        if not needs_review:
-            continue
         copied = dict(site)
         # The residual worklist contract uses ``line`` and
         # ``candidate_target_ids``.  Keep the original ledger fields too so
@@ -663,6 +818,7 @@ def _raw_sites(diagnostics: Mapping[str, Any]) -> Iterable[tuple[str, Mapping[st
             copied.get("candidate_completeness")
             or copied.get("candidate_set_completeness")
         )
+        copied["recovery_admission_reason"] = admission_reason
         copied["reason"] = (
             _text(copied.get("reason"))
             or f"callsite ledger: graph={graph_status or 'unknown'}, "
@@ -769,7 +925,7 @@ def build_recovery_worklist(
     By default only sites without deterministic candidates are included.  A
     caller can opt into candidate-bearing sites for a later verification pass;
     however, a candidate-bearing call-site ledger record with an explicit
-    ``edge_missing``/``not_linked`` gap is also scheduled by default.  In
+    ``edge_missing``/``candidate_or_dynamic`` gap is also scheduled by default.  In
     addition to parser residuals, the independent call-site ledger contributes
     calls whose binding/dispatch/graph status shows a gap; this prevents
     ``residuals=0`` from being mistaken for a complete call graph.  The optional
@@ -784,14 +940,16 @@ def build_recovery_worklist(
     entry_ids = {_text(item) for item in (entry_point_ids or []) if _text(item)}
     source_root = repository if repository is not None else diagnostics.get("repository")
     grouped: dict[tuple[str, str, int, str], dict[str, Any]] = {}
-    for source, raw_site in _raw_sites(diagnostics):
+    for source, raw_site in _raw_sites(
+        diagnostics, include_candidate_sites=include_candidate_sites
+    ):
         candidate_ids = raw_site.get("candidate_target_ids", [])
         if not isinstance(candidate_ids, list):
             candidate_ids = []
         ledger_candidate_gap = (
             _text(raw_site.get("source_record")) == "callsite_ledger"
             and _text(raw_site.get("graph_status")) in {
-                "edge_missing", "candidate_or_dynamic", "not_linked"
+                "edge_missing", "candidate_or_dynamic"
             }
         )
         if candidate_ids and not include_candidate_sites and not ledger_candidate_gap:
@@ -842,6 +1000,7 @@ def build_recovery_worklist(
                 "source_records": [],
                 "site_ids": [],
                 "ledger_site_ids": [],
+                "recovery_admission_reasons": [],
                 "_raw_site": dict(raw_site),
                 "_priority_rank": _CONFIDENCE_RANK.get(priority, 0),
             }
@@ -872,8 +1031,17 @@ def build_recovery_worklist(
                 }
             )
         source_record = _text(raw_site.get("source_record"))
-        if source_record and source_record not in item["source_records"]:
+        if not source_record:
+            source_record = (
+                "lambda_residual" if source == "lambda" else "parser_residual"
+            )
+        if source_record not in item["source_records"]:
             item["source_records"].append(source_record)
+        admission_reason = _text(raw_site.get("recovery_admission_reason"))
+        if not admission_reason:
+            admission_reason = source_record
+        if admission_reason not in item["recovery_admission_reasons"]:
+            item["recovery_admission_reasons"].append(admission_reason)
         ledger_site_id = _text(raw_site.get("site_id"))
         if ledger_site_id and ledger_site_id not in item["site_ids"]:
             item["site_ids"].append(ledger_site_id)
@@ -920,9 +1088,13 @@ def build_recovery_worklist(
         caller_id = caller_ids[0]
         caller = item["callers"][caller_id]
         classification = item["classification"]
+        if classification.get("analysis_route") == "external_boundary":
+            # External callbacks/interfaces are retained in the diagnostics
+            # ledger, but there is no in-repository callee for this recovery
+            # stage to prove.  Sending them to the LLM only adds noise.
+            continue
         if security_relevant_only and (
             not item["security_relevant"]
-            or classification.get("analysis_route") == "external_boundary"
         ):
             continue
         raw_site = dict(item["_raw_site"])
@@ -969,6 +1141,10 @@ def build_recovery_worklist(
             "analysis_route": classification["analysis_route"],
             "llm_eligible": classification["llm_eligible"],
             "source_records": sorted(item["source_records"]),
+            "recovery_admission_reasons": sorted(
+                item["recovery_admission_reasons"]
+            ),
+            "recovery_eligible": True,
             "site_ids": sorted(item["site_ids"]),
             "callsite_ledger_status": dict(item["callsite_ledger_status"]),
             "review_scope": (
@@ -1603,6 +1779,8 @@ def validate_recovery_proposals(
 def _diagnostics_for_batch(
     diagnostics: Mapping[str, Any],
     batch: Sequence[Mapping[str, Any]],
+    *,
+    include_candidate_sites: bool = False,
 ) -> dict[str, Any]:
     """Copy only the raw residual sites represented by one request batch."""
     selected: dict[tuple[str, str, int, str], Mapping[str, Any]] = {}
@@ -1620,7 +1798,9 @@ def _diagnostics_for_batch(
         for item in batch
         if _text(item.get("site_id"))
     }
-    for source, raw_site in _raw_sites(diagnostics):
+    for source, raw_site in _raw_sites(
+        diagnostics, include_candidate_sites=include_candidate_sites
+    ):
         raw_span = (
             source,
             _text(raw_site.get("file")),
@@ -1757,6 +1937,9 @@ def run_recovery_review(
     treat it as a replacement for ``call_graph.json``.
     """
     if _worklist_override is None:
+        input_summary = summarize_recovery_inputs(
+            diagnostics, include_candidate_sites=include_candidate_sites
+        )
         worklist = build_recovery_worklist(
             diagnostics,
             functions,
@@ -1786,6 +1969,9 @@ def run_recovery_review(
             for item in _worklist_override
             if isinstance(item, Mapping)
         ]
+        input_summary = summarize_recovery_inputs(
+            diagnostics, include_candidate_sites=include_candidate_sites
+        )
     if site_ids is not None:
         selected_site_ids = {
             _text(site_id) for site_id in site_ids if _text(site_id)
@@ -1813,7 +1999,11 @@ def run_recovery_review(
         ):
             batch_results: list[dict[str, Any]] = []
             for batch_index, batch in enumerate(request_batches, start=1):
-                batch_diagnostics = _diagnostics_for_batch(diagnostics, batch)
+                batch_diagnostics = _diagnostics_for_batch(
+                    diagnostics,
+                    batch,
+                    include_candidate_sites=include_candidate_sites,
+                )
                 batch_result = run_recovery_review(
                     batch_diagnostics,
                     functions,
@@ -1909,6 +2099,7 @@ def run_recovery_review(
                 "worklist": worklist,
                 "decisions": all_decisions,
                 "validation": validation,
+                "input_summary": input_summary,
                 "errors": [
                     error
                     for result in batch_results
@@ -1981,6 +2172,7 @@ def run_recovery_review(
             "validation": {"accepted": [], "kept_unresolved": [], "rejected": []},
             "errors": [],
             "response_diagnostics": [],
+            "input_summary": input_summary,
             "summary": base_summary,
         }
 
@@ -2184,6 +2376,7 @@ def run_recovery_review(
         "validation": validation,
         "errors": errors,
         "response_diagnostics": response_diagnostics,
+        "input_summary": input_summary,
         "summary": summary,
     }
 
@@ -2201,6 +2394,7 @@ __all__ = [
     "build_recovery_prompt",
     "build_recovery_worklist",
     "classify_recovery_site",
+    "summarize_recovery_inputs",
     "parse_recovery_response",
     "run_recovery_review",
     "validate_recovery_proposals",

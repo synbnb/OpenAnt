@@ -1353,12 +1353,13 @@ class SocketExposureProvider:
         return {"status": "complete", "asset_count": len(assets), "evidence_count": len(self.evidence)}
 
     def _observed_endpoint_candidates(self) -> list[dict[str, str]]:
-        """从已登记的端点枚举证据中提取需要模型覆盖的身份。
+        """从设备 Socket 表提取需要模型覆盖的端点身份。
 
-        这不是设备侦查命令或业务白名单，而是一个保守的完整性检查：只对
-        netstat/proc socket 表中明确出现的路径或抽象名建立候选；CONNECTED
-        行以及权限命令的路径不会被当作监听资产。这样模型使用 ``endpoint``
-        等别名时，仍不会因为字段命名差异把真实端点静默丢掉。
+        这不是设备侦查命令或业务白名单，而是一个保守的完整性检查：对
+        netstat/proc socket 表中明确出现的命名 Unix、抽象 Unix 以及 TCP/UDP
+        LISTENING/BOUND 端点建立候选；CONNECTED 行以及权限命令的路径不会
+        被当作资产。候选同时用于 ``finish_inventory`` 的完整性校验和最终
+        资产视图合并，避免模型遗漏网络端点时静默得到 TCP/UDP=0。
         """
         candidates: dict[str, dict[str, str]] = {}
         endpoint_re = re.compile(r"(?<![A-Za-z0-9_])(?:/dev/unix/socket/[^\s,;]+|@[A-Za-z0-9_.:@/-]+)")
@@ -1422,6 +1423,32 @@ class SocketExposureProvider:
                         previous = candidates.get(key)
                         if previous is None or (state == "LISTENING" and previous.get("state") != "LISTENING"):
                             candidates[key] = {"endpoint": endpoint, "state": state}
+
+        # Network endpoints do not have a Unix path, so they cannot be found
+        # by the path-oriented evidence scan above.  Reuse the same parsed
+        # socket-table records that are persisted in the audit view; this is
+        # deterministic evidence from the current run, not a process/port
+        # allow-list.  Keeping this after the textual scan also lets a
+        # netstat/proc record upgrade a previously observed Unix candidate
+        # without changing its identity.
+        try:
+            socket_records, _ = _enumerate_socket_records(self.commands, self.evidence)
+        except Exception:  # noqa: BLE001 - candidate checks must not abort a run
+            socket_records = []
+        for record in socket_records:
+            if not isinstance(record, Mapping):
+                continue
+            state = _canonical_runtime_state(record.get("state") or record.get("runtime_state"))
+            if state not in _INVENTORY_STATES:
+                continue
+            endpoint = str(record.get("endpoint") or record.get("socket_name") or "").strip()
+            transport = str(record.get("transport") or "").upper()
+            if not endpoint or transport not in {"TCP", "UDP"}:
+                continue
+            key = endpoint.casefold()
+            previous = candidates.get(key)
+            if previous is None or (state == "LISTENING" and previous.get("state") != "LISTENING"):
+                candidates[key] = {"endpoint": endpoint, "state": state}
         return list(candidates.values())
 
     def _missing_observed_endpoints(self, assets: Any) -> list[str]:
@@ -1464,7 +1491,7 @@ class SocketExposureProvider:
         mismatches: list[dict[str, str]] = []
         for endpoint, state in expected.items():
             values = submitted.get(endpoint, set())
-            if state == "LISTENING" and "LISTENING" not in values:
+            if state in _INVENTORY_STATES and state not in values:
                 mismatches.append({"endpoint": endpoint, "expected": state, "submitted": ",".join(sorted(values)) or "MISSING"})
         return mismatches
 
@@ -1847,6 +1874,24 @@ class SocketExposureProvider:
         socket_records, socket_record_summary = _enumerate_socket_records(self.commands, self.evidence)
         socket_record_summary = dict(socket_record_summary)
         socket_record_summary.setdefault("schema_version", SOCKET_RECORDS_SCHEMA_VERSION)
+        # ``finish_inventory`` is intentionally model-driven, but the device
+        # enumeration is deterministic evidence already collected by the
+        # same run.  A model may submit all LISTENING endpoints and omit a
+        # named BOUND endpoint (especially DGRAM/SEQPACKET rows whose netstat
+        # state column is blank).  Keep the model's evidence and fields, then
+        # add only BOUND identities that are directly present in the observed
+        # endpoint/record evidence.  This prevents a partial model response
+        # from hiding a real bound exposure while preserving provenance.
+        observed_candidates = self._observed_endpoint_candidates()
+        assets = _merge_observed_endpoint_assets(
+            assets,
+            observed_candidates,
+            socket_records,
+            self.evidence,
+            self.hdc.serial,
+            self.config.max_assets,
+        )
+        assets = _enrich_assets_from_evidence(assets, self.evidence)
         plan = self._build_plan(status, error)
         artifacts = {
             "socket_inventory_plan.json": _write_json(self.output_dir / "socket_inventory_plan.json", plan),
@@ -1855,8 +1900,9 @@ class SocketExposureProvider:
             "socket_inventory_commands.jsonl": _write_jsonl(self.output_dir / "socket_inventory_commands.jsonl", [item.to_dict() for item in self.commands]),
         }
         listening_count = sum(1 for item in assets if str(item.get("runtime_state", "")).upper() == "LISTENING")
+        bound_count = sum(1 for item in assets if str(item.get("runtime_state", "")).upper() == "BOUND")
         finish = self.finish_payload or {}
-        return {"schema_version": SOCKET_ASSET_SCHEMA_VERSION, "status": status, "device_serial": self.hdc.serial or None, "run_id": self.run_id, "task_goal": self.task_goal, "task_scope": plan["task_scope"], "socket_inventory_required": self.socket_inventory_required, "task_summary": _safe_text(finish.get("task_summary"), MAX_DEVICE_TASK_SUMMARY_CHARS), "task_findings": finish.get("task_findings", []), "assets": assets, "asset_count": len(assets), "listening_count": listening_count, "observed_non_listening": finish.get("observed_non_listening", []), "coverage": finish.get("coverage", {}), "notes": _safe_text(finish.get("notes"), 2000), "missing_fields": finish.get("missing_fields", []), "socket_record_count": len(socket_records), "socket_record_summary": socket_record_summary, "observed_socket_records": socket_records, "task_tree": self.task_tree, "trace": self.trace, "evidence": self.evidence, "commands": self.commands, "rounds": self.rounds, "input_tokens": self.input_tokens, "output_tokens": self.output_tokens, "error": error, "provider": plan["provider"], "model": plan["model"], "rag": plan["rag"], "artifacts": artifacts}
+        return {"schema_version": SOCKET_ASSET_SCHEMA_VERSION, "status": status, "device_serial": self.hdc.serial or None, "run_id": self.run_id, "task_goal": self.task_goal, "task_scope": plan["task_scope"], "socket_inventory_required": self.socket_inventory_required, "task_summary": _safe_text(finish.get("task_summary"), MAX_DEVICE_TASK_SUMMARY_CHARS), "task_findings": finish.get("task_findings", []), "assets": assets, "asset_count": len(assets), "listening_count": listening_count, "bound_count": bound_count, "observed_endpoints": observed_candidates, "observed_endpoint_count": len(observed_candidates), "observed_non_listening": finish.get("observed_non_listening", []), "coverage": finish.get("coverage", {}), "notes": _safe_text(finish.get("notes"), 2000), "missing_fields": finish.get("missing_fields", []), "socket_record_count": len(socket_records), "socket_record_summary": socket_record_summary, "observed_socket_records": socket_records, "task_tree": self.task_tree, "trace": self.trace, "evidence": self.evidence, "commands": self.commands, "rounds": self.rounds, "input_tokens": self.input_tokens, "output_tokens": self.output_tokens, "error": error, "provider": plan["provider"], "model": plan["model"], "rag": plan["rag"], "artifacts": artifacts}
 
 
 def _canonical_asset_key(asset: Mapping[str, Any]) -> str:
@@ -3113,6 +3159,102 @@ def _enrich_assets_from_evidence(
     return assets
 
 
+def _merge_observed_endpoint_assets(
+    assets: list[dict[str, Any]],
+    endpoint_candidates: Iterable[Mapping[str, Any]],
+    socket_records: Iterable[Mapping[str, Any]],
+    evidence: Iterable[Mapping[str, Any]],
+    serial: str,
+    max_assets: int,
+) -> list[dict[str, Any]]:
+    """把已观测但未被模型提交的 LISTENING/BOUND 端点合并进资产视图。
+
+    LISTENING 和 BOUND 都是合法的设备暴露面状态，不应只出现在“原始
+    枚举”表里。这里不推断新的端点，也不把 CONNECTED/匿名行升级成资产：
+    身份必须来自 ``_observed_endpoint_candidates``，可选字段优先来自同一
+    端点的原始 socket record；没有记录时只保留 endpoint、状态和可定位的
+    证据引用。
+    """
+
+    def endpoint_key(value: Any) -> str:
+        name = str(value or "").strip()
+        if name.casefold().startswith("unix://"):
+            name = name[7:]
+        return name.rstrip(".])}>").casefold()
+
+    normalized = _normalise_assets(assets, serial, max_assets)
+    known = {
+        endpoint_key(item.get("socket_name"))
+        for item in normalized
+        if isinstance(item, Mapping) and endpoint_key(item.get("socket_name"))
+    }
+    record_by_endpoint: dict[str, Mapping[str, Any]] = {}
+    for record in socket_records:
+        if not isinstance(record, Mapping):
+            continue
+        state = _canonical_runtime_state(record.get("state") or record.get("runtime_state"))
+        endpoint = record.get("endpoint") or record.get("socket_name")
+        key = endpoint_key(endpoint)
+        if state not in _INVENTORY_STATES or not key:
+            continue
+        previous = record_by_endpoint.get(key)
+        if previous is None or _observation_rank(state) > _observation_rank(previous.get("state")):
+            record_by_endpoint[key] = record
+
+    evidence_rows = [item for item in evidence if isinstance(item, Mapping)]
+    additions: list[dict[str, Any]] = []
+    for candidate in endpoint_candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        endpoint = str(candidate.get("endpoint") or candidate.get("socket_name") or "").strip()
+        key = endpoint_key(endpoint)
+        state = _canonical_runtime_state(candidate.get("state") or candidate.get("runtime_state"))
+        if not key or state not in _INVENTORY_STATES or key in known:
+            continue
+        record = record_by_endpoint.get(key, {})
+        raw: dict[str, Any] = {
+            "socket_name": endpoint,
+            "runtime_state": state,
+            "state": state,
+            "transport": record.get("transport") or ("UNIX" if endpoint.startswith(("/dev/unix/socket/", "@")) else "UNKNOWN"),
+            "address_family": record.get("address_family") or ("AF_UNIX" if endpoint.startswith(("/dev/unix/socket/", "@")) else "UNKNOWN"),
+            "socket_type": record.get("socket_type") or "UNKNOWN",
+            "pid": record.get("pid") or "UNKNOWN",
+            "process": record.get("process") or "UNKNOWN",
+            "uid": record.get("uid") or "UNKNOWN",
+            "process_selinux_domain": record.get("process_selinux_domain") or "UNKNOWN",
+            "inode": record.get("inode") or "UNKNOWN",
+            "evidence_ids": list(record.get("evidence_ids", [])) if isinstance(record.get("evidence_ids"), list) else [],
+            "provenance": "observed_socket_evidence",
+        }
+        for field in ("address", "port", "local_address", "local_port"):
+            if record.get(field) is not None:
+                raw[field] = record.get(field)
+        if endpoint.startswith("/dev/unix/socket/"):
+            raw["dac_permissions"] = record.get("dac_permissions") or "UNKNOWN"
+            raw["owner"] = record.get("owner") or "UNKNOWN"
+            raw["group"] = record.get("group") or "UNKNOWN"
+            raw["selinux_label"] = record.get("selinux_label") or "UNKNOWN"
+        else:
+            raw["dac_permissions"] = "NOT_APPLICABLE"
+            raw["owner"] = "NOT_APPLICABLE"
+            raw["group"] = "NOT_APPLICABLE"
+            raw["selinux_label"] = "NOT_APPLICABLE"
+        if not raw["evidence_ids"]:
+            raw["evidence_ids"] = [
+                item.get("evidence_id")
+                for item in evidence_rows
+                if isinstance(item.get("evidence_id"), str) and endpoint in str(item.get("excerpt", ""))
+            ]
+        additions.append(raw)
+        known.add(key)
+        if len(normalized) + len(additions) >= max_assets:
+            break
+    if not additions:
+        return normalized
+    return _normalise_assets(normalized + additions, serial, max_assets)
+
+
 class DeviceSocketAssetStore:
     """按设备 serial 隔离快照，避免不同开发板共享资产。"""
 
@@ -3256,6 +3398,7 @@ class DeviceSocketAssetStore:
         payload["run_id"] = run_id
         payload["asset_count"] = len(payload.get("assets", [])) if isinstance(payload.get("assets"), list) else 0
         payload["listening_count"] = sum(1 for item in payload.get("assets", []) if isinstance(item, Mapping) and str(item.get("runtime_state", "")).upper() == "LISTENING")
+        payload["bound_count"] = sum(1 for item in payload.get("assets", []) if isinstance(item, Mapping) and str(item.get("runtime_state", "")).upper() == "BOUND")
         payload["artifacts"] = {str(key): str(value) for key, value in (artifacts or {}).items()}
         snapshots = self._child_dir(directory, "snapshots", create=True)
         snapshot_path = snapshots / f"socket_inventory_{run_id}.json"
@@ -3287,7 +3430,49 @@ class DeviceSocketAssetStore:
         path = self.device_dir(serial) / "latest.json"
         if not path.exists() or path.is_symlink():
             raise FileNotFoundError("当前设备没有资产快照")
-        return json.loads(path.read_text(encoding="utf-8"))
+        device_dir = self.device_dir(serial)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return self._hydrate_observed_assets(payload, device_dir)
+
+    @staticmethod
+    def _hydrate_observed_assets(payload: Mapping[str, Any], device_dir: Path) -> dict[str, Any]:
+        """为旧快照补齐同一 run 已观测但未提交的 BOUND 资产。"""
+
+        hydrated = dict(payload)
+        run_id = str(hydrated.get("run_id") or "").strip()
+        plan: Mapping[str, Any] = {}
+        if run_id:
+            plan_path = device_dir / "runs" / run_id / "socket_inventory_plan.json"
+            try:
+                candidate = json.loads(plan_path.read_text(encoding="utf-8"))
+                if isinstance(candidate, Mapping):
+                    plan = candidate
+            except (OSError, ValueError, json.JSONDecodeError):
+                plan = {}
+        endpoint_candidates = hydrated.get("observed_endpoints")
+        if not isinstance(endpoint_candidates, list):
+            endpoint_candidates = plan.get("observed_endpoints", [])
+        records = hydrated.get("observed_socket_records")
+        if not isinstance(records, list):
+            records = plan.get("observed_socket_records", [])
+        if isinstance(endpoint_candidates, list):
+            hydrated["observed_endpoints"] = endpoint_candidates
+            hydrated["observed_endpoint_count"] = len(endpoint_candidates)
+        if not isinstance(records, list) or not records:
+            return hydrated
+        merged = _merge_observed_endpoint_assets(
+            hydrated.get("assets", []) if isinstance(hydrated.get("assets"), list) else [],
+            endpoint_candidates if isinstance(endpoint_candidates, list) else [],
+            records,
+            hydrated.get("evidence", []) if isinstance(hydrated.get("evidence"), list) else [],
+            str(hydrated.get("device_serial") or ""),
+            SOCKET_MAX_ASSETS,
+        )
+        hydrated["assets"] = merged
+        hydrated["asset_count"] = len(merged)
+        hydrated["listening_count"] = sum(1 for item in merged if str(item.get("runtime_state", "")).upper() == "LISTENING")
+        hydrated["bound_count"] = sum(1 for item in merged if str(item.get("runtime_state", "")).upper() == "BOUND")
+        return hydrated
 
     def list_devices(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -3296,8 +3481,8 @@ class DeviceSocketAssetStore:
                 continue
             path = child / "latest.json"
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                rows.append({"device_key": child.name, "device_serial": payload.get("device_serial"), "task_goal": payload.get("task_goal", DEFAULT_DEVICE_SCAN_TASK), "generated_at": payload.get("generated_at"), "asset_count": payload.get("asset_count", 0), "listening_count": payload.get("listening_count", 0), "socket_record_count": payload.get("socket_record_count", 0), "status": payload.get("status")})
+                payload = self._hydrate_observed_assets(json.loads(path.read_text(encoding="utf-8")), child)
+                rows.append({"device_key": child.name, "device_serial": payload.get("device_serial"), "task_goal": payload.get("task_goal", DEFAULT_DEVICE_SCAN_TASK), "generated_at": payload.get("generated_at"), "asset_count": payload.get("asset_count", 0), "listening_count": payload.get("listening_count", 0), "bound_count": payload.get("bound_count", 0), "socket_record_count": payload.get("socket_record_count", 0), "status": payload.get("status")})
             except (OSError, ValueError, json.JSONDecodeError):
                 continue
         rows.sort(key=lambda item: str(item.get("generated_at", "")), reverse=True)
@@ -3402,6 +3587,7 @@ def run_socket_asset_discovery(
         "run_id": snapshot.get("run_id"),
         "asset_count": snapshot.get("asset_count", 0),
         "listening_count": snapshot.get("listening_count", 0),
+        "bound_count": snapshot.get("bound_count", 0),
         "generated_at": snapshot.get("generated_at"),
         "latest_updated": bool(snapshot.get("latest_updated")),
         "snapshot_path": snapshot.get("snapshot_path"),

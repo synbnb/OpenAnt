@@ -11,9 +11,9 @@ import (
 	"github.com/fatih/color"
 	isatty "github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/report"
 )
 
 var reportCmd = &cobra.Command{

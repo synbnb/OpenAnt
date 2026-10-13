@@ -20,8 +20,10 @@ func TestVenvPython_Windows(t *testing.T) {
 		t.Skip("test only runs on Windows")
 	}
 
+	dataRoot := t.TempDir()
+	t.Setenv("VULNFOUNDER_DATA_DIR", dataRoot)
 	vp := venvPython()
-	expected := filepath.Join(os.Getenv("USERPROFILE"), ".openant", "venv", "Scripts", "python.exe")
+	expected := filepath.Join(dataRoot, "venv", "Scripts", "python.exe")
 	if vp != expected {
 		t.Errorf("venvPython() = %q, want %q", vp, expected)
 	}
@@ -36,6 +38,8 @@ func TestVenvPython_Unix(t *testing.T) {
 		t.Skip("test only runs on Unix-like systems")
 	}
 
+	dataRoot := t.TempDir()
+	t.Setenv("VULNFOUNDER_DATA_DIR", dataRoot)
 	vp := venvPython()
 	if !filepath.IsAbs(vp) {
 		t.Errorf("venvPython() should return absolute path, got %q", vp)
@@ -47,6 +51,7 @@ func TestVenvPython_Unix(t *testing.T) {
 }
 
 func TestVenvDir_ReturnsAbsolutePath(t *testing.T) {
+	t.Setenv("VULNFOUNDER_DATA_DIR", t.TempDir())
 	vd := venvDir()
 	if !filepath.IsAbs(vd) {
 		t.Errorf("venvDir() should return absolute path, got %q", vd)
@@ -122,7 +127,7 @@ func TestHashFile_DifferentContent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // readStoredHash / writeStoredHash delegate to readHashAt/writeHashAt with
-// a path under the user's real ~/.openant/venv/. The tests exercise the
+// a path under the project's result/venv/. The tests exercise the
 // underlying readHashAt/writeHashAt helpers directly to avoid touching the
 // real venv directory.
 
@@ -160,7 +165,7 @@ func TestReadHashAt_TrimsWhitespace(t *testing.T) {
 }
 
 func TestReadStoredHash_DoesNotPanic(t *testing.T) {
-	// Smoke test: reading from the real ~/.openant/venv/.deps-hash must
+// Smoke test: reading from the project's result/venv/.deps-hash must
 	// not panic regardless of whether the file exists.
 	_ = readStoredHash()
 }

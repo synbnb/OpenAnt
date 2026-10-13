@@ -24,7 +24,8 @@ import subprocess
 import tempfile
 from typing import Any, Callable, Iterable, Mapping
 
-from utilities.branding import first_env
+from utilities.branding import first_env, project_root
+from utilities.openharmony_dynamic.toolchain import toolchain_file
 
 
 EXPOSURE_SCHEMA_VERSION = "openharmony.exposure-surface.v1"
@@ -3948,14 +3949,21 @@ def resolve_hdc_path() -> str:
     candidates: list[Path] = []
     if override:
         candidates.append(Path(override).expanduser())
+    # 项目内 runtime 是可迁移交付包的首选；assets/toolchains 是旧版兼容
+    # 目录。只有项目内候选不存在时才使用 PATH，避免扫描结果受宿主机上
+    # 另一套 SDK 的版本影响。
+    try:
+        root = project_root()
+    except (OSError, ValueError):
+        root = None
+    if root is not None:
+        candidates.append(root / "runtime" / "openharmony" / "sdk" / "default" / "openharmony" / "toolchains" / "hdc")
+        candidates.append(root / "runtime" / "openharmony" / "hdc")
+        candidates.append(root / "assets" / "toolchains" / "hdc")
+    candidates.append(toolchain_file("sdk/default/openharmony/toolchains/hdc"))
     which = shutil.which("hdc")
     if which:
         candidates.append(Path(which))
-    project_root = Path(__file__).resolve().parents[2]
-    candidates.append(
-        project_root
-        / "libs/vulnfounder-core/utilities/dynamic_tester/toolchains/commandline-tools-mac-arm64-6.1.0.860/command-line-tools/sdk/default/openharmony/toolchains/hdc"
-    )
     for candidate in candidates:
         try:
             resolved = candidate.resolve()

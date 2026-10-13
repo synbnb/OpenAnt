@@ -117,6 +117,10 @@ def validate_contract(contract: Contract, *, hdc=None) -> list[str]:
             # 槽位，不放行任意 LLM 自造字段。
             known_fields |= {
                 "mode", "host", "port", "target", "local_path",
+                # marker 是运行器在发送前注入的本轮观测占位符，不属于线路
+                # 协议字段；允许它出现在 HAP 契约的 field_values 中，避免
+                # 把通用 artifact oracle 的运行期参数误判成模型幻觉字段。
+                "marker",
                 "first", "second", "third",
                 "frame_first", "frame_second", "frame_third",
                 "frame_first_template", "frame_second_template", "frame_third_template",

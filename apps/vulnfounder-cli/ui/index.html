@@ -33,6 +33,7 @@
   }
 
   *, *::before, *::after { box-sizing: border-box; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   html { min-width: 320px; background: var(--canvas); }
   body { margin: 0; min-height: 100vh; background: var(--canvas); color: var(--ink); font-family: var(--sans); }
   button, input, select { font: inherit; }
@@ -165,7 +166,6 @@
   .llm-phase { margin: 5px 0 0 12px; color: var(--ink-soft); font-size: 0.75rem; }
   .llm-credential-ok { color: var(--success); }
   .llm-credential-missing { color: var(--warning); }
-  .llm-config-label { display: block; margin-top: 8px; color: var(--ink-soft); font-size: 0.72rem; font-weight: 800; }
   .llm-status select { width: 100%; min-height: 35px; margin-top: 5px; padding: 6px 8px; color: var(--ink); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 0.78rem; }
   .option-list { display: grid; gap: 9px; }
   .option-section {
@@ -311,13 +311,6 @@
   <div class="topbar-actions">
     <vulnfounder-workspace-nav current="home"></vulnfounder-workspace-nav>
     <span class="local-note" data-i18n="header.local" title="服务只监听本机回环地址，不会暴露到局域网。">仅本机访问</span>
-    <div class="language-field">
-      <label for="language-select" data-i18n="language.label">语言</label>
-      <select id="language-select" aria-label="界面语言">
-        <option value="zh-CN">中文</option>
-        <option value="en">English</option>
-      </select>
-    </div>
   </div>
 </header>
 
@@ -339,23 +332,24 @@
           <details class="stage-nav-group" data-stage="exposure" open>
             <summary>
               <span class="stage-nav-number">01</span>
-              <span class="stage-nav-group-title" data-i18n="nav.exposure.title">阶段 1 · 设备暴露面</span>
+              <span class="stage-nav-group-title" data-i18n="nav.exposure.title">阶段 1 · 设备暴露面发现</span>
               <span class="stage-nav-chevron" aria-hidden="true">›</span>
             </summary>
             <div class="stage-nav-links">
-              <a class="stage-nav-link" href="/device-socket-assets"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.exposure.assets">设备 Socket 资产</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/device-socket-assets"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.exposure.assets">设备 Socket 资产发现</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/device-socket-assets/history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.assets">设备 Socket 资产历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
               <a class="stage-nav-link" href="/exposure-locator"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.exposure.locator">暴露面识别与源码定位</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/exposure-locator?view=history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.history">暴露面识别与定位历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
             </div>
           </details>
           <details class="stage-nav-group" data-stage="source" open>
             <summary>
               <span class="stage-nav-number">02</span>
-              <span class="stage-nav-group-title" data-i18n="nav.source.title">阶段 2 · OpenHarmony 源码定位</span>
+              <span class="stage-nav-group-title" data-i18n="nav.source.title">阶段 2 · 暴露面识别与源码定位</span>
               <span class="stage-nav-chevron" aria-hidden="true">›</span>
             </summary>
             <div class="stage-nav-links">
               <a class="stage-nav-link" href="/source-locator"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.source.locator">源码定位会话</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
-              <a class="stage-nav-link" href="/socket-scope"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.source.scope">Socket 引导扫描</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
             </div>
           </details>
           <details class="stage-nav-group" data-stage="static" open>
@@ -365,6 +359,8 @@
               <span class="stage-nav-chevron" aria-hidden="true">›</span>
             </summary>
             <div class="stage-nav-links">
+              <a class="stage-nav-link" href="/repository-manager"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label">仓库管理</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
+              <a class="stage-nav-link" href="/vulnerability-summary"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label">漏洞汇总</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
               <a class="stage-nav-link" href="#new-scan-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.static.new">新建扫描</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
               <a class="stage-nav-link" href="#recent-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.static.history">最近扫描</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
             </div>
@@ -372,13 +368,10 @@
           <details class="stage-nav-group" data-stage="analysis" open>
             <summary>
               <span class="stage-nav-number">04</span>
-              <span class="stage-nav-group-title" data-i18n="nav.analysis.title">阶段 4 · 验证与报告</span>
+              <span class="stage-nav-group-title" data-i18n="nav.analysis.title">阶段 4 · 动态测试</span>
               <span class="stage-nav-chevron" aria-hidden="true">›</span>
             </summary>
             <div class="stage-nav-links">
-              <a class="stage-nav-link" href="#recent-title"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.results">扫描结果与阶段产物</span><span class="stage-nav-link-hint" data-i18n="nav.jump">跳转</span></a>
-              <a class="stage-nav-link" href="/device-socket-assets#asset-history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.assets">设备 Socket 资产历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
-              <a class="stage-nav-link" href="/exposure-locator?view=history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.history">联合会话历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
               <a class="stage-nav-link" href="/dynamic-test"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.dynamicRun">动态测试执行</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
               <a class="stage-nav-link" href="/dynamic-test-history"><span class="stage-nav-link-dot" aria-hidden="true"></span><span class="stage-nav-link-label" data-i18n="nav.analysis.dynamicHistory">动态测试历史</span><span class="stage-nav-link-hint" data-i18n="nav.open">进入</span></a>
             </div>
@@ -415,11 +408,6 @@
                 <div class="hint" data-i18n="scan.repoPathHint">选择已保存仓库后，此输入框会自动停用。</div>
               </div>
               <div class="field field-wide">
-                <label for="scope_manifest" data-i18n="scan.scopeManifest">已确认的 Socket 范围 manifest（可选）</label>
-                <input type="text" id="scope_manifest" name="scope_manifest" placeholder="/path/to/scan_scope.json">
-                <div class="hint" data-i18n="scan.scopeManifestHint">先在“Socket 引导扫描”中确认服务目录，再把 manifest 带入这里；不填写时保持全仓扫描。</div>
-              </div>
-              <div class="field field-wide">
                 <span class="field-label" id="languages-label" data-i18n="scan.languages">扫描语言</span>
                 <div class="language-grid" role="group" aria-labelledby="languages-label">
                   <label class="choice"><input type="checkbox" name="languages" value="go"> Go</label>
@@ -443,43 +431,9 @@
                 </select>
                 <div class="hint" data-i18n="scan.platformHint">OpenHarmony 模式会启用平台感知的 C/C++ 解析，以及 IPC 和 System Ability 入口检测。</div>
               </div>
-              <div class="field">
-                <span class="field-label" data-i18n="scan.llm">大模型配置</span>
-                <div class="llm-status" role="status">
-                  {{if .LLM.Available}}
-                    <div><strong>{{.LLM.ConfigName}}</strong></div>
-                    <label for="llm_config" class="llm-config-label" data-i18n="scan.llmConfig">本次扫描使用的模型配置</label>
-                    <select id="llm_config" name="llm_config" aria-describedby="llm-config-hint">
-                      {{range .LLM.Configs}}<option value="{{.Name}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>{{end}}
-                    </select>
-                    <div class="hint" id="llm-config-hint" data-i18n="scan.llmConfigHint">默认使用配置文件中的 default_llm；可在每次扫描时切换已登记配置。</div>
-                    {{range .LLM.Providers}}
-                      <div class="llm-provider">
-                        <span data-i18n="llm.provider">服务商</span>: <code>{{.Name}}</code> ({{.Type}})<br>
-                        {{if .BaseURL}}<span data-i18n="llm.endpoint">接口地址</span>: <code>{{.BaseURL}}</code><br>{{end}}
-                        <span data-i18n="llm.credentials">凭据</span>: <span class="{{if eq .CredentialStatus "not detected"}}llm-credential-missing{{else}}llm-credential-ok{{end}}" data-credential-status="{{.CredentialStatus}}">{{.CredentialStatus}}</span>
-                      </div>
-                    {{end}}
-                    {{if .LLM.Phases}}
-                      <details>
-                        <summary data-i18n="llm.bindings">查看各阶段使用的模型</summary>
-                        {{range .LLM.Phases}}<div class="llm-phase">{{.Phase}} -> <code>{{.Provider}}</code> / <code>{{.Model}}</code></div>{{end}}
-                      </details>
-                    {{end}}
-                    <div class="hint">{{.LLM.CredentialHint}}</div>
-                  {{else}}
-                    <div data-i18n="llm.unavailable">未检测到可用的大模型配置。</div>
-                    <input type="hidden" name="llm_config" value="vulnfounder-default">
-                  {{end}}
-                </div>
+              <div class="field field-wide settings-shortcut">
+                <div class="hint">模型配置已集中到左侧“设置”页面。当前默认模型会被所有扫描和验证阶段统一使用，避免每个页面产生不一致的模型选择。</div>
               </div>
-              {{if .LLM.ShowLegacyKey}}
-                <div class="field field-wide">
-                  <label for="api_key" data-i18n-zh="LLM API Key（兼容 Anthropic 模式）" data-i18n-en="LLM API Key (legacy Anthropic mode)">LLM API Key（兼容 Anthropic 模式）</label>
-                  <input type="password" id="api_key" name="api_key" placeholder="sk-ant-...">
-                  <div class="hint" data-i18n="scan.legacyKeyHint">OpenAI 兼容接口请使用 vulnfounder setup llm 配置。此输入框只覆盖本次扫描的旧版 Anthropic 配置。</div>
-                </div>
-              {{end}}
               <div class="field field-wide">
                 <span class="field-label" id="options-label" data-i18n="scan.options">执行选项</span>
                 <div class="option-list" role="group" aria-labelledby="options-label">
@@ -492,8 +446,6 @@
                         <select id="level" name="level">
                           <option value="reachable" selected data-i18n="scan.levelReachable">可达函数（默认）</option>
                           <option value="all" data-i18n="scan.levelAll">全部函数</option>
-                          <option value="codeql" data-i18n="scan.levelCodeQL">CodeQL 范围</option>
-                          <option value="exploitable" data-i18n="scan.levelExploitable">可利用性范围</option>
                         </select>
                         <div class="hint" data-i18n="scan.levelHint">决定哪些函数进入上下文和漏洞分析；可达级别通常更快。</div>
                       </div>
@@ -596,11 +548,18 @@
                           <small data-i18n="scan.llmReachabilityHintShort">复核整个代码库；费用随仓库规模增加。</small>
                           <div class="reachability-control">
                             <label for="llm_reachability_max_code_bytes" data-i18n="scan.llmReachabilityMaxCodeBytes">每个分析单元最多发送源码字节数</label>
-                            <div class="reachability-value disabled">
-                              <input type="number" id="llm_reachability_max_code_bytes" name="llm_reachability_max_code_bytes" value="1500" min="256" max="32768" step="256" disabled aria-describedby="llm-reachability-hint">
+                              <div class="reachability-value disabled">
+                              <select id="llm_reachability_max_code_bytes" name="llm_reachability_max_code_bytes" disabled aria-describedby="llm-reachability-hint">
+                                <option value="1024">1024</option>
+                                <option value="2048">2048</option>
+                                <option value="4096" selected>4096（推荐）</option>
+                                <option value="8192">8192</option>
+                                <option value="16384">16384</option>
+                                <option value="32768">32768</option>
+                              </select>
                               <span class="reachability-unit" data-i18n="scan.llmReachabilityBytesUnit">字节</span>
                             </div>
-                            <div class="hint" id="llm-reachability-hint" data-i18n="scan.llmReachabilityHint">默认关闭；建议先使用 1500，长函数可提高到 4096 或 8192。</div>
+                            <div class="hint" id="llm-reachability-hint" data-i18n="scan.llmReachabilityHint">默认关闭；启用后默认发送 4096 字节，长函数可提高到 8192 或 16384。</div>
                           </div>
                         </div>
                       </div>
@@ -629,86 +588,12 @@
                         <div>
                           <label for="clang_semantic">Clang 语义辅助调用图（--clang-semantic）</label>
                           <small>自动尝试复用 compile_commands.json、Ninja 编译数据库或 BUILD.gn 重建命令；重建得到的候选事实会保留其证据等级。</small>
-                          <div class="option-grid option-inline-grid">
-                            <div class="option-field">
-                              <label for="clang_max_files">最多翻译单元</label>
-                              <input type="number" id="clang_max_files" name="clang_max_files" value="128" min="1" max="10000" step="1">
-                            </div>
-                            <div class="option-field">
-                              <label for="clang_timeout_seconds">单文件超时（秒）</label>
-                              <input type="number" id="clang_timeout_seconds" name="clang_timeout_seconds" value="30" min="1" max="600" step="1">
-                            </div>
-                            <div class="option-field">
-                              <label for="clang_batch_size">批大小</label>
-                              <input type="number" id="clang_batch_size" name="clang_batch_size" value="16" min="1" max="256" step="1">
-                            </div>
-                            <div class="option-field">
-                              <label for="clang_dependency_retries">依赖重试次数</label>
-                              <input type="number" id="clang_dependency_retries" name="clang_dependency_retries" value="1" min="0" max="5" step="1">
-                            </div>
-                            <div class="option-field">
-                              <label for="clang_definition_load_max_files">定义加载上限</label>
-                              <input type="number" id="clang_definition_load_max_files" name="clang_definition_load_max_files" value="16" min="0" max="256" step="1">
-                            </div>
-                          </div>
+                          <div class="hint">启用后由系统使用默认的翻译单元上限、超时、批处理和依赖重试参数；如需调整，请通过命令行或配置文件设置。</div>
                         </div>
                       </div>
                     </div>
                   </section>
 
-                  <section class="option-section" aria-labelledby="runtime-options-title">
-                    <h3 class="option-section-title" id="runtime-options-title" data-i18n="scan.runtimeGroup">动态验证</h3>
-                    <p class="option-section-hint" data-i18n="scan.runtimeGroupHint">静态流水线完成后再运行；Claude Code 模式会在网页中等待交互。</p>
-                    <div class="option-toggle-grid">
-                      <div class="option-toggle option-toggle-wide">
-                        <input type="checkbox" id="dynamic_test" name="dynamic_test">
-                        <div>
-                          <label for="dynamic_test" data-i18n="scan.dynamic">动态测试：验证候选问题的运行时行为（--dynamic-test）</label>
-                          <div class="dynamic-mode-control">
-                            <label for="dynamic_test_mode" data-i18n="scan.dynamicMode">动态测试运行模式</label>
-                            <select id="dynamic_test_mode" name="dynamic_test_mode" disabled>
-                              <option value="docker" data-i18n="scan.dynamicDocker">Docker 隔离执行</option>
-                              <option value="claude-code" data-i18n="scan.dynamicClaude">Claude Code 交互工作台</option>
-                              <option value="openharmony-device" data-i18n="scan.dynamicOpenHarmonyDevice">OpenHarmony 真机 Agentic Loop</option>
-                            </select>
-                            <div class="hint" data-i18n="scan.dynamicModeHint">Claude Code 模式会在动态测试阶段暂停报告生成，在页面中打开对话和任务目录。</div>
-                            <div class="dynamic-device-fields" id="dynamic_device_fields" hidden>
-                              <label for="dynamic_device">开发板 serial</label>
-                              <input type="text" id="dynamic_device" name="dynamic_device" placeholder="例如 150100424a5444345209d945be14b900">
-                              <label for="dynamic_hdc">HDC 路径（可选）</label>
-                              <input type="text" id="dynamic_hdc" name="dynamic_hdc" placeholder="默认使用项目工具链或 PATH">
-                              <label for="dynamic_device_max_rounds">Agent 最大轮数</label>
-                              <input type="number" id="dynamic_device_max_rounds" name="dynamic_device_max_rounds" value="16" min="1" max="32">
-                              <label for="dynamic_device_max_commands">设备命令上限</label>
-                              <input type="number" id="dynamic_device_max_commands" name="dynamic_device_max_commands" value="512" min="1" max="1024">
-                              <label for="dynamic_device_timeout">单命令超时（秒）</label>
-                              <input type="number" id="dynamic_device_timeout" name="dynamic_device_timeout" value="30" min="1" max="300">
-                              <label for="dynamic_device_wall_timeout">总超时（秒）</label>
-                              <input type="number" id="dynamic_device_wall_timeout" name="dynamic_device_wall_timeout" value="1200" min="1" max="7200">
-                              <label for="dynamic_device_canary_path">安全 canary 根目录</label>
-                              <input type="text" id="dynamic_device_canary_path" name="dynamic_device_canary_path" value="/data/local/tmp/vulnfounder-canary">
-                              <label for="dynamic_device_carrier_root">受审查 HAP 载体目录（可选）</label>
-                              <input type="text" id="dynamic_device_carrier_root" name="dynamic_device_carrier_root" placeholder="例如 evaluation_dataset/.../hap_poc_suite/artifacts">
-                              <label for="dynamic_device_carrier_id">载体 finding ID（可选）</label>
-                              <input type="text" id="dynamic_device_carrier_id" name="dynamic_device_carrier_id" placeholder="例如 DP-02；为空时按候选 ID 查找">
-                              <label for="dynamic_device_carrier_bundle">载体 bundle</label>
-                              <input type="text" id="dynamic_device_carrier_bundle" name="dynamic_device_carrier_bundle" value="com.security.research.trigger">
-                              <label for="dynamic_device_carrier_ability">载体 Ability</label>
-                              <input type="text" id="dynamic_device_carrier_ability" name="dynamic_device_carrier_ability" value="EntryAbility">
-                              <label class="checkbox-inline" for="dynamic_device_allow_state_change">
-                                <input type="checkbox" id="dynamic_device_allow_state_change" name="dynamic_device_allow_state_change">
-                                允许设备状态改变（安装/启动/请求需人工授权）
-                              </label>
-                              <label class="checkbox-inline" for="dynamic_device_execute_carrier">
-                                <input type="checkbox" id="dynamic_device_execute_carrier" name="dynamic_device_execute_carrier">
-                                执行已审查 HAP 载体（必须同时允许状态改变）
-                              </label>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </section>
                 </div>
               </div>
             </div>
@@ -760,26 +645,23 @@ const translations = {
     'header.local': '仅本机访问',
     'header.localTitle': '服务只监听本机回环地址，不会暴露到局域网。',
     'header.exposureLocator': '暴露面识别与定位',
-    'header.socketScope': 'Socket 引导扫描',
     'language.label': '语言',
     'intro.body': '选择仓库和扫描范围。vulnfounder 会解析函数、构建上下文、调用模型分析，并保存每个阶段的可审阅产物。',
     'nav.title': '工作台导航',
     'nav.subtitle': '按阶段进入设备侦查、源码定位和扫描结果。',
     'nav.collapse': '收起全部',
     'nav.expand': '展开全部',
-    'nav.exposure.title': '阶段 1 · 设备暴露面',
-    'nav.exposure.assets': '设备 Socket 资产',
+    'nav.exposure.title': '阶段 1 · 设备暴露面发现',
+    'nav.exposure.assets': '设备 Socket 资产发现',
     'nav.exposure.locator': '暴露面识别与源码定位',
-    'nav.source.title': '阶段 2 · OpenHarmony 源码定位',
+    'nav.source.title': '阶段 2 · 暴露面识别与源码定位',
     'nav.source.locator': '源码定位会话',
-    'nav.source.scope': 'Socket 引导扫描',
     'nav.static.title': '阶段 3 · 静态扫描',
     'nav.static.new': '新建扫描',
     'nav.static.history': '最近扫描',
-    'nav.analysis.title': '阶段 4 · 验证与报告',
-    'nav.analysis.results': '扫描结果与阶段产物',
+    'nav.analysis.title': '阶段 4 · 动态测试',
     'nav.analysis.assets': '设备 Socket 资产历史',
-    'nav.analysis.history': '联合会话历史',
+    'nav.analysis.history': '暴露面识别与定位历史',
     'nav.analysis.dynamicRun': '动态测试执行',
     'nav.analysis.dynamicHistory': '动态测试历史',
     'nav.open': '进入',
@@ -801,17 +683,12 @@ const translations = {
     'scan.savedRepoHint': '可选择项目内 source_code_base 的仓库、已初始化项目或最近使用的仓库。',
     'scan.repoPath': '仓库 URL 或本地路径',
     'scan.repoPathHint': '选择已保存仓库后，此输入框会自动停用。',
-    'scan.scopeManifest': '已确认的 Socket 范围 manifest（可选）',
-    'scan.scopeManifestHint': '先在“Socket 引导扫描”中确认服务目录，再把 manifest 带入这里；不填写时保持全仓扫描。',
     'scan.languages': '扫描语言',
     'scan.languagesHint': '全部不选时扫描检测到的所有有效语言。主动限制语言可减少运行时间和模型费用。',
     'scan.platform': '目标平台',
     'scan.platformAuto': '自动检测',
     'scan.platformGeneric': '通用源码',
     'scan.platformHint': 'OpenHarmony 模式会启用平台感知的 C/C++ 解析，以及 IPC 和 System Ability 入口检测。',
-    'scan.llm': '大模型配置',
-    'scan.llmConfig': '本次扫描使用的模型配置',
-    'scan.llmConfigHint': '默认使用配置文件中的 default_llm；可在每次扫描时切换已登记配置。',
     'scan.legacyKeyHint': 'OpenAI 兼容接口请使用 vulnfounder setup llm 配置。此输入框只覆盖本次扫描的旧版 Anthropic 配置。',
     'scan.options': '执行选项',
     'scan.pipelineGroup': '流程范围与资源',
@@ -863,7 +740,7 @@ const translations = {
     'scan.llmReachabilityHintShort': '复核整个代码库；费用随仓库规模增加。',
     'scan.llmReachabilityMaxCodeBytes': '每个分析单元最多发送源码字节数',
     'scan.llmReachabilityBytesUnit': '字节',
-    'scan.llmReachabilityHint': '默认关闭；开启后会复核整个代码库，模型费用会随仓库规模增加。建议先使用 1500，长函数可提高到 4096 或 8192。',
+    'scan.llmReachabilityHint': '默认关闭；开启后会复核整个代码库，模型费用会随仓库规模增加。启用后默认使用 4096，可从下拉框选择其他合法值。',
     'scan.dynamic': '动态测试：验证候选问题的运行时行为（--dynamic-test）',
     'scan.dynamicMode': '动态测试运行模式',
     'scan.dynamicDocker': 'Docker 隔离执行',
@@ -891,6 +768,32 @@ const translations = {
     'recent.title': '最近扫描',
     'recent.subtitle': '继续查看运行状态、阶段产物和最终报告。',
     'recent.empty': '还没有扫描记录。请先在上方创建一次扫描。',
+    'repoManager.title': '仓库管理',
+    'repoManager.subtitle': '预览、上传和删除项目内 source_code_base 下的源码仓库。只管理一级子目录，不会操作目录外的文件。',
+    'repoManager.uploadHint': '上传 ZIP 后会先校验路径、符号链接和解压大小，再安全写入 source_code_base。已有同名仓库不会被覆盖。',
+    'repoManager.archiveLabel': '仓库 ZIP 文件',
+    'repoManager.nameLabel': '仓库名称（可选）',
+    'repoManager.namePlaceholder': '仓库名称（可选）',
+    'repoManager.upload': '上传 ZIP',
+    'repoManager.refresh': '刷新列表',
+    'repoManager.loading': '正在读取仓库列表...',
+    'repoManager.empty': 'source_code_base 下还没有可管理的仓库。',
+    'repoManager.files': '文件预览',
+    'repoManager.noFiles': '没有可展示的普通文件。',
+    'repoManager.filesMore': '仅展示前 60 个文件',
+    'repoManager.fileCount': '文件',
+    'repoManager.size': '大小',
+    'repoManager.updated': '更新时间',
+    'repoManager.scanReady': '可直接用于扫描',
+    'repoManager.scanNotReady': '缺少 Git 或上传标记',
+    'repoManager.delete': '删除仓库',
+    'repoManager.deleteConfirm': '确定删除仓库“{name}”及其中全部源码吗？此操作不可恢复。',
+    'repoManager.uploading': '正在上传并安全解压...',
+    'repoManager.uploaded': '仓库“{name}”已添加。',
+    'repoManager.deleted': '仓库“{name}”已删除。',
+    'repoManager.loadFailed': '读取仓库列表失败：{error}',
+    'repoManager.actionFailed': '操作失败：{error}',
+    'repoManager.confirmHint': '删除前请确认仓库没有被正在运行的扫描使用。',
     'action.copy': '复制',
     'action.copied': '已复制',
     'action.view': '查看',
@@ -916,26 +819,23 @@ const translations = {
     'header.local': 'Local access only',
     'header.localTitle': 'The server listens on loopback only and is not exposed to your local network.',
     'header.exposureLocator': 'Exposure and source location',
-    'header.socketScope': 'Socket-guided scan',
     'language.label': 'Language',
     'intro.body': 'Select a repository and scan scope. vulnfounder parses functions, builds context, runs model analysis, and preserves reviewable output for every stage.',
     'nav.title': 'Workspace navigation',
     'nav.subtitle': 'Move through device inspection, source location, and scan results by stage.',
     'nav.collapse': 'Collapse all',
     'nav.expand': 'Expand all',
-    'nav.exposure.title': 'Stage 1 · Device exposure',
+    'nav.exposure.title': 'Stage 1 · Device exposure discovery',
     'nav.exposure.assets': 'Device Socket assets',
     'nav.exposure.locator': 'Exposure and source location',
-    'nav.source.title': 'Stage 2 · OpenHarmony source location',
+    'nav.source.title': 'Stage 2 · Exposure & source location',
     'nav.source.locator': 'Source locator sessions',
-    'nav.source.scope': 'Socket-guided scan',
     'nav.static.title': 'Stage 3 · Static scanning',
     'nav.static.new': 'New scan',
     'nav.static.history': 'Recent scans',
-    'nav.analysis.title': 'Stage 4 · Verification and reports',
-    'nav.analysis.results': 'Scan results and stage artifacts',
+    'nav.analysis.title': 'Stage 4 · Dynamic testing',
     'nav.analysis.assets': 'Device Socket asset history',
-    'nav.analysis.history': 'Combined session history',
+    'nav.analysis.history': 'Exposure & source location history',
     'nav.analysis.dynamicRun': 'Dynamic test execution',
     'nav.analysis.dynamicHistory': 'Dynamic test history',
     'nav.open': 'Open',
@@ -957,17 +857,12 @@ const translations = {
     'scan.savedRepoHint': 'Choose a repository from source_code_base, an initialized project, or a recent repository.',
     'scan.repoPath': 'Repository URL or local path',
     'scan.repoPathHint': 'This field is disabled after a saved repository is selected.',
-    'scan.scopeManifest': 'Confirmed Socket scope manifest (optional)',
-    'scan.scopeManifestHint': 'Confirm a service directory in Socket-guided scan first, then bring its manifest here; leaving it empty keeps the full-repository baseline.',
     'scan.languages': 'Languages to scan',
     'scan.languagesHint': 'Leave all unchecked to scan every eligible detected language. Limiting languages reduces time and model cost.',
     'scan.platform': 'Target platform',
     'scan.platformAuto': 'Auto-detect',
     'scan.platformGeneric': 'Generic source',
     'scan.platformHint': 'OpenHarmony mode enables platform-aware C/C++ parsing and IPC/System Ability entry detection.',
-    'scan.llm': 'LLM configuration',
-    'scan.llmConfig': 'LLM configuration for this scan',
-    'scan.llmConfigHint': 'Uses default_llm from the configuration file by default; select any registered configuration for this run.',
     'scan.legacyKeyHint': 'Use vulnfounder setup llm for OpenAI-compatible endpoints. This field overrides legacy Anthropic configuration for this scan only.',
     'scan.options': 'Execution options',
     'scan.pipelineGroup': 'Scope and resources',
@@ -1019,7 +914,7 @@ const translations = {
     'scan.llmReachabilityHintShort': 'Reviews the whole repository; cost grows with repository size.',
     'scan.llmReachabilityMaxCodeBytes': 'Maximum source bytes sent per analysis unit',
     'scan.llmReachabilityBytesUnit': 'bytes',
-    'scan.llmReachabilityHint': 'Off by default. When enabled, the whole repository is reviewed and model cost grows with repository size. Start at 1500; use 4096 or 8192 for long handlers.',
+    'scan.llmReachabilityHint': 'Off by default. When enabled, the whole repository is reviewed and model cost grows with repository size. The default is 4096 bytes; choose another valid value from the selector if needed.',
     'scan.dynamic': 'Dynamic testing: observe candidate findings at runtime (--dynamic-test)',
     'scan.dynamicMode': 'Dynamic-test execution mode',
     'scan.dynamicDocker': 'Docker isolation',
@@ -1047,6 +942,32 @@ const translations = {
     'recent.title': 'Recent scans',
     'recent.subtitle': 'Continue to runtime status, stage artifacts, and final reports.',
     'recent.empty': 'No scans yet. Create a scan above to get started.',
+    'repoManager.title': 'Repository management',
+    'repoManager.subtitle': 'Preview, upload, and delete source repositories directly under source_code_base. Only first-level children are managed.',
+    'repoManager.uploadHint': 'ZIP uploads are checked for unsafe paths, symbolic links, and expansion limits before being committed. Existing names are never overwritten.',
+    'repoManager.archiveLabel': 'Repository ZIP file',
+    'repoManager.nameLabel': 'Repository name (optional)',
+    'repoManager.namePlaceholder': 'Repository name (optional)',
+    'repoManager.upload': 'Upload ZIP',
+    'repoManager.refresh': 'Refresh list',
+    'repoManager.loading': 'Loading repository list...',
+    'repoManager.empty': 'No managed repositories are present under source_code_base.',
+    'repoManager.files': 'File preview',
+    'repoManager.noFiles': 'No regular files to display.',
+    'repoManager.filesMore': 'Showing the first 60 files only',
+    'repoManager.fileCount': 'files',
+    'repoManager.size': 'size',
+    'repoManager.updated': 'updated',
+    'repoManager.scanReady': 'Ready for scanning',
+    'repoManager.scanNotReady': 'No Git or upload marker',
+    'repoManager.delete': 'Delete repository',
+    'repoManager.deleteConfirm': 'Delete repository “{name}” and all of its source files? This cannot be undone.',
+    'repoManager.uploading': 'Uploading and extracting safely...',
+    'repoManager.uploaded': 'Repository “{name}” was added.',
+    'repoManager.deleted': 'Repository “{name}” was deleted.',
+    'repoManager.loadFailed': 'Could not load repositories: {error}',
+    'repoManager.actionFailed': 'Operation failed: {error}',
+    'repoManager.confirmHint': 'Make sure no running scan is using this repository before deleting it.',
     'action.copy': 'Copy',
     'action.copied': 'Copied',
     'action.view': 'View',
@@ -1072,9 +993,6 @@ const languageSelect = document.getElementById('language-select');
 const repoChoice = document.getElementById('repo-choice');
 const repoIDInput = document.getElementById('repo_id');
 const repoInput = document.getElementById('repo');
-const dynamicTestCheckbox = document.getElementById('dynamic_test');
-const dynamicTestMode = document.getElementById('dynamic_test_mode');
-const dynamicDeviceFields = document.getElementById('dynamic_device_fields');
 const llmReachabilityCheckbox = document.getElementById('llm_reachability');
 const llmReachabilityMaxCodeBytes = document.getElementById('llm_reachability_max_code_bytes');
 const noEnhanceCheckbox = document.getElementById('no_enhance');
@@ -1167,6 +1085,9 @@ function applyLanguage(language) {
   document.querySelectorAll('[data-i18n-zh][data-i18n-en]').forEach(function(el) {
     el.textContent = currentLanguage === 'zh-CN' ? el.dataset.i18nZh : el.dataset.i18nEn;
   });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
   const localNote = document.querySelector('.local-note');
   if (localNote) localNote.title = t('header.localTitle');
   translateCredentials();
@@ -1192,7 +1113,6 @@ function prefillSourceLocatorHandoff() {
   const params = new URLSearchParams(window.location.search);
   const handoffRepo = params.get('source_locator_repo');
   const scopeRepo = params.get('repo');
-  const scopeManifest = params.get('scope_manifest');
   const selectedRepo = (handoffRepo || scopeRepo || '').trim();
   if (selectedRepo && selectedRepo.length <= 4096) {
     repoChoice.value = '';
@@ -1202,8 +1122,6 @@ function prefillSourceLocatorHandoff() {
     repoInput.value = selectedRepo;
     repoInput.focus();
   }
-  const scopeInput = document.getElementById('scope_manifest');
-  if (scopeInput && scopeManifest && scopeManifest.length <= 4096) scopeInput.value = scopeManifest;
 }
 
 if (languageSelect) {
@@ -1213,19 +1131,6 @@ if (languageSelect) {
   });
 }
 if (repoChoice) repoChoice.addEventListener('change', syncRepositoryChoice);
-
-function syncDynamicTestMode() {
-  if (!dynamicTestCheckbox || !dynamicTestMode) return;
-  dynamicTestMode.disabled = !dynamicTestCheckbox.checked;
-  dynamicTestMode.setAttribute('aria-disabled', String(!dynamicTestCheckbox.checked));
-  if (dynamicDeviceFields) {
-    const show = dynamicTestCheckbox.checked && dynamicTestMode.value === 'openharmony-device';
-    dynamicDeviceFields.hidden = !show;
-    dynamicDeviceFields.setAttribute('aria-hidden', String(!show));
-  }
-}
-if (dynamicTestCheckbox) dynamicTestCheckbox.addEventListener('change', syncDynamicTestMode);
-if (dynamicTestMode) dynamicTestMode.addEventListener('change', syncDynamicTestMode);
 
 function syncLLMReachability() {
   if (!llmReachabilityCheckbox || !llmReachabilityMaxCodeBytes) return;
@@ -1267,6 +1172,205 @@ function copyRepo(btn) {
   });
 }
 
+const repositoryArchive = document.getElementById('repository-archive');
+const repositoryName = document.getElementById('repository-name');
+const repositoryUploadButton = document.getElementById('repository-upload-button');
+const repositoryRefreshButton = document.getElementById('repository-refresh-button');
+const repositoryManagerStatus = document.getElementById('repository-manager-status');
+const repositoryManagerList = document.getElementById('repository-manager-list');
+
+function repositoryMessage(key, values) {
+  let value = t(key);
+  Object.keys(values || {}).forEach(function(name) {
+    value = value.replace('{' + name + '}', String(values[name]));
+  });
+  return value;
+}
+
+function setRepositoryStatus(message, kind) {
+  if (!repositoryManagerStatus) return;
+  repositoryManagerStatus.textContent = message || '';
+  repositoryManagerStatus.className = 'repository-manager-status' + (kind ? ' is-' + kind : '');
+}
+
+function formatRepositoryBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KiB';
+  if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MiB';
+  return (value / (1024 * 1024 * 1024)).toFixed(2) + ' GiB';
+}
+
+function renderRepositoryList(items) {
+  if (!repositoryManagerList) return;
+  repositoryManagerList.replaceChildren();
+  if (!items || items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'repository-empty';
+    empty.textContent = t('repoManager.empty');
+    repositoryManagerList.appendChild(empty);
+    return;
+  }
+  items.forEach(function(item) {
+    const card = document.createElement('article');
+    card.className = 'repository-card';
+
+    const header = document.createElement('div');
+    header.className = 'repository-card-header';
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('h3');
+    title.className = 'repository-card-title';
+    title.textContent = item.name || '';
+    const pathEl = document.createElement('div');
+    pathEl.className = 'repository-card-path';
+    pathEl.textContent = item.relative_path || '';
+    titleWrap.append(title, pathEl);
+    const state = document.createElement('span');
+    state.className = 'badge ' + (item.scan_available ? 'badge-done' : 'badge-running');
+    state.textContent = item.scan_available ? t('repoManager.scanReady') : t('repoManager.scanNotReady');
+    header.append(titleWrap, state);
+    card.appendChild(header);
+
+    const stats = document.createElement('div');
+    stats.className = 'repository-card-stats';
+    [[t('repoManager.fileCount'), String(item.file_count || 0)], [t('repoManager.size'), formatRepositoryBytes(item.total_bytes)], [t('repoManager.updated'), item.modified_at || '-']].forEach(function(pair) {
+      const span = document.createElement('span');
+      const strong = document.createElement('strong');
+      strong.textContent = pair[1];
+      span.append(strong, document.createTextNode(' ' + pair[0]));
+      stats.appendChild(span);
+    });
+    card.appendChild(stats);
+
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = t('repoManager.files') + '（' + String(item.file_count || 0) + '）';
+    details.appendChild(summary);
+    const files = document.createElement('ul');
+    files.className = 'repository-file-list';
+    (item.preview_files || []).forEach(function(file) {
+      const li = document.createElement('li');
+      li.textContent = file;
+      files.appendChild(li);
+    });
+    if (!(item.preview_files || []).length) {
+      const li = document.createElement('li');
+      li.textContent = t('repoManager.noFiles');
+      files.appendChild(li);
+    }
+    details.appendChild(files);
+    if (item.preview_limited) {
+      const limited = document.createElement('div');
+      limited.className = 'hint';
+      limited.textContent = t('repoManager.filesMore');
+      details.appendChild(limited);
+    }
+    card.appendChild(details);
+
+    const actions = document.createElement('div');
+    actions.className = 'repository-card-actions';
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'text-btn danger';
+    deleteButton.textContent = t('repoManager.delete');
+    deleteButton.addEventListener('click', function() { deleteManagedRepository(item.name, deleteButton); });
+    actions.appendChild(deleteButton);
+    card.appendChild(actions);
+    repositoryManagerList.appendChild(card);
+  });
+}
+
+async function repositoryJSON(response) {
+  let payload = {};
+  try { payload = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error(payload.error || ('HTTP ' + response.status));
+  return payload;
+}
+
+async function loadManagedRepositories() {
+  if (!repositoryManagerList) return;
+  const loading = document.createElement('div');
+  loading.className = 'repository-empty';
+  loading.textContent = t('repoManager.loading');
+  repositoryManagerList.replaceChildren(loading);
+  try {
+    const payload = await repositoryJSON(await fetch('/api/repositories', { headers: { 'Accept': 'application/json' } }));
+    renderRepositoryList(payload.repositories || []);
+    setRepositoryStatus('', '');
+  } catch (error) {
+    renderRepositoryList([]);
+    setRepositoryStatus(repositoryMessage('repoManager.loadFailed', { error: error.message || error }), 'error');
+  }
+}
+
+async function refreshRepositoryChoiceCatalog() {
+  if (!repoChoice) return;
+  try {
+    const payload = await repositoryJSON(await fetch('/repositories', { headers: { 'Accept': 'application/json' } }));
+    const selectedID = repoChoice.value;
+    while (repoChoice.options.length > 1) repoChoice.remove(1);
+    (payload.repositories || []).forEach(function(item) {
+      const option = document.createElement('option');
+      option.value = item.id || '';
+      option.textContent = item.label || '';
+      repoChoice.appendChild(option);
+    });
+    repoChoice.value = selectedID;
+    syncRepositoryChoice();
+  } catch (_) {
+    // The management card remains usable even if the scan catalog refresh is
+    // temporarily unavailable; the next page load will rebuild it.
+  }
+}
+
+async function uploadManagedRepository() {
+  if (!repositoryArchive || !repositoryArchive.files || !repositoryArchive.files[0]) {
+    setRepositoryStatus(t('repoManager.archiveLabel') + '：请选择 ZIP 文件', 'error');
+    return;
+  }
+  const form = new FormData();
+  form.append('archive', repositoryArchive.files[0]);
+  if (repositoryName && repositoryName.value.trim()) form.append('name', repositoryName.value.trim());
+  const csrf = document.querySelector('meta[name="csrf"]');
+  repositoryUploadButton.disabled = true;
+  setRepositoryStatus(t('repoManager.uploading'), '');
+  try {
+    const payload = await repositoryJSON(await fetch('/api/repositories', {
+      method: 'POST', body: form,
+      headers: { 'X-CSRF-Token': csrf ? csrf.content : '' }
+    }));
+    repositoryArchive.value = '';
+    if (repositoryName) repositoryName.value = '';
+    await loadManagedRepositories();
+    await refreshRepositoryChoiceCatalog();
+    setRepositoryStatus(repositoryMessage('repoManager.uploaded', { name: payload.repository && payload.repository.name }), 'success');
+  } catch (error) {
+    setRepositoryStatus(repositoryMessage('repoManager.actionFailed', { error: error.message || error }), 'error');
+  } finally {
+    repositoryUploadButton.disabled = false;
+  }
+}
+
+async function deleteManagedRepository(name, button) {
+  if (!window.confirm(repositoryMessage('repoManager.deleteConfirm', { name: name }) + '\n' + t('repoManager.confirmHint'))) return;
+  const csrf = document.querySelector('meta[name="csrf"]');
+  button.disabled = true;
+  try {
+    await repositoryJSON(await fetch('/api/repositories/' + encodeURIComponent(name), {
+      method: 'DELETE', headers: { 'X-CSRF-Token': csrf ? csrf.content : '' }
+    }));
+    await loadManagedRepositories();
+    await refreshRepositoryChoiceCatalog();
+    setRepositoryStatus(repositoryMessage('repoManager.deleted', { name: name }), 'success');
+  } catch (error) {
+    button.disabled = false;
+    setRepositoryStatus(repositoryMessage('repoManager.actionFailed', { error: error.message || error }), 'error');
+  }
+}
+
+if (repositoryUploadButton) repositoryUploadButton.addEventListener('click', uploadManagedRepository);
+if (repositoryRefreshButton) repositoryRefreshButton.addEventListener('click', loadManagedRepositories);
+
 function deleteScan(id) {
   if (!window.confirm(t('action.deleteConfirm'))) return;
   const csrf = document.querySelector('meta[name="csrf"]').content;
@@ -1287,15 +1391,13 @@ function deleteScan(id) {
   });
 }
 
-let preferredLanguage = 'zh-CN';
-try { preferredLanguage = localStorage.getItem('vulnfounder.ui.language') || localStorage.getItem('openant.ui.language') || 'zh-CN'; } catch (_) {}
-applyLanguage(preferredLanguage);
+applyLanguage('zh-CN');
 initStageNav();
-syncDynamicTestMode();
 syncLLMReachability();
 syncEnhanceMode();
 syncLanguageSelection();
 prefillSourceLocatorHandoff();
+loadManagedRepositories();
 </script>
 </body>
 </html>

@@ -31,7 +31,7 @@ from core.language_selection import (
     report_exclusions,
     select_languages,
 )
-from core.verdict_taxonomy import FINDING_VERDICT_ORDER
+from core.verdict_taxonomy import FINDING_VERDICT_ORDER, report_display_verdict
 from utilities.branding import first_env, setdefault_env
 from utilities.file_io import normalize_results, read_json
 
@@ -1547,7 +1547,7 @@ def cmd_source_locator_confirm(args):
 
     try:
         machine = _load_source_locator_machine(args)
-        machine.confirm(confirmation_id=args.confirmation_id)
+        machine.confirm(confirmation_id=args.confirmation_id, project_name=args.project_name)
         _output_json(success(_source_locator_payload(machine)))
         return 0
     except Exception as exc:
@@ -2046,10 +2046,11 @@ def cmd_report_data(args):
             # below is safe (mirrors the fa15 guard in core/reporter.py).
             for result in [r for r in experiment.get("results", []) if isinstance(r, dict)]:
                 route_key = result.get("route_key", "")
-                # Fall back to the raw ``verdict`` field when ``finding`` is
-                # absent, else finding-less vulnerable results are dropped from
-                # the count. Mirrors the canonical read in reporter.py.
-                verdict = str(result.get("finding") or result.get("verdict", "")).lower()
+                # Use the conservative display policy shared with the report
+                # layer.  In particular, a Stage-1 VULNERABLE record with an
+                # incomplete Stage-2 verification is a reportable *lead*, not
+                # a confirmed vulnerability in the HTML summary.
+                verdict = report_display_verdict(result)
                 file_path = route_key.rsplit(":", 1)[0] if ":" in route_key else route_key
                 unit = units_by_id.get(route_key, {})
                 llm_context = unit.get("llm_context") or {}
@@ -2165,6 +2166,8 @@ def cmd_report_data(args):
                 "total_files": total_files,
                 "vulnerable": verdict_counts.get("vulnerable", 0),
                 "bypassable": verdict_counts.get("bypassable", 0),
+                "inconclusive": verdict_counts.get("inconclusive", 0),
+                "errors": verdict_counts.get("error", 0),
                 "secure": verdict_counts.get("protected", 0) + verdict_counts.get("safe", 0),
             }
 
@@ -2388,7 +2391,22 @@ Format your response as HTML (use <h3>, <p>, <ul>, <li>, <strong> tags). Do not 
                 "diff": diff_block,
             }
 
-            ctx.summary = {"findings": len(findings), "actionable": len(actionable)}
+            report_vulnerable = sum(
+                1 for finding in findings
+                if finding.get("verdict") in ("vulnerable", "bypassable")
+            )
+            report_inconclusive = sum(
+                1 for finding in findings if finding.get("verdict") == "inconclusive"
+            )
+            ctx.summary = {
+                "findings": len(findings),
+                # ``actionable`` is retained for compatibility, but it means
+                # "has a remediation/review item" and must not be read as a
+                # confirmed-vulnerability count.
+                "actionable": len(actionable),
+                "vulnerable_reports": report_vulnerable,
+                "inconclusive_reports": report_inconclusive,
+            }
             print_chinese_log(
                 f"HTML 报告数据准备完成：可渲染问题={len(findings)}，可行动问题={len(actionable)}，"
                 "报告数据将通过标准 JSON envelope 返回给 Web 渲染器。",
@@ -3273,12 +3291,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sa_list = sa_sub.add_parser("list", help="列出历史扫描及可动态测试条目（只读）")
     sa_list.add_argument("--result-dir", default=None,
-                         help="聚合产物目录（evaluation_dataset/vulnerability/result）；"
+                         help="聚合产物目录（通常位于 <result-dir>/evaluation/vulnerability/result）；"
                               "--scan-id 模式下不需要")
     sa_list.add_argument("--scan-id", default=None,
-                         help="webui 扫描 ID（~/.openant/webui/<id>）；--webui-dir 配合使用")
+                         help="webui 扫描 ID（<data-dir>/webui/<id>）；--webui-dir 配合使用")
     sa_list.add_argument("--webui-dir", default=None,
-                         help="webui 根目录（缺省 ~/.vulnfounder/webui 或 ~/.openant/webui）")
+                         help="webui 根目录（缺省为项目 result/webui）")
     sa_list.add_argument("--round", type=int, default=None,
                          help="聚合产物模式：指定轮次列出该轮条目；缺省列出全部轮次摘要")
     sa_list.add_argument("--finding", choices=["vulnerable", "inconclusive"], default=None,
@@ -3369,6 +3387,7 @@ def build_parser() -> argparse.ArgumentParser:
     sl_confirm.add_argument("session_id")
     sl_confirm.add_argument("--root", required=True)
     sl_confirm.add_argument("--confirmation-id", default=None)
+    sl_confirm.add_argument("--project-name", default=None, help="从已解析候选中选择要拉取的仓库项目名")
     sl_confirm.set_defaults(func=cmd_source_locator_confirm)
 
     sl_select_version = sl_sub.add_parser(

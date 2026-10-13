@@ -12,7 +12,12 @@ libs/vulnfounder-core/parsers/go/go_parser/go_parser
 libs/vulnfounder-core/parsers/javascript/.vulnfounder-npm-install.lock
 libs/vulnfounder-core/parsers/javascript/.openant-npm-install.lock
 _docs/
-docs/
+/docs/*
+!/docs/DEPLOYMENT_GUIDE.zh-CN.md
+!/docs/VULNFOUNDER_RUNTIME_BUNDLE_AND_SETTINGS_PLAN.zh-CN.md
+!/docs/VULNFOUNDER_PROJECT_WORKFLOW.zh-CN.md
+!/docs/VULNFOUNDER_DEVELOPER_ARCHITECTURE.zh-CN.md
+!/docs/VULNFOUNDER_SOURCE_LEVEL_END_TO_END.zh-CN.md
 .worktrees/
 
 # Local-only scratch and generated artifacts (not part of the codebase)
@@ -20,16 +25,34 @@ docs/
 /bughunt-repros/
 
 # Local OpenHarmony dynamic-test toolchain and generated signing cache.
-# The toolchain remains physically inside VulnFounder for reproducible local runs,
-# but its multi-gigabyte binaries and private keystore must not be committed.
+# The project-local toolchain is physically kept under runtime/openharmony so a
+# copied delivery directory is self-contained. The multi-gigabyte,
+# platform-specific payload is ignored by the source Git checkout; release
+# packaging must include this directory (or an equivalent platform bundle).
 libs/vulnfounder-core/utilities/dynamic_tester/toolchains/
+assets/toolchains/
+# The platform tool payload is large and platform-specific, so it is excluded
+# from ordinary source commits while portable documentation and manifests stay
+# tracked.
+runtime/openharmony/*
+!runtime/openharmony/
+!runtime/openharmony/README.md
+!runtime/openharmony/manifest.example.json
+!runtime/openharmony/*/
+runtime/openharmony/*/*
+!runtime/openharmony/*/manifest.json
+config/hap_cert/*
+!config/hap_cert/README.md
 libs/vulnfounder-core/utilities/dynamic_tester/fixtures/hap_smoke_app/.hvigor-user-home/
 libs/vulnfounder-core/utilities/dynamic_tester/fixtures/hap_smoke_app/signing/*.p12
 
 # Local OpenHarmony repositories, evaluation checkouts and scan outputs.
 # These can be multi-gigabyte or contain device-specific/generated data and
 # should remain local rather than being uploaded with the application source.
+.hvigor/
 /source_code_base/
+/result/*
+!/result/.gitkeep
 /debug_outputs/
 /repro_outputs/
 /test_records/

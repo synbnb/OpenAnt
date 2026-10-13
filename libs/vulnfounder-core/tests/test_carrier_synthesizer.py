@@ -183,6 +183,8 @@ def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
     sdk.mkdir()
     cert_dir = tmp_path / "cert"
     cert_dir.mkdir()
+    for name in ("oh_release_chain.cer", "oh_profile8.p7b", "oh_release.p12"):
+        (cert_dir / name).write_bytes(b"test-signing-material")
     monkeypatch.setattr(hap, "_HVIGORW", hvigorw)
     monkeypatch.setattr(hap, "_NODE", node)
     monkeypatch.setattr(hap, "_SIGN_JAR", sign_jar)

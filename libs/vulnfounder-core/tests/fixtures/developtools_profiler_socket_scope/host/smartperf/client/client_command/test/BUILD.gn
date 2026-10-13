@@ -1,0 +1,143 @@
+# Copyright (C) 2021 Huawei Device Co., Ltd.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import("//build/test.gni")
+import("../../../../../build/config.gni")
+
+module_output_path = "${OHOS_PROFILER_TEST_MODULE_OUTPUT_PATH}/sp_daemon"
+config("module_private_config") {
+  visibility = [ ":*" ]
+}
+
+ohos_unittest("sp_daemon_ut") {
+  module_out_path = module_output_path
+  sources = [
+    "../AI_schedule.cpp",
+    "../ByTrace.cpp",
+    "../CPU.cpp",
+    "../Capture.cpp",
+    "../DDR.cpp",
+    "../Dubai.cpp",
+    "../FPS.cpp",
+    "../FileDescriptor.cpp",
+    "../GPU.cpp",
+    "../GameEvent.cpp",
+    "../GetLog.cpp",
+    "../GpuCounter.cpp",
+    "../GpuCounterCallback.cpp",
+    "../Network.cpp",
+    "../Power.cpp",
+    "../RAM.cpp",
+    "../Temperature.cpp",
+    "../Threads.cpp",
+    "../VisualEffectDisPatch.cpp",
+    "../control_call_cmd.cpp",
+    "../cpu_info.cpp",
+    "../editor_command.cpp",
+    "../effective.cpp",
+    "../heartbeat.cpp",
+    "../hiperf.cpp",
+    "../jitters.cpp",
+    "../lock_frequency.cpp",
+    "../navigation.cpp",
+    "../parse_click_complete_trace.cpp",
+    "../parse_click_response_trace.cpp",
+    "../parse_radar.cpp",
+    "../parse_slide_fps_trace.cpp",
+    "../sdk_data_recv.cpp",
+    "../service_plugin.cpp",
+    "../shader.cpp",
+    "../sp_log.cpp",
+    "../sp_profiler_factory.cpp",
+    "../sp_server_socket.cpp",
+    "../sp_task.cpp",
+    "../sp_thread_socket.cpp",
+    "../sp_utils.cpp",
+    "../stalling_rate_trace.cpp",
+    "../startup_delay.cpp",
+    "unittest/bytrace_test.cpp",
+    "unittest/AI_schedule_test.cpp",
+    "unittest/Capture_test.cpp",
+    "unittest/CPU_test.cpp",
+    "unittest/Network_test.cpp",
+    "unittest/Temperature_test.cpp",
+    "unittest/jitters_test.cpp",
+    "unittest/GPU_test.cpp",
+    "unittest/heartbeat_test.cpp",
+    "unittest/control_call_cmd_test.cpp",
+    "unittest/ddr_test.cpp",
+    "unittest/dubai_test.cpp",
+    "unittest/editor_command_test.cpp",
+    "unittest/fps_test.cpp",
+    "unittest/gpuCounter_test.cpp",
+    "unittest/navigation_test.cpp",
+    "unittest/parse_click_complete_trace_test.cpp",
+    "unittest/parse_radar_test.cpp",
+    "unittest/parse_slide_fps_trace_test.cpp",
+    "unittest/power_test.cpp",
+    "unittest/ram_test.cpp",
+    "unittest/sdk_data_recv_test.cpp",
+    "unittest/smartperf_main_test.cpp",
+    "unittest/sp_daemon_test.cpp",
+    "unittest/sp_server_socket_test.cpp",
+    "unittest/sp_task_test.cpp",
+    "unittest/sp_utils_test.cpp",
+    "unittest/stalling_rate_trace_test.cpp",
+    "unittest/startup_delay_test.cpp",
+    "unittest/threads_test.cpp",
+  ]
+  include_dirs = [
+    "${OHOS_PROFILER_DIR}/host/smartperf/client/client_command/include",
+  ]
+  deps = [
+    "${OHOS_PROFILER_DIR}/host/smartperf/client/client_command:SP_daemon",
+  ]
+  external_deps = [
+    "ability_base:want",
+    "bounds_checking_function:libsec_shared",
+    "c_utils:utils",
+    "common_event_service:cesfwk_innerkits",
+    "graphic_2d:librender_service_base",
+    "graphic_2d:librender_service_client",
+    "hilog:libhilog",
+    "hisysevent:libhisysevent",
+    "hiview:libucollection_utility",
+    "image_framework:image_native",
+    "init:libbegetutil",
+    "ipc:ipc_core",
+    "libpng:libpng",
+    "samgr:samgr_proxy",
+    "window_manager:libdm",
+    "window_manager:libwm",
+  ]
+
+  configs = [ "//build/config/compiler:exceptions" ]
+
+  subsystem_name = "${OHOS_PROFILER_SUBSYS_NAME}"
+  part_name = "${OHOS_PROFILER_PART_NAME}"
+
+  if (arkxtest_able) {
+    external_deps += [ "arkxtest:test_server_client" ]
+    defines = [ "ARKTEST_ENABLE" ]
+  }
+}
+
+group("unittest") {
+  testonly = true
+  deps = [ ":sp_daemon_ut" ]
+}
+
+group("fuzztest") {
+  testonly = true
+  deps = [ "fuzztest/spdaemon_fuzzer:fuzztest" ]
+}

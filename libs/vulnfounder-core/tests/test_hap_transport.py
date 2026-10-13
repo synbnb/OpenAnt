@@ -164,6 +164,11 @@ def test_build_escapes_shell_payload_before_arkts_render(monkeypatch, tmp_path):
     monkeypatch.setattr(hap, "_TEMPLATE_PROJECT", template_project)
     monkeypatch.setattr(hap, "_TEMPLATE_INDEX", template_index)
     monkeypatch.setattr(hap, "_HVIGORW", tmp_path / "hvigorw")
+    cert_dir = tmp_path / "certs"
+    cert_dir.mkdir()
+    for name in ("oh_release_chain.cer", "oh_profile8.p7b", "oh_release.p12"):
+        (cert_dir / name).write_bytes(b"fixture")
+    monkeypatch.setattr(hap, "CERT_DIR", cert_dir)
 
     class _Build:
         stdout = b""
@@ -171,7 +176,7 @@ def test_build_escapes_shell_payload_before_arkts_render(monkeypatch, tmp_path):
 
     monkeypatch.setattr(hap.subprocess, "run", lambda *args, **kwargs: _Build())
     transport = hap.HapTransport(object(), work_root=tmp_path / "out")
-    with pytest.raises(hap.TransportError, match="unsigned HAP"):
+    with pytest.raises(hap.TransportError, match="unsigned HAP|签名材料缺失"):
         transport.build(
             {
                 "target": "SAMPLE-001",

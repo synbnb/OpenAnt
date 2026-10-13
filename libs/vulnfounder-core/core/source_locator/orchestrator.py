@@ -146,8 +146,8 @@ class SourceLocatorOrchestrator:
 
     resume = run
 
-    def confirm(self, *, confirmation_id: str | None = None) -> LocatorSession:
-        return self.machine.confirm(confirmation_id=confirmation_id)
+    def confirm(self, *, confirmation_id: str | None = None, project_name: str | None = None) -> LocatorSession:
+        return self.machine.confirm(confirmation_id=confirmation_id, project_name=project_name)
 
     def reject(self, reason: str, **constraints: Any) -> LocatorSession:
         return self.machine.reject(reason, **constraints)

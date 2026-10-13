@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
 )
 
 var diffCmd = &cobra.Command{

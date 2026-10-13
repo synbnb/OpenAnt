@@ -1,283 +1,145 @@
-<p align="center">
-  <img src="assets/vulnfounder-black.png" alt="VulnFounder" width="180" />
-</p>
-
 # VulnFounder
 
-[VulnFounder](https://knostic.ai/openant) from [Knostic](https://knostic.ai) is an open source LLM-based vulnerability discovery product that helps defenders proactively find verified security flaws while minimizing both false positives and false negatives. Stage 1 detects. Stage 2 attacks. What survives is real.
+VulnFounder 是面向 OpenHarmony 及其他软件项目的证据驱动安全分析平台。它把设备
+暴露面发现、源码定位、静态分析、调用图与可达性分析、Stage 1/Stage 2 复核、动态
+验证和报告生成组织成可追踪的阶段流水线。每个阶段保存结构化产物、日志和证据，结论
+可以回溯到源码、设备观测或模型决策，而不是只保留一段不可复查的自然语言。
 
-We're pretty proud of this product and are in the vulnerability disclosure process for its findings, but do keep in mind that this started as a research project, and some of its features are still in beta. We welcome contributions to make it better.
+## 能做什么
 
-## Why open source?
+* 从已连接的 OpenHarmony 开发板发现 Unix socket、TCP/UDP 端点、进程、权限和
+  SELinux 信息；
+* 根据 socket 或端点在 OpenGrok 中定位服务端实现、入口函数、客户端边界和源码仓库；
+* 对 C/C++、Go、Python、JavaScript/TypeScript、PHP、Ruby、Rust、Swift、Zig 等代码
+  建立函数索引和调用关系；
+* 用严格入口准入、有效调用图、LLM 可达性和上下文增强缩小静态分析范围；
+* 生成包含漏洞说明、触发行、入口到触发点调用链、根因、修复建议和完整源码上下文的
+  中英文报告；
+* 对指定 finding 独立运行动态验证，生成 PoC/Exp、发送帧、设备日志和预言机结论。
 
-Considering the explosion of AI-discovered vulnerabilities, we hope VulnFounder will be the tool helping open source maintainers stay ahead of attackers, where they can use it themselves or submit their repo for scanning at no cost.
-
-Then, since Knostic's focus is on protecting agents and coding assistants and not vulnerability research or application security, and we like open source, we decided to release VulnFounder under the Apache 2 license.
-Besides, you may have heard about Aardvark from OpenAI (now Codex Security) and Claude Code Security from Anthropic, and we have zero intention of competing with them.
-
-## Technical details and free scanning for open source projects
-
-For technical details, limitations, and token costs, check out this blog post:
-[https://knostic.ai/blog/openant](https://knostic.ai/blog/openant)
-
-To submit your repo for scanning:
-[https://knostic.ai/blog/oss-scan](https://knostic.ai/blog/oss-scan)
-
-## Supported languages
-
-- Go
-- Python
-- JavaScript/TypeScript (beta)
-- C/C++ (beta)
-- PHP (beta)
-- Ruby (beta)
-- Zig (beta)
-- Swift (beta)
-- Rust (beta)
-
-## Credits
-
-Research and ideation: [Nahum Korda](https://github.com/NahumKorda/).
-
-Productization: [Alex Raihelgaus](https://github.com/ar7casper/), [Daniel Geyshis](https://github.com/dgeyshis).
-
-With thanks to: [Michal Kamensky](https://github.com/kamenskymic/), [Imri Goldberg](https://github.com/lorg), [Gadi Evron](https://github.com/gadievron/), Daniel Cuthbert. Josh Grossman, and Avi Douglen.
-
-## Check out Knostic
-
-**If you like our work**, check out what we do at [Knostic](https://knostic.ai) to defend your agents and coding assistants, prevent them from deleting your hard drive and code, and control associated supply chain risks such as MCP servers, extensions, and skills.
-
-## Local setup
-
-Build the CLI binary (requires Go 1.25+):
+## 快速开始
 
 ```bash
-cd apps/vulnfounder-cli && make build
+cd /path/to/VulnFounder
+cp config/vulnfounder/config.example.json config/vulnfounder/config.json
+chmod 600 config/vulnfounder/config.json
+
+cd apps/vulnfounder-cli
+make build
+./bin/vulnfounder serve --addr 127.0.0.1:18099
 ```
 
-This compiles the Go source and outputs the binary to `apps/vulnfounder-cli/bin/vulnfounder`.
+然后访问 <http://127.0.0.1:18099/>，在“设置”中选择模型配置、填写 OpenGrok 地址，
+并检查“运行环境诊断”。完整部署步骤见
+[部署与交接指南](docs/DEPLOYMENT_GUIDE.zh-CN.md)。
 
-Symlink it onto your PATH so you can run `vulnfounder` from anywhere:
+## Linux 交付与项目内运行时
+
+正式交付目标为 Linux x86_64。本次交付包不下载、不内置 Linux 版 OpenHarmony
+command-line-tools，只包含运行时清单和导入说明。Linux 部署方应准备匹配版本的
+工具包并放入：
+
+```text
+runtime/openharmony/linux-x64-6.1/
+```
+
+该目录应包含 HDC、Hvigor、Node、SDK 和 HAP 签名工具。也可以设置
+`VULNFOUNDER_DYNAMIC_TOOLCHAIN` 指向外部 Linux 工具目录。工作区中可能保留一份
+macOS arm64 验证包，但它不属于 Linux 交付物，不能跨平台复用。没有正式 HAP 证书时，系统会使用
+SDK 公开测试根材料，按当前 HDC serial 临时生成设备绑定的研究用 debug profile，
+无需用户手工寻找 p7b。它不等同于生产证书。
+
+Python、Java、Go 和系统库仍由 Linux 主机提供，设置页会诊断这些依赖。不要把本机
+API Key、正式 P12、`config.json` 或
+`result/` 放入公开仓库。
+
+## Web 工作台流程
+
+```mermaid
+flowchart LR
+    A[设置] --> B[设备暴露面发现]
+    B --> C[暴露面识别与源码定位]
+    C --> D[静态扫描]
+    D --> E[漏洞报告]
+    E --> F[独立动态测试]
+```
+
+各阶段可以单独运行。设备资产历史、源码定位历史、扫描历史和动态测试历史都保存
+在项目数据目录，页面支持查看中间证据和最终产物。
+
+## CLI 常用命令
 
 ```bash
-ln -sf "$(pwd)/apps/vulnfounder-cli/bin/vulnfounder" /usr/local/bin/vulnfounder
+# 解析仓库
+./apps/vulnfounder-cli/bin/vulnfounder parse source_code_base/<repo>
+
+# 完整静态流程，先跳过动态测试
+./apps/vulnfounder-cli/bin/vulnfounder scan source_code_base/<repo> \
+  --level reachable --skip-dynamic-test
+
+# 分阶段执行
+./apps/vulnfounder-cli/bin/vulnfounder enhance
+./apps/vulnfounder-cli/bin/vulnfounder analyze
+./apps/vulnfounder-cli/bin/vulnfounder verify
+./apps/vulnfounder-cli/bin/vulnfounder report -f summary
+
+# 独立动态测试（需要已有 pipeline_output.json）
+./apps/vulnfounder-cli/bin/vulnfounder dynamic-test \
+  path/to/pipeline_output.json --mode openharmony-device --device <serial>
 ```
 
-_Note: run this from the repo root so `$(pwd)` resolves to the correct absolute path._
+动态测试的设备状态变更、载体执行和安装操作必须显式授权；默认使用受限命令和
+canary 路径。
 
-`openant` remains available as a compatibility binary and Python module for
-existing automation. New scripts should use `vulnfounder`, the
-`vulnfounder-*` configuration/data paths, and the `VULNFOUNDER_*` environment
-variables; legacy `OPENANT_*` variables and paths are read as fallbacks.
+## 配置与安全
 
-### Setting up an LLM
+配置文件：
 
-VulnFounder routes each pipeline phase through a configurable (provider, model) pair. The fastest path is the interactive wizard:
+* `config/vulnfounder/config.example.json`：可提交的安全模板；
+* `config/vulnfounder/config.json`：本机配置，建议权限 `0600`；
+* `config/hap_cert/`：正式证书导入目录，私钥建议权限 `0600`。
+
+重要环境变量：
+
+| 变量 | 作用 |
+|---|---|
+| `VULNFOUNDER_PROJECT_ROOT` | 项目根目录 |
+| `VULNFOUNDER_DATA_DIR` | 运行产物根目录 |
+| `VULNFOUNDER_CONFIG_FILE` | 受保护配置文件 |
+| `VULNFOUNDER_PYTHON` | Python 可执行文件 |
+| `VULNFOUNDER_HDC` | HDC 可执行文件 |
+| `VULNFOUNDER_DYNAMIC_TOOLCHAIN` | OpenHarmony 工具链根目录 |
+| `VULNFOUNDER_HAP_CERT_DIR` | HAP 证书目录 |
+
+OpenGrok 地址必须是 HTTPS，页面只保存令牌环境变量名；模型和签名私钥不会在日志、
+报告或页面中回显。源码仓库、扫描结果和设备数据应按使用方权限单独保护。
+
+## 开发与测试
 
 ```bash
-vulnfounder setup llm
+# Go Web/CLI
+cd apps/vulnfounder-cli
+go test ./...
+make build
+
+# Python 核心
+cd ../..
+PYTHONPATH=libs/vulnfounder-core \
+  result/venv/bin/python -m pytest -q libs/vulnfounder-core/tests
 ```
 
-You name the config (e.g. `my-llm`), pick a provider per pipeline phase (any of the shipped adapters below), enter its API key once per provider (Bedrock uses the AWS credential chain instead — leave the key blank), and the wizard probes each unique provider+model pair with a 1-token request before writing the resolved VulnFounder config file (project-local `config/vulnfounder/config.json` in a checkout). Run a scan against it with `--llm-config`:
+大型 OpenHarmony 源码仓库可能包含自己的测试依赖；测试 VulnFounder 时应使用上面
+指定的项目测试路径，不要把被扫描仓库的测试错误当作产品测试失败。
 
-```bash
-vulnfounder scan /path/to/repo --llm-config my-llm
-```
+## 文档索引
 
-Wizard defaults reflect the project's per-phase recommendations (stronger reasoning models for detection / verification / reachability review; lighter models for context, report, and test generation) — override any answer to taste.
+* [部署与交接指南](docs/DEPLOYMENT_GUIDE.zh-CN.md)
+* [项目全流程说明](docs/VULNFOUNDER_PROJECT_WORKFLOW.zh-CN.md)
+* [开发者架构说明](docs/VULNFOUNDER_DEVELOPER_ARCHITECTURE.zh-CN.md)
+* [运行时与设置说明](docs/VULNFOUNDER_RUNTIME_BUNDLE_AND_SETTINGS_PLAN.zh-CN.md)
+* [OpenHarmony 工具包说明](runtime/openharmony/README.md)
+* [HAP 签名材料说明](config/hap_cert/README.md)
 
-#### Shipped adapters
+## 许可证
 
-| Provider type | API key from | Notes |
-|---|---|---|
-| `anthropic` | [console.anthropic.com](https://console.anthropic.com/settings/keys) | Reference adapter. NOT included in Claude Pro / Max subscriptions — separate billing. |
-| `openai` | [platform.openai.com](https://platform.openai.com/api-keys) | NOT included in ChatGPT / Codex subscriptions — separate billing. |
-| `google` | [aistudio.google.com](https://aistudio.google.com/apikey) | NOT included in Gemini Advanced — separate billing. |
-| `bedrock` | — (AWS credential chain) | Claude on AWS Bedrock. No `api_key`: credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars or a `~/.aws` profile, region from `AWS_REGION`. Model IDs are inference profiles (`us.anthropic.claude-sonnet-4-6`, `global.anthropic.claude-haiku-4-5-20251001-v1:0`, ...) — enable them under "Model access" in the Bedrock console and list them with `aws bedrock list-inference-profiles`. Offered by `vulnfounder setup llm` (leave the API key blank — AWS credential chain, probe skipped) — full guide: [`utilities/llm/providers/BEDROCK.md`](libs/vulnfounder-core/utilities/llm/providers/BEDROCK.md). |
-| `openrouter` | [openrouter.ai](https://openrouter.ai/settings/keys) | Gateway to many providers with one key and one prepaid balance (also reads `OPENROUTER_API_KEY`). Model IDs are `vendor/model` slugs (`anthropic/claude-sonnet-4.6`, `openai/gpt-4o-mini`, ...) — browse them at [openrouter.ai/models](https://openrouter.ai/models). Offered by `vulnfounder setup llm` (leave the base URL blank for the OpenRouter default) — full guide: [`utilities/llm/providers/OPENROUTER.md`](libs/vulnfounder-core/utilities/llm/providers/OPENROUTER.md). |
-
-All four support tool calling, so any of them can drive the `enhance` and `verify` phases that use the agentic tool-use loop.
-
-#### Quick path for Anthropic-only setups
-
-If you want today's per-phase Claude defaults and nothing else, skip the wizard:
-
-```bash
-vulnfounder set-api-key sk-ant-...
-vulnfounder scan /path/to/repo
-```
-
-This uses the built-in `vulnfounder-default` config (compiled into the binary, no `config.json` needed) — Claude Opus 4.6 for detection phases, Sonnet 4 for the rest.
-
-#### Hand-authored config
-
-The wizard writes the resolved VulnFounder config file for you (project-local `config/vulnfounder/config.json` in a checkout), but you can edit it directly too. Every llm-config must list all seven pipeline phases:
-
-```json
-{
-  "$schema_version": 2,
-  "default_llm": "my-llm",
-  "llm_providers": {
-    "anthropic": {"type": "anthropic", "api_key": "sk-ant-..."},
-    "openai":    {"type": "openai",    "api_key": "sk-proj-..."},
-    "google":    {"type": "google",    "api_key": "AIza..."}
-  },
-  "llm_configs": {
-    "my-llm": {
-      "app_context":  {"provider": "openai",    "model": "gpt-4o-mini"},
-      "llm_reach":    {"provider": "anthropic", "model": "claude-opus-4-6"},
-      "enhance":      {"provider": "openai",    "model": "gpt-4o-mini"},
-      "analyze":      {"provider": "anthropic", "model": "claude-opus-4-6"},
-      "verify":       {"provider": "anthropic", "model": "claude-opus-4-6"},
-      "dynamic_test": {"provider": "google",    "model": "gemini-2.0-flash"},
-      "report":       {"provider": "google",    "model": "gemini-2.0-flash"}
-    }
-  }
-}
-```
-
-Providers accept a custom `base_url` for OpenAI-compatible / Anthropic-compatible proxies (vLLM, Bedrock, internal gateways); OpenRouter has its own first-class `openrouter` provider type. The `vulnfounder-default` config (Claude across all phases) is built in and always available regardless of file contents.
-
-#### Adding a new provider adapter
-
-VulnFounder's adapter layer is a small Python recipe — one Python file implementing the `LLMAdapter` Protocol, one factory for the contract-test harness, plus a registry entry — and that alone is enough to run the adapter from a hand-authored config. To also have it offered by the `vulnfounder setup llm` wizard and pass its pre-save probe, add a few Go touch-points in `apps/vulnfounder-cli/cmd/setup.go` (the supported-provider list, a probe `case`, the per-phase default-model maps) plus a Go probe function. The 12 contract tests run automatically against your adapter once it's wired in. Provider-specific examples are in [`libs/vulnfounder-core/utilities/llm/providers/`](libs/vulnfounder-core/utilities/llm/providers/).
-
-### Python runtime
-
-VulnFounder's parsing, enhancement, analysis, and reporting code is Python 3.11+. The Go CLI picks an interpreter in this order:
-
-1. `VULNFOUNDER_PYTHON` env var (the legacy `OPENANT_PYTHON` alias is also accepted; set either to pin a specific interpreter — e.g. `VULNFOUNDER_PYTHON=python3.11`).
-2. Managed venv at `~/.vulnfounder/venv/` (auto-created on first use). The CLI uses `bin/python` on Linux/macOS and `Scripts\python.exe` on Windows.
-3. `python3` / `python` on `PATH`.
-
-If none yield Python 3.11+, the command exits with an error pointing at [python.org](https://www.python.org/downloads/). To rebuild a stale managed venv (e.g. after upgrading Python), delete `~/.vulnfounder/venv/` and rerun any `vulnfounder` command.
-
-## Data directories
-
-VulnFounder creates two directories:
-
-- **`config/vulnfounder/`** — project-local CLI configuration (`config.json`). The real file is ignored by Git and must remain `0600`; `config.example.json` is the safe delivery template. `VULNFOUNDER_CONFIG_FILE` can override the path explicitly; `OPENANT_CONFIG_FILE` remains a legacy alias.
-- **`~/.config/vulnfounder/`** — user configuration for installations outside a VulnFounder checkout. Existing `~/.config/openant/` files remain a migration fallback.
-- **`~/.vulnfounder/`** — project data. Each initialized project gets a workspace under `~/.vulnfounder/projects/<org>/<repo>/` containing `project.json` and a `scans/` directory with per-commit outputs. Existing `~/.openant/` data is reused when no new directory exists.
-
-## Analyzing a project
-
-### 1. Initialize
-
-Point VulnFounder at a repository. The `-l` flag (language) is required — use `go` or `python`.
-
-```bash
-# Remote — clones the repo
-vulnfounder init <repo-url> -l go
-
-# Remote — pin to a specific commit
-vulnfounder init <repo-url> -l go --commit <sha>
-
-# Local — references the directory in-place
-vulnfounder init <path-to-repo> -l go --name <org/repo>
-```
-
-This creates a project workspace and sets it as the active project. All subsequent commands operate on the active project automatically — no path arguments needed.
-
-### 2. Run the pipeline
-
-Each step picks up the output of the previous one from the project's scan directory:
-
-```bash
-vulnfounder parse
-vulnfounder enhance
-vulnfounder analyze
-vulnfounder verify
-vulnfounder build-output
-vulnfounder report -f summary
-```
-
-Or run the full pipeline in one command:
-
-```bash
-vulnfounder scan --verify
-```
-
-### Web UI
-
-`vulnfounder serve` starts a local web UI over the same scan pipeline: submit a
-repository URL or local path, watch the scan logs stream live, and read the HTML
-report, markdown summary, and disclosures — all from the browser.
-
-```bash
-vulnfounder serve                       # http://127.0.0.1:8080, opens your browser
-vulnfounder serve --addr 127.0.0.1:9000 # choose a port
-```
-
-The server binds to loopback only (it refuses any non-loopback `--addr`) and is
-intended for local single-user use. Scan outputs persist under
-`~/.vulnfounder/webui/` across restarts. Analysis still sends source code to your
-configured LLM provider, the same as the CLI.
-
-### Incremental and diff-based scans
-
-For repositories where a full scan is too slow or expensive, VulnFounder can
-restrict the pipeline to units whose bodies overlap a git diff hunk:
-
-```bash
-vulnfounder scan --diff-base origin/main          # diff vs a ref
-vulnfounder scan --pr 123                         # diff vs the base of a GitHub PR
-vulnfounder scan --staged                         # diff vs HEAD using the staged index
-vulnfounder scan --incremental                    # diff vs the last successful scan
-```
-
-`--staged` reads `git diff --cached` and is intended for pre-commit hooks or
-local "scan what I'm about to commit" runs. The base is HEAD; the head is the
-index, so files staged with `git add` are scanned and worktree-only edits are
-not.
-
-The shorter `vulnfounder diff` form takes the same flags, e.g.:
-
-```bash
-vulnfounder diff --staged --skip-dynamic-test
-```
-
-### Working with multiple projects
-
-The pipeline operates on one project at a time. Running `vulnfounder init` sets the newly initialized project as the active one, so all subsequent commands target it by default.
-
-If you're working with several projects, you have two options:
-
-```bash
-# Option 1: switch the active project
-vulnfounder project switch org/repo
-vulnfounder parse
-
-# Option 2: target a project directly with -p
-vulnfounder parse -p org/repo
-```
-
-### Project management
-
-```bash
-vulnfounder project list              # shows all projects, marks active
-vulnfounder project show              # details of active project
-vulnfounder project switch <org/repo> # switch active project
-```
-
-## Roadmap
-
-Things on the list, in no particular order:
-
-- **More provider adapters.** Ollama (local models), vLLM, Cohere, Mistral, Groq, Azure OpenAI — each is a small Python adapter recipe (plus a few Go wizard/probe touch-points if you want it offered by `vulnfounder setup llm`) per the contributor guide. Lower the barrier to local / on-prem inference.
-- **Subscription-based auth.** ChatGPT / Codex, Claude Pro / Max, and Gemini Advanced subscriptions don't currently grant API quota — users have to maintain a separate API-tier key per provider. OAuth-based adapters that ride the consumer subscription would close that gap.
-- **Cross-provider tool-call quirks.** All three shipped adapters support tool calling, but the long tail (parallel tool calls, strict-mode schema enforcement, retry semantics on partial JSON) behaves differently per provider. Real-world scans surface these — PRs welcome.
-- **More languages.** The supported-languages list above is current coverage. Java and C# come up frequently.
-- **Hosted scan service.** Knostic offers free scans for OSS projects today via the form linked above; a self-serve API for trusted partners is a future possibility.
-
-PRs welcome on any of these — open an issue first if the scope is non-trivial so we can align before you build.
-
-## LICENSE
-
-This project is licensed under Apache 2. See the LICENSE file for details.
-
-## Disclaimer and legal notice
-
-This project is intended for defensive and research purposes only. VulnFounder is still in the research phase, use it carefully and at your own risk. Knostic, VulnFounder, and associated developers, researchers, and maintainers assume no responsibility whatsoever for any misuse, damage, or consequences arising from the use of this tool.
-
-Only scan code you own or have explicit permission to test. If you discover a vulnerability in someone else's project through legitimate means, please follow coordinated vulnerability disclosure practices and report it to the maintainers before making it public.
+本项目沿用仓库中的许可证和第三方依赖许可说明。

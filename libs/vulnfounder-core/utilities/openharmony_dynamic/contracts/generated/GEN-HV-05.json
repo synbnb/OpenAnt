@@ -1,0 +1,116 @@
+{
+  "schema_version": "vf.ohos.dynamic.contract.v2",
+  "contract_id": "GEN-HV-05",
+  "finding_ids": [
+    "HV-05"
+  ],
+  "unit_id": "hiviewdfx_hiview_hv05",
+  "vuln_class": "path_traversal",
+  "description": "cpuFile 缺少路径校验，攻击者可通过 freeze 事件控制路径读取并删除任意文件，且内容会被写入诊断日志。",
+  "entry": {
+    "kind": "unix_dgram",
+    "endpoint": "/dev/unix/socket/hisysevent",
+    "reachability_identity": "root_su",
+    "evidence": ""
+  },
+  "identity": {
+    "execution_identity": "root_su",
+    "identity_ladder_fallback": "root_su",
+    "max_evidence_grade": "C",
+    "drop_privs": null
+  },
+  "protocol": {
+    "descriptor_id": "hisysevent_eventraw",
+    "field_values": {
+      "domain": "GRAPHIC",
+      "stringid": "NO_DRAW",
+      "type": 1,
+      "PID": 1234,
+      "UID": 5523,
+      "PACKAGE_NAME": "com.example.victim",
+      "PROCESS_NAME": "com.example.victim",
+      "info_": "logPath:__STACK_FILE__",
+      "FREEZE_INFO_PATH": "__STACK_FILE__,__CPU_FILE__"
+    },
+    "frame_sequence": [],
+    "inter_frame_delay_seconds": 0.3,
+    "param_space": {
+      "src_file_dir": "/data/log/eventlog",
+      "preplant": [
+        "__STACK_FILE__"
+      ],
+      "effect_window_seconds": 15,
+      "note": "FREEZE_INFO_PATH 使用逗号分隔的 stack,cpu 双路径；info_ 通过 logPath 引用 stack 文件。stack 文件需预先存在，cpu 文件写入 __RUN_PATTERN__。源码确认 stack 路径还需通过 CheckFreezePathTraversal、PathToRealPath 及 expectedPrefix 校验；GetCpuInfo 的路径守卫与 finding 的任意路径穿越描述存在冲突，设备侧结果需以运行时观察为准。总长字段必须正确，SCM_CREDENTIALS 要求报文头 uid/pid 与真实凭据匹配；发送器支持设备侧凭据回填。"
+    }
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "以 FREEZE_INFO_PATH 携带 stack,cpu 双路径，观察 GetAppFreezeFile 读取、删除 cpu 文件及 SaveFreezeExtInfoToFile 写入 freeze_ext 的行为。源码链路中 FREEZE_INFO_PATH 映射到 params.freezeExtFile；cpu sink 为 GetAppFreezeFile，输出 sink 为 freeze_ext。",
+    "evidence": "freeze_manager.cpp:177-189 读取 filePath；延迟删除分支 191-195 调用 RemoveFile；源码事实库记录 GetCpuInfo 对 cpuFile 执行路径守卫；freeze_detector_plugin.cpp:155 将 FREEZE_INFO_PATH 映射到 params.freezeExtFile",
+    "expected_guards": [
+      "scm_credential_match",
+      "total_length_check",
+      "freeze_rule_window",
+      "stack_path_traversal_and_realpath_prefix",
+      "cpu_path_traversal_guard"
+    ]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "exfil",
+        "path": "__CPU_FILE__",
+        "content_contains": "__RUN_PATTERN__",
+        "output_surface": "/data/log/faultlog/freeze_ext",
+        "output_is_dir": true
+      },
+      {
+        "form": "delete",
+        "path": "__CPU_FILE__",
+        "content_contains": "",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [
+      {
+      "kind": "hilog_expectation",
+      "required": true,
+        "tag": "C02d01/FreezeDetector",
+        "pattern": "SaveFreezeExtInfoToFile: create freezeExt file=(\\S+) success",
+        "window": {
+          "from": "send",
+          "seconds": 20
+        },
+        "min_count": 1,
+        "capture_groups": [
+          "out"
+        ]
+      }
+    ],
+    "pattern_key": "run_pattern",
+    "refutation": [
+      "run_pattern_bound",
+      "baseline_absent",
+      "source_file_planted_by_run"
+    ],
+    "evidence": "若链路成立，cpu 文件内容应出现在 freeze_ext 输出面且源文件被删除；若路径守卫生效，则应无对应输出或删除。tag/pattern 为源码与既有事实库结论，设备侧本轮未复核。"
+  },
+  "risk": {
+    "target_process": "GetAppFreezeFile",
+    "risk_tier": "unknown",
+    "crash_oracle_allowed": false,
+    "restartable": false,
+    "rationale": ""
+  },
+  "cleanup": {
+    "remote_paths": [
+      "__RUN_DIR__"
+    ],
+    "restore_actions": [],
+    "verify": []
+  },
+  "compile_status": "ELIGIBLE",
+  "limitations": []
+}

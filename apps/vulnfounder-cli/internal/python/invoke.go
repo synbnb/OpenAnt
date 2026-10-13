@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types"
+	"vulnfounder/apps/vulnfounder-cli/internal/types"
 )
 
 // defaultInvokeTimeout bounds how long Invoke will wait on the Python

@@ -124,6 +124,7 @@ if (item == nullptr) return ERR_INVALID_VALUE;
 		"repository": map[string]any{"name": "fixture", "release_version": "OpenHarmony-6.1"},
 		"findings": []any{map[string]any{
 			"cwe_id": 476, "cwe_name": "NULL Pointer Dereference",
+			"stage1_verdict": "vulnerable", "stage2_verdict": "unverified", "review_status": "needs_review",
 			"location":      map[string]any{"file": "services/service.cpp", "function": "Service::Handle", "start_line": 40, "end_line": 48},
 			"suggested_fix": "if (item == nullptr) return ERR_INVALID_VALUE;",
 			"report_context": map[string]any{
@@ -173,6 +174,9 @@ if (item == nullptr) return ERR_INVALID_VALUE;
 	}
 	if info.AffectedVersion != "OpenHarmony-6.1" || info.RepairStatus != "generated" {
 		t.Fatalf("revision/repair metadata = %#v", info)
+	}
+	if info.Classification != "inconclusive" || info.Stage1Verdict != "vulnerable" || info.Stage2Verdict != "unverified" || info.ReviewStatus != "needs_review" {
+		t.Fatalf("classification metadata = %#v", info)
 	}
 	if !info.ContextAvailable || info.SourceToSink == "" || info.CallChainCount != 2 || len(info.CallChain) != 2 {
 		t.Fatalf("context metadata = %#v", info)

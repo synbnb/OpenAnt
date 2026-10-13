@@ -20,6 +20,7 @@ from pathlib import Path
 from core.verdict_taxonomy import DYNAMIC_TESTABLE
 from utilities.branding import first_env
 from utilities.file_io import normalize_results, read_json, write_json
+from utilities.openharmony_dynamic.toolchain import toolchain_root
 
 
 TASK_SCHEMA_VERSION = "openant.claude-code.dynamic.v1"
@@ -206,11 +207,9 @@ def _toolchain_root() -> Path:
     override = first_env("VULNFOUNDER_DYNAMIC_TOOLCHAIN", "OPENANT_DYNAMIC_TOOLCHAIN")
     if override:
         return Path(override).expanduser().resolve()
-    return (
-        _project_root()
-        / "libs/vulnfounder-core/utilities/dynamic_tester/toolchains"
-        / "commandline-tools-mac-arm64-6.1.0.860/command-line-tools"
-    )
+    # 工具链不再作为隐藏的开发机目录依赖。若交付包携带可选工具链，约定
+    # 放在项目 assets/toolchains；否则由 PATH 或显式环境变量提供。
+    return toolchain_root()
 
 
 def _build_public_tool_library(destination: Path) -> dict:

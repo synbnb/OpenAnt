@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>VulnFounder · 设备 Socket 资产历史</title>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+  <style>
+    body.asset-history-page { background: var(--oa-canvas); }
+    .asset-history-shell { width: min(1220px, 100%); margin: 0 auto; padding: 2rem clamp(1rem, 4vw, 3.25rem) 4rem; }
+    .asset-history-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; margin-bottom:1.2rem; }
+    .asset-history-kicker { color:var(--oa-accent); font-size:.72rem; font-weight:850; letter-spacing:.14em; text-transform:uppercase; }
+    .asset-history-hero h1 { margin:.45rem 0 0; color:var(--oa-ink); font-size:clamp(1.7rem,3.4vw,2.55rem); letter-spacing:-.04em; }
+    .asset-history-hero p { max-width:700px; margin:.55rem 0 0; color:var(--oa-ink-soft); line-height:1.7; font-size:.88rem; }
+    .asset-history-refresh { border:1px solid #b4cdd1; border-radius:.5rem; background:var(--oa-surface); color:var(--oa-accent); padding:.58rem .82rem; font:inherit; font-size:.78rem; font-weight:800; cursor:pointer; white-space:nowrap; }
+    .asset-history-refresh:hover { border-color:var(--oa-accent); background:var(--oa-accent-soft); }
+    .asset-history-grid { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr); gap:1rem; }
+    .asset-history-card { min-width:0; border:1px solid var(--oa-line); border-radius:var(--oa-radius-md); background:var(--oa-surface); box-shadow:var(--oa-shadow); }
+    .asset-history-card-head { padding:1.15rem 1.2rem .85rem; border-bottom:1px solid var(--oa-line); }
+    .asset-history-card-head h2 { margin:0; color:var(--oa-ink); font-size:1.02rem; }
+    .asset-history-card-head p { margin:.35rem 0 0; color:var(--oa-ink-soft); font-size:.76rem; line-height:1.5; }
+    .asset-history-list { display:grid; gap:0; padding:.35rem .7rem .7rem; }
+    .asset-history-row { display:flex; align-items:flex-start; justify-content:space-between; gap:.8rem; padding:.82rem .5rem; border-top:1px solid var(--oa-line); }
+    .asset-history-row:first-child { border-top:0; }
+    .asset-history-main { min-width:0; }
+    .asset-history-title { color:var(--oa-ink); font-size:.8rem; font-weight:800; overflow-wrap:anywhere; }
+    .asset-history-meta { margin-top:.25rem; color:var(--oa-ink-soft); font-size:.7rem; line-height:1.55; overflow-wrap:anywhere; }
+    .asset-history-id { color:var(--oa-ink-faint); font: .68rem var(--oa-mono); overflow-wrap:anywhere; }
+    .asset-history-link { flex:0 0 auto; color:var(--oa-accent); font-size:.72rem; font-weight:800; text-decoration:none; white-space:nowrap; }
+    .asset-history-link:hover { text-decoration:underline; }
+    .asset-history-badge { display:inline-flex; margin-right:.35rem; padding:.2rem .48rem; border-radius:99px; background:var(--oa-accent-soft); color:var(--oa-accent); font-size:.66rem; font-weight:800; }
+    .asset-history-empty { margin:.6rem; padding:1.1rem .8rem; border:1px dashed var(--oa-line-strong); border-radius:.55rem; color:var(--oa-ink-soft); font-size:.78rem; line-height:1.55; text-align:center; }
+    .asset-history-status { min-height:1.2rem; margin-top:.8rem; color:var(--oa-ink-soft); font-size:.76rem; }
+    @media(max-width:850px){.asset-history-grid{grid-template-columns:1fr}.asset-history-hero{display:block}.asset-history-refresh{margin-top:1rem}}
+    @media(max-width:520px){.asset-history-shell{padding-top:1.25rem}.asset-history-row{display:block}.asset-history-link{display:inline-flex;margin-top:.55rem}}
+  </style>
+</head>
+<body class="asset-history-page">
+  <header class="topbar"><div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>vulnfounder</h1><p data-i18n="brand.subtitle">设备 Socket 资产历史</p></div></div><div class="topbar-actions"><span class="local-note">仅本机访问</span><vulnfounder-workspace-nav current="assets-history"></vulnfounder-workspace-nav><select id="language-select" hidden aria-hidden="true"></select></div></header>
+  <main class="asset-history-shell">
+    <section class="asset-history-hero"><div><div class="asset-history-kicker">Device socket history</div><h1>设备 Socket 资产历史</h1><p>这里集中查看不同设备的 Agent 运行记录和最新资产快照。设备 Socket 资产发现页面只负责启动和观察当前侦查，不再混合历史列表。</p></div><button id="refresh-history" class="asset-history-refresh" type="button">刷新历史</button></section>
+    <div class="asset-history-grid">
+      <section class="asset-history-card" aria-labelledby="run-history-title"><div class="asset-history-card-head"><h2 id="run-history-title">Agent 运行记录</h2><p>可进入某一轮运行，继续查看任务树、设备命令、证据和完整产物。</p></div><div id="run-history" class="asset-history-list"><div class="asset-history-empty">正在读取运行历史…</div></div></section>
+      <section class="asset-history-card" aria-labelledby="snapshot-history-title"><div class="asset-history-card-head"><h2 id="snapshot-history-title">设备最新快照</h2><p>每台设备的最新资产汇总；打开后可回到资产工作台查看完整详情。</p></div><div id="snapshot-history" class="asset-history-list"><div class="asset-history-empty">正在读取设备快照…</div></div></section>
+    </div>
+    <div id="history-status" class="asset-history-status" role="status" aria-live="polite"></div>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const $ = id => document.getElementById(id);
+    const text = (value, fallback = '—') => value === undefined || value === null || value === '' ? fallback : String(value);
+    const formatTime = value => { if (!value) return ''; const date = new Date(value); return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(); };
+    const request = async url => { const response = await fetch(url, {headers:{Accept:'application/json'}}); const payload = await response.json().catch(() => ({})); if (!response.ok || payload.status === 'error') throw new Error((payload.errors || []).join('; ') || `HTTP ${response.status}`); return payload.data || {}; };
+    const link = (label, href) => { const a = document.createElement('a'); a.className = 'asset-history-link'; a.href = href; a.textContent = label; return a; };
+    const empty = (root, message) => { root.replaceChildren(); const div = document.createElement('div'); div.className = 'asset-history-empty'; div.textContent = message; root.append(div); };
+    function renderRuns(rows) {
+      const root = $('run-history'); root.replaceChildren();
+      if (!Array.isArray(rows) || !rows.length) { empty(root, '暂无设备 Socket Agent 运行记录。'); return; }
+      rows.forEach(row => {
+        const article = document.createElement('article'); article.className = 'asset-history-row';
+        const main = document.createElement('div'); main.className = 'asset-history-main';
+        const title = document.createElement('div'); title.className = 'asset-history-title'; title.textContent = `${text(row.device_serial, '待预检设备')} · ${text(row.status, '未知状态')}`;
+        const id = document.createElement('div'); id.className = 'asset-history-id'; id.textContent = text(row.run_id);
+        const meta = document.createElement('div'); meta.className = 'asset-history-meta'; meta.textContent = `${text(row.task_goal, '扫描所有 Socket 暴露面')} · ${row.asset_count == null ? '资产数待读取' : `${row.asset_count} 项资产`} · ${text(row.rounds, 0)} 轮 · ${text(row.command_count, 0)} 命令 · ${text(row.evidence_count, 0)} 证据 · ${formatTime(row.generated_at || row.started_at)}`;
+        main.append(title, id, meta); article.append(main, link('打开运行 →', `/device-socket-assets?run=${encodeURIComponent(text(row.run_id, ''))}`)); root.append(article);
+      });
+    }
+    function renderSnapshots(rows) {
+      const root = $('snapshot-history'); root.replaceChildren();
+      if (!Array.isArray(rows) || !rows.length) { empty(root, '暂无已完成设备快照。'); return; }
+      rows.forEach(row => {
+        const article = document.createElement('article'); article.className = 'asset-history-row';
+        const main = document.createElement('div'); main.className = 'asset-history-main';
+        const title = document.createElement('div'); title.className = 'asset-history-title'; title.textContent = text(row.device_serial, '未知设备');
+        const meta = document.createElement('div'); meta.className = 'asset-history-meta'; meta.textContent = `${text(row.listening_count, 0)} 个 LISTENING · ${text(row.asset_count, 0)} 项资产 · ${text(row.socket_record_count, 0)} 条原始记录 · ${formatTime(row.generated_at)}`;
+        const id = document.createElement('div'); id.className = 'asset-history-id'; id.textContent = text(row.run_id, '无关联 run');
+        main.append(title, meta, id); article.append(main, link('打开快照 →', `/device-socket-assets?snapshot=${encodeURIComponent(text(row.device_serial, ''))}`)); root.append(article);
+      });
+    }
+    async function refresh() {
+      const status = $('history-status'); status.textContent = '正在读取历史记录…';
+      try { const [runs, snapshots] = await Promise.all([request('/device-socket-assets/runs'), request('/device-socket-assets/snapshots')]); renderRuns(runs.runs); renderSnapshots(snapshots.devices); status.textContent = `已加载 ${Array.isArray(runs.runs) ? runs.runs.length : 0} 条运行记录和 ${Array.isArray(snapshots.devices) ? snapshots.devices.length : 0} 台设备快照。`; }
+      catch (error) { status.textContent = `历史读取失败：${error.message}`; }
+    }
+    document.documentElement.lang = 'zh-CN';
+    $('refresh-history').addEventListener('click', refresh); refresh();
+  })();
+  </script>
+</body>
+</html>

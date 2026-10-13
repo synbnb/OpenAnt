@@ -5,9 +5,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/checkpoint"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 var verifyCmd = &cobra.Command{

@@ -65,7 +65,7 @@ func GenerateOverviewLocalized(data ReportData, outputPath, locale string) error
 	return generateToFile(overviewTmpl, data, outputPath)
 }
 
-// RenderReskin renders the Knostic-themed HTML report to the given writer.
+// RenderReskin renders the VulnFounder Observatory HTML report to the given writer.
 func RenderReskin(data ReportData, w io.Writer) error {
 	return reskinTmpl.Execute(w, data)
 }
@@ -77,7 +77,7 @@ func RenderReskinLocalized(data ReportData, w io.Writer, locale string) error {
 	return reskinTmpl.Execute(w, data)
 }
 
-// GenerateReskin renders the Knostic-themed HTML report to a file.
+// GenerateReskin renders the VulnFounder Observatory HTML report to a file.
 func GenerateReskin(data ReportData, outputPath string) error {
 	return generateToFile(reskinTmpl, data, outputPath)
 }

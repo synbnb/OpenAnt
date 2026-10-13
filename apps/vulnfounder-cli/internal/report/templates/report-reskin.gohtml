@@ -82,9 +82,124 @@
         .finding-ref:hover {
             text-decoration-color: #6861FF;
         }
+
+        /*
+         * VulnFounder Observatory theme.
+         *
+         * The previous report used a light purple marketing-card layout.  The
+         * final report is now an evidence console: dark canvas, cyan evidence
+         * accents, compact scan metadata, and high-contrast finding cards.
+         * Keep the existing semantic template/data bindings, but deliberately
+         * override the legacy utility palette so old report payloads render in
+         * the new style without a migration step.
+         */
+        body.vf-observatory {
+            --vf-canvas: #07131e;
+            --vf-surface: #0c202d;
+            --vf-surface-raised: #102b3b;
+            --vf-surface-soft: #0a1b27;
+            --vf-line: #244759;
+            --vf-line-strong: #32657b;
+            --vf-ink: #eaf7ff;
+            --vf-ink-soft: #b1c8d5;
+            --vf-ink-faint: #7794a3;
+            --vf-cyan: #51d7ff;
+            --vf-cyan-soft: rgba(81, 215, 255, 0.12);
+            background: var(--vf-canvas) !important;
+            color: var(--vf-ink) !important;
+            font-family: "SF Pro Display", "Avenir Next", "Segoe UI", "PingFang SC", sans-serif !important;
+        }
+        body.vf-observatory nav {
+            background: rgba(7, 19, 30, 0.94) !important;
+            border-color: var(--vf-line) !important;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24) !important;
+        }
+        body.vf-observatory nav a {
+            color: var(--vf-ink-soft) !important;
+            letter-spacing: 0.02em;
+        }
+        body.vf-observatory nav a:hover { color: var(--vf-cyan) !important; }
+        body.vf-observatory main { max-width: 1480px !important; }
+        body.vf-observatory #overview {
+            position: relative;
+            border-color: var(--vf-line-strong) !important;
+            background: linear-gradient(135deg, rgba(16, 43, 59, 0.92), rgba(7, 19, 30, 0.96)) !important;
+            border-radius: 18px;
+            padding: 2rem !important;
+            overflow: hidden;
+        }
+        body.vf-observatory #overview::after {
+            content: "";
+            position: absolute;
+            width: 18rem;
+            height: 18rem;
+            right: -5rem;
+            top: -8rem;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(81, 215, 255, 0.18), transparent 68%);
+            pointer-events: none;
+        }
+        body.vf-observatory h1,
+        body.vf-observatory h2,
+        body.vf-observatory h3,
+        body.vf-observatory h4 { color: var(--vf-ink) !important; }
+        body.vf-observatory h1 { letter-spacing: -0.04em; }
+        body.vf-observatory .text-knostic-navy,
+        body.vf-observatory .text-knostic-body { color: var(--vf-ink) !important; }
+        body.vf-observatory .text-knostic-muted,
+        body.vf-observatory .text-knostic-purple,
+        body.vf-observatory .text-knostic-body\/80 { color: var(--vf-ink-soft) !important; }
+        body.vf-observatory .bg-white,
+        body.vf-observatory .bg-knostic-card-bg,
+        body.vf-observatory .bg-knostic-purple-light,
+        body.vf-observatory .bg-knostic-glow { background: var(--vf-surface) !important; }
+        body.vf-observatory .border-knostic-border,
+        body.vf-observatory .border-knostic-border-light { border-color: var(--vf-line) !important; }
+        body.vf-observatory .border-knostic-purple,
+        body.vf-observatory .border-l-4 { border-color: var(--vf-cyan) !important; }
+        body.vf-observatory .rounded-card { border-radius: 14px !important; }
+        body.vf-observatory .card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+        body.vf-observatory .card-hover:hover {
+            transform: translateY(-2px);
+            border-color: var(--vf-cyan) !important;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(81, 215, 255, 0.08) !important;
+        }
+        body.vf-observatory .bg-knostic-card-bg code,
+        body.vf-observatory code {
+            background: #06121b !important;
+            color: #a7edff !important;
+            border-color: var(--vf-line) !important;
+        }
+        body.vf-observatory .remediation-content,
+        body.vf-observatory #pipeline > details > div > div,
+        body.vf-observatory #findings details {
+            background: var(--vf-surface) !important;
+            border-color: var(--vf-line) !important;
+        }
+        body.vf-observatory table th { background: var(--vf-surface-raised) !important; color: var(--vf-ink-soft) !important; }
+        body.vf-observatory table td { color: var(--vf-ink-soft); }
+        body.vf-observatory table tr:hover { background: var(--vf-cyan-soft) !important; }
+        body.vf-observatory .remediation-content a,
+        body.vf-observatory a { color: var(--vf-cyan); }
+        body.vf-observatory .remediation-content pre,
+        body.vf-observatory .remediation-content pre code,
+        body.vf-observatory pre,
+        body.vf-observatory pre code {
+            background: #050d14 !important;
+            color: #ffffff !important;
+            border: 1px solid var(--vf-line) !important;
+        }
+        body.vf-observatory .remediation-content code:not(pre code) {
+            background: #06121b !important;
+            color: #a7edff !important;
+        }
+        body.vf-observatory .text-knostic-purple:hover { color: #8de8ff !important; }
+        @media (max-width: 640px) {
+            body.vf-observatory #overview { padding: 1.25rem !important; }
+        }
     </style>
 </head>
-<body class="bg-white text-knostic-body font-sans leading-relaxed">
+<body class="vf-observatory bg-white text-knostic-body font-sans leading-relaxed">
 
     <!-- Section Nav Bar -->
     <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-knostic-border">

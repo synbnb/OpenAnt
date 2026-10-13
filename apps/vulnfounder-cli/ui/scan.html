@@ -55,8 +55,8 @@
   }
   .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .language-field { display: flex; align-items: center; gap: 7px; }
-  .language-field label { color: #a9bac4; font-size: 0.75rem; }
-  .language-field select {
+  .language-field label, .report-language-field label { color: #a9bac4; font-size: 0.75rem; }
+  .language-field select, .report-language-field select {
     min-width: 104px; padding: 6px 28px 6px 9px; border: 1px solid #455b67;
     border-radius: 8px; background: #1c2d36; color: #f5f8fa;
   }
@@ -220,8 +220,11 @@
   .stage-result-evidence-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 0 8px; }
   .stage-result-evidence-title { color: #164d5c; font-size: 0.78rem; font-weight: 850; }
   .stage-result-evidence-subtitle { color: #718b93; font-size: 0.68rem; line-height: 1.45; }
-  .stage-result-evidence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 9px; padding-bottom: 1px; }
-  .stage-result-evidence-card { min-width: 0; border: 1px solid #cfe0e4; border-radius: 8px; background: #fff; overflow: hidden; }
+  /* Keep each evidence card at its own intrinsic height.  Grid's default
+     stretch alignment made opening one callsite visually stretch every card
+     in the same row, which looked like multiple blank cards had opened. */
+  .stage-result-evidence-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 9px; padding-bottom: 1px; align-items: start; }
+  .stage-result-evidence-card { min-width: 0; align-self: start; height: max-content; border: 1px solid #cfe0e4; border-radius: 8px; background: #fff; overflow: hidden; }
   .stage-result-evidence-card summary { display: flex; align-items: baseline; gap: 8px; padding: 9px 10px; cursor: pointer; background: #f8fbfc; color: #245e6b; font-size: 0.72rem; font-weight: 800; }
   .stage-result-evidence-card summary::marker { color: #5b929e; }
   .stage-result-evidence-card[open] summary { border-bottom: 1px solid #e0ebed; }
@@ -437,7 +440,11 @@
   .disclosure-card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 5px; }
   .disclosure-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
   .disclosure-card-title { min-width: 0; color: #7d2029; font-size: 0.8rem; font-weight: 800; overflow-wrap: anywhere; }
-  .disclosure-card-status { flex: 0 0 auto; padding: 3px 6px; border: 1px solid #e3a4aa; border-radius: 5px; color: #8f2831; font: 0.62rem/1.2 var(--mono); font-weight: 800; letter-spacing: 0.03em; }
+  .disclosure-card-status { flex: 0 0 auto; padding: 3px 6px; border: 1px solid #e3a4aa; border-radius: 5px; color: #8f2831; background: #fff1f2; font: 0.62rem/1.2 var(--mono); font-weight: 800; letter-spacing: 0.03em; }
+  .disclosure-card-status.inconclusive { border-color: #d4b06c; color: #765318; background: #fff8e8; }
+  .disclosure-card-status.safe { border-color: #9dbca8; color: #23633c; background: #effaf2; }
+  .disclosure-summary { margin-bottom: 12px; padding: 9px 11px; border: 1px solid #e1c3c6; border-radius: 8px; color: #633b40; background: #fffafb; font-size: 0.73rem; line-height: 1.5; }
+  .disclosure-summary strong { color: #7d2029; font-weight: 850; }
   .disclosure-card-meta { display: grid; gap: 4px; min-width: 0; color: #633b40; font-size: 0.71rem; line-height: 1.45; }
   .disclosure-card-meta-row { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 7px; min-width: 0; }
   .disclosure-card-meta-label { color: #8a5a60; font-weight: 750; }
@@ -513,14 +520,14 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <vulnfounder-workspace-nav current="home"></vulnfounder-workspace-nav>
-    <div class="language-field">
-      <label for="language-select" data-i18n="language.label">语言</label>
-      <select id="language-select" aria-label="界面语言">
+    <div class="report-language-field">
+      <label for="report-language-select">报告语言</label>
+      <select id="report-language-select" aria-label="报告语言">
         <option value="zh-CN">中文</option>
-        <option value="en">English</option>
+        <option value="en">英文报告</option>
       </select>
     </div>
+    <vulnfounder-workspace-nav current="home"></vulnfounder-workspace-nav>
   </div>
 </header>
 
@@ -554,7 +561,6 @@
         <div class="step-item"><button type="button" class="step" id="step-analyze" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="analyze"><span><span class="step-label" data-stage-label="analyze">漏洞分析</span><span class="step-count" id="count-analyze"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-verify" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="verify"><span><span class="step-label" data-stage-label="verify">结果验证</span><span class="step-count" id="count-verify"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-build-output" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="build-output"><span><span class="step-label" data-stage-label="build-output">汇总输出</span><span class="step-count" id="count-build-output"></span></span></button></div>
-        <div class="step-item"><button type="button" class="step" id="step-dynamic-test" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="dynamic-test"><span><span class="step-label" data-stage-label="dynamic-test">动态测试</span><span class="step-count" id="count-dynamic-test"></span></span></button></div>
         <div class="step-item"><button type="button" class="step" id="step-report" role="tab" aria-selected="false" aria-controls="stage-workbench" data-stage="report"><span><span class="step-label" data-stage-label="report">报告生成</span><span class="step-count" id="count-report"></span></span></button></div>
       </div>
     </aside>
@@ -634,42 +640,6 @@
         </div>
       </section>
 
-      <section class="section-panel claude-panel" id="claude-workbench" data-stage-panel="dynamic-test" aria-labelledby="claude-title" hidden>
-        <div class="section-header">
-          <div class="claude-heading">
-            <h2 id="claude-title"><span data-i18n="claude.title">Claude Code 动态验证</span><span class="claude-status-badge" id="claude-status-badge" data-claude-status="preparing">准备中</span></h2>
-            <p data-i18n="claude.subtitle">静态分析已停在动态测试边界。你可以直接在这里与 Claude Code 对话，并观察任务目录的实时变化。</p>
-          </div>
-          <div class="claude-actions">
-            <button type="button" class="claude-button" id="claude-refresh" data-i18n="claude.refresh">刷新目录</button>
-            <button type="button" class="claude-button danger" id="claude-stop" data-i18n="claude.stop">停止会话</button>
-          </div>
-        </div>
-        <div class="section-body">
-          <div class="claude-meta" aria-live="polite">
-            <div class="claude-meta-row"><span data-i18n="claude.workspace">任务工作目录</span><code id="claude-workspace-path">-</code></div>
-            <div class="claude-meta-row"><span data-i18n="claude.candidates">待验证候选</span><code id="claude-candidate-count">-</code></div>
-            <div class="claude-meta-row"><span data-i18n="claude.tools">公开工具库</span><code id="claude-tools-path">-</code></div>
-            <div class="claude-meta-row"><span data-i18n="claude.manifest">任务清单</span><code id="claude-manifest-path">-</code></div>
-          </div>
-          <div class="claude-layout">
-            <section class="claude-chat" aria-labelledby="claude-chat-title">
-              <div class="claude-chat-header"><strong id="claude-chat-title" data-i18n="claude.chatTitle">Claude Code 对话</strong><p data-i18n="claude.chatHint">消息会写入同一个 PTY 会话；终端控制符会转换为可读记录，Claude 的命令、结果和说明会实时显示。</p></div>
-              <div class="claude-transcript" id="claude-transcript" role="log" aria-live="polite" aria-label="Claude Code transcript"><div class="claude-empty" data-i18n="claude.waiting">等待 Claude Code 连接...</div></div>
-              <form class="claude-composer" id="claude-composer">
-                <textarea id="claude-message" rows="3" maxlength="32000" data-i18n-placeholder="claude.messagePlaceholder" placeholder="例如：先阅读候选清单，验证第一个候选并把证据写入 results/。"></textarea>
-                <button type="submit" class="claude-send" id="claude-send" disabled data-i18n="claude.send">发送</button>
-              </form>
-            </section>
-            <aside class="claude-files" aria-labelledby="claude-files-title">
-              <div class="claude-files-header"><strong id="claude-files-title" data-i18n="claude.filesTitle">任务目录</strong><p data-i18n="claude.filesHint">只读浏览任务工作目录；点击文件可查看内容。</p></div>
-              <div class="claude-tree" id="claude-file-tree" role="tree"><div class="claude-empty" data-i18n="claude.filesWaiting">任务包准备后会显示目录。</div></div>
-              <div class="claude-file-viewer" id="claude-file-viewer" aria-live="polite"><div class="claude-file-title" id="claude-file-title" data-i18n="claude.fileWaiting">请选择一个文本文件。</div><pre id="claude-file-content"></pre></div>
-            </aside>
-          </div>
-        </div>
-      </section>
-
       <section class="section-panel" aria-labelledby="artifacts-heading">
         <div class="section-header">
           <div><h2 id="artifacts-heading"><span id="artifact-stage-title">源码解析</span> <span data-i18n="artifacts.suffix">阶段产物</span></h2><p data-i18n="artifacts.subtitle">每个文件均标明用途，并保留原始内容入口供审阅。</p></div>
@@ -682,8 +652,9 @@
       </section>
 
       <section class="section-panel disclosures" id="disclosures" aria-labelledby="disclosures-title">
-        <div class="section-header"><div><h2 id="disclosures-title" data-i18n="disclosures.title">漏洞披露报告</h2><p data-i18n="disclosures.subtitle">为已确认问题生成的独立披露文件。</p></div></div>
+        <div class="section-header"><div><h2 id="disclosures-title" data-i18n="disclosures.title">漏洞分析报告</h2><p data-i18n="disclosures.subtitle">展示已确认问题和仍需补证的待定问题报告。</p></div></div>
         <div class="section-body">
+          <div class="disclosure-summary" id="disclosure-summary" role="status" aria-live="polite" hidden></div>
           <div class="disclosure-toolbar" role="search" aria-label="漏洞披露报告筛选">
             <div class="disclosure-search-field">
               <label for="disclosure-search" data-i18n="disclosures.searchLabel">筛选报告</label>
@@ -812,11 +783,13 @@ const translations = {
     'details.outcomeVerify': '验证结果：确认漏洞 {confirmed} 个，一致 {agreed} 个，不一致 {disagreed} 个，需人工复核 {review} 个。',
     'details.outcomeBuild': '统一输出包含 {findings} 个问题，实际分析 {analyzed} 个单元，其中可达单元 {reachable} 个。',
     'details.outcomeDynamic': '动态测试状态为“{status}”，记录 {observations} 条观察、{steps} 个步骤。',
-    'details.outcomeReport': '已生成 {formats}；可从下方产物或顶部报告入口继续查看。',
+    'details.outcomeReport': '最终结果：确认漏洞 {vulnerable} 个、待定 {inconclusive} 个、错误 {errors} 个；已生成报告 {reports} 份，其中确认漏洞报告 {reportVulnerable} 份、待定报告 {reportInconclusive} 份。格式：{formats}。',
     'details.resultsLoading': '正在读取阶段关键结果...',
     'details.resultsEmpty': '阶段产物尚未生成，完成后会显示关键结果。',
     'details.resultsUnavailable': '当前阶段没有可提取的关键结果。',
     'details.resultsCount': '{count} 个产物摘要',
+    'details.metricItems': '查看明细（{count} 项）',
+    'details.metricItemsMore': '还有 {count} 项未展开',
     'details.resultsStage': '阶段摘要',
     'details.resultsArtifact': '产物文件',
     'details.evidenceTitle': '关键证据与站点',
@@ -915,12 +888,16 @@ const translations = {
     'explorer.rawLoading': '正在读取原始 JSON...',
     'explorer.rawUnavailable': '原始 JSON 暂不可用。',
     'disclosures.title': '漏洞披露报告',
-    'disclosures.subtitle': '为已确认问题生成的独立披露文件。',
+    'disclosures.subtitle': '展示已确认问题和仍需补证的待定问题报告。',
     'disclosures.searchLabel': '筛选报告',
     'disclosures.searchPlaceholder': '输入函数名称或 CVE 名称',
     'disclosures.searchCount': '显示 {visible} / {total} 个报告',
     'disclosures.clearSearch': '清空筛选',
     'disclosures.searchRegion': '漏洞披露报告筛选',
+    'disclosures.summaryCount': '已生成报告 {total} 份：确认漏洞 {vulnerable} 份，待定报告 {inconclusive} 份。待定报告表示线索已保留，但尚未完成验证，不等同于确认漏洞。',
+    'disclosures.classification.vulnerable': '漏洞（vulnerable）',
+    'disclosures.classification.inconclusive': '待定（inconclusive）',
+    'disclosures.classification.safe': '安全（safe）',
     'disclosures.noMatches': '没有匹配的漏洞披露报告，请尝试函数名或 CVE 名称。',
     'disclosures.cve': 'CVE',
     'disclosures.status': '判定',
@@ -941,6 +918,10 @@ const translations = {
     'disclosures.sourceToSink': 'Source → Sink',
     'disclosures.callChain': '调用链',
     'disclosures.callChainCount': '个函数节点',
+    'disclosures.finalClassification': '最终展示判定',
+    'disclosures.stage1Verdict': 'Stage 1 判定',
+    'disclosures.stage2Verdict': 'Stage 2 判定',
+    'disclosures.reviewStatus': '复核状态',
     'disclosures.noContext': '当前扫描没有保存可展示的调用链证据，请打开完整披露文件查看详情。',
     'disclosures.noSourceToSink': '未保存 source → sink 路径摘要。',
     'disclosures.callChainOmitted': '另有 {count} 个节点因上下文上限未展开。',
@@ -1024,11 +1005,13 @@ const translations = {
     'details.outcomeVerify': 'Verification: {confirmed} confirmed vulnerabilities, {agreed} agreed results, {disagreed} disagreements, and {review} items needing manual review.',
     'details.outcomeBuild': 'Normalized output contains {findings} findings; {analyzed} units were analyzed, including {reachable} reachable units.',
     'details.outcomeDynamic': 'Dynamic testing status is “{status}”, with {observations} observations across {steps} steps.',
-    'details.outcomeReport': 'Generated {formats}; continue with the artifacts below or the report links above.',
+    'details.outcomeReport': 'Final result: {vulnerable} confirmed vulnerabilities, {inconclusive} inconclusive results, and {errors} errors; {reports} reports generated ({reportVulnerable} vulnerable, {reportInconclusive} inconclusive). Formats: {formats}.',
     'details.resultsLoading': 'Loading key stage results...',
     'details.resultsEmpty': 'Stage artifacts are not available yet. Key results will appear when the stage completes.',
     'details.resultsUnavailable': 'No key results are available for this stage.',
     'details.resultsCount': '{count} artifact summaries',
+    'details.metricItems': 'View details ({count} items)',
+    'details.metricItemsMore': '{count} more items remain collapsed',
     'details.resultsStage': 'Stage summary',
     'details.resultsArtifact': 'Artifact file',
     'details.evidenceTitle': 'Key evidence and sites',
@@ -1127,12 +1110,16 @@ const translations = {
     'explorer.rawLoading': 'Loading raw JSON...',
     'explorer.rawUnavailable': 'Raw JSON is not available yet.',
     'disclosures.title': 'Disclosure reports',
-    'disclosures.subtitle': 'Standalone disclosure files generated for confirmed findings.',
+    'disclosures.subtitle': 'Reports for confirmed findings and inconclusive items that need more evidence.',
     'disclosures.searchLabel': 'Filter reports',
     'disclosures.searchPlaceholder': 'Enter a function name or CVE name',
     'disclosures.searchCount': 'Showing {visible} / {total} reports',
     'disclosures.clearSearch': 'Clear filter',
     'disclosures.searchRegion': 'Disclosure report filter',
+    'disclosures.summaryCount': 'Generated {total} reports: {vulnerable} vulnerable and {inconclusive} inconclusive. Inconclusive reports preserve leads that are not fully verified and are not confirmed vulnerabilities.',
+    'disclosures.classification.vulnerable': 'Vulnerable',
+    'disclosures.classification.inconclusive': 'Inconclusive',
+    'disclosures.classification.safe': 'Safe',
     'disclosures.noMatches': 'No disclosure reports match this search. Try a function or CVE name.',
     'disclosures.cve': 'CVE',
     'disclosures.status': 'Verdict',
@@ -1153,6 +1140,10 @@ const translations = {
     'disclosures.sourceToSink': 'Source → Sink',
     'disclosures.callChain': 'Call chain',
     'disclosures.callChainCount': 'function nodes',
+    'disclosures.finalClassification': 'Final display classification',
+    'disclosures.stage1Verdict': 'Stage 1 verdict',
+    'disclosures.stage2Verdict': 'Stage 2 verdict',
+    'disclosures.reviewStatus': 'Review status',
     'disclosures.noContext': 'No displayable call-chain evidence was saved for this scan. Open the full disclosure for details.',
     'disclosures.noSourceToSink': 'No source-to-sink path summary was saved.',
     'disclosures.callChainOmitted': '{count} additional nodes were omitted by the context limit.',
@@ -1392,8 +1383,8 @@ const stageResultDefinitions = {
       ['summary.signals_received', '模型信号数', 'Signals received'],
       ['summary.signals_applied', '有效信号数', 'Signals applied'],
       ['summary.entry_points_promoted', '提升入口数', 'Entry points promoted'],
-      ['summary.semantic_seed_ids', '语义 BFS 种子数', 'Semantic BFS seeds'],
-      ['summary.reachable_only_ids', 'medium 直接保留数', 'Medium retained-only units'],
+      ['summary.semantic_seed_ids', '语义 BFS 种子数', 'Semantic BFS seed count'],
+      ['summary.reachable_only_ids', 'medium 直接保留数', 'Medium retained-only count'],
       ['summary.retained_only_counts', '直接保留类型统计', 'Retained-only counts by type'],
       ['summary.seed_counts.external_input', '外部输入种子数', 'External-input seeds'],
       ['summary.seed_counts.cross_process', '跨进程种子数', 'Cross-process seeds'],
@@ -1406,8 +1397,8 @@ const stageResultDefinitions = {
         ['summary.signals_received', '模型信号数', 'Signals received'],
         ['summary.signals_applied', '有效信号数', 'Signals applied'],
         ['summary.entry_points_promoted', '提升入口数', 'Entry points promoted'],
-        ['summary.semantic_seed_ids', '语义 BFS 种子', 'Semantic BFS seeds'],
-        ['summary.reachable_only_ids', 'medium 直接保留单元', 'Medium retained-only units'],
+        ['summary.semantic_seed_ids', '语义 BFS 种子数', 'Semantic BFS seed count'],
+        ['summary.reachable_only_ids', 'medium 直接保留数', 'Medium retained-only count'],
         ['summary.retained_only_counts', '直接保留类型统计', 'Retained-only counts by type'],
         ['summary.seed_counts', '按类型种子统计', 'Seed counts by type'],
         ['summary.rejected_counts', '未采用原因统计', 'Rejected/review counts'],
@@ -1590,8 +1581,13 @@ const stageResultDefinitions = {
       { name: 'scan.report.json', title: ['全流程扫描记录', 'Aggregate scan report'], fields: [
         ['status', '扫描状态', 'Scan status'], ['summary.units_count', '扫描单元数', 'Scanned units'],
         ['summary.metrics.vulnerable', '漏洞数', 'Vulnerabilities'], ['summary.metrics.safe', '安全数', 'Safe results'],
-        ['summary.metrics.inconclusive', '待定数', 'Inconclusive results'], ['summary.steps_completed', '已完成阶段', 'Completed stages'],
+        ['summary.metrics.inconclusive', '待定数', 'Inconclusive results'], ['summary.metrics.errors', '错误数', 'Errors'], ['summary.steps_completed', '已完成阶段', 'Completed stages'],
         ['summary.steps_skipped', '已跳过阶段', 'Skipped stages']
+      ] },
+      { name: 'report-data.report.json', title: ['报告数据统计', 'Report-data statistics'], fields: [
+        ['status', '报告数据状态', 'Report-data status'], ['summary.findings', '可渲染问题数', 'Renderable findings'],
+        ['summary.actionable', '进入报告的问题数', 'Items sent to reports'], ['summary.vulnerable_reports', '确认漏洞报告数', 'Vulnerable reports'],
+        ['summary.inconclusive_reports', '待定报告数', 'Inconclusive reports']
       ] },
       { name: 'report.report.json', title: ['报告生成记录', 'Report-generation record'], fields: [
         ['status', '报告阶段状态', 'Report status'], ['summary.formats_generated', '生成格式', 'Generated formats'],
@@ -1629,7 +1625,7 @@ const categoryLabels = {
   }
 };
 
-const steps = ['parse', 'app-context', 'llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'enhance', 'analyze', 'verify', 'build-output', 'dynamic-test', 'report'];
+const steps = ['parse', 'app-context', 'llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'enhance', 'analyze', 'verify', 'build-output', 'report'];
 const stepEls = {};
 const countEls = {};
 steps.forEach(function(stage) {
@@ -1638,6 +1634,13 @@ steps.forEach(function(stage) {
 });
 
 const languageSelect = document.getElementById('language-select');
+const reportLanguageSelect = document.getElementById('report-language-select');
+let reportLanguage = 'zh-CN';
+try {
+  const savedReportLanguage = localStorage.getItem('vulnfounder.report.language');
+  if (savedReportLanguage === 'en' || savedReportLanguage === 'zh-CN') reportLanguage = savedReportLanguage;
+} catch (_) {}
+if (reportLanguageSelect) reportLanguageSelect.value = reportLanguage;
 let currentLanguage = 'zh-CN';
 let streamClosed = false;
 let pipelineTimer = null;
@@ -1645,6 +1648,7 @@ let artifactTimer = null;
 let lastPipelineView = null;
 let lastArtifacts = null;
 let lastDisclosures = [];
+let disclosureListRevision = 0;
 let disclosureQuery = '';
 let selectedStage = 'parse';
 let stageWasChosen = false;
@@ -1717,6 +1721,13 @@ if (languageSelect) {
   languageSelect.addEventListener('change', function() {
     try { localStorage.setItem('vulnfounder.ui.language', languageSelect.value); } catch (_) {}
     applyLanguage(languageSelect.value);
+  });
+}
+if (reportLanguageSelect) {
+  reportLanguageSelect.addEventListener('change', function() {
+    reportLanguage = reportLanguageSelect.value === 'en' ? 'en' : 'zh-CN';
+    try { localStorage.setItem('vulnfounder.report.language', reportLanguage); } catch (_) {}
+    loadDisclosures();
   });
 }
 
@@ -1998,6 +2009,43 @@ const stageResultCollectionLabels = {
   confirmed_findings: ['条确认问题记录', 'confirmed finding records']
 };
 
+// These fields are persisted as ID collections, not as a human-readable
+// counter.  Keep the count prominent and move the potentially long function
+// identities into a collapsed details block so a stage card never turns into
+// a wall of paths.
+const stageResultMetricCollectionLabels = {
+  semantic_seed_ids: ['个语义 BFS 种子', 'semantic BFS seeds'],
+  reachable_only_ids: ['个 medium 直接保留单元', 'medium retained-only units']
+};
+
+function stageResultMetricCollectionItems(value) {
+  if (Array.isArray(value)) return value.map(function(item) { return String(item); }).filter(Boolean);
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.items)) return value.items.map(function(item) { return String(item); }).filter(Boolean);
+    return Object.keys(value);
+  }
+  if (typeof value !== 'string') return [];
+  const raw = value.trim();
+  if (!raw || Number.isFinite(Number(raw))) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(function(item) { return String(item); }).filter(Boolean);
+  } catch (_) {}
+  return raw.split(/(?:\r?\n|、|,|，|;|；)/).map(function(item) { return item.trim(); }).filter(Boolean);
+}
+
+function stageResultMetricCollectionInfo(value, path) {
+  const key = String(path || '').split('.').pop();
+  const label = stageResultMetricCollectionLabels[key];
+  if (!label) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return { count: value, items: [] };
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value.trim()))) {
+    return { count: Number(value.trim()), items: [] };
+  }
+  const items = stageResultMetricCollectionItems(value);
+  return { count: items.length, items: items };
+}
+
 function stageResultCollectionSummary(value, path) {
   if (!Array.isArray(value)) return '';
   const key = String(path || '').split('.').pop();
@@ -2101,6 +2149,16 @@ function stageResultValueSummary(value, path, depth) {
 }
 
 function formatStageResultValue(value, path) {
+  const metricCollection = stageResultMetricCollectionInfo(value, path);
+  if (metricCollection) {
+    const key = String(path || '').split('.').pop();
+    const label = stageResultMetricCollectionLabels[key];
+    return {
+      text: metricCollection.count.toLocaleString(currentLanguage) + ' ' + (currentLanguage === 'zh-CN' ? label[0] : label[1]),
+      mono: false,
+      detailItems: metricCollection.items
+    };
+  }
   if (Array.isArray(value)) {
     const collectionSummary = stageResultCollectionSummary(value, path);
     if (collectionSummary) return { text: collectionSummary, mono: false };
@@ -2146,7 +2204,16 @@ function stageResultCount(value) {
   if (Array.isArray(value)) return value.length;
   if (value && typeof value === 'object') return Object.keys(value).length;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (raw !== '' && Number.isFinite(Number(raw))) return Number(raw);
+    // Older stage summaries sometimes serialized an ID collection as one
+    // delimited string.  Count those identifiers for the lead sentence too;
+    // the field card still provides the expandable normalized list.
+    if (raw && (raw.indexOf('/') !== -1 || raw.indexOf('::') !== -1 || /[、,，;；\n]/.test(raw))) {
+      return stageResultMetricCollectionItems(raw).length;
+    }
+  }
   return 0;
 }
 
@@ -2471,10 +2538,12 @@ function renderStageResultEvidence(stage, records, available) {
     return;
   }
   const limit = 12;
-  unique.slice(0, limit).forEach(function(record, index) {
+  unique.slice(0, limit).forEach(function(record) {
     const details = document.createElement('details');
     details.className = 'stage-result-evidence-card';
-    if (index === 0) details.open = true;
+    // Do not pre-open the first card.  A pre-opened card made the first user
+    // click close it (appearing blank) instead of revealing the selected
+    // callsite; cards now open exactly on the click that selects them.
     const summary = document.createElement('summary');
     const title = element('span', 'stage-result-evidence-card-title', record.title);
     const badge = element('span', 'stage-result-evidence-badge ' + (record.badgeClass || ''), record.badge || '');
@@ -2648,7 +2717,23 @@ function renderStageResultLead(step, groups) {
       }
       case 'report': {
         const formats = stageResultMetricText(groups, ['summary.formats_generated']);
-        body = stageResultInterpolate(t('details.outcomeReport'), { formats: formats });
+        const vulnerable = stageResultMetricDisplay(groups, ['summary.metrics.vulnerable']);
+        const inconclusive = stageResultMetricDisplay(groups, ['summary.metrics.inconclusive']);
+        const errors = stageResultMetricDisplay(groups, ['summary.metrics.errors']);
+        const reportStats = disclosureCounts(lastDisclosures);
+        const reports = lastDisclosures.length ? String(reportStats.total) : stageResultMetricDisplay(groups, ['summary.report_count', 'summary.disclosure_count', 'summary.actionable']);
+        const reportVulnerable = lastDisclosures.length ? String(reportStats.vulnerable) : stageResultMetricDisplay(groups, ['summary.vulnerable_reports']);
+        const reportInconclusive = lastDisclosures.length ? String(reportStats.inconclusive) : stageResultMetricDisplay(groups, ['summary.inconclusive_reports']);
+        tone = vulnerable !== '0' && vulnerable !== '-' ? 'danger' : ((inconclusive !== '0' && inconclusive !== '-') || (errors !== '0' && errors !== '-') ? 'warning' : 'success');
+        body = stageResultInterpolate(t('details.outcomeReport'), {
+          formats: formats,
+          vulnerable: vulnerable,
+          inconclusive: inconclusive,
+          errors: errors,
+          reports: reports,
+          reportVulnerable: reportVulnerable,
+          reportInconclusive: reportInconclusive
+        });
         break;
       }
       default:
@@ -2750,6 +2835,41 @@ function renderStageResultGroups(groups, evidenceRecords, evidenceAvailable) {
       value.textContent = rendered.text;
       card.appendChild(label);
       card.appendChild(value);
+      // Seed identities are useful as a count but are not a user-facing
+      // detail list; showing dozens of internal unit IDs obscures the result.
+      // Retained-medium units keep their optional details for diagnostics.
+      const metricKey = String(field.path || '').split('.').pop();
+      const showMetricDetails = metricKey !== 'semantic_seed_ids';
+      if (showMetricDetails && Array.isArray(rendered.detailItems) && rendered.detailItems.length) {
+        const details = document.createElement('details');
+        details.className = 'stage-result-detail';
+        const summary = document.createElement('summary');
+        summary.textContent = stageResultInterpolate(t('details.metricItems'), { count: rendered.detailItems.length });
+        details.appendChild(summary);
+        const body = document.createElement('div');
+        body.className = 'stage-result-detail-body';
+        rendered.detailItems.slice(0, 40).forEach(function(item, index) {
+          const row = document.createElement('div');
+          row.className = 'stage-result-detail-row';
+          const itemLabel = document.createElement('span');
+          itemLabel.className = 'stage-result-detail-label';
+          itemLabel.textContent = String(index + 1);
+          const itemValue = document.createElement('code');
+          itemValue.className = 'stage-result-detail-text';
+          itemValue.textContent = item;
+          row.appendChild(itemLabel);
+          row.appendChild(itemValue);
+          body.appendChild(row);
+        });
+        if (rendered.detailItems.length > 40) {
+          const more = document.createElement('div');
+          more.className = 'stage-result-note';
+          more.textContent = stageResultInterpolate(t('details.metricItemsMore'), { count: rendered.detailItems.length - 40 });
+          body.appendChild(more);
+        }
+        details.appendChild(body);
+        card.appendChild(details);
+      }
       if (isProfileField) {
         renderStageResultProfileDetails(card, field.value, field.path);
       }
@@ -2768,7 +2888,7 @@ function renderStageResultHighlights() {
   const definition = stageResultDefinitions[selectedStage] || { summary: [], artifacts: [] };
   const artifactDefs = (definition.artifacts || []).filter(function(item) { return stageResultArtifactMeta(item.name); });
   const revisions = artifactDefs.map(function(item) { return item.name + '@' + stageResultArtifactRevision(item.name); }).join('|');
-  const signature = currentLanguage + '|' + selectedStage + '|' + String(step && step.status || '') + '|' + revisions + '|' + String(step && JSON.stringify(step.summary || {}) || '');
+  const signature = currentLanguage + '|' + selectedStage + '|' + String(step && step.status || '') + '|' + revisions + '|' + String(disclosureListRevision) + '|' + String(step && JSON.stringify(step.summary || {}) || '');
   if (signature === stageResultSignature) return;
   stageResultSignature = signature;
   const requestID = ++stageResultRequestID;
@@ -2834,7 +2954,7 @@ function renderStageWorkbench() {
   const usage = (step && step.token_usage) || {};
   if (tokens) tokens.textContent = typeof usage.total_tokens === 'number' ? usage.total_tokens.toLocaleString(currentLanguage) : '-';
   if (cost) cost.textContent = formatPipelineCost(step) || '-';
-  const optionalStages = ['llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'verify', 'dynamic-test'];
+  const optionalStages = ['llm-reachability', 'llm-call-graph-recovery', 'llm-call-graph-candidate-review', 'llm-call-graph-projection', 'openharmony-dispatch-code-evidence', 'verify'];
   const isOptional = step ? Boolean(step.optional) : optionalStages.indexOf(selectedStage) !== -1;
   if (optional) optional.textContent = t(isOptional ? 'details.optionalYes' : 'details.optionalNo');
 
@@ -2897,6 +3017,11 @@ function refreshPipeline() {
     .then(function(view) {
       if (!view) return;
       applyPipelineView(view);
+      // Historical scans are often opened after the SSE `done` event has
+      // already happened. Load disclosure metadata from the same pipeline
+      // endpoint path so the report-stage counters and per-report badges are
+      // available without requiring a page refresh or a new scan.
+      if (view.status !== 'running') loadDisclosures();
       if (view.status === 'running' && !streamClosed) pipelineTimer = window.setTimeout(refreshPipeline, 800);
     })
     .catch(function() {
@@ -3632,9 +3757,6 @@ function renderClaudeInfo(info) {
   if (info.status === 'preparing' || info.status === 'starting' || info.status === 'running') {
     scheduleClaudeInfoRefresh();
   }
-  if (!stageWasChosen && info.status === 'running' && selectedStage !== 'dynamic-test') {
-    selectStage('dynamic-test', false);
-  }
 }
 
 // Older sessions may contain PTY bytes captured before the server-side
@@ -4018,6 +4140,37 @@ function disclosureLineRange(disclosure) {
   return '';
 }
 
+function disclosureClassificationValue(disclosure) {
+  if (!disclosure || typeof disclosure !== 'object') return 'inconclusive';
+  const explicit = String(disclosure.classification || '').trim().toLowerCase();
+  if (explicit === 'vulnerable' || explicit === 'inconclusive' || explicit === 'safe') return explicit;
+  const stage2 = String(disclosure.stage2_verdict || '').trim().toLowerCase();
+  const review = String(disclosure.review_status || '').trim().toLowerCase();
+  const stage1 = String(disclosure.stage1_verdict || '').trim().toLowerCase();
+  if (stage2 === 'unverified' || stage2 === 'inconclusive' || review === 'needs_review') return 'inconclusive';
+  if (['confirmed', 'agreed', 'vulnerable', 'bypassable'].indexOf(stage2) !== -1) return 'vulnerable';
+  if (stage1 === 'vulnerable' || stage1 === 'bypassable') return 'vulnerable';
+  const name = String(disclosure.name || '').toUpperCase();
+  if (name.indexOf('INCONCLUSIVE') !== -1) return 'inconclusive';
+  if (name.indexOf('VULNERABLE') !== -1 || name.indexOf('BYPASSABLE') !== -1 || name.indexOf('CONFIRMED') !== -1) return 'vulnerable';
+  return 'inconclusive';
+}
+
+function disclosureClassificationLabel(classification) {
+  const value = classification === 'vulnerable' || classification === 'safe' ? classification : 'inconclusive';
+  return t('disclosures.classification.' + value);
+}
+
+function disclosureCounts(list) {
+  const counts = { total: 0, vulnerable: 0, inconclusive: 0, safe: 0 };
+  (Array.isArray(list) ? list : []).forEach(function(disclosure) {
+    const classification = disclosureClassificationValue(disclosure);
+    counts.total += 1;
+    counts[classification] = (counts[classification] || 0) + 1;
+  });
+  return counts;
+}
+
 function disclosureSearchText(disclosure) {
   if (!disclosure || typeof disclosure !== 'object') return '';
   const values = [
@@ -4030,6 +4183,10 @@ function disclosureSearchText(disclosure) {
     disclosure.function,
     disclosure.affected_version,
     disclosure.repair_status,
+    disclosure.classification,
+    disclosure.stage1_verdict,
+    disclosure.stage2_verdict,
+    disclosure.review_status,
     disclosure.summary,
     disclosure.source_to_sink,
     // Keep compatibility with future server fields without requiring a UI
@@ -4069,16 +4226,27 @@ function updateDisclosureSearchUI(total, visible) {
 
 function renderDisclosures(list) {
   lastDisclosures = Array.isArray(list) ? list : [];
+  disclosureListRevision += 1;
   const container = document.getElementById('disclosures');
   const links = document.getElementById('disclosure-links');
   const empty = document.getElementById('disclosure-empty');
+  const summary = document.getElementById('disclosure-summary');
   if (!container || !links) return;
   links.replaceChildren();
   if (lastDisclosures.length === 0) {
     container.style.display = 'none';
     if (empty) empty.hidden = true;
+    if (summary) summary.hidden = true;
     updateDisclosureSearchUI(0, 0);
     return;
+  }
+  const classifications = disclosureCounts(lastDisclosures);
+  if (summary) {
+    summary.hidden = false;
+    summary.textContent = t('disclosures.summaryCount')
+      .replace('{total}', String(classifications.total))
+      .replace('{vulnerable}', String(classifications.vulnerable))
+      .replace('{inconclusive}', String(classifications.inconclusive));
   }
   const filtered = lastDisclosures.filter(disclosureMatches);
   updateDisclosureSearchUI(lastDisclosures.length, filtered.length);
@@ -4105,8 +4273,9 @@ function renderDisclosures(list) {
     titleNode.className = 'disclosure-card-title';
     titleNode.textContent = title;
     const status = document.createElement('span');
-    status.className = 'disclosure-card-status';
-    status.textContent = disclosure.label || t('disclosures.notProvided');
+    const classification = disclosureClassificationValue(disclosure);
+    status.className = 'disclosure-card-status ' + classification;
+    status.textContent = disclosureClassificationLabel(classification);
     head.append(titleNode, status);
     link.appendChild(head);
 
@@ -4163,6 +4332,10 @@ function renderDisclosures(list) {
       evidenceBody.appendChild(row);
     }
     appendEvidence('disclosures.sourceToSink', disclosure.source_to_sink || t('disclosures.noSourceToSink'), true);
+    appendEvidence('disclosures.finalClassification', disclosureClassificationLabel(classification), false);
+    appendEvidence('disclosures.stage1Verdict', disclosure.stage1_verdict || t('disclosures.notProvided'), false);
+    appendEvidence('disclosures.stage2Verdict', disclosure.stage2_verdict || t('disclosures.notProvided'), false);
+    appendEvidence('disclosures.reviewStatus', disclosure.review_status || t('disclosures.notProvided'), false);
     const chain = Array.isArray(disclosure.call_chain) ? disclosure.call_chain : [];
     const chainLabel = document.createElement('span');
     chainLabel.className = 'disclosure-evidence-label';
@@ -4201,10 +4374,13 @@ function renderDisclosures(list) {
     card.appendChild(evidence);
     links.appendChild(card);
   });
+  if (lastPipelineView && selectedStage === 'report') renderStageWorkbench();
 }
 
 function loadDisclosures() {
-  fetch('/disclosures/' + jobID)
+  // Disclosure cards and links are backed by the selected language directory.
+  // The server falls back to the available locale for historical scans.
+  fetch('/disclosures/' + jobID + '?lang=' + encodeURIComponent(reportLanguage))
     .then(function(response) { return response.ok ? response.json() : []; })
     .then(function(list) { renderDisclosures(list); })
     .catch(function() { renderDisclosures([]); });
@@ -4262,11 +4438,10 @@ function connect() {
   };
 }
 
-let preferredLanguage = 'zh-CN';
-try { preferredLanguage = localStorage.getItem('vulnfounder.ui.language') || localStorage.getItem('openant.ui.language') || 'zh-CN'; } catch (_) {}
-applyLanguage(preferredLanguage);
+applyLanguage('zh-CN');
 refreshPipeline();
 loadArtifacts();
+loadDisclosures();
 loadClaudeInfo();
 connect();
 </script>

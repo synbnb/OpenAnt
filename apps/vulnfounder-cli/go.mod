@@ -1,4 +1,4 @@
-module github.com/synbnb/vulnfounder/apps/vulnfounder-cli
+module vulnfounder/apps/vulnfounder-cli
 
 go 1.25.7
 

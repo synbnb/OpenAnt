@@ -223,6 +223,11 @@ class LocatorSession:
     # Appended at the end to keep positional construction of older session
     # objects backward compatible.
     version_selection: Mapping[str, Any] | None = None
+    # The exact repository mapping selected by the user for the next clone.
+    # This is intentionally separate from the ranked mapping list: the list is
+    # evidence, while this field is an explicit user decision.  Older
+    # checkpoints omit it and retain the historical ranked-candidate fallback.
+    selected_repository: str | None = None
 
     def __post_init__(self) -> None:
         _session_id(self.session_id)
@@ -242,6 +247,8 @@ class LocatorSession:
         object.__setattr__(self, "client_attribution", _safe_mapping(self.client_attribution, name="client_attribution"))
         object.__setattr__(self, "repository_mappings", _safe_mapping(self.repository_mappings, name="repository_mappings"))
         object.__setattr__(self, "version_selection", _safe_mapping(self.version_selection, name="version_selection"))
+        if self.selected_repository is not None:
+            object.__setattr__(self, "selected_repository", _text(self.selected_repository, name="selected_repository", limit=128))
         object.__setattr__(self, "handoff", _safe_mapping(self.handoff, name="handoff"))
         object.__setattr__(self, "artifacts", _safe_artifacts(self.artifacts))
         object.__setattr__(self, "excluded_paths", _safe_excluded_paths(self.excluded_paths))
@@ -275,6 +282,7 @@ class LocatorSession:
             "client_attribution": dict(self.client_attribution) if self.client_attribution else None,
             "repository_mappings": dict(self.repository_mappings) if self.repository_mappings else None,
             "version_selection": dict(self.version_selection) if self.version_selection else None,
+            "selected_repository": self.selected_repository,
             "handoff": dict(self.handoff) if self.handoff else None,
             "artifacts": dict(self.artifacts),
             "excluded_paths": list(self.excluded_paths),
@@ -467,6 +475,7 @@ class SourceLocatorStateMachine:
             "client_attribution",
             "repository_mappings",
             "version_selection",
+            "selected_repository",
             "handoff",
             "artifacts",
             "excluded_paths",
@@ -623,13 +632,38 @@ class SourceLocatorStateMachine:
         )
         return "accepted"
 
-    def confirm(self, *, confirmation_id: str | None = None) -> LocatorSession:
+    def confirm(
+        self,
+        *,
+        confirmation_id: str | None = None,
+        project_name: str | None = None,
+    ) -> LocatorSession:
         if self.session.state != "AWAIT_USER_CONFIRMATION":
             raise LocatorStateError("只有等待用户确认时才能接受仓库候选")
         details = {"decision": "accepted"}
         if confirmation_id:
             details["confirmation_id"] = _text(confirmation_id, name="confirmation_id", limit=256)
-        return self.transition("CLONE", summary_zh="用户已确认候选仓库，允许进入拉取阶段", event_type="user.confirmed", details=details)
+        selected = None
+        if project_name is not None and str(project_name).strip():
+            selected = _text(project_name, name="project_name", limit=128)
+            mapping_data = self.session.repository_mappings
+            if not isinstance(mapping_data, Mapping):
+                raise LocatorStateError("session 缺少 repository_mappings，无法选择候选仓库")
+            raw_mappings = mapping_data.get("mappings")
+            if not isinstance(raw_mappings, list):
+                raise LocatorStateError("repository_mappings.mappings 不是列表")
+            matches = [
+                item for item in raw_mappings
+                if isinstance(item, Mapping)
+                and item.get("project_name") == selected
+                and item.get("status") == "resolved"
+            ]
+            if len(matches) != 1:
+                raise LocatorStateError("所选仓库不在本次已解析候选列表中")
+            details["project_name"] = selected
+        updates = {"selected_repository": selected}
+        summary = "用户已选择候选仓库，允许进入拉取阶段" if selected else "用户已确认推荐候选仓库，允许进入拉取阶段"
+        return self.transition("CLONE", summary_zh=summary, event_type="user.confirmed", updates=updates, details=details)
 
     def select_version(
         self,

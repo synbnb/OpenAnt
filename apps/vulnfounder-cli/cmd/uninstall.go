@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 var uninstallCmd = &cobra.Command{

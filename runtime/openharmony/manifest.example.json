@@ -1,0 +1,17 @@
+{
+  "platform": "linux-x64",
+  "openharmony_version": "6.1",
+  "toolchain_root": ".",
+  "components": {
+    "hdc": "sdk/default/openharmony/toolchains/hdc",
+    "hvigor": "hvigor/bin/hvigorw",
+    "node": "tool/node/bin/node",
+    "hap_sign_tool": "sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
+  },
+  "sha256": {
+    "hdc": "",
+    "hvigor": "",
+    "node": "",
+    "hap_sign_tool": ""
+  }
+}

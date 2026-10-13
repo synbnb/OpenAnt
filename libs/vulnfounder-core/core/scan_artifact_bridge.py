@@ -2,7 +2,7 @@
 
 输入只来自项目扫描的中间产物（不再依赖人工整理的数据集）：
 
-* ``evaluation_dataset/vulnerability/result/N.json`` — 聚合行（sample /
+* ``<result-dir>/evaluation/vulnerability/result/N.json`` — 聚合行（sample /
   repository / target_id / location / finding / result_file），finding 限定
   ``vulnerable`` / ``inconclusive``；
 * ``result_file`` 指向的 ``stage1_runs_N/outputs/<repo>/results.json`` —
@@ -31,6 +31,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from utilities.branding import data_dir
 
 # repo（扫描中间产物的 repository 字段）→ 描述符标准端点。
 # 只登记有已注册描述符协议族、且端点在真机上有稳定监听的仓库。
@@ -63,17 +65,14 @@ class ScanBridgeError(ValueError):
 
 
 # ---------------------------------------------------------------------------
-# webui 扫描目录（~/.openant/webui/<scan_id>/results.json）桥接输入
+# 项目内 Web 扫描目录（result/webui/<scan_id>/results.json）桥接输入
 # ---------------------------------------------------------------------------
 
 def _webui_root(webui_dir: str | Path | None) -> Path:
     if webui_dir is not None:
         root = Path(webui_dir).expanduser().resolve()
     else:
-        home = Path.home()
-        primary = home / ".vulnfounder" / "webui"
-        legacy = home / ".openant" / "webui"
-        root = primary if primary.is_dir() else legacy
+        root = (data_dir() / "webui").resolve()
     if not root.is_dir():
         raise ScanBridgeError(f"webui 扫描目录不存在：{root}")
     return root
@@ -619,12 +618,15 @@ def bridge_scan_entry(
     if repo_root is not None:
         resolved_root = Path(repo_root).expanduser().resolve()
     else:
-        # 缺省：项目内 socket_scope 仓库（与扫描产物路径约定一致）。
-        # 本模块位于 <project>/libs/vulnfounder-core/core/，项目根在 parents[3]。
-        resolved_root = (
-            Path(__file__).resolve().parents[3]
-            / "evaluation_dataset" / "vulnerability" / "service_scopes" / f"{repo}_socket_scope"
-        )
+        # 评测仓库不是产品运行时依赖。需要桥接评测产物时显式设置
+        # VULNFOUNDER_EVALUATION_DATASET，或把数据放入 result/evaluation；
+        # 不再隐式读取项目外或旧版 evaluation_dataset 目录。
+        evaluation_root = os.environ.get("VULNFOUNDER_EVALUATION_DATASET", "").strip()
+        if evaluation_root:
+            base = Path(evaluation_root).expanduser().resolve()
+        else:
+            base = (data_dir() / "evaluation").resolve()
+        resolved_root = base / "vulnerability" / "service_scopes" / f"{repo}_socket_scope"
     if not resolved_root.is_dir():
         raise ScanBridgeError(f"仓库根目录不存在：{resolved_root}")
 
@@ -1212,9 +1214,10 @@ def run_dynamic_from_scan(
     if repo_root is not None:
         resolved_repo_root = str(Path(repo_root).expanduser().resolve())
     else:
+        evaluation_root = os.environ.get("VULNFOUNDER_EVALUATION_DATASET", "").strip()
+        base = Path(evaluation_root).expanduser().resolve() if evaluation_root else (data_dir() / "evaluation").resolve()
         resolved_repo_root = str(
-            Path(__file__).resolve().parents[3]
-            / "evaluation_dataset" / "vulnerability" / "service_scopes"
+            base / "vulnerability" / "service_scopes"
             / f"{entry.repository}_socket_scope"
         )
     adapter = adapt_stage_finding(
@@ -1333,7 +1336,14 @@ def run_dynamic_from_scan(
     contract = compile_result.contract
     result.contract = contract.to_dict()
     _write_run_snapshot(progress_path, "contract.json", result.contract)
-    rec = Runner(hdc, on_event=emit).run(contract)
+    # Web worker 的当前工作目录可能来自只读的安装/打包目录。运行记录是
+    # 本次 scan-artifact 的产物，必须落在服务已创建并可写的 run 目录，不能
+    # 依赖相对路径 test_records/，否则设备载荷尚未发送就会因 Errno 30 失败。
+    rec = Runner(
+        hdc,
+        artifacts_root=Path(progress_path).parent,
+        on_event=emit,
+    ).run(contract)
     result.run_id = rec.run_id
     result.pattern = rec.pattern
     verdict = rec.verdict if isinstance(rec.verdict, dict) else {}
@@ -1365,7 +1375,8 @@ def run_dynamic_from_scan(
     # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
     runner_name = f"{rec.run_id}-{rec.contract_id}.json"
     runner_out = next(
-        (c for c in (Path("test_records/ohos-dynamic-v2/runs") / runner_name,
+        (c for c in (Path(progress_path).parent / runner_name,
+                     Path("test_records/ohos-dynamic-v2/runs") / runner_name,
                      Path.cwd() / "test_records/ohos-dynamic-v2/runs" / runner_name)
          if c.is_file()),
         None,
@@ -1399,7 +1410,7 @@ def run_dynamic_from_webui(
     clean_room: bool = False,
     allow_service_start: bool = False,
 ) -> ScanDynamicResult:
-    """webui 扫描条目（~/.openant/webui/<scan_id>/results.json）→ 适配 →
+    """webui 扫描条目（<data-dir>/webui/<scan_id>/results.json）→ 适配 →
     编译契约 → 真机执行。serial 必须显式给出（绝不隐式选择板卡）。"""
     bridge, entry = bridge_webui_entry(
         webui_dir, scan_id=scan_id, sample=sample, repo_root=repo_root,
@@ -1556,7 +1567,11 @@ def run_dynamic_from_webui(
     contract = compile_result.contract
     result.contract = contract.to_dict()
     _write_run_snapshot(progress_path, "contract.json", result.contract)
-    rec = Runner(hdc, on_event=emit).run(contract)
+    rec = Runner(
+        hdc,
+        artifacts_root=Path(progress_path).parent,
+        on_event=emit,
+    ).run(contract)
     result.run_id = rec.run_id
     result.pattern = rec.pattern
     verdict = rec.verdict if isinstance(rec.verdict, dict) else {}
@@ -1588,7 +1603,8 @@ def run_dynamic_from_webui(
     # Runner._persist 写 <cwd>/test_records/ohos-dynamic-v2/runs/<run_id>-<contract_id>.json。
     runner_name = f"{rec.run_id}-{rec.contract_id}.json"
     runner_out = next(
-        (c for c in (Path("test_records/ohos-dynamic-v2/runs") / runner_name,
+        (c for c in (Path(progress_path).parent / runner_name,
+                     Path("test_records/ohos-dynamic-v2/runs") / runner_name,
                      Path.cwd() / "test_records/ohos-dynamic-v2/runs" / runner_name)
          if c.is_file()),
         None,

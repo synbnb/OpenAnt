@@ -48,14 +48,14 @@
   <script src="/assets/vulnfounder-navigation.js" defer></script>
 </head>
 <body class="socket-scope-page">
-  <header class="top"><div class="brand"><div class="mark" aria-hidden="true">VF</div><div><h1>Socket 引导扫描范围</h1><p>从服务端源码证据确定最小扫描目录</p></div></div><div class="top-actions"><vulnfounder-workspace-nav current="scope"></vulnfounder-workspace-nav></div></header>
+  <header class="top"><div class="brand"><div class="mark" aria-hidden="true">VF</div><div><h1>Socket 引导扫描范围</h1><p>从服务端源码证据确定最小扫描目录</p></div></div><div class="top-actions"><vulnfounder-workspace-nav current="source"></vulnfounder-workspace-nav></div></header>
   <main>
     <section class="panel">
       <h2>先定位 Socket 服务目录</h2>
       <p class="hint">输入本地源码仓库和 Unix/TCP/UDP Socket。模型会通过只读工具逐步浏览目录、搜索源码并读取关键文件，给出候选服务目录和证据；确认后，普通扫描才会使用所选子目录。未使用本页确认范围时，普通扫描仍保持全仓模式。</p>
       <form id="discover-form" class="form">
         <div><label for="repo">本地源码仓库</label><input id="repo" name="repo" placeholder="/path/to/repository" required></div>
-        <div><label for="target">Socket 目标</label><input id="target" name="target" placeholder="/dev/unix/socket/paramservice 或 SP_daemon UDP 127.0.0.1:8283" required><label for="llm-config" style="margin-top:9px">模型配置名</label><input id="llm-config" name="llm_config" value="openharmony-live-gpt" maxlength="256"></div>
+        <div><label for="target">Socket 目标</label><input id="target" name="target" placeholder="/dev/unix/socket/paramservice 或 SP_daemon UDP 127.0.0.1:8283" required><p class="muted" style="margin-top:9px">模型配置统一从左侧“设置”页面读取当前默认值。</p></div>
         <button id="discover" type="submit">发现候选范围</button>
       </form>
       <div id="notice" role="status"></div>
@@ -104,7 +104,7 @@
       });
     }
     async function selectCandidate(candidateID, button) { if(!manifestPath||!candidateID)return; button.disabled=true; showNotice('正在写入用户确认记录……',''); try { const data=await post('/socket-scope/select',{manifest:manifestPath,candidate_id:candidateID}); const selected=data.scope&&data.scope.selection; const root=selected&&selected.scan_root?selected.scan_root:'（未知）'; $('selected').hidden=false; $('selected-text').textContent='已确认：'+root+'。manifest：'+(data.manifest_path||manifestPath); $('open-scan').onclick=()=>{ const params=new URLSearchParams({scope_manifest:data.manifest_path||manifestPath,repo:$('repo').value.trim()}); window.location.href='/?'+params.toString(); }; showNotice('范围已确认。请打开普通扫描页面，并检查 manifest 后开始扫描。','ok'); } catch(e){showNotice(e.message||String(e),'error');} finally {button.disabled=false;} }
-    $('discover-form').addEventListener('submit',async event=>{event.preventDefault(); $('discover').disabled=true; $('selected').hidden=true; showNotice('模型正在逐步读取仓库并追踪 Socket 服务实现……',''); try { const values={repo:$('repo').value.trim(),target:$('target').value.trim(),llm_config:$('llm-config').value.trim()}; const data=await post('/socket-scope/discover',values); renderCandidates(data); showNotice('模型调查完成。请核对源码证据并确认服务端目录。','ok'); } catch(e){showNotice(e.message||String(e),'error');} finally {$('discover').disabled=false;} });
+    $('discover-form').addEventListener('submit',async event=>{event.preventDefault(); $('discover').disabled=true; $('selected').hidden=true; showNotice('模型正在逐步读取仓库并追踪 Socket 服务实现……',''); try { const values={repo:$('repo').value.trim(),target:$('target').value.trim()}; const data=await post('/socket-scope/discover',values); renderCandidates(data); showNotice('模型调查完成。请核对源码证据并确认服务端目录。','ok'); } catch(e){showNotice(e.message||String(e),'error');} finally {$('discover').disabled=false;} });
     const query=new URLSearchParams(window.location.search); if(query.get('repo'))$('repo').value=query.get('repo'); if(query.get('target'))$('target').value=query.get('target');
   </script>
 </body>

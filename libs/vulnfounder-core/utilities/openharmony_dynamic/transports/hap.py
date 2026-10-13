@@ -8,35 +8,48 @@ bundle 名固定为签名 profile 允许的 com.security.research.trigger。
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .base import INPUT_DELIVERED, INPUT_NOT_SENT, SendResult, TransportError
+from ..toolchain import toolchain_root
 
 if TYPE_CHECKING:
     from ..hdc_client import HDCClient
 
-_SUITE_DIR = (
-    Path(__file__).resolve().parents[5] / "evaluation_dataset" / "vulnerability" / "result" / "hap_poc_suite"
-)
+_PROJECT_ROOT = Path(__file__).resolve().parents[5]
+_SUITE_DIR = _PROJECT_ROOT / "assets" / "dynamic_tester" / "hap_poc_suite"
 _TEMPLATE_PROJECT = _SUITE_DIR / "dp01_hap"
 _TEMPLATE_INDEX = _SUITE_DIR / "HAP_INDEX.ets.in"
 
-_TOOLCHAIN_ROOT = (
-    Path(__file__).resolve().parents[2] / "dynamic_tester" / "toolchains" /
-    "commandline-tools-mac-arm64-6.1.0.860" / "command-line-tools"
-)
+# Toolchain and signing credentials are deployment inputs.  The previous
+# implementation embedded one developer's home-directory certificate path,
+# which made a copied checkout unusable on another machine and risked leaking
+# a private signing location into reports.
+_TOOLCHAIN_ROOT = toolchain_root()
 _HVIGORW = _TOOLCHAIN_ROOT / "hvigor/bin/hvigorw"
 _NODE = _TOOLCHAIN_ROOT / "tool/node"
 _SIGN_JAR = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
 _HDC = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/hdc"
+_SDK_SIGNING_LIB = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/lib"
+_SDK_SIGNING_P12 = _SDK_SIGNING_LIB / "OpenHarmony.p12"
+_SDK_PROFILE_ROOT_CERT = _SDK_SIGNING_LIB / "OpenHarmonyProfileDebug.pem"
+_JAVA = os.environ.get("VULNFOUNDER_JAVA", "").strip() or shutil.which("java") or "java"
+_KEYTOOL = os.environ.get("VULNFOUNDER_KEYTOOL", "").strip() or shutil.which("keytool") or "keytool"
+_SDK_SIGNING_PASSWORD = "123456"
 
-CERT_DIR = Path("/Users/shiyu/学习/hyl_project/harmony_exploit/tools/hap_cert")
+_CERT_DIR_ENV = "VULNFOUNDER_HAP_CERT_DIR"
+CERT_DIR = Path(os.environ[_CERT_DIR_ENV]).expanduser().resolve() if os.environ.get(_CERT_DIR_ENV) else (
+    _PROJECT_ROOT / "config" / "hap_cert"
+)
 KEY_ALIAS = "oh-release-key"
 KEY_PWD = "123456"
 BUNDLE_NAME = "com.security.research.trigger"
@@ -54,6 +67,216 @@ _PLACEHOLDER_MAP = {
     "__SECOND__": "second",
     "__THIRD__": "third",
 }
+
+
+def _select_signing_material() -> tuple[Path, Path, Path, str, str, str] | None:
+    """选择本机签名材料，不把 debug 材料伪装成 release 证书。
+
+    交付包可带有研究用途的 ``config/hap_cert/debug`` 三件套；它只在没有
+    release 三件套时作为明确的 debug profile 使用。返回值包含证书链、
+    profile、P12、alias、密码和 profile 名，调用方会把 profile 写入构建
+    日志/产物元数据但绝不写出密码。
+    """
+
+    release = (
+        CERT_DIR / "oh_release_chain.cer",
+        CERT_DIR / "oh_profile8.p7b",
+        CERT_DIR / "oh_release.p12",
+        "oh-release-key",
+        "123456",
+        "release",
+    )
+    if all(path.is_file() for path in release[:3]):
+        return release
+    # Debug profile 必须显式选择。不同 OpenHarmony 版本/开发板的 debug
+    # profile 不一定兼容当前 hap-sign-tool，自动选用会把“证书无效”伪装成
+    # 动态测试失败；默认要求用户提供匹配设备的 release 材料。
+    if os.environ.get("VULNFOUNDER_HAP_CERT_PROFILE", "").strip().lower() != "debug":
+        return None
+    debug_dir = CERT_DIR / "debug"
+    debug = (
+        debug_dir / "app-cert.pem",
+        debug_dir / "debug-profile.p7b",
+        debug_dir / "debug.p12",
+        "debugKey",
+        "00000000000000000000000000000000",
+        "debug",
+    )
+    if all(path.is_file() for path in debug[:3]):
+        return debug
+    return None
+
+
+def _run_sign_tool(arguments: list[str], *, timeout: int = 120) -> str:
+    """运行 SDK 签名工具并返回输出；命令参数不包含可持久化的报告密钥。"""
+
+    completed = subprocess.run(
+        [_JAVA, "-jar", str(_SIGN_JAR), *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        shell=False,
+        timeout=timeout,
+        check=False,
+    )
+    output = completed.stdout.decode("utf-8", errors="replace")
+    if completed.returncode != 0:
+        raise TransportError("OpenHarmony 签名工具执行失败：" + output[-1800:])
+    return output
+
+
+def _run_keytool(arguments: list[str], *, timeout: int = 60) -> str:
+    """导出公开证书链；私钥和密码只在子进程参数中短暂存在，不写入日志。"""
+
+    completed = subprocess.run(
+        [_KEYTOOL, *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        shell=False,
+        timeout=timeout,
+        check=False,
+    )
+    output = completed.stdout.decode("utf-8", errors="replace")
+    if completed.returncode != 0:
+        raise TransportError("keytool 导出 OpenHarmony 证书失败：" + output[-1200:])
+    return output
+
+
+def _safe_signing_alias(prefix: str, contract_id: str) -> str:
+    digest = hashlib.sha256(str(contract_id).encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"vf-{prefix}-{digest}"
+
+
+def _generate_sdk_debug_signing_material(
+    out_dir: Path,
+    *,
+    device_serial: str,
+    contract_id: str,
+) -> tuple[Path, Path, Path, str, str, str]:
+    """用工具链随附的测试根密钥为当前设备生成一次性 debug 签名材料。
+
+    OpenHarmony debug profile 含设备 ID，不能把某台开发板的 p7b 固定放进
+    项目。SDK 自带的 ``OpenHarmony.p12`` 是公开测试材料；这里复制到本次
+    隔离目录，生成新的 app/profile 链和绑定当前 serial 的 profile，完成后
+    随契约临时目录清理。生产/用户证书仍优先走 ``_select_signing_material``。
+    """
+
+    serial = str(device_serial or "").strip()
+    if not serial:
+        raise TransportError("无法自动生成 HAP profile：HDC 设备 serial 为空")
+    required = (_SIGN_JAR, _SDK_SIGNING_P12, _SDK_PROFILE_ROOT_CERT)
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise TransportError("项目内 SDK 测试签名材料不完整：" + ", ".join(missing))
+    if shutil.which(_JAVA) is None and not Path(_JAVA).is_file():
+        raise TransportError("无法自动生成 HAP profile：未找到 Java（可设置 VULNFOUNDER_JAVA）")
+    if shutil.which(_KEYTOOL) is None and not Path(_KEYTOOL).is_file():
+        raise TransportError("无法自动生成 HAP profile：未找到 keytool（可设置 VULNFOUNDER_KEYTOOL）")
+
+    generated = out_dir / "sdk-debug-signing"
+    generated.mkdir(parents=True, exist_ok=True)
+    generated.chmod(0o700)
+    keystore = generated / "vulnfounder-sdk-debug.p12"
+    shutil.copy2(_SDK_SIGNING_P12, keystore)
+    keystore.chmod(0o600)
+
+    password = _SDK_SIGNING_PASSWORD
+    app_alias = _safe_signing_alias("app", contract_id)
+    profile_ca_alias = _safe_signing_alias("profile-ca", contract_id)
+    profile_alias = _safe_signing_alias("profile", contract_id)
+    common = ["-keystoreFile", str(keystore), "-keystorePwd", password]
+    _run_sign_tool([
+        "generate-keypair", "-keyAlias", app_alias, "-keyPwd", password,
+        "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
+    ])
+    _run_sign_tool([
+        "generate-cert", "-keyAlias", app_alias, "-keyPwd", password,
+        "-issuer", "C=CN,O=OpenHarmony,OU=OpenHarmony Team,CN=OpenHarmony Application CA",
+        "-issuerKeyAlias", "openharmony application ca", "-issuerKeyPwd", password,
+        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder App Debug",
+        "-validity", "3650", "-keyUsage", "digitalSignature", "-extKeyUsage", "codeSignature",
+        "-signAlg", "SHA256withECDSA", *common, "-issuerKeystoreFile", str(keystore),
+        "-issuerKeystorePwd", password, "-outFile", str(generated / "app-cert.cer"),
+    ])
+    _run_sign_tool([
+        "generate-keypair", "-keyAlias", profile_ca_alias, "-keyPwd", password,
+        "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
+    ])
+    _run_sign_tool([
+        "generate-ca", "-keyAlias", profile_ca_alias, "-keyPwd", password,
+        "-keyAlg", "ECC", "-keySize", "NIST-P-256",
+        "-issuer", "C=CN,O=OpenHarmony,OU=OpenHarmony Team,CN=OpenHarmony Application Root CA",
+        "-issuerKeyAlias", "openharmony application root ca", "-issuerKeyPwd", password,
+        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile CA",
+        "-validity", "3650", "-signAlg", "SHA384withECDSA", "-basicConstraintsPathLen", "1",
+        *common, "-issuerKeystoreFile", str(keystore), "-issuerKeystorePwd", password,
+        "-outFile", str(generated / "profile-ca.cer"),
+    ])
+    _run_sign_tool([
+        "generate-keypair", "-keyAlias", profile_alias, "-keyPwd", password,
+        "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
+    ])
+    _run_sign_tool([
+        "generate-cert", "-keyAlias", profile_alias, "-keyPwd", password,
+        "-issuer", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile CA",
+        "-issuerKeyAlias", profile_ca_alias, "-issuerKeyPwd", password,
+        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile Debug",
+        "-validity", "3650", "-keyUsage", "digitalSignature", "-extKeyUsage", "codeSignature",
+        "-signAlg", "SHA256withECDSA", *common, "-issuerKeystoreFile", str(keystore),
+        "-issuerKeystorePwd", password, "-outFile", str(generated / "profile-cert.cer"),
+    ])
+
+    root_cert = generated / "root.cer"
+    app_ca_cert = generated / "app-ca.cer"
+    _run_keytool([
+        "-exportcert", "-rfc", "-keystore", str(keystore), "-storetype", "PKCS12",
+        "-storepass", password, "-alias", "openharmony application root ca", "-file", str(root_cert),
+    ])
+    _run_keytool([
+        "-exportcert", "-rfc", "-keystore", str(keystore), "-storetype", "PKCS12",
+        "-storepass", password, "-alias", "openharmony application ca", "-file", str(app_ca_cert),
+    ])
+    app_chain = generated / "app-chain.cer"
+    profile_chain = generated / "profile-chain.cer"
+    app_chain.write_text(
+        (generated / "app-cert.cer").read_text(encoding="utf-8")
+        + app_ca_cert.read_text(encoding="utf-8")
+        + root_cert.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    profile_chain.write_text(
+        (generated / "profile-cert.cer").read_text(encoding="utf-8")
+        + (generated / "profile-ca.cer").read_text(encoding="utf-8")
+        + root_cert.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    template = _SDK_SIGNING_LIB / "UnsgnedDebugProfileTemplate.json"
+    if not template.is_file():
+        raise TransportError("项目内 SDK 缺少 UnsgnedDebugProfileTemplate.json")
+    profile_json = generated / "profile.json"
+    profile_data = json.loads(template.read_text(encoding="utf-8"))
+    profile_data["validity"] = {
+        "not-before": int(time.time()) - 3600,
+        "not-after": int(time.time()) + 3650 * 24 * 3600,
+    }
+    profile_data.setdefault("bundle-info", {})["bundle-name"] = BUNDLE_NAME
+    profile_data["bundle-info"]["development-certificate"] = app_chain.read_text(encoding="utf-8")
+    profile_data.setdefault("debug-info", {})["device-ids"] = [serial]
+    profile_json.write_text(json.dumps(profile_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    signed_profile = generated / "debug-profile.p7b"
+    _run_sign_tool([
+        "sign-profile", "-mode", "localSign", "-keyAlias", profile_alias,
+        "-keyPwd", password, "-profileCertFile", str(profile_chain),
+        "-inFile", str(profile_json), "-signAlg", "SHA256withECDSA",
+        *common, "-outFile", str(signed_profile),
+    ])
+    verification = _run_sign_tool(["verify-profile", "-inFile", str(signed_profile)])
+    if '"verifiedPassed": true' not in verification:
+        raise TransportError("自动生成的 HAP profile 未通过 SDK 校验：" + verification[-1200:])
+    return app_chain, signed_profile, keystore, app_alias, password, "sdk-generated-debug"
 
 
 def _escape_arkts_string(value: str) -> str:
@@ -102,10 +325,55 @@ class HapTransport:
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
+        signing_material = _select_signing_material()
+        if signing_material is None:
+            # 没有用户导入的 release/debug 三件套时，优先使用项目内 SDK
+            # 的公开测试根密钥为当前 HDC serial 生成设备绑定 profile。
+            # 这样新机器无需手动寻找 p7b；生成结果仍只存在本次隔离目录。
+            try:
+                signing_material = _generate_sdk_debug_signing_material(
+                    out_dir,
+                    device_serial=str(getattr(self.hdc, "serial", "") or ""),
+                    contract_id=contract_id,
+                )
+            except TransportError as auto_error:
+                required_certs = (
+                    CERT_DIR / "oh_release_chain.cer",
+                    CERT_DIR / "oh_profile8.p7b",
+                    CERT_DIR / "oh_release.p12",
+                )
+                missing_certs = [str(path) for path in required_certs if not path.is_file()]
+                raise TransportError(
+                    "HAP 签名材料缺失，且项目内 SDK 自动生成 debug profile 失败；请设置 "
+                    "VULNFOUNDER_HAP_CERT_DIR，或检查项目工具链/Java/HDC："
+                    + ", ".join(missing_certs)
+                    + f"。自动生成失败原因：{auto_error}"
+                ) from auto_error
+        app_cert, profile, keystore, key_alias, key_pwd, _profile_name = signing_material
         project = out_dir / "project"
         # 排除历史构建产物（build*.log / build 目录）与签名物，但保留 build-profile.json5
         shutil.copytree(_TEMPLATE_PROJECT, project,
                         ignore=shutil.ignore_patterns(".hvigor", "build", "signing", "*.log"))
+        # Hvigor 的 OpenHarmony signingConfigs 仍需要看到 profile 和
+        # keystore。签名材料只复制到本次隔离构建目录，构建完成后随临时
+        # 工作目录一起清理；不会把私钥写入模板或报告。
+        signing_dir = project / "signing"
+        signing_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(app_cert, signing_dir / "app-cert.pem")
+        shutil.copy2(profile, signing_dir / "debug-profile.p7b")
+        shutil.copy2(keystore, signing_dir / "debug.p12")
+
+        # 模板默认使用 SDK 调试材料的 alias/password。导入正式材料后，
+        # Hvigor 仍会先读取 build-profile.json5；如果不随材料更新，
+        # 外部 sign-app 参数虽然正确，Hvigor 仍可能在构建阶段先失败。
+        # 只修改本次隔离工程，不触碰项目模板和用户证书目录。
+        profile_path = project / "build-profile.json5"
+        if profile_path.is_file():
+            profile_text = profile_path.read_text(encoding="utf-8")
+            profile_text = profile_text.replace('"keyAlias": "debugKey"', f'"keyAlias": {key_alias!r}')
+            profile_text = profile_text.replace('"keyPassword": "00000000000000000000000000000000"', f'"keyPassword": {key_pwd!r}')
+            profile_text = profile_text.replace('"storePassword": "00000000000000000000000000000000"', f'"storePassword": {key_pwd!r}')
+            profile_path.write_text(profile_text, encoding="utf-8")
 
         index_src = _TEMPLATE_INDEX.read_text(encoding="utf-8")
         for placeholder, key in _PLACEHOLDER_MAP.items():
@@ -174,16 +442,16 @@ class HapTransport:
 
         signed = out_dir / "entry-default-signed.hap"
         sign_cmd = [
-            "java", "-jar", str(_SIGN_JAR), "sign-app",
+            _JAVA, "-jar", str(_SIGN_JAR), "sign-app",
             "-mode", "localSign",
-            "-keyAlias", KEY_ALIAS,
-            "-keyPwd", KEY_PWD,
-            "-appCertFile", str(CERT_DIR / "oh_release_chain.cer"),
-            "-profileFile", str(CERT_DIR / "oh_profile8.p7b"),
+            "-keyAlias", key_alias,
+            "-keyPwd", key_pwd,
+            "-appCertFile", str(app_cert),
+            "-profileFile", str(profile),
             "-inFile", str(unsigned[0]),
             "-signAlg", "SHA256withECDSA",
-            "-keystoreFile", str(CERT_DIR / "oh_release.p12"),
-            "-keystorePwd", KEY_PWD,
+            "-keystoreFile", str(keystore),
+            "-keystorePwd", key_pwd,
             "-outFile", str(signed),
             "-compatibleVersion", "23",
             "-signCode", "0",
@@ -195,6 +463,14 @@ class HapTransport:
             raise TransportError(
                 "签名未产出，日志尾部:\n" + sign.stdout.decode("utf-8", errors="replace")[-1500:]
             )
+        # Hvigor/签名完成后，隔离工程里的私钥副本不再需要。尤其是 SDK
+        # 自动生成的 P12 含有本轮临时私钥，不能跟着阶段产物长期保留；用户
+        # 导入的正式 P12 也只在 CERT_DIR 原位置保留，绝不从那里删除。
+        for private_copy in (project / "signing" / "debug.p12", keystore):
+            try:
+                private_copy.unlink(missing_ok=True)
+            except OSError:
+                pass
         return signed
 
     @staticmethod

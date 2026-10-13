@@ -99,3 +99,6 @@ exclude = [
 # The exposure-surface Agentic Loop uses one local Markdown command guide for
 # deterministic, offline RAG retrieval. Ship it as data with the wheel.
 "knowledge/openharmony_exposure_surface_command_guide.zh-CN.md" = "knowledge/openharmony_exposure_surface_command_guide.zh-CN.md"
+# Ship the built-in OpenHarmony rule catalog as well; the default loader uses
+# package resources when the checkout is installed as a wheel.
+"core/rules/defaults/openharmony.yaml" = "core/rules/defaults/openharmony.yaml"

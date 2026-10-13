@@ -19,6 +19,9 @@ func withTempHome(t *testing.T) string {
 	} else {
 		t.Setenv("HOME", dir)
 	}
+	t.Setenv("VULNFOUNDER_PROJECT_ROOT", "")
+	t.Setenv("OPENANT_PROJECT_ROOT", "")
+	t.Setenv("VULNFOUNDER_DATA_DIR", filepath.Join(dir, ".vulnfounder"))
 	return dir
 }
 
@@ -132,7 +135,7 @@ func TestLatestScanMetaSkipsFailedAndLegacyDirs(t *testing.T) {
 	}
 
 	// Legacy run: a scans/<sha>/ dir with no meta.json. Should be skipped.
-	legacyDir := filepath.Join(home, ".openant", "projects", "p", "scans", "legacysha")
+	legacyDir := filepath.Join(home, ".vulnfounder", "projects", "p", "scans", "legacysha")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

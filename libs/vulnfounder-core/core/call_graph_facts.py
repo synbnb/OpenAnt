@@ -547,6 +547,9 @@ def build_effective_call_graph(
     native_forward = _native_adjacency(native_graph)
     node_ids = _function_ids(native_graph, native_forward)
     body_ids = _known_function_body_ids(native_graph)
+    function_metadata = native_graph.get("functions", {})
+    if not isinstance(function_metadata, Mapping):
+        function_metadata = {}
     # Semantic overlays may carry declaration-only or external symbols that
     # the parser's dataset did not materialize as function bodies.  Keep them
     # as graph nodes, but do not treat them as analyzable dataset units.
@@ -638,6 +641,36 @@ def build_effective_call_graph(
             fact_keys.add(key)
         effective.setdefault(source, set()).add(target)
         return True
+
+    def qualified_self_edge_is_incompatible(
+        site: Mapping[str, Any], caller: str, target: str
+    ) -> bool:
+        """Reject stale qualified-call bindings that point back to an override.
+
+        A recursive ``Derived::Run()`` call is a valid self edge.  The unsafe
+        case is narrower: the source expression explicitly names a different
+        owner (for example ``Base::Run()``), while an old ledger resolves it
+        to the derived caller because only the leaf name was indexed.  Keep
+        this guard in effective-graph construction so reusing an older ledger
+        cannot resurrect that false edge after the diagnostics fix.
+        """
+        if caller != target:
+            return False
+        spelling = _string(site.get("callee_spelling"))
+        if "::" not in spelling:
+            return False
+        metadata = function_metadata.get(target, {})
+        target_name = (
+            _string(metadata.get("name"))
+            if isinstance(metadata, Mapping)
+            else ""
+        )
+        if not target_name:
+            target_name = target.rsplit(":", 1)[-1]
+        return not (
+            target_name == spelling
+            or target_name.endswith(f"::{spelling}")
+        )
 
     # Native edges are confirmed parser facts and are retained as-is for all
     # graph consumers. The functions index remains the authoritative body set.
@@ -818,6 +851,25 @@ def build_effective_call_graph(
             "callee_spelling": site.get("callee_spelling"),
         }
         for target in targets:
+            if qualified_self_edge_is_incompatible(site, caller, target):
+                add_exclusion(
+                    "qualified_call_target_mismatch",
+                    {
+                        "site_id": site_id,
+                        "caller_id": caller,
+                        "callee_id": target,
+                        "expression": site.get("expression"),
+                    },
+                    expected_callee=site.get("callee_spelling"),
+                    target_name=(
+                        function_metadata.get(target, {}).get("name")
+                        if isinstance(function_metadata.get(target), Mapping)
+                        else ""
+                    ),
+                )
+                if graph_status == "edge_missing":
+                    unrepaired_sites += 1
+                continue
             if add_confirmed(
                 caller,
                 target,
@@ -856,7 +908,16 @@ def build_effective_call_graph(
                 target = _normalize_endpoint(
                     edge.get("target") or edge.get("target_id") or edge.get("callee_id")
                 )
-                attrs = edge.get("attributes") if isinstance(edge.get("attributes"), Mapping) else {}
+                # Keep edge attributes mutable and carry provenance from the
+                # overlay envelope into each fact.  The producer commonly
+                # writes source/build identity once at the artifact level;
+                # dropping it here made the effective-graph validator treat
+                # otherwise matching facts as revision-missing.
+                attrs = dict(
+                    edge.get("attributes")
+                    if isinstance(edge.get("attributes"), Mapping)
+                    else {}
+                )
                 resolver = _string(edge.get("resolver") or attrs.get("resolver") or "semantic_overlay")
                 site_key = _string(edge.get("site_id") or attrs.get("site_id") or attrs.get("call_site"))
                 overlay_key = (source, target, resolver, site_key)
@@ -872,6 +933,19 @@ def build_effective_call_graph(
                 if expected_revision != "unknown":
                     if not overlay_revision:
                         revision_reason = "overlay_source_revision_missing"
+                    elif overlay_revision.lower() in {
+                        "unknown",
+                        "unavailable",
+                        "not_available",
+                        "n/a",
+                    }:
+                        # An object-flow or manually reconstructed artifact
+                        # may explicitly declare that it has no source
+                        # fingerprint.  This is weaker than a concrete
+                        # revision mismatch and should be reported as an
+                        # unknown provenance state, not as evidence that it
+                        # came from the wrong checkout.
+                        revision_reason = "overlay_source_revision_unknown"
                     elif overlay_revision != expected_revision:
                         revision_reason = "overlay_source_revision_mismatch"
                 overlay_build_config = _string(
@@ -879,6 +953,10 @@ def build_effective_call_graph(
                     or edge.get("build_config_id")
                     or graph_payload.get("build_config_id")
                 )
+                if overlay_revision and "source_revision" not in attrs:
+                    attrs["source_revision"] = overlay_revision
+                if overlay_build_config and "build_config_id" not in attrs:
+                    attrs["build_config_id"] = overlay_build_config
                 build_config_reason = ""
                 # Clang facts are configuration-specific.  When the caller
                 # supplies a concrete graph configuration, an overlay from a

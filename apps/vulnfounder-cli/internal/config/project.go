@@ -98,8 +98,8 @@ func SetActiveProject(name string) error {
 
 // ListProjects returns the names of all initialized projects.
 // It looks for project.json at exactly one or two levels deep:
-//   - ~/.openant/projects/<name>/project.json         → local projects
-//   - ~/.openant/projects/<org>/<repo>/project.json   → remote (org/repo) projects
+//   - <data-dir>/projects/<name>/project.json         → local projects
+//   - <data-dir>/projects/<org>/<repo>/project.json  → remote (org/repo) projects
 //
 // It does NOT recurse deeper, to avoid picking up project.json files
 // inside cloned repositories (e.g. Grafana's plugin project.json files).

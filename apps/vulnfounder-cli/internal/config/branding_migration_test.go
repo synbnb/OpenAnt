@@ -26,6 +26,9 @@ func isolateBrandingEnvironment(t *testing.T) string {
 	} {
 		t.Setenv(key, "")
 	}
+	// Tests that exercise project data APIs use an explicit portable data root;
+	// production code must never infer a home-directory runtime location.
+	t.Setenv("VULNFOUNDER_DATA_DIR", filepath.Join(home, "result"))
 	return home
 }
 
@@ -83,31 +86,23 @@ func TestDataDirUsesVulnFounderForFreshInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DataDir: %v", err)
 	}
-	want := filepath.Join(home, ".vulnfounder")
+	want := filepath.Join(home, "result")
 	if got != want {
 		t.Fatalf("DataDir = %q, want %q", got, want)
 	}
 }
 
-func TestDataDirKeepsExistingLegacyHistoryVisible(t *testing.T) {
-	home := isolateBrandingEnvironment(t)
-	legacy := filepath.Join(home, ".openant")
-	if err := os.MkdirAll(legacy, 0o700); err != nil {
-		t.Fatalf("mkdir legacy data: %v", err)
-	}
-
-	got, err := DataDir()
-	if err != nil {
-		t.Fatalf("DataDir: %v", err)
-	}
-	if got != legacy {
-		t.Fatalf("DataDir = %q, want legacy history %q", got, legacy)
+func TestDataDirRejectsUnownedGlobalRuntime(t *testing.T) {
+	isolateBrandingEnvironment(t)
+	t.Setenv("VULNFOUNDER_DATA_DIR", "")
+	if _, err := DataDir(); err == nil {
+		t.Fatal("DataDir should require a project root or explicit data directory")
 	}
 }
 
 func TestDataDirExplicitOverrideWinsOverLegacyHistory(t *testing.T) {
 	home := isolateBrandingEnvironment(t)
-	if err := os.MkdirAll(filepath.Join(home, ".openant"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, "result"), 0o700); err != nil {
 		t.Fatalf("mkdir legacy data: %v", err)
 	}
 	override := filepath.Join(t.TempDir(), "vulnfounder-data")

@@ -207,12 +207,8 @@
 </head>
 <body data-job-id="{{.ID}}" data-artifact-name="{{.Name}}" data-artifact-label="{{.Label}}" data-artifact-stage="{{.Stage}}" data-artifact-description="{{.Description}}">
 <header class="topbar">
-  <div class="brand"><strong>vulnfounder</strong><span data-i18n="brand.subtitle">扫描产物查看器</span></div>
-  <div class="topbar-actions">
-    <vulnfounder-workspace-nav></vulnfounder-workspace-nav>
-    <label class="language-field" for="language-select"><span data-i18n="language.label">语言</span><select id="language-select"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
-    <button type="button" class="close-button" id="close-button" data-i18n="action.close">关闭窗口</button>
-  </div>
+  <div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>vulnfounder</h1><p data-i18n="brand.subtitle">扫描产物查看器</p></div></div>
+  <div class="topbar-actions"><vulnfounder-workspace-nav></vulnfounder-workspace-nav><button type="button" class="close-button" id="close-button" data-i18n="action.close">关闭窗口</button></div>
 </header>
 <main class="page">
   <section class="hero">
@@ -1418,9 +1414,7 @@
   graphCanvas.addEventListener('mousedown', function(event) { if (event.button !== 0) return; graphDragging = true; graphDragStart = { x: event.clientX, y: event.clientY }; graphDragOrigin = { x: graphPan.x, y: graphPan.y }; graphCanvas.classList.add('dragging'); });
   window.addEventListener('mousemove', function(event) { if (!graphDragging) return; graphPan = { x: graphDragOrigin.x + event.clientX - graphDragStart.x, y: graphDragOrigin.y + event.clientY - graphDragStart.y }; if (graphData) graphRenderSvg(); });
   window.addEventListener('mouseup', function() { graphDragging = false; graphCanvas.classList.remove('dragging'); });
-  const languageSelect = document.getElementById('language-select'); let preferredLanguage = new URLSearchParams(window.location.search).get('lang'); if (!translations[preferredLanguage]) { try { preferredLanguage = localStorage.getItem('vulnfounder.ui.language') || localStorage.getItem('openant.ui.language'); } catch (_) {} }
-  languageSelect.value = translations[preferredLanguage] ? preferredLanguage : 'zh-CN'; languageSelect.addEventListener('change', function() { applyLanguage(languageSelect.value); });
-  applyLanguage(languageSelect.value); setMode(defaultGraphArtifacts[artifactName] ? 'graph' : 'structured');
+  applyLanguage('zh-CN'); setMode(defaultGraphArtifacts[artifactName] ? 'graph' : 'structured');
 })();
 </script>
 </body>

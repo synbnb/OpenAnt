@@ -28,30 +28,32 @@ func TestPythonOverrideFallsBackToLegacyEnvironment(t *testing.T) {
 func TestManagedVenvUsesFreshVulnFounderDataRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("VULNFOUNDER_DATA_DIR", "")
+	dataRoot := filepath.Join(home, "result")
+	t.Setenv("VULNFOUNDER_DATA_DIR", dataRoot)
 	if runtime.GOOS == "windows" {
 		t.Setenv("USERPROFILE", home)
 	}
 	got := venvDir()
-	want := filepath.Join(home, ".vulnfounder", "venv")
+	want := filepath.Join(dataRoot, "venv")
 	if got != want {
 		t.Fatalf("venvDir = %q, want %q", got, want)
 	}
 }
 
-func TestManagedVenvKeepsLegacyEnvironmentUsable(t *testing.T) {
+func TestManagedVenvIgnoresLegacyRuntimeRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("VULNFOUNDER_DATA_DIR", "")
+	dataRoot := filepath.Join(home, "result")
+	t.Setenv("VULNFOUNDER_DATA_DIR", dataRoot)
 	if runtime.GOOS == "windows" {
 		t.Setenv("USERPROFILE", home)
 	}
-	legacy := filepath.Join(home, ".openant")
+	legacy := filepath.Join(home, ".vulnfounder")
 	if err := os.MkdirAll(legacy, 0o700); err != nil {
 		t.Fatalf("mkdir legacy data: %v", err)
 	}
-	want := filepath.Join(legacy, "venv")
+	want := filepath.Join(dataRoot, "venv")
 	if got := venvDir(); got != want {
-		t.Fatalf("venvDir = %q, want legacy %q", got, want)
+		t.Fatalf("venvDir = %q, want canonical %q", got, want)
 	}
 }

@@ -7882,6 +7882,12 @@ class SourceLocatorWorker:
         candidates = [_mapping_from_dict(item) for item in mappings if isinstance(item, Mapping) and item.get("status") == "resolved"]
         if not candidates:
             raise SourceLocatorWorkerError("没有可拉取的 resolved mapping")
+        selected_name = self.session.selected_repository
+        if isinstance(selected_name, str) and selected_name.strip():
+            selected = next((item for item in candidates if item.project_name == selected_name), None)
+            if selected is None:
+                raise SourceLocatorWorkerError("用户选择的仓库不再位于当前 resolved mapping 中")
+            return selected
         review_path = _session_dir(self.machine) / "repository_candidate_review.json"
         if review_path.exists() and review_path.is_file() and not review_path.is_symlink():
             try:

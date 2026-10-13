@@ -99,6 +99,49 @@ func TestSavePreservesV2Fields(t *testing.T) {
 	}
 }
 
+func TestSourceLocatorSettingsRoundTripPreservesSiblings(t *testing.T) {
+	withConfigJSON(t, `{
+  "default_llm": "team-model",
+  "private_token": "keep-me",
+  "source_locator": {
+    "enabled": true,
+    "manifest": {"source": "local", "path": "config/openharmony/ohos.xml"},
+    "opengrok": {"base_url": "https://old.example/source", "project": "old", "api_prefix": "/api/v1", "auth": {"mode": "none"}}
+  }
+}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.WriteSourceLocatorSettings(SourceLocatorSettings{
+		Enabled: true, TargetRevision: "OpenHarmony-6.1-LTS", BaseURL: "https://new.example/source",
+		Project: "openharmony", APIPrefix: "/api/v1", TimeoutSeconds: 20, MaxRetries: 1,
+		VerifyTLS: true, AuthMode: "bearer_env", TokenEnv: "OPENGROK_TOKEN",
+	})
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	got := reloaded.GetSourceLocatorSettings()
+	if got.BaseURL != "https://new.example/source" || got.Project != "openharmony" || got.TokenEnv != "OPENGROK_TOKEN" {
+		t.Fatalf("settings mismatch: %+v", got)
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatalf("config path: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), `"private_token": "keep-me"`) || !strings.Contains(string(data), `"manifest"`) {
+		t.Fatalf("unknown or sibling source_locator fields were lost: %s", data)
+	}
+}
+
 func TestSetAPIKeyAlsoUpdatesV2Provider(t *testing.T) {
 	original := `{
   "$schema_version": 2,
@@ -553,5 +596,38 @@ func TestWriteLLMConfigOverwritesExistingProvider(t *testing.T) {
 	got, _ := cfg2.GetProvider("anthropic")
 	if got.APIKey != "sk-new" {
 		t.Errorf("provider key not rotated: got %q, want sk-new", got.APIKey)
+	}
+}
+
+func TestLLMDefaultAndDeleteConfig(t *testing.T) {
+	withConfigJSON(t, `{
+  "$schema_version": 2,
+  "default_llm": "custom-a",
+  "llm_configs": {
+    "custom-a": {"analyze": {"provider": "p", "model": "m"}},
+    "custom-b": {"analyze": {"provider": "p", "model": "m2"}}
+  }
+}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.SetDefaultLLM("custom-b"); err != nil {
+		t.Fatalf("SetDefaultLLM: %v", err)
+	}
+	if cfg.DefaultLLMName() != "custom-b" {
+		t.Fatalf("DefaultLLMName = %q, want custom-b", cfg.DefaultLLMName())
+	}
+	if err := cfg.DeleteLLMConfig("custom-b"); err != nil {
+		t.Fatalf("DeleteLLMConfig: %v", err)
+	}
+	if cfg.DefaultLLMName() != DefaultLLMConfigName {
+		t.Fatalf("deleted active config did not fall back to builtin: %q", cfg.DefaultLLMName())
+	}
+	if err := cfg.DeleteLLMConfig(DefaultLLMConfigName); err == nil {
+		t.Fatal("DeleteLLMConfig allowed deletion of builtin config")
+	}
+	if err := cfg.SetDefaultLLM("missing"); err == nil {
+		t.Fatal("SetDefaultLLM allowed an unknown config")
 	}
 }

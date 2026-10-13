@@ -35,7 +35,7 @@ type DiffStats struct {
 }
 
 // ScanMeta describes a single scan-run. One file per scan-run dir at
-// ~/.openant/projects/<name>/scans/<short_sha>/meta.json.
+// <data-dir>/projects/<name>/scans/<short_sha>/meta.json.
 //
 // The dir is the source of truth for "what scans exist on this project";
 // project.json carries only static identity. To find the latest run, walk
@@ -56,7 +56,7 @@ type ScanMeta struct {
 }
 
 // ScanRunDir returns the per-run directory (without the language subdir).
-// ~/.openant/projects/<name>/scans/<short_sha>/
+// <data-dir>/projects/<name>/scans/<short_sha>/
 //
 // meta.json lives here. Language-specific dataset/report output continues
 // to live at <run-dir>/<language>/ via ScanDir.

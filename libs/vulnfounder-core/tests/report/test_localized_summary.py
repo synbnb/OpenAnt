@@ -1,6 +1,10 @@
 """Regression tests for Chinese summary generation."""
 
-from report.generator import generate_summary_report, load_prompt
+from report.generator import (
+    _strip_chinese_summary_cost_section,
+    generate_summary_report,
+    load_prompt,
+)
 from utilities.llm import CompletionResult, PhaseBinding, TextBlock
 
 
@@ -54,3 +58,17 @@ def test_chinese_summary_prompt_is_packaged():
     prompt = load_prompt("summary.zh-CN")
     assert "安全分析报告" in prompt
     assert "OpenHarmony 平台上下文" in prompt
+    assert "## 各阶段费用" not in prompt
+    assert "不要在中文摘要中输出模型费用" in prompt
+
+
+def test_chinese_summary_cost_section_is_removed_without_touching_duration():
+    source = (
+        "## 各阶段费用\n\n| 阶段 | 费用 |\n|---|---|\n| 解析 | ¥1 |\n\n"
+        "## 各阶段耗时\n\n| 阶段 | 耗时 |\n|---|---|\n| 解析 | 1 秒 |\n"
+    )
+    result = _strip_chinese_summary_cost_section(source)
+    assert "各阶段费用" not in result
+    assert "¥1" not in result
+    assert "各阶段耗时" in result
+    assert "1 秒" in result

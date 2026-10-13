@@ -63,8 +63,9 @@ def test_bare_macro_and_service_name_are_distinguished_without_guessing_repo():
 
 
 def test_local_absolute_path_is_not_misclassified_as_remote_socket():
+    local_repo_path = Path(__file__).resolve().parents[4] / "source_code_base" / "foo"
     with pytest.raises(TargetNormalizationError, match="本地源码/工程路径"):
-        normalize_target("/Users/shiyu/学习/hyl/new/VulnFounder/source_code_base/foo")
+        normalize_target(str(local_repo_path))
 
 
 @pytest.mark.parametrize(

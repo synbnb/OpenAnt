@@ -5,12 +5,12 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/checkpoint"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/languages"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/checkpoint"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/git"
+	"vulnfounder/apps/vulnfounder-cli/internal/languages"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 var scanCmd = &cobra.Command{

@@ -342,7 +342,7 @@ def _compact_for_summary(pipeline_data: dict) -> dict:
     return compact
 
 
-def _context_provenance_header(pipeline_data: dict) -> str:
+def _context_provenance_header(pipeline_data: dict, language: str = "en") -> str:
     """R5: a deterministic banner when context came from a repo-controlled file.
 
     Rendered from ``pipeline_output.json`` fields WITHOUT the LLM, on purpose: a
@@ -358,34 +358,49 @@ def _context_provenance_header(pipeline_data: dict) -> str:
     baseline_applied = isinstance(baseline, dict) and baseline.get("applied") is True
     if pipeline_data.get("context_source") != "threat_model" and not baseline_applied:
         return ""
+    zh = _disclosure_locale(language) == "zh-CN"
     lines = []
     if pipeline_data.get("context_source") == "threat_model":
-        lines.extend(
-            [
-                "> **⚠ Security model supplied by a repo-controlled file.**",
-                "> This scan's attacker model came from `VULNFOUNDER.THREATMODEL.md` "
-                "(or the legacy `OPENANT.THREATMODEL.md`) inside "
-                "the scanned repository, which is attacker-influenceable. Treat the "
-                "findings' scope as only as trustworthy as that file.",
-            ]
-        )
+        if zh:
+            lines.extend(
+                [
+                    "> **⚠ 安全模型由仓库内文件提供。**",
+                    "> 本次扫描的攻击者模型来自被扫描仓库中的 `VULNFOUNDER.THREATMODEL.md` "
+                    "（或旧版 `OPENANT.THREATMODEL.md`）。该文件可能受到被扫描内容影响，"
+                    "因此报告结论的适用范围必须结合该文件一并复核。",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "> **⚠ Security model supplied by a repo-controlled file.**",
+                    "> This scan's attacker model came from `VULNFOUNDER.THREATMODEL.md` "
+                    "(or the legacy `OPENANT.THREATMODEL.md`) inside "
+                    "the scanned repository, which is attacker-influenceable. Treat the "
+                    "findings' scope as only as trustworthy as that file.",
+                ]
+            )
         sha = pipeline_data.get("threat_model_sha256")
         if sha:
-            lines.append(f"> Threat-model sha256: `{sha}`")
+            lines.append(f"> {'威胁模型 sha256' if zh else 'Threat-model sha256'}: `{sha}`")
         for warning in pipeline_data.get("threat_model_warnings") or []:
             lines.append(f"> - {warning}")
     if baseline_applied:
         lines.append(
-            "> **OpenHarmony platform minimum baseline applied (mandatory).**"
+            "> **已应用 OpenHarmony 平台最小基线（强制）。**"
+            if zh
+            else "> **OpenHarmony platform minimum baseline applied (mandatory).**"
         )
         if baseline.get("version") is not None:
-            lines.append(f"> Baseline version: `{baseline.get('version')}`")
+            lines.append(
+                f"> {'基线版本' if zh else 'Baseline version'}: `{baseline.get('version')}`"
+            )
         conflicts = (
             pipeline_data.get("application_context_provenance") or {}
         ).get("merge_conflicts") or []
         if conflicts:
             lines.append(
-                f"> Repository-model merge conflicts retained for review: `{len(conflicts)}`"
+                f"> {'保留待复核的仓库模型合并冲突' if zh else 'Repository-model merge conflicts retained for review'}: `{len(conflicts)}`"
             )
     return "\n".join(lines) + "\n\n"
 
@@ -455,6 +470,40 @@ def _report_attacker_model(pipeline_data: Mapping) -> str:
     return "Remote attacker with browser access, no server-side access, no admin credentials."
 
 
+def _strip_chinese_summary_cost_section(text: str) -> str:
+    """Remove a model-emitted per-stage cost section from the Chinese summary.
+
+    The localized summary contract intentionally keeps operational duration and
+    analysis counts, but does not expose billing details to report readers.  A
+    prompt instruction is not sufficient protection because an LLM may still
+    reproduce an old template.  Remove only a level-two Markdown section whose
+    heading explicitly describes stage/pipeline costs; other sections and
+    evidence text remain untouched.
+    """
+    if not text:
+        return text
+    lines = text.splitlines()
+    output: list[str] = []
+    skipping = False
+    for line in lines:
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if match:
+            level = len(match.group(1))
+            title = match.group(2)
+            if (
+                level == 2
+                and ("费用" in title or "成本" in title)
+                and ("阶段" in title or "流水线" in title or "管线" in title)
+            ):
+                skipping = True
+                continue
+            if skipping and level <= 2:
+                skipping = False
+        if not skipping:
+            output.append(line)
+    return "\n".join(output).rstrip() + ("\n" if text.endswith("\n") else "")
+
+
 def generate_summary_report(
     pipeline_data: dict,
     binding: PhaseBinding,
@@ -495,8 +544,10 @@ def generate_summary_report(
     )
 
     text = "\n".join(b.text for b in result.content if isinstance(b, TextBlock))
+    if language == "zh-CN":
+        text = _strip_chinese_summary_cost_section(text)
     # Prepend the provenance banner deterministically (see helper docstring).
-    text = _context_provenance_header(pipeline_data) + text
+    text = _context_provenance_header(pipeline_data, language=language) + text
     return text, _extract_usage(
         result.input_tokens,
         result.output_tokens,
@@ -576,6 +627,19 @@ def _localize_disclosure_markdown(text: str, language: str = "en") -> str:
     output = text or ""
     heading_map = {
         "Security Disclosure": "安全漏洞披露",
+        "Core Vulnerability Evidence": "漏洞核心证据",
+        "Vulnerability Description": "漏洞说明",
+        "Triggering Code": "漏洞触发代码",
+        "Attack Chain": "攻击链",
+        "Call Chain Overview": "调用链总览",
+        "Strict call chains": "严格调用链",
+        "Candidate call chains": "候选调用链",
+        "Root Cause": "漏洞根因",
+        "Remediation Key Points": "修复要点",
+        "Attack scenario": "攻击场景",
+        "Evidence granularity": "证据粒度",
+        "Stage-2 data-flow status": "Stage 2 数据流状态",
+        "Independent Issue Inventory": "独立问题清单",
         "Vulnerable Code": "漏洞代码",
         "Evidence Context": "证据上下文",
         "Target Source Location": "目标源码位置",
@@ -667,6 +731,256 @@ def _localize_disclosure_markdown(text: str, language: str = "en") -> str:
             output,
         )
     return output
+
+
+def _zero_usage() -> dict:
+    """Return a zero-cost usage record for deterministic/fallback work."""
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "cost_cny": 0.0,
+        "costs_by_currency": {},
+    }
+
+
+def _restore_translation_code_fences(source: str, translated: str) -> str:
+    """Restore fenced source blocks byte-for-byte after model translation."""
+    source_fences = re.findall(r"```[^\n]*\n.*?```", source or "", flags=re.DOTALL)
+    if not source_fences:
+        return translated
+    target_fences = list(re.finditer(r"```[^\n]*\n.*?```", translated or "", flags=re.DOTALL))
+    if not target_fences:
+        return (translated or "").rstrip() + "\n\n" + "\n\n".join(source_fences)
+    pieces = []
+    cursor = 0
+    for index, match in enumerate(target_fences):
+        pieces.append(translated[cursor:match.start()])
+        pieces.append(source_fences[index] if index < len(source_fences) else match.group(0))
+        cursor = match.end()
+    pieces.append(translated[cursor:])
+    if len(source_fences) > len(target_fences):
+        pieces.extend(["\n\n", "\n\n".join(source_fences[len(target_fences):])])
+    return "".join(pieces)
+
+
+def _mask_translation_literals(source: str) -> tuple[str, list[str]]:
+    """Mask fenced source blocks before sending prose to a translator.
+
+    Earlier versions also replaced every inline-code span with a long marker.
+    A real disclosure can contain hundreds of paths, function names and line
+    references; asking the model to preserve one marker for each of them made
+    an otherwise good translation fail the structural check and caused a full
+    English fallback.  Fenced source is the only content that must be kept
+    byte-for-byte here.  Inline identifiers are validated/restored separately
+    by the Markdown post-processing layer.
+    """
+    literals: list[str] = []
+
+    def replace(match: re.Match) -> str:
+        marker = f"VULNFOUNDER_PROTECTED_LITERAL_{len(literals)}"
+        literals.append(match.group(0))
+        return marker
+
+    # Fences are the only protected literals.  Keep the marker short because
+    # it has to survive a long report translation without being paraphrased.
+    masked = re.sub(r"```[^\n]*\n.*?```", replace, source or "", flags=re.DOTALL)
+    return masked, literals
+
+
+def _restore_translation_literals(text: str, literals: list[str]) -> str:
+    """Restore protected source/identifier literals after translation."""
+    output = text or ""
+    for index, literal in enumerate(literals):
+        marker = f"VULNFOUNDER_PROTECTED_LITERAL_{index}"
+        output = output.replace(marker, literal)
+    return output
+
+
+def _restore_inline_translation_literals(source: str, translated: str) -> str:
+    """Restore inline Markdown code spans without masking them in the prompt.
+
+    Inline spans are much more numerous than fenced blocks.  They remain
+    visible to the translator so the request stays tractable, then this
+    post-pass restores their exact source spelling when the model preserved
+    the same number of spans.  Fenced source blocks are skipped.
+    """
+    fence_pattern = r"```[^\n]*\n.*?```"
+
+    def prose_spans(value: str) -> list[str]:
+        spans: list[str] = []
+        for index, part in enumerate(re.split(f"({fence_pattern})", value or "", flags=re.DOTALL)):
+            if index % 2 == 1:
+                continue
+            spans.extend(re.findall(r"`[^`\n]+`", part))
+        return spans
+
+    source_spans = prose_spans(source)
+    if not source_spans:
+        return translated
+    target_count = len(prose_spans(translated))
+    if target_count != len(source_spans):
+        return translated
+
+    remaining = iter(source_spans)
+    rebuilt: list[str] = []
+    for index, part in enumerate(re.split(f"({fence_pattern})", translated or "", flags=re.DOTALL)):
+        if index % 2 == 1:
+            rebuilt.append(part)
+        else:
+            rebuilt.append(re.sub(r"`[^`\n]+`", lambda _match: next(remaining), part))
+    return "".join(rebuilt)
+
+
+def _translation_quality_ok(source: str, translated: str) -> bool:
+    """Reject a label-only/English echo before it becomes a Chinese report.
+
+    Technical identifiers, paths and code are intentionally English and are
+    not a translation failure.  The check therefore removes fenced and
+    inline-code content, then requires a meaningful amount of Chinese prose.
+    It is deliberately a quality gate, not a claim that every technical term
+    must be translated.
+    """
+    if not translated.strip():
+        return False
+
+    def prose(value: str) -> str:
+        value = re.sub(r"```[^\n]*\n.*?```", " ", value or "", flags=re.DOTALL)
+        value = re.sub(r"`[^`\n]+`", " ", value)
+        # Remove URLs before measuring.  We deliberately do *not* remove all
+        # ASCII words here: doing that makes an English echo look empty and
+        # lets a few translated headings pass the quality gate.
+        value = re.sub(r"https?://\S+", " ", value)
+        return value
+
+    source_prose = prose(source)
+    target_prose = prose(translated)
+    source_words = len(re.findall(r"[A-Za-z]{3,}", source_prose))
+    target_cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", target_prose))
+    if source_words < 12:
+        return target_cjk >= 8 or not re.search(r"[A-Za-z]{6,}", target_prose)
+    # A faithful Chinese rendering normally has at least several hundred
+    # Chinese characters for a long report.  A label-only fallback has almost
+    # none, even when deterministic sections already contain a few Chinese
+    # labels.
+    return target_cjk >= max(20, int(source_words * 0.35))
+
+
+def _translation_structure_ok(source: str, translated: str, markers: list[str]) -> bool:
+    """Check only evidence/Markdown structure, not wording."""
+    source_heading_count = len(re.findall(r"(?m)^#{1,6}\s+", source))
+    translated_heading_count = len(re.findall(r"(?m)^#{1,6}\s+", translated))
+    if translated_heading_count != source_heading_count:
+        return False
+    return all(marker in translated for marker in markers)
+
+
+def translate_report_markdown(
+    source_markdown: str,
+    binding: PhaseBinding | None,
+    *,
+    kind: str = "disclosure",
+) -> tuple[str, dict]:
+    """Translate a canonical English report without changing its evidence.
+
+    The English report is the canonical factual artifact; this model call only
+    localizes prose.  If the optional report model is unavailable, callers get
+    a deterministic label-localized fallback and can still expose English.
+    """
+    source = str(source_markdown or "").strip()
+    if not source:
+        return "", _zero_usage()
+    if binding is None:
+        return _localize_disclosure_markdown(source, "zh-CN"), _zero_usage()
+
+    from utilities.llm import Message, TextBlock
+
+    masked_source, protected_literals = _mask_translation_literals(source)
+    report_kind = "待定分析报告" if kind == "inconclusive" else "安全漏洞披露报告"
+    prompt = (
+        f"你是 VulnFounder 的专业安全报告本地化器。请把下面的英文{report_kind}完整翻译为简体中文。\n\n"
+        "硬性要求：\n"
+        "1. 每一段自然语言说明、分析、影响、根因和修复建议都必须翻译成简体中文，不能只翻译标题。\n"
+        "2. 不得删减、合并或新增事实；保持所有 Markdown 标题层级、列表顺序和分隔线。\n"
+        "3. 代码围栏中的占位符必须原样保留；路径、函数名、类名、变量名、命令、URL、CVE/CWE、证据 ID、行号、数字、状态枚举和文件名必须原样保留。\n"
+        "4. 技术标识符可以保留英文，但不得把普通英文句子原样复制到中文报告。\n"
+        "5. 只输出翻译后的 Markdown，不要解释翻译过程，不要包裹额外的代码围栏。\n\n"
+        "--- 英文规范版本开始 ---\n"
+        f"{masked_source}\n"
+        "--- 英文规范版本结束 ---\n"
+    )
+
+    def complete_translation(instruction: str):
+        return binding.adapter.complete(
+            model=binding.model,
+            # A full disclosure often contains a large call-chain source
+            # bundle.  16K output tokens was enough to trigger truncation and
+            # then the old all-or-nothing fallback.
+            max_tokens=max(8192, min(32768, len(source) // 2 + 4096)),
+            system=(
+                "你是专业的简体中文安全报告翻译器。必须把英文自然语言全部翻译成简体中文；"
+                "代码、路径、函数名、变量名、命令、数字和证据标识符逐字保留。"
+                "不得输出英文解释，也不得省略任何段落。"
+            ),
+            messages=[Message(role="user", content=[TextBlock(instruction)])],
+        )
+
+    def result_text(result) -> str:
+        return "\n".join(
+            block.text for block in result.content if isinstance(block, TextBlock)
+        ).strip()
+
+    try:
+        result = complete_translation(prompt)
+        translated = result_text(result)
+        if not translated:
+            translated = source
+        markers = [
+            f"VULNFOUNDER_PROTECTED_LITERAL_{index}"
+            for index in range(len(protected_literals))
+        ]
+
+        # One retry is useful for the two common failure modes of a long
+        # report: the model echoed English prose or omitted one code marker.
+        # The retry is still constrained to the same canonical source and does
+        # not reinterpret the finding.
+        if not _translation_structure_ok(masked_source, translated, markers) or not _translation_quality_ok(source, translated):
+            retry_prompt = (
+                prompt
+                + "\n\n上一版没有满足要求。请重新输出完整译文：所有普通英文句子必须改写为简体中文；"
+                "每一个 VULNFOUNDER_PROTECTED_LITERAL_N 占位符（N 为实际编号）必须保留且顺序不变；"
+                "不要输出英文原文，不要省略任何标题、列表或段落。"
+            )
+            retry_result = complete_translation(retry_prompt)
+            retry_text = result_text(retry_result)
+            if retry_text and (
+                _translation_structure_ok(masked_source, retry_text, markers)
+                and _translation_quality_ok(source, retry_text)
+            ):
+                result = retry_result
+                translated = retry_text
+
+        if not _translation_structure_ok(masked_source, translated, markers) or not _translation_quality_ok(source, translated):
+            # Preserve a complete deterministic artifact if the provider is
+            # unavailable or refuses the translation.  The fallback is now
+            # explicitly marked in the report metadata by its localized
+            # headings; it is never mistaken for a successful full translation
+            # by the quality gate above.
+            translated = _localize_disclosure_markdown(source, "zh-CN")
+        translated = _restore_translation_literals(translated, protected_literals)
+        translated = _restore_translation_code_fences(source, translated)
+        translated = _restore_inline_translation_literals(source, translated)
+        translated = _localize_disclosure_markdown(translated, "zh-CN")
+        usage = _extract_usage(
+            result.input_tokens,
+            result.output_tokens,
+            binding.model,
+            pricing=lookup_pricing(binding),
+        )
+        return translated, usage
+    except Exception:
+        return _localize_disclosure_markdown(source, "zh-CN"), _zero_usage()
 
 
 def _disclosure_title(vulnerability_data: Mapping) -> str:
@@ -2188,6 +2502,10 @@ def generate_disclosure(
     binding: PhaseBinding,
     pipeline_data: Mapping | None = None,
     language: str = "en",
+    *,
+    repair_info: Mapping | None = None,
+    translation_source: str | None = None,
+    _capture: dict | None = None,
 ) -> tuple[str, dict]:
     """Generate a disclosure document for a single vulnerability.
 
@@ -2198,6 +2516,12 @@ def generate_disclosure(
         pipeline_data: Optional pipeline output carrying platform provenance.
         language: Disclosure locale (``en`` or ``zh-CN``). English is the
             backward-compatible default.
+        repair_info: Reuse the canonical English repair result for a localized
+            sibling report instead of asking the repair model a second time.
+        translation_source: English model-authored narrative to translate for
+            a localized sibling report. Deterministic evidence is still
+            rendered from the same finding below.
+        _capture: Internal component capture used by ``generate_disclosure_pair``.
 
     Returns:
         (disclosure_text, usage_dict)
@@ -2219,7 +2543,11 @@ def generate_disclosure(
         code_section = _fallback_code_section(vulnerability_data, locale)
     else:
         code_section = _localize_disclosure_markdown(code_section, locale)
-    repair_info, repair_usage = _generate_repair_suggestion(vulnerability_data, binding)
+    if repair_info is None:
+        repair_info, repair_usage = _generate_repair_suggestion(vulnerability_data, binding)
+    else:
+        repair_info = dict(repair_info)
+        repair_usage = _zero_usage()
     effective_data = dict(vulnerability_data)
     if repair_info.get("code"):
         effective_data["suggested_fix"] = repair_info["code"]
@@ -2251,32 +2579,51 @@ def generate_disclosure(
         # legacy caller can never leave the disclosure prompt without code.
         "fixed_code_snippet": repair_info.get("code") or _reference_repair_code(vulnerability_data),
     }
-    prompt_name = "disclosure.zh-CN" if locale == "zh-CN" else "disclosure"
-    user_prompt = load_prompt(prompt_name)
-    user_prompt = user_prompt.replace(
-        "{vulnerability_data}", json.dumps(payload, ensure_ascii=False, indent=2), 1
-    )
-    user_prompt = user_prompt.replace(
-        "{platform_context}",
-        _render_platform_context_for_report(report_data)
-        or "No OpenHarmony platform baseline was recorded.",
-    )
-    user_prompt = user_prompt.replace(
-        "{attacker_model}", _report_attacker_model(report_data)
-    )
-    for key, value in replacements.items():
-        user_prompt = user_prompt.replace("{" + key + "}", str(value))
+    result = None
+    if locale == "zh-CN" and translation_source is not None:
+        # The Chinese sibling is a constrained localization of the canonical
+        # English narrative. It must not independently reinterpret the finding.
+        llm_output, disclosure_usage = translate_report_markdown(
+            translation_source,
+            binding,
+            kind="disclosure",
+        )
+    else:
+        prompt_name = "disclosure.zh-CN" if locale == "zh-CN" else "disclosure"
+        user_prompt = load_prompt(prompt_name)
+        user_prompt = user_prompt.replace(
+            "{vulnerability_data}", json.dumps(payload, ensure_ascii=False, indent=2), 1
+        )
+        user_prompt = user_prompt.replace(
+            "{platform_context}",
+            _render_platform_context_for_report(report_data)
+            or "No OpenHarmony platform baseline was recorded.",
+        )
+        user_prompt = user_prompt.replace(
+            "{attacker_model}", _report_attacker_model(report_data)
+        )
+        for key, value in replacements.items():
+            user_prompt = user_prompt.replace("{" + key + "}", str(value))
 
-    result = binding.adapter.complete(
-        model=binding.model,
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[Message(role="user", content=[TextBlock(user_prompt)])],
-    )
+        result = binding.adapter.complete(
+            model=binding.model,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[Message(role="user", content=[TextBlock(user_prompt)])],
+        )
 
-    llm_output = "\n".join(
-        b.text for b in result.content if isinstance(b, TextBlock)
-    )
+        llm_output = "\n".join(
+            b.text for b in result.content if isinstance(b, TextBlock)
+        )
+        disclosure_usage = _extract_usage(
+            result.input_tokens,
+            result.output_tokens,
+            binding.model,
+            pricing=lookup_pricing(binding),
+        )
+    if _capture is not None:
+        _capture["llm_output"] = llm_output
+        _capture["repair_info"] = dict(repair_info)
     final_output = _splice_code_section(llm_output, code_section, locale)
     context_section = _render_disclosure_context(
         vulnerability_data,
@@ -2313,13 +2660,67 @@ def generate_disclosure(
         language=locale,
     )
 
-    disclosure_usage = _extract_usage(
-        result.input_tokens,
-        result.output_tokens,
-        binding.model,
-        pricing=lookup_pricing(binding),
-    )
     return final_output, _merge_usage([repair_usage, disclosure_usage])
+
+
+# Kept so tests and downstream integrations that monkeypatch the historical
+# single-locale function continue to exercise their lightweight doubles.  The
+# production path below always uses the canonical pair implementation.
+_CANONICAL_GENERATE_DISCLOSURE = generate_disclosure
+
+
+def generate_disclosure_pair(
+    vulnerability_data: dict,
+    product_name: str,
+    binding: PhaseBinding,
+    pipeline_data: Mapping | None = None,
+) -> tuple[str, str, dict]:
+    """Generate English and Chinese siblings from one canonical finding.
+
+    The English report performs the only vulnerability and repair generation.
+    The Chinese report translates that exact narrative and reuses the same
+    deterministic source/context/repair sections, eliminating locale drift.
+    """
+    if generate_disclosure is not _CANONICAL_GENERATE_DISCLOSURE:
+        # Compatibility path for callers replacing generate_disclosure with a
+        # test double. Real scans never enter this branch, so they retain the
+        # single-finding canonical-English -> constrained-Chinese flow.
+        english, english_usage = generate_disclosure(
+            vulnerability_data,
+            product_name,
+            binding,
+            pipeline_data=pipeline_data,
+        )
+        chinese, chinese_usage = generate_disclosure(
+            vulnerability_data,
+            product_name,
+            binding,
+            pipeline_data=pipeline_data,
+            language="zh-CN",
+        )
+        safe_usages = [
+            usage if isinstance(usage, Mapping) and "input_tokens" in usage else _zero_usage()
+            for usage in (english_usage, chinese_usage)
+        ]
+        return english, chinese, _merge_usage(safe_usages)
+
+    components: dict = {}
+    english, english_usage = generate_disclosure(
+        vulnerability_data,
+        product_name,
+        binding,
+        pipeline_data=pipeline_data,
+        _capture=components,
+    )
+    # Translate the completed English artifact, rather than regenerating a
+    # second Chinese finding. This includes deterministic core evidence whose
+    # field values may themselves be English (description, root cause, etc.).
+    chinese, chinese_usage = translate_report_markdown(
+        english,
+        binding,
+        kind="disclosure",
+    )
+    return english, chinese, _merge_usage([english_usage, chinese_usage])
 
 
 def generate_all(
@@ -2375,11 +2776,14 @@ def generate_all(
         # core.verdict_taxonomy.DISCLOSURE_ELIGIBLE, shared with
         # core/reporter.generate_disclosure_docs and report/__main__, so a
         # degenerate verify never silently drops a Stage-1 potential vuln.
-        if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE:
+        if finding.get("stage2_verdict") not in DISCLOSURE_ELIGIBLE or (
+            finding.get("stage1_verdict") == "inconclusive"
+            and finding.get("stage2_verdict") == "unverified"
+        ):
             continue
 
         print(f"Generating disclosure for {finding['short_name']}...")
-        disclosure, _usage = generate_disclosure(
+        disclosure, disclosure_zh, _usage = generate_disclosure_pair(
             finding,
             product_name,
             report_binding,
@@ -2397,18 +2801,37 @@ def generate_all(
             f.write(disclosure)
         print(f"  -> {disclosures_dir / filename}")
 
-        print(f"Generating Chinese disclosure for {finding['short_name']}...")
-        disclosure_zh, _usage = generate_disclosure(
-            finding,
-            product_name,
-            report_binding,
-            pipeline_data=pipeline_data,
-            language="zh-CN",
-        )
         disclosures_zh_dir.mkdir(exist_ok=True)
         with open_utf8(disclosures_zh_dir / filename, "w") as f:
             f.write(disclosure_zh)
         print(f"  -> {disclosures_zh_dir / filename}")
+
+    # Keep unresolved static-analysis leads visible without treating them as
+    # confirmed disclosures. English is deterministic; the Chinese sibling is
+    # a constrained translation of that same artifact.
+    from core.reporter import render_inconclusive_report
+    for i, finding in enumerate(pipeline_data["findings"], 1):
+        if not (
+            finding.get("stage2_verdict") == "inconclusive"
+            or (
+                finding.get("stage1_verdict") == "inconclusive"
+                and finding.get("stage2_verdict") in {"unverified", ""}
+            )
+        ):
+            continue
+        safe_name = (os.path.basename(str(finding.get("short_name") or finding.get("id") or "inconclusive"))
+                     or "inconclusive").replace(" ", "_").upper()
+        filename = f"INCONCLUSIVE_{i:02d}_{safe_name}.md"
+        english_text = render_inconclusive_report(finding, language="en")
+        chinese_text, _translation_usage = translate_report_markdown(
+            english_text, report_binding, kind="inconclusive"
+        )
+        with open_utf8(disclosures_dir / filename, "w") as f:
+            f.write(english_text)
+        disclosures_zh_dir.mkdir(exist_ok=True)
+        with open_utf8(disclosures_zh_dir / filename, "w") as f:
+            f.write(chinese_text)
+        print(f"  -> {disclosures_dir / filename} (inconclusive)")
 
 
 if __name__ == "__main__":

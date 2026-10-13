@@ -27,11 +27,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/report"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types"
-	uifiles "github.com/synbnb/vulnfounder/apps/vulnfounder-cli/ui"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/report"
+	"vulnfounder/apps/vulnfounder-cli/internal/types"
+	uifiles "vulnfounder/apps/vulnfounder-cli/ui"
 )
 
 // Job status constants.
@@ -112,20 +112,21 @@ type jobMeta struct {
 
 // Job represents a single scan job.
 type Job struct {
-	mu              sync.Mutex
-	ID              string
-	Repo            string
-	StartedAt       time.Time
-	Status          string
-	LogBuf          []string
-	logBytes        int  // total bytes buffered, to bound memory (see addLog)
-	logCapped       bool // true once a line/byte limit was hit; no more appends
-	ReportPath      string
-	ReportPathZH    string
-	SummaryPath     string
-	SummaryPathZH   string
-	DisclosurePaths []string
-	Cancel          context.CancelFunc
+	mu                sync.Mutex
+	ID                string
+	Repo              string
+	StartedAt         time.Time
+	Status            string
+	LogBuf            []string
+	logBytes          int  // total bytes buffered, to bound memory (see addLog)
+	logCapped         bool // true once a line/byte limit was hit; no more appends
+	ReportPath        string
+	ReportPathZH      string
+	SummaryPath       string
+	SummaryPathZH     string
+	DisclosurePaths   []string
+	DisclosurePathsZH []string
+	Cancel            context.CancelFunc
 
 	// Internal scan parameters (not exposed via API)
 	apiKey                        string
@@ -208,7 +209,7 @@ func (j *Job) addLog(line string) {
 	j.LogBuf = append(j.LogBuf, line)
 }
 
-func (j *Job) setDone(reportPath, summaryPath, reportPathZH, summaryPathZH string, disclosurePaths []string) {
+func (j *Job) setDone(reportPath, summaryPath, reportPathZH, summaryPathZH string, disclosurePaths, disclosurePathsZH []string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.Status = StatusDone
@@ -217,6 +218,7 @@ func (j *Job) setDone(reportPath, summaryPath, reportPathZH, summaryPathZH strin
 	j.SummaryPath = summaryPath
 	j.SummaryPathZH = summaryPathZH
 	j.DisclosurePaths = disclosurePaths
+	j.DisclosurePathsZH = disclosurePathsZH
 }
 
 func (j *Job) setError() {
@@ -282,41 +284,60 @@ func (m *manager) cancelAll() {
 
 // Server is the web UI HTTP server.
 type Server struct {
-	pythonPath              string
-	outDir                  string
-	mgr                     *manager
-	tmplIndex               *template.Template
-	tmplScan                *template.Template
-	tmplArtifact            *template.Template
-	tmplSum                 *template.Template
-	tmplDisclosure          *template.Template
-	tmplSourceLocator       *template.Template
-	tmplExposureSurface     *template.Template
-	tmplExposureLocator     *template.Template
-	tmplDeviceSocketAssets  *template.Template
-	tmplSocketScope         *template.Template
-	tmplScanArtifact        *template.Template
-	tmplScanArtifactHistory *template.Template
-	sem                     chan struct{}
-	csrfToken               string
-	sourceLocatorMu         sync.Mutex     // serializes Web source-locator mutations, including deletion
-	exposureSurfaceMu       sync.Mutex     // serializes Web exposure-surface mutations, including deletion
-	wg                      sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
-	shutdownDone            chan struct{}  // closed once cancel+drain completes
-	drainMu                 sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
-	draining                bool           // set at shutdown so no new job is added after Wait starts
-	deviceSocketJobsMu      sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
-	deviceSocketJobs        map[string]*deviceSocketAssetJob
-	scanArtifactJobsMu      sync.RWMutex // protects scan-artifact dynamic-test runs observed by the Web UI
-	scanArtifactJobs        map[string]*scanArtifactJob
+	pythonPath               string
+	outDir                   string
+	mgr                      *manager
+	tmplDashboard            *template.Template
+	tmplIndex                *template.Template
+	tmplRepositoryManager    *template.Template
+	tmplVulnerabilitySummary *template.Template
+	tmplScan                 *template.Template
+	tmplArtifact             *template.Template
+	tmplSum                  *template.Template
+	tmplDisclosure           *template.Template
+	tmplSourceLocator        *template.Template
+	tmplExposureSurface      *template.Template
+	tmplExposureLocator      *template.Template
+	tmplDeviceSocketAssets   *template.Template
+	tmplDeviceSocketHistory  *template.Template
+	tmplSocketScope          *template.Template
+	tmplSettings             *template.Template
+	tmplScanArtifact         *template.Template
+	tmplScanArtifactHistory  *template.Template
+	sem                      chan struct{}
+	csrfToken                string
+	repositoryMu             sync.Mutex     // serializes source_code_base repository mutations
+	sourceLocatorMu          sync.Mutex     // serializes Web source-locator mutations, including deletion
+	exposureSurfaceMu        sync.Mutex     // serializes Web exposure-surface mutations, including deletion
+	settingsMu               sync.Mutex     // serializes persistent settings mutations
+	wg                       sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
+	shutdownDone             chan struct{}  // closed once cancel+drain completes
+	drainMu                  sync.Mutex     // guards draining; makes wg.Add happen-before wg.Wait
+	draining                 bool           // set at shutdown so no new job is added after Wait starts
+	deviceSocketJobsMu       sync.RWMutex   // protects Agentic device Socket runs observed by the Web UI
+	deviceSocketJobs         map[string]*deviceSocketAssetJob
+	scanArtifactJobsMu       sync.RWMutex // protects scan-artifact dynamic-test runs observed by the Web UI
+	scanArtifactJobs         map[string]*scanArtifactJob
 }
 
 // New creates a new Server.  It parses UI templates and recovers any existing
 // jobs from disk at outDir.
 func New(pythonPath, outDir string) (*Server, error) {
+	tmplDashboard, err := template.ParseFS(uifiles.FS, "dashboard.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse dashboard.html: %w", err)
+	}
 	tmplIndex, err := template.ParseFS(uifiles.FS, "index.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse index.html: %w", err)
+	}
+	tmplRepositoryManager, err := template.ParseFS(uifiles.FS, "repository-manager.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse repository-manager.html: %w", err)
+	}
+	tmplVulnerabilitySummary, err := template.ParseFS(uifiles.FS, "vulnerability-summary.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse vulnerability-summary.html: %w", err)
 	}
 	tmplScan, err := template.ParseFS(uifiles.FS, "scan.html")
 	if err != nil {
@@ -350,9 +371,17 @@ func New(pythonPath, outDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse device-socket-assets.html: %w", err)
 	}
+	tmplDeviceSocketHistory, err := template.ParseFS(uifiles.FS, "device-socket-asset-history.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse device-socket-asset-history.html: %w", err)
+	}
 	tmplSocketScope, err := template.ParseFS(uifiles.FS, "socket-scope.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse socket-scope.html: %w", err)
+	}
+	tmplSettings, err := template.ParseFS(uifiles.FS, "settings.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse settings.html: %w", err)
 	}
 	tmplScanArtifact, err := template.ParseFS(uifiles.FS, "dynamic-test.html")
 	if err != nil {
@@ -371,26 +400,31 @@ func New(pythonPath, outDir string) (*Server, error) {
 	}
 
 	s := &Server{
-		pythonPath:              pythonPath,
-		outDir:                  outDir,
-		mgr:                     newManager(outDir),
-		tmplIndex:               tmplIndex,
-		tmplScan:                tmplScan,
-		tmplArtifact:            tmplArtifact,
-		tmplSum:                 tmplSum,
-		tmplDisclosure:          tmplDisclosure,
-		tmplSourceLocator:       tmplSourceLocator,
-		tmplExposureSurface:     tmplExposureSurface,
-		tmplExposureLocator:     tmplExposureLocator,
-		tmplDeviceSocketAssets:  tmplDeviceSocketAssets,
-		tmplSocketScope:         tmplSocketScope,
-		tmplScanArtifact:        tmplScanArtifact,
-		tmplScanArtifactHistory: tmplScanArtifactHistory,
-		sem:                     make(chan struct{}, 4),
-		csrfToken:               hex.EncodeToString(tokBytes),
-		shutdownDone:            make(chan struct{}),
-		deviceSocketJobs:        make(map[string]*deviceSocketAssetJob),
-		scanArtifactJobs:        make(map[string]*scanArtifactJob),
+		pythonPath:               pythonPath,
+		outDir:                   outDir,
+		mgr:                      newManager(outDir),
+		tmplDashboard:            tmplDashboard,
+		tmplIndex:                tmplIndex,
+		tmplRepositoryManager:    tmplRepositoryManager,
+		tmplVulnerabilitySummary: tmplVulnerabilitySummary,
+		tmplScan:                 tmplScan,
+		tmplArtifact:             tmplArtifact,
+		tmplSum:                  tmplSum,
+		tmplDisclosure:           tmplDisclosure,
+		tmplSourceLocator:        tmplSourceLocator,
+		tmplExposureSurface:      tmplExposureSurface,
+		tmplExposureLocator:      tmplExposureLocator,
+		tmplDeviceSocketAssets:   tmplDeviceSocketAssets,
+		tmplDeviceSocketHistory:  tmplDeviceSocketHistory,
+		tmplSocketScope:          tmplSocketScope,
+		tmplSettings:             tmplSettings,
+		tmplScanArtifact:         tmplScanArtifact,
+		tmplScanArtifactHistory:  tmplScanArtifactHistory,
+		sem:                      make(chan struct{}, 4),
+		csrfToken:                hex.EncodeToString(tokBytes),
+		shutdownDone:             make(chan struct{}),
+		deviceSocketJobs:         make(map[string]*deviceSocketAssetJob),
+		scanArtifactJobs:         make(map[string]*scanArtifactJob),
 	}
 	s.recoverJobs()
 	return s, nil
@@ -720,6 +754,7 @@ func populateRecoveredArtifacts(job *Job, jobDir string) {
 		}
 	}
 	job.DisclosurePaths = findDisclosures(jobDir)
+	job.DisclosurePathsZH = findLocalizedDisclosures(jobDir, "zh-CN")
 }
 
 // refreshRecoveredJob synchronizes a job restored from disk with artifacts
@@ -772,10 +807,23 @@ func inferRepoURL(jobDir string) string {
 // Handler returns the HTTP handler for the server.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /repositories", s.handleRepositories)
+	mux.HandleFunc("GET /repository-manager", s.handleRepositoryManagerIndex)
+	mux.HandleFunc("GET /vulnerability-summary", s.handleVulnerabilitySummaryIndex)
+	mux.HandleFunc("GET /api/vulnerabilities", s.handleVulnerabilitySummaryData)
+	// Repository management is deliberately separate from the opaque scan
+	// catalog above: the browser may inspect, upload, and delete only direct
+	// children of the project-local source_code_base directory.
+	mux.HandleFunc("GET /api/repositories", s.handleRepositoryInventory)
+	mux.HandleFunc("POST /api/repositories", s.handleRepositoryUpload)
+	mux.HandleFunc("DELETE /api/repositories/{name}", s.handleRepositoryDelete)
 	mux.HandleFunc("POST /scan", s.handleStartScan)
 	mux.HandleFunc("GET /assets/{name}", s.handleAsset)
+	// Keep the existing scanner form available at a stable, explicit route;
+	// the root route is now the read-only workbench overview.
+	mux.HandleFunc("GET /scan", s.handleIndex)
+	mux.HandleFunc("GET /scan/{$}", s.handleIndex)
 	mux.HandleFunc("GET /scan/{id}", s.handleScanPage)
 	mux.HandleFunc("GET /scan/{id}/logs", s.handleScanLogs)
 	mux.HandleFunc("GET /scan/{id}/pipeline", s.handlePipeline)
@@ -798,6 +846,16 @@ func (s *Server) Handler() http.Handler {
 	// security headers with scan jobs; no second port or cross-origin bridge is
 	// introduced.
 	mux.HandleFunc("GET /source-locator", s.handleSourceLocatorIndex)
+	// Centralized project settings.  Model selection is intentionally managed
+	// here instead of being duplicated in each scan/discovery form.
+	mux.HandleFunc("GET /settings", s.handleSettingsIndex)
+	mux.HandleFunc("GET /settings/llm", s.handleSettingsLLM)
+	mux.HandleFunc("POST /settings/llm/configs", s.handleSettingsLLMSave)
+	mux.HandleFunc("POST /settings/llm/default", s.handleSettingsLLMDefault)
+	mux.HandleFunc("DELETE /settings/llm/configs/{name}", s.handleSettingsLLMDelete)
+	mux.HandleFunc("GET /settings/opengrok", s.handleSettingsOpenGrok)
+	mux.HandleFunc("POST /settings/opengrok", s.handleSettingsOpenGrokSave)
+	mux.HandleFunc("GET /settings/runtime", s.handleSettingsRuntime)
 	// Unified OpenHarmony workflow: device exposure inspection is stage 1 and
 	// source location is stage 2. The underlying APIs remain separate so old
 	// sessions and clients stay compatible.
@@ -806,6 +864,10 @@ func (s *Server) Handler() http.Handler {
 	// It maintains a latest snapshot per board and does not replace the
 	// target-specific exposure-surface session APIs.
 	mux.HandleFunc("GET /device-socket-assets", s.handleDeviceSocketAssetIndex)
+	mux.HandleFunc("GET /device-socket-assets/history", s.handleDeviceSocketAssetHistoryIndex)
+	mux.HandleFunc("GET /device-socket-assets/devices", s.handleDeviceSocketAssetDevices)
+	mux.HandleFunc("GET /device-socket-assets/llm-configs", s.handleDeviceSocketAssetLLMConfigs)
+	mux.HandleFunc("GET /device-socket-assets/asset-options", s.handleDeviceSocketAssetOptions)
 	mux.HandleFunc("GET /device-socket-assets/snapshots", s.handleDeviceSocketAssetSnapshots)
 	mux.HandleFunc("POST /device-socket-assets/scan", s.handleDeviceSocketAssetScan)
 	mux.HandleFunc("GET /device-socket-assets/runs", s.handleDeviceSocketAssetRuns)
@@ -1146,12 +1208,11 @@ func addRepositoryOption(options *[]repositoryOption, seen map[string]struct{}, 
 	})
 }
 
-// sourceCodeRepositoryOptions discovers the independent Git repositories kept
-// under the project-local source_code_base directory. Only direct child
-// directories with their own .git metadata are eligible; this avoids treating
-// arbitrary documentation/build directories or nested project files as scan
-// targets. Symlinked children and symlinked .git metadata are skipped so a
-// catalog entry cannot silently point outside the project-local corpus.
+// sourceCodeRepositoryOptions discovers independent repositories kept under
+// the project-local source_code_base directory. Only direct child directories
+// with their own .git metadata or the server-owned upload marker are eligible;
+// this avoids treating arbitrary documentation/build directories as scan
+// targets while still making ZIP uploads selectable in the scan form.
 func sourceCodeRepositoryOptions(options *[]repositoryOption, seen map[string]struct{}) {
 	root, err := config.SourceCodeBaseDir()
 	if err != nil || root == "" {
@@ -1166,11 +1227,11 @@ func sourceCodeRepositoryOptions(options *[]repositoryOption, seen map[string]st
 			continue
 		}
 		repoPath := filepath.Join(root, entry.Name())
-		gitMetadata, err := os.Lstat(filepath.Join(repoPath, ".git"))
-		if err != nil || gitMetadata.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		if !gitMetadata.IsDir() && !gitMetadata.Mode().IsRegular() {
+		gitMetadata, gitErr := os.Lstat(filepath.Join(repoPath, ".git"))
+		markerMetadata, markerErr := os.Lstat(filepath.Join(repoPath, repositoryMarkerFile))
+		gitEligible := gitErr == nil && gitMetadata.Mode()&os.ModeSymlink == 0 && (gitMetadata.IsDir() || gitMetadata.Mode().IsRegular())
+		markerEligible := markerErr == nil && markerMetadata.Mode().IsRegular()
+		if !gitEligible && !markerEligible {
 			continue
 		}
 		addRepositoryOption(options, seen, "source_code_base", "Project source — "+entry.Name(), repoPath, -1, time.Time{})
@@ -1182,7 +1243,7 @@ func (s *Server) repositoryOptions() []repositoryOption {
 	seen := make(map[string]struct{})
 
 	// The project-local corpus is the most portable source of repositories: it
-	// travels with a VulnFounder checkout and does not depend on ~/.openant state.
+	// travels with a VulnFounder checkout and does not depend on hidden home state.
 	sourceCodeRepositoryOptions(&options, seen)
 
 	// Initialized projects are the most stable choices and therefore appear
@@ -2747,6 +2808,49 @@ type indexData struct {
 	CSRF         string
 }
 
+// dashboardJobView is deliberately smaller than the scanner form's jobView:
+// the overview is a navigation surface, not a second report reader.  Status
+// labels/classes are prepared server-side so the template never has to infer
+// workflow state from untrusted strings.
+type dashboardJobView struct {
+	ID           string
+	Repo         string
+	StartedAt    string
+	Status       string
+	StatusLabel  string
+	StatusClass  string
+	HasReportZH  bool
+	HasSummaryZH bool
+}
+
+type dashboardData struct {
+	Jobs                      []*dashboardJobView
+	RecentJobs                []*dashboardJobView
+	TotalJobs                 int
+	RunningJobs               int
+	CompletedJobs             int
+	ReportJobs                int
+	SourceRepositories        int
+	LatestExposureAssets      int
+	TotalVulnerabilityReports int
+	DefaultLLM                string
+	HasLLM                    bool
+	CSRF                      string
+}
+
+func dashboardStatus(status string) (label, class string) {
+	switch status {
+	case StatusRunning:
+		return "运行中", "running"
+	case StatusDone:
+		return "已完成", "done"
+	case StatusError:
+		return "需要查看", "error"
+	default:
+		return "已记录", "unknown"
+	}
+}
+
 func llmCredentialEnvVars(providerType string) []string {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
 	case "anthropic":
@@ -2863,6 +2967,113 @@ func buildLLMStatus(cfg *config.Config) llmStatusView {
 		})
 	}
 	return status
+}
+
+// handleDeviceSocketAssetLLMConfigs returns a secret-free list for the
+// device-asset form.  The index page already renders this information on the
+// server, but the asset page is a standalone entry point and must be able to
+// refresh configuration after the server starts.  Custom names remain
+// accepted by the browser and the scan API; this endpoint only provides
+// discovered choices.
+func (s *Server) handleDeviceSocketAssetLLMConfigs(w http.ResponseWriter, r *http.Request) {
+	cfg, loadErr := config.Load()
+	status := buildLLMStatus(cfg)
+	configs := make([]map[string]any, 0, len(status.Configs))
+	for _, option := range status.Configs {
+		row := map[string]any{
+			"name":     option.Name,
+			"selected": option.Selected,
+			"bindings": []map[string]string{},
+		}
+		if cfg != nil {
+			bindings := make([]map[string]string, 0)
+			for _, phase := range cfg.LLMPhaseSummaries(option.Name) {
+				bindings = append(bindings, map[string]string{
+					"phase":    phase.Phase,
+					"provider": phase.Provider,
+					"model":    phase.Model,
+				})
+			}
+			row["bindings"] = bindings
+		}
+		configs = append(configs, row)
+	}
+	data := map[string]any{
+		"available":       status.Available,
+		"selected":        status.ConfigName,
+		"configs":         configs,
+		"credential_hint": status.CredentialHint,
+	}
+	if loadErr != nil {
+		// A malformed or unreadable config must not make the asset page unusable;
+		// the scan worker will still report the actual configuration error if a
+		// user chooses to run.  Expose the diagnostic without any credential data.
+		data["error"] = "读取模型配置失败：" + loadErr.Error()
+	}
+	sourceLocatorJSON(w, http.StatusOK, map[string]any{"status": "success", "data": data, "errors": []string{}})
+}
+
+// handleDashboard renders the stable root of the workbench.  Keeping it
+// separate from handleIndex preserves the scanner form's existing server-side
+// data contract and deep links while giving the product a real overview page.
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	cfg, _ := config.Load()
+	defaultLLM := config.DefaultLLMConfigName
+	if cfg != nil {
+		defaultLLM = cfg.DefaultLLMName()
+	}
+
+	j := s.mgr.all()
+	views := make([]*dashboardJobView, 0, len(j))
+	for _, job := range j {
+		s.refreshRecoveredJob(job)
+		job.mu.Lock()
+		status := job.Status
+		label, class := dashboardStatus(status)
+		views = append(views, &dashboardJobView{
+			ID:           job.ID,
+			Repo:         job.Repo,
+			StartedAt:    job.StartedAt.Format("2006-01-02 15:04:05"),
+			Status:       status,
+			StatusLabel:  label,
+			StatusClass:  class,
+			HasReportZH:  job.ReportPathZH != "",
+			HasSummaryZH: job.SummaryPathZH != "",
+		})
+		job.mu.Unlock()
+	}
+
+	repositoryCount, exposureAssetCount, vulnerabilityReportCount := dashboardMetricSnapshot(s.outDir, j)
+	d := dashboardData{
+		Jobs:                      views,
+		RecentJobs:                views,
+		TotalJobs:                 len(views),
+		SourceRepositories:        repositoryCount,
+		LatestExposureAssets:      exposureAssetCount,
+		TotalVulnerabilityReports: vulnerabilityReportCount,
+		DefaultLLM:                defaultLLM,
+		HasLLM:                    true, // the built-in VulnFounder configuration is always available
+		CSRF:                      s.csrfToken,
+	}
+	if len(d.RecentJobs) > 8 {
+		d.RecentJobs = d.RecentJobs[:8]
+	}
+	for _, view := range views {
+		switch view.Status {
+		case StatusRunning:
+			d.RunningJobs++
+		case StatusDone:
+			d.CompletedJobs++
+		}
+		if view.HasReportZH || view.HasSummaryZH {
+			d.ReportJobs++
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmplDashboard.Execute(w, d); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -3543,8 +3754,16 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 type disclosureInfo struct {
-	Name              string               `json:"name"`
-	Label             string               `json:"label"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// Classification is the final human-facing report state.  It is separate
+	// from Label, which is the vulnerability title parsed from Markdown (older
+	// reports often used "VULNERABLE" as that title even when Stage 2 was not
+	// finished).
+	Classification    string               `json:"classification,omitempty"`
+	Stage1Verdict     string               `json:"stage1_verdict,omitempty"`
+	Stage2Verdict     string               `json:"stage2_verdict,omitempty"`
+	ReviewStatus      string               `json:"review_status,omitempty"`
 	URL               string               `json:"url"`
 	CVE               string               `json:"cve,omitempty"`
 	VulnerabilityType string               `json:"vulnerability_type,omitempty"`
@@ -3602,9 +3821,10 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job.mu.Lock()
-	paths := make([]string, len(job.DisclosurePaths))
-	copy(paths, job.DisclosurePaths)
+	englishPaths := append([]string(nil), job.DisclosurePaths...)
+	chinesePaths := append([]string(nil), job.DisclosurePathsZH...)
 	job.mu.Unlock()
+	paths := preferredDisclosurePaths(englishPaths, chinesePaths, disclosureLanguage(r))
 	pipeline := readDisclosurePipeline(filepath.Join(s.outDir, id))
 
 	infos := make([]disclosureInfo, 0, len(paths))
@@ -3618,7 +3838,8 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 		info := disclosureInfo{
 			Name:              name,
 			Label:             label,
-			URL:               "/disclosure/" + id + "/" + name,
+			Classification:    disclosureClassificationFromFilename(name),
+			URL:               "/disclosure/" + id + "/" + url.PathEscape(name) + "?lang=" + url.QueryEscape(disclosureLanguage(r)),
 			CVE:               metadata.CVE,
 			VulnerabilityType: metadata.VulnerabilityType,
 			CWEID:             metadata.CWEID,
@@ -3650,6 +3871,10 @@ func (s *Server) handleDisclosureList(w http.ResponseWriter, r *http.Request) {
 type disclosureData struct {
 	ID           string
 	Name         string
+	Filename     string
+	Language     string
+	EnglishURL   string
+	ChineseURL   string
 	MarkdownJSON template.JS
 }
 
@@ -3669,14 +3894,16 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 
 	// Verify the file is one of the job's known disclosure paths.
 	job.mu.Lock()
+	englishPaths := append([]string(nil), job.DisclosurePaths...)
+	chinesePaths := append([]string(nil), job.DisclosurePathsZH...)
+	job.mu.Unlock()
 	var matchedPath string
-	for _, p := range job.DisclosurePaths {
+	for _, p := range preferredDisclosurePaths(englishPaths, chinesePaths, disclosureLanguage(r)) {
 		if filepath.Base(p) == filename {
 			matchedPath = p
 			break
 		}
 	}
-	job.mu.Unlock()
 
 	if matchedPath == "" {
 		http.NotFound(w, r)
@@ -3697,10 +3924,20 @@ func (s *Server) handleDisclosure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mdJSON, _ := json.Marshal(string(data))
+	displayName := disclosureLabel(filename)
+	if metadata := parseDisclosureMetadata(string(data)); metadata.Label != "" {
+		displayName = metadata.Label
+	}
+	englishURL := "/disclosure/" + url.PathEscape(id) + "/" + url.PathEscape(filename) + "?lang=en"
+	chineseURL := "/disclosure/" + url.PathEscape(id) + "/" + url.PathEscape(filename) + "?lang=zh-CN"
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmplDisclosure.Execute(w, disclosureData{
 		ID:           id,
-		Name:         disclosureLabel(filename),
+		Name:         displayName,
+		Filename:     filename,
+		Language:     disclosureLanguage(r),
+		EnglishURL:   englishURL,
+		ChineseURL:   chineseURL,
 		MarkdownJSON: template.JS(mdJSON),
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3745,13 +3982,13 @@ func disclosureTitleFromFile(path string) string {
 
 // disclosureLabel converts a disclosure filename to a human-readable label.
 // e.g. "DISCLOSURE_01_SQL_INJECTION.md" → "Sql Injection"
-var reDisclosurePrefix = regexp.MustCompile(`(?i)^DISCLOSURE_\d+_`)
+var reDisclosurePrefix = regexp.MustCompile(`(?i)^(?:DISCLOSURE|INCONCLUSIVE)_\d+_`)
 
 var (
 	reDisclosureCodePath       = regexp.MustCompile("(?m)^`([^`\\n]+)`:\\s*$")
 	reDisclosureFunction       = regexp.MustCompile(`(?s)\b([A-Za-z_~][A-Za-z0-9_:~]*)\s*\([^;{}]*\)\s*(?:const\b[^{}]*)?\{`)
 	reDisclosurePythonFunction = regexp.MustCompile(`(?m)^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	reDisclosureOrdinal        = regexp.MustCompile(`(?i)^DISCLOSURE_(\d+)_`)
+	reDisclosureOrdinal        = regexp.MustCompile(`(?i)^(?:DISCLOSURE|INCONCLUSIVE)_(\d+)_`)
 	reDisclosureEvidenceFile   = regexp.MustCompile("(?m)^-\\s+\\*\\*File:\\*\\*\\s+`([^`\\n]+)`\\s+\\(第\\s*(\\d+)(?:\\s*-\\s*(\\d+))?\\s*行")
 	reDisclosureEvidenceFunc   = regexp.MustCompile("(?m)^-\\s+\\*\\*Function:\\*\\*\\s+`([^`\\n]+)`")
 	reDisclosureRepairStatus   = regexp.MustCompile("(?mi)(?:修复状态|repair\\s+status)\\s*[：:]\\s*`?([^`\\n]+)")
@@ -3941,6 +4178,12 @@ func applyDisclosureFinding(info *disclosureInfo, finding map[string]any, pipeli
 	if info == nil || finding == nil {
 		return
 	}
+	info.Stage1Verdict = strings.ToLower(disclosureScalar(finding["stage1_verdict"]))
+	info.Stage2Verdict = strings.ToLower(disclosureScalar(finding["stage2_verdict"]))
+	info.ReviewStatus = strings.ToLower(disclosureScalar(finding["review_status"]))
+	if classification := disclosureClassification(finding); classification != "" {
+		info.Classification = classification
+	}
 	location := disclosureMap(finding["location"])
 	if location != nil {
 		if value := disclosureScalar(location["file"]); value != "" {
@@ -4040,6 +4283,45 @@ func applyDisclosureFinding(info *disclosureInfo, finding map[string]any, pipeli
 	}
 }
 
+// disclosureClassification is deliberately independent from the Markdown
+// title.  A report may be generated for an unresolved candidate so that no
+// evidence is lost; its title can still say "VULNERABLE", while the final
+// scanner state is inconclusive.  The structured pipeline fields are the
+// authoritative source for the card badge.
+func disclosureClassification(finding map[string]any) string {
+	if finding == nil {
+		return ""
+	}
+	stage2 := strings.ToLower(strings.TrimSpace(disclosureScalar(finding["stage2_verdict"])))
+	review := strings.ToLower(strings.TrimSpace(disclosureScalar(finding["review_status"])))
+	stage1 := strings.ToLower(strings.TrimSpace(disclosureScalar(finding["stage1_verdict"])))
+	if stage2 == "unverified" || stage2 == "inconclusive" || review == "needs_review" {
+		return "inconclusive"
+	}
+	switch stage2 {
+	case "confirmed", "agreed", "vulnerable", "bypassable":
+		return "vulnerable"
+	}
+	if stage1 == "inconclusive" || stage1 == "" {
+		return "inconclusive"
+	}
+	if stage1 == "vulnerable" || stage1 == "bypassable" {
+		return "vulnerable"
+	}
+	return "safe"
+}
+
+func disclosureClassificationFromFilename(filename string) string {
+	upper := strings.ToUpper(filepath.Base(filename))
+	if strings.HasPrefix(upper, "INCONCLUSIVE_") {
+		return "inconclusive"
+	}
+	if strings.Contains(upper, "_VULNERABLE") || strings.Contains(upper, "_BYPASSABLE") || strings.Contains(upper, "_CONFIRMED") {
+		return "vulnerable"
+	}
+	return ""
+}
+
 // disclosureMetadataFromFile reads a bounded amount of a report and extracts
 // only presentation metadata. It uses the same symlink protections as the
 // existing title reader so a malformed report cannot make the UI read a host
@@ -4068,8 +4350,11 @@ func parseDisclosureMetadata(markdown string) disclosureMetadata {
 	metadata.CVE = disclosureFirstCVE(markdown)
 	for _, line := range strings.Split(markdown, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "**Type:**") {
-			metadata.VulnerabilityType = strings.TrimSpace(strings.TrimPrefix(trimmed, "**Type:**"))
+		if strings.HasPrefix(trimmed, "**Type:**") || strings.HasPrefix(trimmed, "**类型：**") {
+			value := trimmed
+			value = strings.TrimPrefix(value, "**Type:**")
+			value = strings.TrimPrefix(value, "**类型：**")
+			metadata.VulnerabilityType = strings.TrimSpace(value)
 			if match := reDisclosureCWE.FindStringSubmatch(metadata.VulnerabilityType); len(match) >= 2 {
 				metadata.CWEID = match[1]
 				if len(match) >= 3 {
@@ -4077,14 +4362,23 @@ func parseDisclosureMetadata(markdown string) disclosureMetadata {
 				}
 			}
 		}
-		if strings.HasPrefix(trimmed, "**Affected:**") {
-			metadata.AffectedVersion = strings.TrimSpace(strings.TrimPrefix(trimmed, "**Affected:**"))
+		if strings.HasPrefix(trimmed, "**Affected:**") || strings.HasPrefix(trimmed, "**影响版本：**") {
+			value := trimmed
+			value = strings.TrimPrefix(value, "**Affected:**")
+			value = strings.TrimPrefix(value, "**影响版本：**")
+			metadata.AffectedVersion = strings.TrimSpace(value)
 		}
 	}
 
 	summary := disclosureMarkdownSection(markdown, "## Summary")
+	if summary == "" {
+		summary = disclosureMarkdownSection(markdown, "## 摘要")
+	}
 	metadata.Summary = disclosureCompactText(summary, 360)
 	vulnerableCode := disclosureMarkdownSection(markdown, "## Vulnerable Code")
+	if vulnerableCode == "" {
+		vulnerableCode = disclosureMarkdownSection(markdown, "## 漏洞代码")
+	}
 	if match := reDisclosureCodePath.FindStringSubmatch(vulnerableCode); len(match) == 2 {
 		metadata.FilePath = strings.TrimSpace(match[1])
 	}
@@ -4101,6 +4395,9 @@ func parseDisclosureMetadata(markdown string) disclosureMetadata {
 		metadata.Function = strings.TrimSpace(match[1])
 	}
 	fixSection := disclosureMarkdownSection(markdown, "## Suggested Fix")
+	if fixSection == "" {
+		fixSection = disclosureMarkdownSection(markdown, "## 建议修复")
+	}
 	if match := reDisclosureRepairStatus.FindStringSubmatch(fixSection); len(match) == 2 {
 		metadata.RepairStatus = strings.TrimSpace(match[1])
 	}
@@ -4227,7 +4524,21 @@ func disclosureLabel(filename string) string {
 // findDisclosures returns absolute paths to all .md files in the disclosures
 // subdirectory of outDir.
 func findDisclosures(outDir string) []string {
-	discDir := filepath.Join(outDir, "report", "disclosures")
+	return findDisclosuresInDir(outDir, filepath.Join(outDir, "report", "disclosures"))
+}
+
+// findLocalizedDisclosures returns the localized disclosure files generated by
+// the report stage (for example report/disclosures.zh-CN).  The English and
+// localized directories intentionally use the same basenames so a list/detail
+// request can switch languages without changing the finding identity.
+func findLocalizedDisclosures(outDir, locale string) []string {
+	if locale == "" || filepath.Base(locale) != locale {
+		return nil
+	}
+	return findDisclosuresInDir(outDir, filepath.Join(outDir, "report", "disclosures."+locale))
+}
+
+func findDisclosuresInDir(outDir, discDir string) []string {
 	entries, err := os.ReadDir(discDir)
 	if err != nil {
 		return nil
@@ -4246,6 +4557,64 @@ func findDisclosures(outDir string) []string {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
+	return paths
+}
+
+// disclosureLanguage keeps the Chinese Web UI on the localized artifact by
+// default.  English remains available for compatibility and explicit export
+// links via ?lang=en; unsupported values safely fall back to Chinese.
+func disclosureLanguage(r *http.Request) string {
+	if r != nil && strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("lang")), "en") {
+		return "en"
+	}
+	return "zh-CN"
+}
+
+// preferredDisclosurePaths joins English and Chinese artifacts by basename.
+// A historical scan may have only the English directory, so the selected
+// language gracefully falls back to whichever file exists without duplicating
+// a finding in the API response.
+func preferredDisclosurePaths(english, chinese []string, language string) []string {
+	byName := func(paths []string) map[string]string {
+		result := make(map[string]string, len(paths))
+		for _, path := range paths {
+			name := filepath.Base(path)
+			if name != "" && name != "." {
+				result[name] = path
+			}
+		}
+		return result
+	}
+	en := byName(english)
+	zh := byName(chinese)
+	names := make(map[string]struct{}, len(en)+len(zh))
+	for name := range en {
+		names[name] = struct{}{}
+	}
+	for name := range zh {
+		names[name] = struct{}{}
+	}
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	paths := make([]string, 0, len(ordered))
+	for _, name := range ordered {
+		if language == "zh-CN" {
+			if path := zh[name]; path != "" {
+				paths = append(paths, path)
+				continue
+			}
+		}
+		if path := en[name]; path != "" {
+			paths = append(paths, path)
+			continue
+		}
+		if path := zh[name]; path != "" {
+			paths = append(paths, path)
+		}
+	}
 	return paths
 }
 
@@ -4563,7 +4932,7 @@ func (s *Server) runJob(job *Job) {
 		// Do not silently undo the operator's explicit choice by generating a
 		// report here; the scan artifacts remain available in the stage viewer.
 		job.addLog("[report] 已按执行选项跳过报告生成（--no-report）")
-		job.setDone("", "", "", "", nil)
+		job.setDone("", "", "", "", nil, nil)
 		return
 	}
 
@@ -4650,11 +5019,12 @@ func (s *Server) runJob(job *Job) {
 	}
 
 	disclosurePaths := findDisclosures(outDir)
+	disclosurePathsZH := findLocalizedDisclosures(outDir, "zh-CN")
 	if !fileExists(reportPathZH) {
 		reportPathZH = ""
 	}
 
-	job.setDone(reportPath, summaryPath, reportPathZH, summaryPathZH, disclosurePaths)
+	job.setDone(reportPath, summaryPath, reportPathZH, summaryPathZH, disclosurePaths, disclosurePathsZH)
 }
 
 // envelopeErrors extracts the errors[] from the CLI's JSON result envelope,

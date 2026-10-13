@@ -198,107 +198,322 @@ samp {
   flex-wrap: wrap;
 }
 
+/* Global workbench navigation. The component is mounted in every page header,
+ * but the actual sidebar is fixed to the viewport so it remains available
+ * while navigating between stages and report pages. */
+body.vf-sidebar-page {
+  padding-left: 17rem;
+}
+
 vulnfounder-workspace-nav {
   display: block;
-  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  flex: 0 0 0;
 }
 
-.workspace-menu {
-  position: relative;
+.workspace-sidebar {
+  position: fixed;
+  z-index: 120;
+  inset: 0 auto 0 0;
+  width: 17rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 1.15rem 0.9rem 1rem;
+  overflow-y: auto;
+  background: linear-gradient(180deg, #122a34 0%, #10232c 100%);
+  color: #eaf4f6;
+  box-shadow: 0.35rem 0 1.6rem rgba(16, 35, 44, 0.16);
+  scrollbar-width: thin;
+  scrollbar-color: #3e6470 transparent;
 }
 
-.workspace-menu > summary {
-  min-height: 2rem;
-  display: inline-flex;
+.workspace-sidebar-head {
+  min-height: 2.9rem;
+  display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.625rem;
-  border: 0.0625rem solid #49636e;
-  border-radius: var(--oa-radius-sm);
-  background: transparent;
-  color: #dce9ed;
-  font-size: 0.75rem;
-  font-weight: 700;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0 0.35rem 0.95rem;
+  border-bottom: 0.0625rem solid rgba(214, 237, 241, 0.14);
+}
+
+.workspace-sidebar-home {
+  min-height: 2.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.58rem;
+  margin: 0.8rem 0 0.5rem;
+  padding: 0.45rem 0.62rem;
+  border: 0.0625rem solid rgba(153, 202, 211, 0.22);
+  border-radius: 0.58rem;
+  background: rgba(214, 237, 241, 0.07);
+  color: #d9edf0;
+  font-size: 0.77rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-decoration: none;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.workspace-sidebar-home:hover {
+  border-color: rgba(214, 237, 241, 0.42);
+  background: rgba(214, 237, 241, 0.15);
+  color: #ffffff;
+  transform: translateX(0.08rem);
+}
+
+.workspace-sidebar-home[aria-current="page"] {
+  border-color: #9bcfd5;
+  background: #d6edf1;
+  color: #0b5363;
+  box-shadow: 0 0.25rem 0.7rem rgba(0, 0, 0, 0.12);
+}
+
+.workspace-sidebar-home-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border-radius: 0.35rem;
+  background: rgba(164, 213, 221, 0.18);
+  font-size: 0.9rem;
   line-height: 1;
+}
+
+.workspace-sidebar-home .workspace-sidebar-link-arrow {
+  margin-left: auto;
+}
+
+.workspace-sidebar-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.workspace-sidebar-brand strong,
+.workspace-sidebar-brand small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-sidebar-brand strong {
+  color: #f5fbfc;
+  font-size: 0.9rem;
+  letter-spacing: -0.02em;
+}
+
+.workspace-sidebar-brand small {
+  margin-top: 0.18rem;
+  color: #9fb9c1;
+  font-size: 0.66rem;
+  line-height: 1.2;
+}
+
+.workspace-sidebar-mark {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 0.55rem;
+  background: #d6edf1;
+  color: #0b5363;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+
+.workspace-sidebar-close {
+  display: none;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: rgba(214, 237, 241, 0.09);
+  color: #d6edf1;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.workspace-sidebar-close:hover {
+  background: rgba(214, 237, 241, 0.18);
+}
+
+.workspace-sidebar-nav {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.workspace-sidebar-stage {
+  overflow: hidden;
+  border: 0.0625rem solid transparent;
+  border-radius: 0.65rem;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.workspace-sidebar-stage[open] {
+  border-color: rgba(153, 202, 211, 0.18);
+  background: rgba(4, 17, 22, 0.18);
+}
+
+.workspace-sidebar-stage > summary {
+  min-height: 2.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem 0.55rem;
+  color: #e8f2f4;
+  font-size: 0.79rem;
+  font-weight: 750;
+  line-height: 1.25;
   list-style: none;
   cursor: pointer;
   user-select: none;
 }
 
-.workspace-menu > summary::-webkit-details-marker {
+.workspace-sidebar-stage > summary::-webkit-details-marker {
   display: none;
 }
 
-.workspace-menu > summary::after {
-  content: "⌄";
-  color: #9db4bd;
-  font-size: 0.875rem;
+.workspace-sidebar-stage > summary:hover {
+  background: rgba(214, 237, 241, 0.08);
+}
+
+.workspace-sidebar-number {
+  width: 1.65rem;
+  height: 1.65rem;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 0.42rem;
+  background: rgba(164, 213, 221, 0.16);
+  color: #b7e0e6;
+  font-size: 0.65rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+}
+
+.workspace-sidebar-stage:nth-child(2) .workspace-sidebar-number {
+  background: rgba(135, 194, 215, 0.16);
+  color: #b7dce8;
+}
+
+.workspace-sidebar-stage:nth-child(3) .workspace-sidebar-number {
+  background: rgba(183, 177, 237, 0.17);
+  color: #d5d1f5;
+}
+
+.workspace-sidebar-stage:nth-child(4) .workspace-sidebar-number {
+  background: rgba(243, 194, 104, 0.17);
+  color: #f5d48e;
+}
+
+.workspace-sidebar-stage:nth-child(5) .workspace-sidebar-number {
+  background: rgba(103, 204, 170, 0.17);
+  color: #a5ebd0;
+}
+
+.workspace-sidebar-stage-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.workspace-sidebar-chevron {
+  color: #94b3bc;
+  font-size: 1rem;
   line-height: 1;
   transition: transform 140ms ease;
 }
 
-.workspace-menu[open] > summary,
-.workspace-menu > summary:hover {
-  border-color: #68848f;
-  background: var(--oa-header-hover);
-  color: #ffffff;
+.workspace-sidebar-stage[open] .workspace-sidebar-chevron {
+  transform: rotate(90deg);
 }
 
-.workspace-menu[open] > summary::after {
-  transform: rotate(180deg);
+.workspace-sidebar-links {
+  display: grid;
+  gap: 0.18rem;
+  margin: 0 0.42rem 0.45rem 2.85rem;
+  padding-left: 0.58rem;
+  border-left: 0.1rem solid rgba(164, 213, 221, 0.25);
 }
 
-.workspace-menu-panel {
-  position: absolute;
-  z-index: 80;
-  top: calc(100% + 0.5rem);
-  right: 0;
-  width: 15rem;
-  padding: 0.375rem;
-  border: 0.0625rem solid var(--oa-line);
-  border-radius: var(--oa-radius-md);
-  background: var(--oa-surface);
-  box-shadow: 0 1rem 2.5rem rgba(15, 37, 47, 0.2);
-}
-
-.top .workspace-menu-panel .workspace-menu-link,
-.topbar .workspace-menu-panel .workspace-menu-link {
-  min-height: 2.5rem;
-  width: 100%;
-  margin: 0;
-  padding: 0.625rem 0.75rem;
+.workspace-sidebar-link {
+  min-height: 2rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  border: 0;
-  border-radius: 0.375rem;
-  background: transparent;
-  color: var(--oa-ink-soft);
-  font-size: 0.8125rem;
-  font-weight: 650;
-  line-height: 1.3;
+  gap: 0.48rem;
+  padding: 0.38rem 0.45rem;
+  border-radius: 0.4rem;
+  color: #adc5ca;
+  font-size: 0.73rem;
+  line-height: 1.25;
   text-decoration: none;
-  white-space: normal;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
 }
 
-.top .workspace-menu-panel .workspace-menu-link:hover,
-.topbar .workspace-menu-panel .workspace-menu-link:hover {
-  background: var(--oa-surface-soft);
-  color: var(--oa-accent-hover);
+.workspace-sidebar-link:hover {
+  background: rgba(214, 237, 241, 0.1);
+  color: #ffffff;
+  transform: translateX(0.12rem);
 }
 
-.top .workspace-menu-panel .workspace-menu-link[aria-current="page"],
-.topbar .workspace-menu-panel .workspace-menu-link[aria-current="page"] {
-  background: var(--oa-accent-soft);
-  color: var(--oa-accent-hover);
-}
-
-.workspace-menu-current {
-  flex: 0 0 auto;
-  color: var(--oa-accent);
-  font-size: 0.6875rem;
+.workspace-sidebar-link[aria-current="page"] {
+  background: #d6edf1;
+  color: #0b5363;
   font-weight: 750;
+  box-shadow: 0 0.25rem 0.7rem rgba(0, 0, 0, 0.12);
+}
+
+.workspace-sidebar-link-mark {
+  width: 0.34rem;
+  height: 0.34rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #6e9aa5;
+}
+
+.workspace-sidebar-link[aria-current="page"] .workspace-sidebar-link-mark {
+  background: #086579;
+}
+
+.workspace-sidebar-link-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.workspace-sidebar-link-arrow {
+  flex: 0 0 auto;
+  color: #75959e;
+  font-size: 0.82rem;
+}
+
+.workspace-sidebar-foot {
+  margin-top: auto;
+  padding: 1rem 0.35rem 0;
+  border-top: 0.0625rem solid rgba(214, 237, 241, 0.14);
+  color: #86a5ad;
+  font-size: 0.66rem;
+  line-height: 1.45;
+}
+
+.workspace-sidebar-toggle,
+.workspace-sidebar-backdrop {
+  display: none;
+}
+
+/* The old home-only navigation is superseded by the global sidebar. */
+body.vf-sidebar-page .page > .workspace > .sidebar {
+  display: none;
+}
+
+body.vf-sidebar-page .page > .workspace {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .top-actions a,
@@ -796,6 +1011,72 @@ body.socket-scope-page > main {
 }
 
 @media (max-width: 48rem) {
+  body.vf-sidebar-page {
+    padding-left: 0;
+  }
+
+  body.vf-sidebar-page .topbar,
+  body.vf-sidebar-page .top {
+    padding-left: 4.4rem;
+  }
+
+  .workspace-sidebar {
+    width: min(17rem, 86vw);
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+  }
+
+  body.vf-sidebar-open .workspace-sidebar {
+    transform: translateX(0);
+  }
+
+  .workspace-sidebar-close,
+  .workspace-sidebar-toggle {
+    display: grid;
+    place-items: center;
+  }
+
+  .workspace-sidebar-toggle {
+    position: fixed;
+    z-index: 121;
+    top: 0.8rem;
+    left: 0.8rem;
+    min-height: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    padding: 0.45rem 0.65rem;
+    border: 0.0625rem solid #49636e;
+    border-radius: var(--oa-radius-sm);
+    background: var(--oa-header);
+    color: #e7f4f6;
+    font-size: 0.74rem;
+    font-weight: 750;
+    cursor: pointer;
+    box-shadow: 0 0.4rem 1.2rem rgba(16, 35, 44, 0.18);
+  }
+
+  .workspace-sidebar-toggle:hover {
+    border-color: #83b1bc;
+    background: var(--oa-header-hover);
+  }
+
+  .workspace-sidebar-backdrop {
+    position: fixed;
+    z-index: 119;
+    inset: 0;
+    display: block;
+    visibility: hidden;
+    background: rgba(7, 22, 28, 0.48);
+    opacity: 0;
+    transition: opacity 180ms ease, visibility 180ms ease;
+  }
+
+  body.vf-sidebar-open .workspace-sidebar-backdrop {
+    visibility: visible;
+    opacity: 1;
+  }
+
   .topbar,
   .top {
     align-items: flex-start;
@@ -852,4 +1133,83 @@ body.socket-scope-page > main {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Chinese-only product chrome. The former language switch is intentionally
+ * removed from the visible header; all pages use the same fixed locale. The
+ * hidden compatibility nodes keep older inline renderers harmless while they
+ * are being retired. */
+.language-field,
+.topbar #language-select,
+.top #language-select,
+label[for="language-select"] {
+  display: none !important;
+}
+
+/* One header rhythm for dashboard, stage pages, reports and artifact views. */
+.topbar,
+.top,
+.report-reader-page > header {
+  min-height: 4.25rem;
+  padding: 0.75rem clamp(1rem, 4vw, 3.25rem);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--oa-header) !important;
+  color: #f5fafb;
+  border-bottom: 0.0625rem solid #29414b;
+  box-shadow: none;
+}
+
+.topbar .brand,
+.top .brand,
+.report-reader-page > header .brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.topbar .topbar-actions,
+.top .top-actions,
+.report-reader-page > header .topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.topbar .brand-copy h1,
+.topbar .scan-heading h1,
+.top .brand h1,
+body.scan-artifact-page .top .brand h1,
+.report-reader-page > header .brand-copy h1 {
+  margin: 0;
+  color: #f5fafb;
+  font-size: 1rem;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.topbar .brand-copy p,
+.topbar .scan-heading p,
+.top .brand p,
+body.scan-artifact-page .top .brand p,
+.report-reader-page > header .brand-copy p {
+  margin: 0.125rem 0 0;
+  color: #adc0c8;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.report-reader-page > header a {
+  color: #d7e5e9;
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+.report-reader-page > header a:hover {
+  color: #ffffff;
 }

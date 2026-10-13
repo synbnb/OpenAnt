@@ -95,6 +95,12 @@ def test_member_function_dispatch_produces_bounded_candidates_without_mutating_g
     assert diagnostics["schema_version"] == 1
     assert diagnostics["platform"] == "openharmony"
     assert diagnostics["status"] == "complete"
+    assert diagnostics["recovery_input"]["ledger_sites"] == len(
+        diagnostics["call_sites"]
+    )
+    assert diagnostics["recovery_input"]["residual_sites"] == len(
+        diagnostics["unresolved_call_sites"]
+    )
     assert diagnostics["summary"] == {
         "unresolved_call_sites": 1,
         "dispatch_assignments": 2,
@@ -156,6 +162,87 @@ def test_direct_switch_calls_are_not_reported_as_unresolved_indirect_calls():
     assert diagnostics["unresolved_call_sites"] == []
     assert diagnostics["dispatch_assignments"] == []
     assert diagnostics["summary"]["candidate_edges"] == 0
+
+
+def test_explicit_base_qualified_call_does_not_bind_to_derived_override():
+    """An indexed derived method must not become a false self-edge.
+
+    The base declaration is intentionally outside this fixture's function
+    index.  A qualified ``FileDescriptorListener::OnReadable`` call should
+    remain unresolved until the base declaration is loaded, rather than
+    falling back to the derived method with the same leaf name.
+    """
+    source = "listener.cpp"
+    derived_id = f"{source}:MyFileDescriptorListener::OnReadable"
+    functions = {
+        derived_id: {
+            "name": "MyFileDescriptorListener::OnReadable",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "MyFileDescriptorListener",
+            "unit_type": "method",
+            "parameters": ["int32_t fileDescriptor"],
+            "code": """void MyFileDescriptorListener::OnReadable(int32_t fileDescriptor)
+{
+    FileDescriptorListener::OnReadable(fileDescriptor);
+}""",
+        }
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions},
+        {"functions": functions, "call_graph": {derived_id: []}},
+    )
+
+    site = next(
+        item
+        for item in diagnostics["call_sites"]
+        if item["callee_spelling"] == "FileDescriptorListener::OnReadable"
+    )
+    assert site["candidate_target_ids"] == []
+    assert site["binding_status"] == "unresolved"
+    assert site["graph_status"] == "not_linked"
+
+
+def test_explicit_qualified_call_can_match_a_full_namespace_base_symbol():
+    source = "listener.cpp"
+    derived_id = f"{source}:MyFileDescriptorListener::OnReadable"
+    base_id = "base.hpp:OHOS::AppExecFwk::FileDescriptorListener::OnReadable"
+    functions = {
+        derived_id: {
+            "name": "MyFileDescriptorListener::OnReadable",
+            "file_path": source,
+            "start_line": 1,
+            "class_name": "MyFileDescriptorListener",
+            "unit_type": "method",
+            "parameters": ["int32_t fileDescriptor"],
+            "code": """void MyFileDescriptorListener::OnReadable(int32_t fileDescriptor)
+{
+    FileDescriptorListener::OnReadable(fileDescriptor);
+}""",
+        },
+        base_id: {
+            "name": "OHOS::AppExecFwk::FileDescriptorListener::OnReadable",
+            "file_path": "base.hpp",
+            "start_line": 10,
+            "class_name": "OHOS::AppExecFwk::FileDescriptorListener",
+            "unit_type": "method",
+            "parameters": ["int32_t fileDescriptor"],
+            "code": "virtual void OnReadable(int32_t fileDescriptor) {}",
+        },
+    }
+
+    diagnostics = build_call_graph_diagnostics(
+        {"repository": "/fixture", "functions": functions},
+        {"functions": functions, "call_graph": {derived_id: []}},
+    )
+
+    site = next(
+        item
+        for item in diagnostics["call_sites"]
+        if item["callee_spelling"] == "FileDescriptorListener::OnReadable"
+    )
+    assert site["candidate_target_ids"] == [base_id]
 
 
 def test_factory_constructor_site_matches_native_constructor_edge():

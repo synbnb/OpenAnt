@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types"
+	"vulnfounder/apps/vulnfounder-cli/internal/types"
 )
 
 var (

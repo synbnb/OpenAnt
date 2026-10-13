@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 // M-d: a blank API key means "read from the environment"; the wizard must

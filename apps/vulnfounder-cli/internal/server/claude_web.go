@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/types"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/types"
 )
 
 const (

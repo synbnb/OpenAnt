@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 func TestValidateModeFlags(t *testing.T) {
@@ -160,6 +161,9 @@ func withTempHome(t *testing.T) string {
 	} else {
 		t.Setenv("HOME", dir)
 	}
+	t.Setenv("VULNFOUNDER_PROJECT_ROOT", "")
+	t.Setenv("OPENANT_PROJECT_ROOT", "")
+	t.Setenv("VULNFOUNDER_DATA_DIR", filepath.Join(dir, ".vulnfounder"))
 	return dir
 }
 

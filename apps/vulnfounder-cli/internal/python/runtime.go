@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 // MinPythonMajor is the minimum required Python major version.

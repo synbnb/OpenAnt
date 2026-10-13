@@ -93,6 +93,26 @@ func TestRenderReskinIncrementalScan(t *testing.T) {
 	}
 }
 
+func TestRenderReskinUsesObservatoryThemeAndHighContrastCode(t *testing.T) {
+	data := baseReportData()
+	data.RemediationHTML = `<p>用 <code>ValidateInput()</code> 修复。</p><pre><code>if (!ValidateInput(value)) return;</code></pre>`
+	var buf bytes.Buffer
+	if err := RenderReskinLocalized(data, &buf, "zh-CN"); err != nil {
+		t.Fatalf("RenderReskinLocalized: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		`class="vf-observatory`,
+		"--vf-canvas: #07131e",
+		"background: #050d14 !important",
+		"color: #ffffff !important",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("observatory report missing style marker %q", want)
+		}
+	}
+}
+
 func TestRenderLocalizedReportsUseChineseLabelsAndNoBrandingFooter(t *testing.T) {
 	data := baseReportData()
 	data.Categories = []Category{

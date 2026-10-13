@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 // withConfigEnv passes the Go resolver's exact choice to Python. This is

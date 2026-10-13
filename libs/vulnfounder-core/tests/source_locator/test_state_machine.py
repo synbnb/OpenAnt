@@ -257,6 +257,61 @@ def test_confirm_is_the_only_path_to_clone(tmp_path):
     assert machine.store.events(machine.session.session_id).load()[-1].type == "user.confirmed"
 
 
+def test_confirm_can_select_one_resolved_repository_mapping(tmp_path):
+    machine = _machine(tmp_path)
+    for state in (
+        "NORMALIZE_TARGET",
+        "PROBE_OPENGROK",
+        "SEARCH_INITIAL",
+        "TRACE_EVIDENCE",
+        "ATTRIBUTION_SERVER",
+        "LOCATE_CLIENT_COMM",
+        "RESOLVE_REPOSITORIES",
+        "VERIFY_EVIDENCE",
+    ):
+        machine.transition(state, summary_zh=state)
+    machine.transition(
+        "AWAIT_USER_CONFIRMATION",
+        summary_zh="等待确认",
+        updates={
+            "repository_mappings": {
+                "mappings": [
+                    {"project_name": "server_repo", "status": "resolved"},
+                    {"project_name": "client_repo", "status": "resolved"},
+                ]
+            }
+        },
+    )
+    machine.confirm(project_name="client_repo")
+    assert machine.session.state == "CLONE"
+    assert machine.session.selected_repository == "client_repo"
+    event = machine.store.events(machine.session.session_id).load()[-1]
+    assert event.details["project_name"] == "client_repo"
+
+
+def test_confirm_rejects_repository_not_in_resolved_mappings(tmp_path):
+    machine = _machine(tmp_path)
+    for state in (
+        "NORMALIZE_TARGET",
+        "PROBE_OPENGROK",
+        "SEARCH_INITIAL",
+        "TRACE_EVIDENCE",
+        "ATTRIBUTION_SERVER",
+        "LOCATE_CLIENT_COMM",
+        "RESOLVE_REPOSITORIES",
+        "VERIFY_EVIDENCE",
+    ):
+        machine.transition(state, summary_zh=state)
+    machine.transition(
+        "AWAIT_USER_CONFIRMATION",
+        summary_zh="等待确认",
+        updates={"repository_mappings": {"mappings": [{"project_name": "server_repo", "status": "resolved"}]}},
+    )
+    with pytest.raises(LocatorStateError, match="已解析候选列表"):
+        machine.confirm(project_name="unknown_repo")
+    assert machine.session.state == "AWAIT_USER_CONFIRMATION"
+
+
 def test_version_selection_required_is_resumable_and_persisted(tmp_path):
     machine = _machine(tmp_path)
     for state in (

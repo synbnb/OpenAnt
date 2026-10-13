@@ -38,15 +38,6 @@ OpenHarmony 平台上下文（如果存在）：
 - 第一阶段分析：{n} 个单元
 - 第二阶段验证：{n} 个问题
 
-## 各阶段费用
-
-[根据 pipeline_stats.costs 生成。每个键代表一个阶段，包含 estimated、actual、units_requested、units_processed。]
-
-| 阶段 | 预计费用（USD） | 实际费用（USD） | 单元数 |
-|------|-----------------|-----------------|--------|
-| {step} | ${estimated} | ${actual} | {units_processed}/{units_requested} |
-| **合计** | **${sum_estimated}** | **${sum_actual}** | |
-
 ## 各阶段耗时
 
 [根据 pipeline_stats.durations 生成。每个值为秒数，格式化为 X 分 Y 秒。]
@@ -116,6 +107,6 @@ OpenHarmony 平台上下文（如果存在）：
 - 处理级别取自 pipeline_stats.processing_level；缺失时写“不可用”。
 - 当 reachability_filter_applied 为 true 时，在可达单元后说明裁剪数量和比例；为 false 时说明没有记录可达性筛选。
 - reachability_warnings 非空时逐条列出；为空时不要添加警告行。
-- 各阶段费用和耗时必须遍历输入数据计算合计。
+- 各阶段耗时必须遍历输入数据计算合计；不要在中文摘要中输出模型费用、阶段费用或费用合计。
 - skipped_steps 为空时写“没有阶段被跳过”。
 - 不要在模板之外添加评论或解释。

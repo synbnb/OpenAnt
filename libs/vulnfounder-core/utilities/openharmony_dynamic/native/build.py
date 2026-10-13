@@ -13,15 +13,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..transports.base import TransportError
+from ..toolchain import toolchain_root
 
 if TYPE_CHECKING:
     from ..hdc_client import HDCClient
 
 _C_SOURCE = Path(__file__).with_name("unix_client.c")
-_TOOLCHAIN_ROOT = (
-    Path(__file__).resolve().parents[2] / "dynamic_tester" / "toolchains" /
-    "commandline-tools-mac-arm64-6.1.0.860" / "command-line-tools"
-)
+_TOOLCHAIN_ROOT = toolchain_root()
 _CLANG = _TOOLCHAIN_ROOT / "sdk/default/openharmony/native/llvm/bin/aarch64-unknown-linux-ohos-clang"
 _SYSROOT = _TOOLCHAIN_ROOT / "sdk/default/openharmony/native/sysroot"
 

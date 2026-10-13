@@ -13,6 +13,8 @@ Usage:
 from .generator import (
     generate_summary_report,
     generate_disclosure,
+    generate_disclosure_pair,
+    translate_report_markdown,
     generate_all,
 )
 from .schema import (
@@ -25,6 +27,8 @@ from .schema import (
 __all__ = [
     "generate_summary_report",
     "generate_disclosure",
+    "generate_disclosure_pair",
+    "translate_report_markdown",
     "generate_all",
     "PipelineOutput",
     "Finding",

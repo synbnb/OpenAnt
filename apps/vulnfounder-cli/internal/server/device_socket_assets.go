@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 const deviceSocketAssetInvokeTimeout = 35 * time.Minute
@@ -31,6 +31,8 @@ const (
 	deviceSocketAssetMaxCommandBytes  = 64 << 20
 	deviceSocketAssetMaxSnapshotBytes = 32 << 20
 	deviceSocketAssetMaxRuns          = 2048
+	deviceSocketAssetMaxOptions       = 4096
+	deviceSocketAssetMaxHistoryFiles  = 2048
 )
 
 var deviceSocketAssetArtifactAllowlist = map[string]bool{
@@ -459,18 +461,25 @@ func (s *Server) deviceSocketAssetRunData(runID string) (map[string]any, bool, e
 		"socket_inventory_required": plan["socket_inventory_required"],
 		"task_summary":              plan["task_summary"],
 		"task_findings":             plan["task_findings"],
-		"provider":                  plan["provider"],
-		"model":                     plan["model"],
-		"phase":                     plan["phase"],
-		"plan":                      plan,
-		"task_tree":                 plan["task_tree"],
-		"rag":                       plan["rag"],
-		"rounds":                    plan["rounds"],
-		"command_count":             commandCount,
-		"evidence_count":            evidenceCount,
-		"trace_count":               traceCount,
-		"observed_endpoint_count":   observedEndpointCount,
-		"observed_endpoints":        plan["observed_endpoints"],
+		// A few early workers persisted the final asset list in the run plan
+		// instead of the sibling snapshot.  Preserve it here so a historical
+		// run remains selectable even when its snapshot is missing or partial.
+		"assets":                  plan["assets"],
+		"asset_count":             plan["asset_count"],
+		"listening_count":         plan["listening_count"],
+		"provider":                plan["provider"],
+		"model":                   plan["model"],
+		"phase":                   plan["phase"],
+		"plan":                    plan,
+		"task_tree":               plan["task_tree"],
+		"rag":                     plan["rag"],
+		"rounds":                  plan["rounds"],
+		"command_count":           commandCount,
+		"evidence_count":          evidenceCount,
+		"trace_count":             traceCount,
+		"observed_endpoint_count": observedEndpointCount,
+		"observed_endpoints":      plan["observed_endpoints"],
+		"bound_count":             plan["bound_count"],
 		// The final asset list intentionally excludes CONNECTED and anonymous
 		// rows.  Forward the separate exhaustive observation view as-is so the
 		// Web UI can display every socket record collected from netstat/proc.
@@ -495,7 +504,7 @@ func (s *Server) deviceSocketAssetRunData(runID string) (map[string]any, bool, e
 	// when present so assets are visible as soon as the terminal snapshot lands.
 	snapshotPath := filepath.Join(deviceDir, "snapshots", "socket_inventory_"+runID+".json")
 	if snapshot, snapshotErr := readDeviceSocketAssetJSON(root, snapshotPath, deviceSocketAssetMaxSnapshotBytes); snapshotErr == nil {
-		for _, key := range []string{"assets", "asset_count", "listening_count", "observed_non_listening", "coverage", "notes", "missing_fields", "task_goal", "task_scope", "socket_inventory_required", "task_summary", "task_findings", "socket_record_count", "socket_record_summary", "observed_socket_records", "generated_at", "latest_updated"} {
+		for _, key := range []string{"assets", "asset_count", "listening_count", "bound_count", "observed_endpoints", "observed_endpoint_count", "observed_non_listening", "coverage", "notes", "missing_fields", "task_goal", "task_scope", "socket_inventory_required", "task_summary", "task_findings", "socket_record_count", "socket_record_summary", "observed_socket_records", "generated_at", "latest_updated"} {
 			if value, ok := snapshot[key]; ok {
 				data[key] = value
 			}
@@ -514,6 +523,7 @@ func (s *Server) deviceSocketAssetRunData(runID string) (map[string]any, bool, e
 			data["status"] = job.Status
 		}
 	}
+	hydrateBoundAssetView(data)
 	return data, true, nil
 }
 
@@ -529,9 +539,465 @@ func (s *Server) handleDeviceSocketAssetIndex(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleDeviceSocketAssetHistoryIndex keeps durable run/snapshot history out
+// of the live discovery screen.  The page is read-only and consumes the same
+// existing JSON endpoints as the discovery page, so moving the presentation
+// does not duplicate storage or alter the Agent workflow.
+func (s *Server) handleDeviceSocketAssetHistoryIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if s.tmplDeviceSocketHistory == nil {
+		http.Error(w, "设备 Socket 资产历史页面未初始化", http.StatusInternalServerError)
+		return
+	}
+	if err := s.tmplDeviceSocketHistory.Execute(w, struct{ CSRF string }{CSRF: s.csrfToken}); err != nil {
+		http.Error(w, "设备 Socket 资产历史页面渲染失败", http.StatusInternalServerError)
+	}
+}
+
+// handleDeviceSocketAssetDevices exposes the same read-only HDC discovery used
+// by dynamic testing, but under the device-asset namespace.  Keeping the
+// endpoint next to the asset page makes the browser contract explicit and
+// lets the page distinguish "no HDC", "no devices" and "multiple devices"
+// without guessing from an empty serial field.
+func (s *Server) handleDeviceSocketAssetDevices(w http.ResponseWriter, r *http.Request) {
+	hdc := resolveHDCBinary()
+	data := map[string]any{
+		"devices": []map[string]string{},
+		"source":  "hdc list targets",
+	}
+	if hdc == "" || filepath.Base(hdc) != "hdc" {
+		data["available"] = false
+		data["error"] = "未找到 hdc；可以继续手动输入 serial。"
+		sourceLocatorJSON(w, http.StatusOK, map[string]any{"status": "success", "data": data, "errors": []string{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	devices, err := discoverHDCDevices(ctx, hdc)
+	data["available"] = true
+	data["devices"] = devices
+	if err != nil {
+		data["error"] = "读取设备列表失败：" + err.Error()
+	}
+	sourceLocatorJSON(w, http.StatusOK, map[string]any{"status": "success", "data": data, "errors": []string{}})
+}
+
 func (s *Server) handleDeviceSocketAssetSnapshots(w http.ResponseWriter, r *http.Request) {
 	result, err := s.invokeDeviceSocketAsset(r, []string{"list"})
 	writeDeviceSocketAssetResult(w, result, err)
+}
+
+// deviceSocketAssetOption is the small, browser-facing projection of a
+// persisted asset.  It deliberately contains no command output or model
+// context: the combined exposure/locator page only needs a safe target string
+// and enough metadata for a user to distinguish boards and processes.
+type deviceSocketAssetOption struct {
+	Value        string `json:"value"`
+	Target       string `json:"target"`
+	SocketName   string `json:"socket_name"`
+	Label        string `json:"label"`
+	DeviceSerial string `json:"device_serial,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
+	GeneratedAt  string `json:"generated_at,omitempty"`
+	RuntimeState string `json:"runtime_state,omitempty"`
+	Transport    string `json:"transport,omitempty"`
+	Process      string `json:"process,omitempty"`
+	Address      string `json:"address,omitempty"`
+	Port         string `json:"port,omitempty"`
+}
+
+func deviceSocketAssetValue(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := value[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch typed := raw.(type) {
+		case string:
+			return strings.TrimSpace(typed)
+		case json.Number:
+			return typed.String()
+		case float64:
+			if typed == float64(int64(typed)) {
+				return strconv.FormatInt(int64(typed), 10)
+			}
+			return strconv.FormatFloat(typed, 'f', -1, 64)
+		case float32:
+			return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+		case int:
+			return strconv.Itoa(typed)
+		case int64:
+			return strconv.FormatInt(typed, 10)
+		}
+	}
+	return ""
+}
+
+func deviceSocketAssetKnown(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	switch strings.ToUpper(value) {
+	case "UNKNOWN", "N/A", "NA", "NONE", "-":
+		return false
+	default:
+		return true
+	}
+}
+
+func deviceSocketAssetEndpointKey(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "unix://") {
+		value = value[len("unix://"):]
+	}
+	value = strings.TrimRight(value, ".])}>")
+	return strings.ToLower(value)
+}
+
+// hydrateBoundAssetView keeps the run API and the browser's final-asset view
+// consistent for snapshots written before BOUND was copied into assets. It
+// only promotes a named BOUND endpoint already present in observed_endpoints;
+// CONNECTED/anonymous rows are never promoted.
+func hydrateBoundAssetView(data map[string]any) {
+	assets, _ := data["assets"].([]any)
+	known := make(map[string]bool, len(assets))
+	for _, raw := range assets {
+		asset, ok := raw.(map[string]any)
+		if !ok || asset == nil {
+			continue
+		}
+		if key := deviceSocketAssetEndpointKey(deviceSocketAssetValue(asset, "socket_name", "socket_path", "endpoint")); key != "" {
+			known[key] = true
+		}
+	}
+	records, _ := data["observed_socket_records"].([]any)
+	recordByEndpoint := make(map[string]map[string]any)
+	for _, raw := range records {
+		record, ok := raw.(map[string]any)
+		if !ok || record == nil || !strings.EqualFold(deviceSocketAssetValue(record, "state", "runtime_state"), "BOUND") {
+			continue
+		}
+		key := deviceSocketAssetEndpointKey(deviceSocketAssetValue(record, "endpoint", "socket_name"))
+		if key != "" && recordByEndpoint[key] == nil {
+			recordByEndpoint[key] = record
+		}
+	}
+	candidates, _ := data["observed_endpoints"].([]any)
+	for _, raw := range candidates {
+		candidate, ok := raw.(map[string]any)
+		if !ok || candidate == nil || !strings.EqualFold(deviceSocketAssetValue(candidate, "state", "runtime_state"), "BOUND") {
+			continue
+		}
+		endpoint := deviceSocketAssetValue(candidate, "endpoint", "socket_name")
+		key := deviceSocketAssetEndpointKey(endpoint)
+		if key == "" || known[key] {
+			continue
+		}
+		asset := make(map[string]any)
+		for field, value := range recordByEndpoint[key] {
+			asset[field] = value
+		}
+		for field, value := range candidate {
+			asset[field] = value
+		}
+		asset["socket_name"] = endpoint
+		asset["endpoint"] = endpoint
+		asset["runtime_state"] = "BOUND"
+		asset["state"] = "BOUND"
+		assets = append(assets, asset)
+		known[key] = true
+	}
+	data["assets"] = assets
+	data["asset_count"] = len(assets)
+	listening, bound := 0, 0
+	for _, raw := range assets {
+		asset, ok := raw.(map[string]any)
+		if !ok || asset == nil {
+			continue
+		}
+		switch strings.ToUpper(deviceSocketAssetValue(asset, "runtime_state", "state")) {
+		case "LISTENING":
+			listening++
+		case "BOUND":
+			bound++
+		}
+	}
+	data["listening_count"] = listening
+	data["bound_count"] = bound
+}
+
+func deviceSocketAssetNetworkTarget(socketName, transport, address, port, process string) string {
+	if !deviceSocketAssetKnown(socketName) {
+		return ""
+	}
+	transport = strings.ToUpper(strings.TrimSpace(transport))
+	address = strings.TrimSpace(address)
+	port = strings.TrimSpace(port)
+	process = strings.TrimSpace(process)
+
+	// Historical snapshots produced by older workers sometimes only have the
+	// endpoint in socket_name.  Preserve that endpoint rather than inventing a
+	// port; add the protocol/process only when the metadata is trustworthy.
+	endpoint := socketName
+	if deviceSocketAssetKnown(address) && deviceSocketAssetKnown(port) {
+		host := address
+		if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+			host = "[" + host + "]"
+		}
+		endpoint = host + ":" + port
+	}
+	if transport == "" || transport == "UNKNOWN" {
+		return endpoint
+	}
+	if deviceSocketAssetKnown(process) {
+		return process + " " + transport + " " + endpoint
+	}
+	return transport + " " + endpoint
+}
+
+func deviceSocketAssetTarget(asset map[string]any) string {
+	socketName := deviceSocketAssetValue(asset, "socket_name", "name", "endpoint")
+	if !deviceSocketAssetKnown(socketName) {
+		return ""
+	}
+	transport := deviceSocketAssetValue(asset, "transport", "protocol")
+	family := strings.ToUpper(deviceSocketAssetValue(asset, "address_family", "family"))
+	if strings.HasPrefix(socketName, "/") || strings.HasPrefix(socketName, "@") || family == "AF_UNIX" || strings.EqualFold(transport, "UNIX") {
+		return socketName
+	}
+	if strings.EqualFold(transport, "TCP") || strings.EqualFold(transport, "UDP") || strings.HasPrefix(family, "AF_INET") {
+		return deviceSocketAssetNetworkTarget(socketName, transport, deviceSocketAssetValue(asset, "address", "local_address", "host"), deviceSocketAssetValue(asset, "port", "local_port"), deviceSocketAssetValue(asset, "process", "process_name"))
+	}
+	return socketName
+}
+
+func deviceSocketAssetOptionLabel(option deviceSocketAssetOption) string {
+	parts := []string{option.Target}
+	if deviceSocketAssetKnown(option.Process) {
+		parts = append(parts, "进程: "+option.Process)
+	}
+	if deviceSocketAssetKnown(option.RuntimeState) {
+		parts = append(parts, option.RuntimeState)
+	}
+	if deviceSocketAssetKnown(option.DeviceSerial) {
+		parts = append(parts, "设备: "+option.DeviceSerial)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func appendDeviceSocketAssetOptionPayload(payload map[string]any, fallbackSerial string, options map[string]deviceSocketAssetOption, sourceCount *int, runIDFilter string) {
+	if payload == nil {
+		return
+	}
+	runID := deviceSocketAssetValue(payload, "run_id")
+	if runIDFilter != "" && runID != runIDFilter {
+		return
+	}
+	if sourceCount != nil {
+		(*sourceCount)++
+	}
+	serial := deviceSocketAssetValue(payload, "device_serial")
+	if !deviceSocketAssetKnown(serial) {
+		serial = fallbackSerial
+	}
+	generatedAt := deviceSocketAssetValue(payload, "latest_updated", "generated_at")
+	items, ok := payload["assets"].([]any)
+	if !ok {
+		return
+	}
+	for _, raw := range items {
+		asset, ok := raw.(map[string]any)
+		if !ok || asset == nil {
+			continue
+		}
+		target := deviceSocketAssetTarget(asset)
+		if target == "" {
+			continue
+		}
+		option := deviceSocketAssetOption{
+			Value:        target,
+			Target:       target,
+			SocketName:   deviceSocketAssetValue(asset, "socket_name", "name", "endpoint"),
+			DeviceSerial: serial,
+			RunID:        runID,
+			GeneratedAt:  generatedAt,
+			RuntimeState: deviceSocketAssetValue(asset, "runtime_state", "state"),
+			Transport:    strings.ToUpper(deviceSocketAssetValue(asset, "transport", "protocol")),
+			Process:      deviceSocketAssetValue(asset, "process", "process_name"),
+			Address:      deviceSocketAssetValue(asset, "address", "local_address", "host"),
+			Port:         deviceSocketAssetValue(asset, "port", "local_port"),
+		}
+		option.Label = deviceSocketAssetOptionLabel(option)
+		key := serial + "\x00" + target
+		if old, exists := options[key]; !exists || option.GeneratedAt >= old.GeneratedAt {
+			options[key] = option
+		}
+	}
+}
+
+func appendDeviceSocketAssetOptions(root, path, fallbackSerial string, options map[string]deviceSocketAssetOption, sourceCount *int, runIDFilter string) {
+	payload, err := readDeviceSocketAssetJSON(root, path, deviceSocketAssetMaxSnapshotBytes)
+	if err != nil {
+		return
+	}
+	appendDeviceSocketAssetOptionPayload(payload, fallbackSerial, options, sourceCount, runIDFilter)
+}
+
+// handleDeviceSocketAssetOptions reads the durable asset history already
+// collected for each board.  It intentionally does not invoke HDC, the model,
+// or the Python worker: opening the combined page must remain a read-only,
+// instant operation.  The returned target values are suitable for the same
+// source-locator/exposure-surface input used by manual entry.
+func (s *Server) handleDeviceSocketAssetOptions(w http.ResponseWriter, r *http.Request) {
+	root, err := s.deviceSocketAssetRoot()
+	if err != nil {
+		sourceLocatorJSON(w, http.StatusInternalServerError, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{err.Error()}})
+		return
+	}
+	optionsByKey := make(map[string]deviceSocketAssetOption)
+	runIDFilter := strings.TrimSpace(r.URL.Query().Get("run_id"))
+	if len(runIDFilter) > 256 {
+		runIDFilter = runIDFilter[:256]
+	}
+	sourceCount := 0
+	deviceCount := 0
+	fileCount := 0
+	// A selected historical run is resolved through the run API first.  This
+	// is important for older snapshots: some workers wrote the complete asset
+	// list into the run plan (or omitted run_id from the snapshot JSON), while
+	// the merged latest view may contain a different batch.  Never silently
+	// substitute that latest view for an explicitly selected run.
+	if runIDFilter != "" {
+		payload, found, runErr := s.deviceSocketAssetRunData(runIDFilter)
+		if runErr == nil && found {
+			appendDeviceSocketAssetOptionPayload(payload, deviceSocketAssetValue(payload, "device_serial"), optionsByKey, &sourceCount, runIDFilter)
+		}
+		// Compatibility with snapshots written before a run directory was
+		// retained.  The filename is the durable run identity in that format;
+		// inject it only into this in-memory view so the selected batch still
+		// receives its complete asset list without mixing other snapshots.
+		if len(optionsByKey) == 0 {
+			if entries, readErr := os.ReadDir(root); readErr == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						continue
+					}
+					path := filepath.Join(root, entry.Name(), "snapshots", "socket_inventory_"+runIDFilter+".json")
+					if snapshot, snapshotErr := readDeviceSocketAssetJSON(root, path, deviceSocketAssetMaxSnapshotBytes); snapshotErr == nil {
+						if deviceSocketAssetValue(snapshot, "run_id") == "" {
+							snapshot["run_id"] = runIDFilter
+						}
+						appendDeviceSocketAssetOptionPayload(snapshot, deviceSocketAssetValue(snapshot, "device_serial"), optionsByKey, &sourceCount, runIDFilter)
+					}
+				}
+			}
+		}
+		if found || len(optionsByKey) > 0 {
+			options := make([]deviceSocketAssetOption, 0, len(optionsByKey))
+			for _, option := range optionsByKey {
+				options = append(options, option)
+			}
+			sort.SliceStable(options, func(i, j int) bool {
+				if options[i].GeneratedAt != options[j].GeneratedAt {
+					return options[i].GeneratedAt > options[j].GeneratedAt
+				}
+				return options[i].Target < options[j].Target
+			})
+			truncated := 0
+			if len(options) > deviceSocketAssetMaxOptions {
+				truncated = len(options) - deviceSocketAssetMaxOptions
+				options = options[:deviceSocketAssetMaxOptions]
+			}
+			sourceLocatorJSON(w, http.StatusOK, map[string]any{
+				"status": "success",
+				"data": map[string]any{
+					"options": options, "count": len(options), "device_count": 1,
+					"source_count": sourceCount, "truncated_count": truncated,
+					"selected_run_id":      runIDFilter,
+					"selected_asset_count": len(options),
+					"source":               "设备 Socket 资产历史（选定 run 的只读快照）", "manual_input": true,
+				}, "errors": []string{},
+			})
+			return
+		}
+		// An explicitly selected run that cannot be loaded must not fall back
+		// to all historical assets: doing so makes the UI appear to show a
+		// selected batch while actually mixing unrelated sessions.
+		sourceLocatorJSON(w, http.StatusOK, map[string]any{
+			"status": "success",
+			"data":   map[string]any{"options": []deviceSocketAssetOption{}, "count": 0, "device_count": 0, "source_count": 0, "truncated_count": 0, "selected_run_id": runIDFilter, "selected_asset_count": 0, "source": "设备 Socket 资产历史（选定 run 不可用）", "manual_input": true},
+			"errors": []string{},
+		})
+		return
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		sourceLocatorJSON(w, http.StatusInternalServerError, map[string]any{"status": "error", "data": map[string]any{}, "errors": []string{readErr.Error()}})
+		return
+	}
+	for _, entry := range entries {
+		if fileCount >= deviceSocketAssetMaxHistoryFiles || !entry.IsDir() {
+			continue
+		}
+		deviceDir := filepath.Join(root, entry.Name())
+		info, lstatErr := os.Lstat(deviceDir)
+		if lstatErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			continue
+		}
+		deviceCount++
+		latest := filepath.Join(deviceDir, "latest.json")
+		if _, statErr := os.Lstat(latest); statErr == nil {
+			appendDeviceSocketAssetOptions(root, latest, "", optionsByKey, &sourceCount, runIDFilter)
+			fileCount++
+		}
+		snapshotsDir := filepath.Join(deviceDir, "snapshots")
+		snapshotEntries, snapshotErr := os.ReadDir(snapshotsDir)
+		if snapshotErr != nil {
+			continue
+		}
+		for _, snapshot := range snapshotEntries {
+			if fileCount >= deviceSocketAssetMaxHistoryFiles || snapshot.IsDir() || !strings.HasPrefix(snapshot.Name(), "socket_inventory_") || !strings.HasSuffix(snapshot.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(snapshotsDir, snapshot.Name())
+			appendDeviceSocketAssetOptions(root, path, "", optionsByKey, &sourceCount, runIDFilter)
+			fileCount++
+		}
+	}
+	options := make([]deviceSocketAssetOption, 0, len(optionsByKey))
+	for _, option := range optionsByKey {
+		options = append(options, option)
+	}
+	sort.SliceStable(options, func(i, j int) bool {
+		if options[i].GeneratedAt != options[j].GeneratedAt {
+			return options[i].GeneratedAt > options[j].GeneratedAt
+		}
+		if options[i].DeviceSerial != options[j].DeviceSerial {
+			return options[i].DeviceSerial < options[j].DeviceSerial
+		}
+		return options[i].Target < options[j].Target
+	})
+	truncated := 0
+	if len(options) > deviceSocketAssetMaxOptions {
+		truncated = len(options) - deviceSocketAssetMaxOptions
+		options = options[:deviceSocketAssetMaxOptions]
+	}
+	sourceLocatorJSON(w, http.StatusOK, map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"options":         options,
+			"count":           len(options),
+			"device_count":    deviceCount,
+			"source_count":    sourceCount,
+			"truncated_count": truncated,
+			"selected_run_id": runIDFilter,
+			"source":          "设备 Socket 资产历史（本地只读快照）",
+			"manual_input":    true,
+		},
+		"errors": []string{},
+	})
 }
 
 func (s *Server) handleDeviceSocketAssetScan(w http.ResponseWriter, r *http.Request) {
@@ -770,6 +1236,16 @@ func (s *Server) handleDeviceSocketAssetRuns(w http.ResponseWriter, r *http.Requ
 					}
 				}
 				socketRecordCount := plan["socket_record_count"]
+				assetCount := plan["asset_count"]
+				if assetCount == nil {
+					if planAssets, ok := plan["assets"].([]any); ok {
+						assetCount = len(planAssets)
+					} else if snapshot, snapshotErr := readDeviceSocketAssetJSON(root, filepath.Join(device, "snapshots", "socket_inventory_"+runEntry.Name()+".json"), deviceSocketAssetMaxSnapshotBytes); snapshotErr == nil {
+						if snapshotAssets, ok := snapshot["assets"].([]any); ok {
+							assetCount = len(snapshotAssets)
+						}
+					}
+				}
 				rows = append(rows, map[string]any{
 					"run_id":                  runEntry.Name(),
 					"device_serial":           plan["device_serial"],
@@ -782,6 +1258,7 @@ func (s *Server) handleDeviceSocketAssetRuns(w http.ResponseWriter, r *http.Requ
 					"evidence_count":          evidenceCount,
 					"trace_count":             traceCount,
 					"observed_endpoint_count": observedEndpointCount,
+					"asset_count":             assetCount,
 					"socket_record_count":     socketRecordCount,
 				})
 			}

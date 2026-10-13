@@ -1,0 +1,150 @@
+import socket from '@ohos.net.socket';
+import hilog from '@ohos.hilog';
+
+const DOMAIN = 0x0001;
+const TAG = 'VulnFounderHapPoc';
+const TARGET: string = '__TARGET__';
+const MODE: string = '__MODE__';
+const HOST = '__HOST__';
+const PORT = __PORT__;
+const LOCAL_PATH = '__LOCAL_PATH__';
+const MARKER = '__MARKER__';
+const FIRST = '__FIRST__';
+const SECOND = '__SECOND__';
+const THIRD = '__THIRD__';
+
+@Entry
+@Component
+struct Index {
+  @State statusText: string = 'Preparing controlled PoC...';
+  @State responseText: string = '';
+
+  aboutToAppear(): void {
+    hilog.info(DOMAIN, TAG, `HAP_POC_START ${TARGET} mode=${MODE}`);
+    this.runPoc();
+  }
+
+  async runPoc(): Promise<void> {
+    try {
+      if (MODE === 'udp') {
+        await this.runUdp();
+      } else if (MODE === 'tcp') {
+        await this.runTcp();
+      } else if (MODE === 'local') {
+        await this.runLocal();
+      } else {
+        this.statusText = `${TARGET}: HAP transport not applicable`;
+        this.responseText = 'The target requires a CLI/system-native entry; no privileged operation was attempted.';
+        hilog.info(DOMAIN, TAG, `HAP_POC_NOT_APPLICABLE ${TARGET} reason=cli_or_native_entry`);
+      }
+    } catch (err) {
+      const message = this.errorMessage(err);
+      this.statusText = `${TARGET} send failed`;
+      this.responseText = message;
+      hilog.error(DOMAIN, TAG, `HAP_POC_FAIL ${TARGET}: ${message}`);
+      return;
+    }
+  }
+
+  async runUdp(): Promise<void> {
+    const udp = socket.constructUDPSocketInstance();
+    try {
+      await udp.bind({ address: '0.0.0.0', family: 1, port: 0 });
+      if (FIRST.length > 0) {
+        await udp.send({ data: FIRST, address: { address: HOST, family: 1, port: PORT } });
+      }
+      if (SECOND.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, __FRAME_DELAY_MS__));
+        await udp.send({ data: SECOND, address: { address: HOST, family: 1, port: PORT } });
+      }
+      if (THIRD.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, __FRAME_DELAY_MS__));
+        await udp.send({ data: THIRD, address: { address: HOST, family: 1, port: PORT } });
+      }
+      await udp.close();
+      this.statusText = `${TARGET} UDP frames sent`;
+      this.responseText = `marker=${MARKER}`;
+      hilog.info(DOMAIN, TAG, `HAP_POC_SENT ${TARGET} transport=udp marker=${MARKER}`);
+    } finally {
+      try { await udp.close(); } catch (_) {}
+    }
+  }
+
+  async runTcp(): Promise<void> {
+    const tcp = socket.constructTCPSocketInstance();
+    try {
+      await tcp.bind({ address: '0.0.0.0', family: 1, port: 0 });
+      await tcp.connect({ address: { address: HOST, family: 1, port: PORT }, timeout: 2000 });
+      if (FIRST.length > 0) {
+        await tcp.send({ data: FIRST });
+      }
+      if (SECOND.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, __FRAME_DELAY_MS__));
+        await tcp.send({ data: SECOND });
+      }
+      if (THIRD.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, __FRAME_DELAY_MS__));
+        await tcp.send({ data: THIRD });
+      }
+      await tcp.close();
+      this.statusText = `${TARGET} TCP frames sent`;
+      this.responseText = `marker=${MARKER}`;
+      hilog.info(DOMAIN, TAG, `HAP_POC_SENT ${TARGET} transport=tcp marker=${MARKER}`);
+    } finally {
+      try { await tcp.close(); } catch (_) {}
+    }
+  }
+
+  async runLocal(): Promise<void> {
+    const local = socket.constructLocalSocketInstance();
+    try {
+      await local.connect({ address: { address: LOCAL_PATH }, timeout: 2000 });
+      if (FIRST.length > 0) {
+        await local.send({ data: FIRST, encoding: 'utf-8' });
+      }
+      await local.close();
+      this.statusText = `${TARGET} local-socket frame sent`;
+      this.responseText = `marker=${MARKER}`;
+      hilog.info(DOMAIN, TAG, `HAP_POC_SENT ${TARGET} transport=local marker=${MARKER}`);
+    } finally {
+      try { await local.close(); } catch (_) {}
+    }
+  }
+
+  private errorMessage(err: Object): string {
+    if (err instanceof Error) {
+      return err.message;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch (_) {
+      return String(err);
+    }
+  }
+
+  build() {
+    Column() {
+      Text(`VulnFounder HAP — ${TARGET}`)
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .margin({ top: 25, bottom: 10 })
+      Text(`Controlled ${MODE} PoC`)
+        .fontSize(15)
+        .fontColor('#666666')
+        .margin({ bottom: 14 })
+      Text(this.statusText)
+        .fontSize(15)
+        .fontColor('#1677FF')
+        .margin({ bottom: 8 })
+        .maxLines(2)
+      Text(this.responseText)
+        .fontSize(13)
+        .fontColor('#333333')
+        .margin({ left: 20, right: 20 })
+        .maxLines(5)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+  }
+}

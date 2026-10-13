@@ -2474,6 +2474,7 @@ def scan_repository(
                     )
                     relative_graph = os.path.relpath(graph_path, output_dir)
                     relative_residual = os.path.relpath(residual_path, output_dir)
+                    entry_point_seed_source = "unavailable"
                     if not os.path.isfile(residual_path):
                         missing_artifacts.append({
                             "language": label,
@@ -2503,6 +2504,58 @@ def scan_repository(
                             if isinstance(function, dict)
                             and function.get("is_entry_point") is True
                         }
+                        entry_point_seed_source = (
+                            "graph_or_dataset_flags"
+                            if graph_entry_points or dataset_entry_points
+                            else "none"
+                        )
+                        # Older ``all`` checkpoints did not persist the
+                        # structural entry labels because the normal
+                        # reachability filter was intentionally skipped.  Do
+                        # not silently terminate recovery in that case: use
+                        # the same deterministic detector as the parser to
+                        # reconstruct seeds, and record the provenance in the
+                        # report.  This is still a static fact; no LLM signal
+                        # or target-specific hint is introduced here.
+                        if not graph_entry_points and not dataset_entry_points:
+                            try:
+                                from utilities.agentic_enhancer import (
+                                    EntryPointDetector,
+                                )
+
+                                detector = EntryPointDetector(
+                                    functions,
+                                    graph_payload.get("call_graph", {}),
+                                    platform=effective_platform,
+                                    file_evidence=graph_payload.get(
+                                        "openharmony_file_evidence", {}
+                                    )
+                                    if effective_platform == "openharmony"
+                                    else None,
+                                )
+                                fallback_entry_points = {
+                                    str(function_id)
+                                    for function_id in detector.detect_entry_points()
+                                    if str(function_id) in functions
+                                }
+                                if fallback_entry_points:
+                                    graph_entry_points |= fallback_entry_points
+                                    entry_point_seed_source = (
+                                        "static_detector_fallback"
+                                    )
+                                    _print_chinese_log(
+                                        f"调用图恢复入口回退检测：从函数索引恢复 "
+                                        f"{len(fallback_entry_points)} 个静态入口，"
+                                        "继续调度残余站点；不会修改原生调用边。"
+                                    )
+                                else:
+                                    entry_point_seed_source = "static_detector_empty"
+                            except Exception as exc:  # optional recovery hint
+                                entry_point_seed_source = "static_detector_failed"
+                                _print_chinese_log(
+                                    f"调用图恢复入口回退检测失败：{exc}；"
+                                    "本语言仍保留 no_entry_points 诊断。"
+                                )
                         if iterative_mode:
                             semantic_payload = None
                             semantic_path = os.path.join(
@@ -2542,6 +2595,10 @@ def scan_repository(
                             "call_graph_path": relative_graph,
                             "residuals_path": relative_residual,
                             "mode": "iterative" if iterative_mode else "one_shot",
+                            "entry_point_seed_source": entry_point_seed_source,
+                            "entry_point_count": len(
+                                graph_entry_points | dataset_entry_points
+                            ),
                             "report": review,
                         })
                     except Exception as exc:  # optional stage: keep prior work
@@ -2559,14 +2616,24 @@ def scan_repository(
                             "call_graph_path": relative_graph,
                             "residuals_path": relative_residual,
                             "mode": "iterative" if iterative_mode else "one_shot",
+                            "entry_point_seed_source": entry_point_seed_source,
+                            "entry_point_count": len(
+                                graph_entry_points | dataset_entry_points
+                            ),
                             "error": str(exc)[:500],
                         })
 
                 report_statuses = {item.get("status") for item in reports}
                 if not reports:
                     overall_status = "no_artifacts"
-                elif report_statuses <= {"complete", "no_sites", "no_entry_points"}:
+                elif report_statuses <= {"complete", "no_sites"}:
                     overall_status = "complete"
+                elif report_statuses <= {"no_entry_points"}:
+                    # This is an explicit diagnostic outcome, not a
+                    # successful review.  Keeping it distinct prevents the
+                    # UI/report from claiming that recovery completed when
+                    # zero rounds were scheduled.
+                    overall_status = "no_entry_points"
                 elif report_statuses & {
                     "complete",
                     "no_sites",

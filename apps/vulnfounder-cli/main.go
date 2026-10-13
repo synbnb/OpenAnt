@@ -4,7 +4,7 @@
 // experience with colored output, progress streaming, and JSON mode.
 package main
 
-import "github.com/synbnb/vulnfounder/apps/vulnfounder-cli/cmd"
+import "vulnfounder/apps/vulnfounder-cli/cmd"
 
 func main() {
 	cmd.Execute()

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .transports.base import TransportError
+from .toolchain import toolchain_root
 
 # ---------------------------------------------------------------------------
 # §10.2 确定性校验规则表（代码管控，LLM 无配置权）
@@ -70,14 +71,9 @@ _PLACEHOLDER_RE = re.compile(r"__[A-Z_]+__")
 _HAP_POC_START = "HAP_POC_START"   # 自证日志锚（与模板/合成的 aboutToAppear 约定一致）
 
 _TEMPLATES_DIR = Path(__file__).parent / "carrier_templates"
-_HAP_PROJECT = (
-    Path(__file__).resolve().parents[5] / "evaluation_dataset" / "vulnerability" /
-    "result" / "hap_poc_suite" / "dp01_hap"
-)
-_TOOLCHAIN_ROOT = (
-    Path(__file__).resolve().parents[1] / "dynamic_tester" / "toolchains" /
-    "commandline-tools-mac-arm64-6.1.0.860" / "command-line-tools"
-)
+_PROJECT_ROOT = Path(__file__).resolve().parents[5]
+_HAP_PROJECT = _PROJECT_ROOT / "assets" / "dynamic_tester" / "hap_poc_suite" / "dp01_hap"
+_TOOLCHAIN_ROOT = toolchain_root()
 _CLANG = _TOOLCHAIN_ROOT / "sdk/default/openharmony/native/llvm/bin/aarch64-unknown-linux-ohos-clang"
 _SYSROOT = _TOOLCHAIN_ROOT / "sdk/default/openharmony/native/sysroot"
 
@@ -237,14 +233,18 @@ def _build_hap(source: str, *, contract_id: str, out_root: Path | None = None) -
         _HVIGORW, _NODE, _SIGN_JAR, _TEMPLATE_PROJECT, CERT_DIR, KEY_ALIAS, KEY_PWD,
     )
 
-    if not _TEMPLATE_PROJECT.exists():
-        return None, f"HAP 模板工程缺失: {_TEMPLATE_PROJECT}"
+    # Keep the carrier template hook independent from the transport module so
+    # a caller can supply a minimal project (and tests do not need the whole
+    # transport fixture). Fall back to the shared template when necessary.
+    template_project = _HAP_PROJECT if _HAP_PROJECT.exists() else _TEMPLATE_PROJECT
+    if not template_project.exists():
+        return None, f"HAP 模板工程缺失: {template_project}"
     out_dir = (out_root or Path(tempfile.gettempdir())) / f"vf-carrier-{contract_id}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     project = out_dir / "project"
-    shutil.copytree(_TEMPLATE_PROJECT, project,
+    shutil.copytree(template_project, project,
                     ignore=shutil.ignore_patterns(".hvigor", "build", "signing", "*.log"))
     index_path = project / "Entry/src/main/ets/pages/Index.ets"
     index_path.write_text(source, encoding="utf-8")

@@ -317,14 +317,17 @@ def _find_candidate_compiler(root: Path) -> tuple[str | None, dict[str, Any]]:
         value = first_env(variable, legacy)
         if value:
             candidates.append(_path(value))
+    # 工具链是可选的外部依赖。交付包不携带开发者机器上的 SDK；若运维
+    # 需要随项目提供工具链，可放到 assets/toolchains，或直接设置
+    # VULNFOUNDER_OHOS_CLANGXX。找不到时仍可使用 PATH 中的 clang++ 做诊断。
     try:
-        project_root = Path(__file__).resolve().parents[5]
-        toolchains = project_root / "libs" / "vulnfounder-core" / "utilities" / "dynamic_tester" / "toolchains"
+        project_root = data_dir().parent
+        toolchains = project_root / "assets" / "toolchains"
         candidates.extend(sorted(toolchains.glob(
             "*/command-line-tools/sdk/default/openharmony/native/llvm/bin/"
             "*-unknown-linux-ohos-clang++"
         )))
-    except (IndexError, OSError):
+    except (IndexError, OSError, RuntimeError):
         pass
     host = shutil.which("clang++")
     if host:

@@ -21,7 +21,7 @@ func TestExposureLocatorRouteRendersUnifiedStages(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"暴露面识别与定位",
-		"启动新的联合会话",
+		"启动新的暴露面识别与定位会话",
 		"id=\"launch-panel\"",
 		"id=\"runtime-panels\"",
 		"id=\"history-page\"",
@@ -34,6 +34,10 @@ func TestExposureLocatorRouteRendersUnifiedStages(t *testing.T) {
 		"/exposure-surface/sessions",
 		"/source-locator/sessions",
 		"locator-llm-rounds",
+		"llm_search.json",
+		"locatorAuditRounds",
+		"loadLocatorInsightsWithAudit",
+		"结构化记录不完整",
 		"locator-repository-summary",
 		"locatorRepositoryMappings",
 	} {

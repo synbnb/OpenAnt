@@ -11,9 +11,9 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/server"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/server"
 )
 
 var serveCmd = &cobra.Command{
@@ -23,7 +23,8 @@ var serveCmd = &cobra.Command{
 the browser automatically.
 
 Scan outputs are stored under the active VulnFounder data directory and persist
-across restarts. Existing ~/.openant history remains visible during migration.
+across restarts. In a project checkout the data directory is <project>/result;
+an explicit VULNFOUNDER_DATA_DIR may be used for an external writable volume.
 Use Ctrl+C to stop the server; in-flight scans are cancelled (their process
 groups are killed) before exit.`,
 	Args: cobra.NoArgs,

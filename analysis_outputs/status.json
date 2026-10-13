@@ -1,0 +1,21 @@
+{
+  "status": "complete",
+  "mode": "read_only",
+  "project": "VulnFounder",
+  "scope": "OpenHarmony 6.1-LTS -> 7.0-Release migration impact",
+  "code_modified": false,
+  "heavy_jobs_run": false,
+  "confidence": "high_for_static_configuration_findings",
+  "needs_runtime_verification": [
+    "OpenGrok project name and API capability after 7.0 index rebuild",
+    "device build fingerprint and ABI",
+    "7.0 command-line-tools/HAP signing compatibility",
+    "7.0 protocol descriptors and device services"
+  ],
+  "missing_skill_reference": "research-pitfall-checklist.md was not present in the installed analyze-project skill directory",
+  "outputs": [
+    "analysis_outputs/SUMMARY.md",
+    "analysis_outputs/RISKS.md",
+    "analysis_outputs/status.json"
+  ]
+}

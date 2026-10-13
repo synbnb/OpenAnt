@@ -1,0 +1,10 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Entry module",
+  "main": "",
+  "author": "",
+  "license": "ISC",
+  "modelVersion": "5.0.0",
+  "dependencies": {}
+}

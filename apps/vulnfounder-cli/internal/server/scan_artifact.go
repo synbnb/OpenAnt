@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/python"
+	"vulnfounder/apps/vulnfounder-cli/internal/python"
 )
 
 const scanArtifactInvokeTimeout = 45 * time.Minute
@@ -57,7 +57,7 @@ var scanArtifactRunArtifactSpecs = map[string]struct {
 	"contract.json":           {"设备测试契约", "最终交给 HAP 载荷和设备执行器的结构化契约。", "json", 16 << 20},
 	"protocol_contract.json":  {"标准化协议契约", "按计划统一保存的协议、描述符来源和路由证据；阻断时也会记录缺口。", "json", 16 << 20},
 	"probe_result.json":       {"合法报文自证", "自动描述符生成后的无害合法报文设备侧自证结果。", "json", 8 << 20},
-	"dynamic_baseline.json":  {"独立评测基线", "当前样本、源码快照和 clean-room 输入边界的冻结记录。", "json", 8 << 20},
+	"dynamic_baseline.json":   {"独立评测基线", "当前样本、源码快照和 clean-room 输入边界的冻结记录。", "json", 8 << 20},
 	"payload_manifest.json":   {"实际载荷清单", "本轮实际发送的帧、传输方式和设备响应摘要。", "json", 16 << 20},
 	"input_influence.json":    {"输入影响证据", "指定输入是否影响危险参数的独立结论；不会由效果信号自动代替。", "json", 16 << 20},
 	"oracle_result.json":      {"预言机结果", "文件、日志、响应、进程或资源观测器的结构化结果。", "json", 16 << 20},
@@ -1997,25 +1997,51 @@ func (s *Server) handleScanArtifactDevices(w http.ResponseWriter, r *http.Reques
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, hdc, "list", "targets").Output()
-	devices := []map[string]string{}
+	devices, err := discoverHDCDevices(ctx, hdc)
 	if err != nil {
 		scanArtifactJSON(w, http.StatusOK, map[string]any{"status": "success", "devices": devices, "error": err.Error()})
 		return
 	}
+	scanArtifactJSON(w, http.StatusOK, map[string]any{"status": "success", "devices": devices})
+}
+
+// discoverHDCDevices is shared by the dynamic-test and device-asset pages.
+// HDC output differs slightly between SDK revisions (some append a transport
+// or connection state after the serial), so keep the parser conservative: the
+// first token is the stable serial and the remaining tokens are display-only
+// metadata.  No device is silently selected here; the caller decides whether
+// one unique device is required.
+func discoverHDCDevices(ctx context.Context, hdc string) ([]map[string]string, error) {
+	out, err := exec.CommandContext(ctx, hdc, "list", "targets").Output()
+	devices := []map[string]string{}
+	if err != nil {
+		return devices, err
+	}
+	seen := make(map[string]struct{})
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "[Empty]") || strings.Contains(line, "Cannot find") {
 			continue
 		}
-		// Serial is the first token; some hdc versions append a state suffix.
-		serial := strings.Fields(line)[0]
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		serial := fields[0]
 		if len(serial) > 128 || !scanArtifactSampleOK(serial) {
 			continue
 		}
-		devices = append(devices, map[string]string{"serial": serial})
+		if _, exists := seen[serial]; exists {
+			continue
+		}
+		seen[serial] = struct{}{}
+		state := "online"
+		if len(fields) > 1 {
+			state = strings.Join(fields[1:], " ")
+		}
+		devices = append(devices, map[string]string{"serial": serial, "state": state})
 	}
-	scanArtifactJSON(w, http.StatusOK, map[string]any{"status": "success", "devices": devices})
+	return devices, nil
 }
 
 // resolveHDCBinary mirrors the Python core's resolve order (env override →

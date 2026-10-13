@@ -20,10 +20,14 @@ from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     _diagnostics_for_batch,
     parse_recovery_response,
     run_recovery_review,
+    summarize_recovery_inputs,
     validate_recovery_proposals,
 )
 from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     _partition_worklist,
+)
+from core.platforms.openharmony.llm_call_graph_rounds import (  # noqa: E402
+    run_iterative_recovery_review,
 )
 
 
@@ -200,6 +204,54 @@ def test_callsite_ledger_is_reviewed_even_when_parser_residuals_are_empty():
     assert worklist[0]["candidate_completeness"] == "unknown"
 
 
+def test_ledger_admission_filters_ordinary_unlinked_calls_and_exposes_counts():
+    diagnostics = {
+        "unresolved_call_sites": [],
+        "call_sites": [
+            {
+                "site_id": "callsite:ordinary",
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line_start": 12,
+                "expression": "std::move(value)",
+                "call_kind": "direct",
+                "binding_status": "unresolved",
+                "dispatch_status": "unknown",
+                "graph_status": "not_linked",
+                "candidate_target_ids": [],
+            },
+            {
+                "site_id": "callsite:missing-edge",
+                "caller_id": CALLER,
+                "file": SOURCE,
+                "line_start": 13,
+                "expression": "controlCallCmd.GetResult(vec)",
+                "call_kind": "member",
+                "binding_status": "resolved",
+                "dispatch_status": "not_applicable",
+                "graph_status": "edge_missing",
+                "candidate_target_ids": [HANDLER],
+            },
+        ],
+    }
+
+    worklist = build_recovery_worklist(
+        diagnostics, _functions(), max_sites=-1, include_candidate_sites=False
+    )
+    assert [item["site_id"] for item in worklist] == ["callsite:missing-edge"]
+    assert worklist[0]["recovery_admission_reasons"] == ["graph_gap"]
+    assert worklist[0]["recovery_eligible"] is True
+
+    summary = summarize_recovery_inputs(diagnostics)
+    assert summary["ledger_sites"] == 2
+    assert summary["ledger_admitted_sites"] == 1
+    assert summary["ledger_skipped_sites"] == 1
+    assert summary["ledger_admission_counts"] == {
+        "graph_gap": 1,
+        "ordinary_ledger_call": 1,
+    }
+
+
 def test_ledger_and_residual_observations_for_one_site_are_merged():
     site_id = "callsite:shared"
     diagnostics = {
@@ -236,7 +288,10 @@ def test_ledger_and_residual_observations_for_one_site_are_merged():
 
     assert len(worklist) == 1
     assert worklist[0]["duplicate_count"] == 2
-    assert worklist[0]["source_records"] == ["callsite_ledger"]
+    assert worklist[0]["source_records"] == [
+        "callsite_ledger",
+        "parser_residual",
+    ]
     assert worklist[0]["candidate_target_ids"] == [HANDLER]
 
 
@@ -896,3 +951,72 @@ def test_run_batches_keep_all_candidate_edges_and_never_send_truncated_json():
     assert result["summary"]["request_batches"] == 3
     assert result["summary"]["accepted"] == 30
     assert result["summary"]["unreviewed_sites"] == 0
+
+
+def test_iterative_scheduler_never_overshoots_llm_call_budget():
+    calls = []
+
+    def completion(_prompt: str) -> str:
+        calls.append(1)
+        return json.dumps({"schema_version": 1, "decisions": []})
+
+    result = run_iterative_recovery_review(
+        _diagnostics(),
+        _functions(),
+        completion=completion,
+        max_rounds=4,
+        max_llm_calls=1,
+        max_retries=2,
+    )
+
+    assert len(calls) == 1
+    assert result["summary"]["llm_calls"] == 1
+    # Both small sites fit in one prompt, so the one-call budget is not
+    # wasted merely because the scheduler has two worklist entries.
+    assert result["summary"]["sites_scheduled"] == 2
+    assert result["summary"]["unreviewed_sites"] == 0
+    assert result["summary"]["termination_reason"] == "max_llm_calls"
+    assert result["status"] == "partial"
+
+
+def test_iterative_scheduler_keeps_an_oversized_site_unreviewed_when_budget_is_too_small():
+    diagnostics = _diagnostics()
+    candidate_ids = []
+    functions = _functions()
+    for index in range(60):
+        target_id = f"{SOURCE}:NetStub::Candidate{index}"
+        candidate_ids.append(target_id)
+        functions[target_id] = {
+            "name": f"NetStub::Candidate{index}",
+            "file_path": SOURCE,
+            "start_line": 100 + index,
+            "end_line": 105 + index,
+            "class_name": "NetStub",
+            "code": "int32_t Candidate(MessageParcel &, MessageParcel &) { return 0; }",
+        }
+    diagnostics["unresolved_call_sites"][0]["candidate_target_ids"] = candidate_ids
+    calls = []
+
+    def completion(_prompt: str) -> str:
+        calls.append(1)
+        return json.dumps({"schema_version": 1, "decisions": []})
+
+    result = run_iterative_recovery_review(
+        diagnostics,
+        functions,
+        completion=completion,
+        include_candidate_sites=True,
+        max_rounds=4,
+        max_llm_calls=1,
+        max_retries=2,
+    )
+
+    # The oversized site expands into three candidate batches and is skipped,
+    # while the two smaller sites still fit in the one-call budget.  Only the
+    # oversized site remains explicitly unreviewed.
+    assert len(calls) == 1
+    assert result["summary"]["llm_calls"] == 1
+    assert result["summary"]["sites_scheduled"] == 2
+    assert result["summary"]["unreviewed_sites"] == 1
+    assert result["summary"]["termination_reason"] == "max_llm_calls"
+    assert result["status"] == "partial"

@@ -458,6 +458,28 @@ def build_pipeline_output(
 
     review = experiment.get("review_findings") or []
     review = [r for r in review if isinstance(r, dict)]
+    # Stage 1 can emit an inconclusive result even when Stage 2 did not create
+    # a separate review_findings record. Keep it in the pipeline so the report
+    # phase can publish a clearly labelled, non-confirming report instead of
+    # silently dropping the analysis lead.
+    review_keys = {
+        r.get("route_key") or r.get("unit_id")
+        for r in review
+        if r.get("route_key") or r.get("unit_id")
+    }
+    for candidate in all_results:
+        verdict = str(candidate.get("finding") or candidate.get("verdict") or "").strip().lower()
+        if verdict != "inconclusive":
+            continue
+        verification = candidate.get("verification")
+        if isinstance(verification, dict):
+            corrected = str(verification.get("correct_finding") or "").strip().lower()
+            if corrected in {"safe", "protected", "not_vulnerable"}:
+                continue
+        key = candidate.get("route_key") or candidate.get("unit_id")
+        if key and key not in review_keys:
+            review.append(candidate)
+            review_keys.add(key)
 
     # ---------------------------------------------------------------
     # Dedup: collapse caller/callee pairs that share the same attack
@@ -1198,6 +1220,74 @@ def safe_disclosure_filename(short_name: str) -> str:
     return cleaned.upper() or "UNNAMED"
 
 
+def render_inconclusive_report(finding: Mapping, *, language: str = "en") -> str:
+    """Render a deterministic report for a finding that remains inconclusive.
+
+    Inconclusive findings are intentionally not passed through the normal
+    disclosure-eligibility filter: they are useful review artifacts, but are
+    not claims that a vulnerability has been confirmed.  Keeping this report
+    deterministic also means a missing report-phase model cannot silently
+    erase evidence from a static scan.
+    """
+    route = _coerce_to_str(finding.get("route_key") or finding.get("unit_id") or "unknown")
+    short_name = _coerce_to_str(finding.get("short_name") or finding.get("name") or "待定安全问题")
+    description = _coerce_to_str(finding.get("description") or finding.get("reasoning") or "未提供详细分析说明。")
+    stage1 = _coerce_to_str(finding.get("stage1_verdict") or "inconclusive")
+    stage2 = _coerce_to_str(finding.get("stage2_verdict") or "unverified")
+    missing = finding.get("missing_evidence") or []
+    counter = finding.get("counterevidence") or []
+    suggested = _coerce_to_str(finding.get("suggested_fix") or "补充缺失证据后再判断是否可以生成修复方案。")
+    if not isinstance(missing, (list, tuple)):
+        missing = [missing]
+    if not isinstance(counter, (list, tuple)):
+        counter = [counter]
+    missing_text = "\n".join(f"- {_coerce_to_str(item)}" for item in missing if _coerce_to_str(item)) or "- 暂未记录。"
+    counter_text = "\n".join(f"- {_coerce_to_str(item)}" for item in counter if _coerce_to_str(item)) or "- 暂未记录。"
+    location = finding.get("location") if isinstance(finding.get("location"), Mapping) else {}
+    file_path = _coerce_to_str(location.get("file") or route.split(":", 1)[0])
+    function = _coerce_to_str(location.get("function") or (route.split(":", 1)[1] if ":" in route else route))
+    line_range = ""
+    if location.get("start_line") is not None or location.get("end_line") is not None:
+        line_range = f"{location.get('start_line', '?')}-{location.get('end_line', '?')}"
+    if language == "zh-CN":
+        return (
+            f"# 待定安全分析报告：{short_name}\n\n"
+            "> 状态：待定（inconclusive）。本文档记录静态分析线索，不代表已确认存在可利用问题。\n\n"
+            "## 目标位置\n\n"
+            f"- 函数：`{function}`\n- 文件：`{file_path}`\n"
+            + (f"- 行号：`{line_range}`\n" if line_range else "")
+            + f"- 路由标识：`{route}`\n\n"
+            "## 分析结论\n\n"
+            f"- Stage 1：`{stage1}`\n- Stage 2：`{stage2}`\n\n"
+            f"{description}\n\n"
+            "## 尚缺少的证据\n\n"
+            f"{missing_text}\n\n"
+            "## 反向或限制性证据\n\n"
+            f"{counter_text}\n\n"
+            "## 后续建议\n\n"
+            f"{suggested}\n\n"
+            "> 建议维护者结合源码、调用链和必要的运行时验证后，再将该条目升级为已确认报告或标记为安全。\n"
+        )
+    return (
+        f"# Inconclusive Security Analysis: {short_name}\n\n"
+        "> Status: inconclusive. This document records a static-analysis lead; it is not confirmation of an exploitable vulnerability.\n\n"
+        "## Location\n\n"
+        f"- Function: `{function}`\n- File: `{file_path}`\n"
+        + (f"- Lines: `{line_range}`\n" if line_range else "")
+        + f"- Route: `{route}`\n\n"
+        "## Analysis status\n\n"
+        f"- Stage 1: `{stage1}`\n- Stage 2: `{stage2}`\n\n"
+        f"{description}\n\n"
+        "## Missing evidence\n\n"
+        f"{missing_text}\n\n"
+        "## Counterevidence or limitations\n\n"
+        f"{counter_text}\n\n"
+        "## Recommended follow-up\n\n"
+        f"{suggested}\n\n"
+        "> Confirm the source, call path, and (where appropriate) runtime behavior before upgrading this item to a confirmed disclosure or closing it as safe.\n"
+    )
+
+
 def generate_disclosure_docs(
     results_path: str,
     output_dir: str,
@@ -1219,7 +1309,8 @@ def generate_disclosure_docs(
     import json
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from report.generator import (
-        generate_disclosure as _generate_disclosure,
+        generate_disclosure_pair as _generate_disclosure_pair,
+        translate_report_markdown,
         _hydrate_pipeline_findings,
         _merge_usage,
         merge_dynamic_results,
@@ -1261,15 +1352,6 @@ def generate_disclosure_docs(
     output_path = Path(output_dir)
     chinese_output_dir = output_path.with_name(output_path.name + ".zh-CN")
 
-    # Resolve the report-phase binding once and reuse across the
-    # ThreadPoolExecutor — adapters are stateless dispatchers, safe
-    # to share. Probe the registry upfront (standalone-invocation
-    # path; same rationale as generate_summary_report).
-    cf = load_config_file()
-    registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
-    probe_registry_or_raise(registry)
-    report_binding = registry.get("report")
-
     product_name = pipeline_data["repository"]["name"]
     all_usages = []
     count = 0
@@ -1285,7 +1367,25 @@ def generate_disclosure_docs(
     confirmed = [
         (i, finding) for i, finding in enumerate(pipeline_data["findings"], 1)
         if finding.get("stage2_verdict") in DISCLOSURE_ELIGIBLE
+        and not (
+            finding.get("stage1_verdict") == "inconclusive"
+            and finding.get("stage2_verdict") == "unverified"
+        )
     ]
+
+    # Resolve the report-phase binding only when at least one normal disclosure
+    # will actually call the model.  An inconclusive-only scan is intentionally
+    # renderable without credentials: its deterministic report must remain
+    # available even when the optional report model is unavailable.
+    report_binding = None
+    if confirmed:
+        # Reuse one stateless binding across the ThreadPoolExecutor. Probe the
+        # registry at the boundary so a bad model configuration fails before
+        # worker threads start.
+        cf = load_config_file()
+        registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+        probe_registry_or_raise(registry)
+        report_binding = registry.get("report")
 
     if not confirmed:
         print("  No confirmed vulnerabilities to generate disclosures for.", file=sys.stderr)
@@ -1297,28 +1397,22 @@ def generate_disclosure_docs(
             i, finding = args
             filename = f"DISCLOSURE_{i:02d}_{safe_disclosure_filename(finding['short_name'])}.md"
             written = []
-            usages = []
-            for locale, target_dir in (("en", output_path), ("zh-CN", chinese_output_dir)):
+            disclosure_text, disclosure_zh, usage = _generate_disclosure_pair(
+                finding,
+                product_name,
+                report_binding,
+                pipeline_data=pipeline_data,
+            )
+            for target_dir, text in (
+                (output_path, disclosure_text),
+                (chinese_output_dir, disclosure_zh),
+            ):
                 target_dir.mkdir(parents=True, exist_ok=True)
-                kwargs = {"pipeline_data": pipeline_data}
-                # Keep the legacy English invocation shape for wrappers and
-                # third-party integrations that still accept only the old
-                # arguments; the locale is explicit for the new Chinese call.
-                if locale == "zh-CN":
-                    kwargs["language"] = locale
-                disclosure_text, usage = _generate_disclosure(
-                    finding,
-                    product_name,
-                    report_binding,
-                    **kwargs,
-                )
                 filepath = target_dir / filename
                 with open_utf8(filepath, "w") as f:
-                    f.write(disclosure_text)
+                    f.write(text)
                 written.append(str(filepath))
-                usages.append(usage)
-            from report.generator import _merge_usage
-            return finding["short_name"], written, _merge_usage(usages)
+            return finding["short_name"], written, usage
 
         executor = ThreadPoolExecutor(max_workers=8)
         futures = {executor.submit(_one, item): item for item in confirmed}
@@ -1337,9 +1431,54 @@ def generate_disclosure_docs(
             raise
         executor.shutdown(wait=False)
 
+    # Inconclusive items are rendered deterministically in English.  When the
+    # optional report binding is available, only the Chinese sibling is sent
+    # through the constrained translator; the finding is never re-analyzed.
+    # They remain available even when the report model is unavailable.
+    inconclusive = [
+        (i, finding)
+        for i, finding in enumerate(pipeline_data["findings"], 1)
+        if finding.get("stage2_verdict") == "inconclusive"
+        or (
+            finding.get("stage1_verdict") == "inconclusive"
+            and finding.get("stage2_verdict") in {"unverified", ""}
+        )
+    ]
+    # If this scan has only inconclusive findings, translation remains an
+    # optional enhancement: do not make report generation fail merely because
+    # the optional model is unavailable.
+    inconclusive_count = 0
+    inconclusive_binding = report_binding
+    if inconclusive and inconclusive_binding is None:
+        try:
+            cf = load_config_file()
+            registry = build_phase_registry(cf, resolve_llm_config(cf, llm_config_name))
+            probe_registry_or_raise(registry)
+            inconclusive_binding = registry.get("report")
+        except Exception as exc:
+            print(f"  Chinese inconclusive translation unavailable: {type(exc).__name__}", file=sys.stderr)
+    for i, finding in inconclusive:
+        filename = f"INCONCLUSIVE_{i:02d}_{safe_disclosure_filename(finding.get('short_name', 'inconclusive'))}.md"
+        english_text = render_inconclusive_report(finding, language="en")
+        if inconclusive_binding is not None:
+            chinese_text, translation_usage = translate_report_markdown(
+                english_text, inconclusive_binding, kind="inconclusive"
+            )
+            all_usages.append(translation_usage)
+        else:
+            chinese_text = render_inconclusive_report(finding, language="zh-CN")
+        for target_dir, text in ((output_path, english_text), (chinese_output_dir, chinese_text)):
+            target_dir.mkdir(parents=True, exist_ok=True)
+            filepath = target_dir / filename
+            with open_utf8(filepath, "w") as handle:
+                handle.write(text)
+        inconclusive_count += 1
+    if inconclusive_count:
+        print(f"  Inconclusive reports: {inconclusive_count} English + {inconclusive_count} Chinese files", file=sys.stderr)
+
     merged_usage = _merge_usage(all_usages) if all_usages else {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
 
-    print(f"  Disclosures: {count} English + {count} Chinese files", file=sys.stderr)
+    print(f"  Disclosures: {count} English + {count} Chinese files; inconclusive: {inconclusive_count} + {inconclusive_count}", file=sys.stderr)
     if count:
         print(f"  Chinese disclosures: {chinese_output_dir}", file=sys.stderr)
     print(f"  Cost: {_format_usage_cost(merged_usage)} ({merged_usage['total_tokens']:,} tokens)", file=sys.stderr)

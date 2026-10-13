@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	uifiles "github.com/synbnb/vulnfounder/apps/vulnfounder-cli/ui"
+	uifiles "vulnfounder/apps/vulnfounder-cli/ui"
 )
 
 func readUITemplate(t *testing.T, name string) string {
@@ -21,14 +21,19 @@ func readUITemplate(t *testing.T, name string) string {
 
 func TestWebTemplatesParseAfterRedesign(t *testing.T) {
 	for _, name := range []string{
+		"dashboard.html",
 		"index.html",
+		"repository-manager.html",
+		"vulnerability-summary.html",
 		"scan.html",
 		"artifact-view.html",
 		"source-locator.html",
 		"exposure-surface.html",
 		"exposure-locator.html",
 		"device-socket-assets.html",
+		"device-socket-asset-history.html",
 		"socket-scope.html",
+		"settings.html",
 		"dynamic-test.html",
 		"dynamic-test-history.html",
 		"summary.html",
@@ -36,6 +41,36 @@ func TestWebTemplatesParseAfterRedesign(t *testing.T) {
 	} {
 		if _, err := template.ParseFS(uifiles.FS, name); err != nil {
 			t.Errorf("parse %s: %v", name, err)
+		}
+	}
+}
+
+func TestRepositoryManagementHasIndependentPage(t *testing.T) {
+	body := readUITemplate(t, "repository-manager.html")
+	for _, want := range []string{
+		"id=\"repository-manager-title\"",
+		"id=\"repository-archive\"",
+		"id=\"repository-upload-button\"",
+		"id=\"repository-manager-list\"",
+		"/api/repositories",
+		"async function remove",
+		"source_code_base",
+		"上传 ZIP",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("repository-manager.html missing repository-management marker %q", want)
+		}
+	}
+	if strings.Contains(readUITemplate(t, "index.html"), `id="repository-manager-title"`) {
+		t.Fatal("index.html still renders the repository manager panel")
+	}
+}
+
+func TestVulnerabilitySummaryTemplateProvidesFilters(t *testing.T) {
+	body := readUITemplate(t, "vulnerability-summary.html")
+	for _, want := range []string{"/api/vulnerabilities", "summary-repository", "summary-scan", "summary-type", "summary-classification", "value=\"vulnerable\"", "value=\"inconclusive\"", "summary-function", "scan_sessions", "查看披露报告"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("vulnerability-summary.html missing marker %q", want)
 		}
 	}
 }
@@ -58,14 +93,19 @@ func TestDynamicTestDeliverablesAreMountedBeforeSourcePreview(t *testing.T) {
 
 func TestWebTemplatesUseSharedVisualLanguage(t *testing.T) {
 	for _, name := range []string{
+		"dashboard.html",
 		"index.html",
+		"repository-manager.html",
+		"vulnerability-summary.html",
 		"scan.html",
 		"artifact-view.html",
 		"source-locator.html",
 		"exposure-surface.html",
 		"exposure-locator.html",
 		"device-socket-assets.html",
+		"device-socket-asset-history.html",
 		"socket-scope.html",
+		"settings.html",
 		"dynamic-test.html",
 		"dynamic-test-history.html",
 		"summary.html",
@@ -115,14 +155,20 @@ func TestSharedThemeAssetIsServedAsCSS(t *testing.T) {
 
 func TestWorkbenchTemplatesUseSharedStageNavigation(t *testing.T) {
 	for _, name := range []string{
+		"dashboard.html",
 		"index.html",
+		"repository-manager.html",
+		"vulnerability-summary.html",
 		"scan.html",
 		"artifact-view.html",
 		"source-locator.html",
 		"exposure-surface.html",
 		"exposure-locator.html",
 		"device-socket-assets.html",
+		"device-socket-asset-history.html",
 		"socket-scope.html",
+		"summary.html",
+		"disclosure.html",
 	} {
 		body := readUITemplate(t, name)
 		for _, want := range []string{
@@ -139,11 +185,12 @@ func TestWorkbenchTemplatesUseSharedStageNavigation(t *testing.T) {
 	for _, want := range []string{
 		`href: "/"`,
 		`href: "/exposure-locator"`,
-		`href: "/device-socket-assets#asset-history"`,
+		`href: "/device-socket-assets/history"`,
 		`href: "/source-locator"`,
-		`href: "/socket-scope"`,
 		`href: "/dynamic-test"`,
 		`href: "/dynamic-test-history"`,
+		`href: "/repository-manager"`,
+		`href: "/vulnerability-summary"`,
 		`link.setAttribute("aria-current", "page")`,
 		`event.key === "Escape"`,
 	} {
@@ -208,7 +255,6 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 		"id=\"artifacts\"",
 		"id=\"events\"",
 		"id=\"llm-search\"",
-		"id=\"llm-config\"",
 		"id=\"llm-round-limit\"",
 		"id=\"batch-targets\"",
 		"id=\"batch-create\"",
@@ -253,20 +299,34 @@ func TestSourceLocatorTemplateProvidesInteractiveSessionWorkbench(t *testing.T) 
 	}
 }
 
-func TestWebTemplatesProvidePersistentChineseEnglishSwitch(t *testing.T) {
-	for _, name := range []string{"index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html", "device-socket-assets.html"} {
+func TestWebTemplatesUseChineseOnlyChrome(t *testing.T) {
+	for _, name := range []string{"dashboard.html", "index.html", "scan.html", "artifact-view.html", "source-locator.html", "exposure-surface.html", "device-socket-assets.html", "device-socket-asset-history.html", "settings.html"} {
 		body := readUITemplate(t, name)
-		for _, want := range []string{
-			"id=\"language-select\"",
-			"value=\"zh-CN\"",
-			"value=\"en\"",
-			"vulnfounder.ui.language",
-			"document.documentElement.lang",
-			"data-i18n=",
-		} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s missing %q", name, want)
-			}
+		if strings.Contains(body, "<option value=\"en\">English</option>") {
+			t.Errorf("%s still exposes the English language selector", name)
+		}
+		if strings.Contains(body, "<div class=\"language-field\"") || strings.Contains(body, "<label for=\"language-select\"") {
+			t.Errorf("%s still exposes a visible language switcher", name)
+		}
+		if !strings.Contains(body, "vulnfounder-workspace-nav") || !strings.Contains(body, "lang=\"zh-CN\"") {
+			t.Errorf("%s must keep the shared navigation and Chinese locale", name)
+		}
+	}
+}
+
+func TestSettingsTemplateProvidesCentralizedModelManagement(t *testing.T) {
+	body := readUITemplate(t, "settings.html")
+	for _, want := range []string{
+		"/settings/llm",
+		"/settings/llm/configs",
+		"/settings/llm/default",
+		"模型配置已保存",
+		"API Key 仅写入本机配置文件",
+		"deleteConfig",
+		"setDefault",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings.html missing model-management marker %q", want)
 		}
 	}
 }
@@ -322,14 +382,93 @@ func TestDeviceSocketAssetsTemplateProvidesAgenticInventoryControls(t *testing.T
 		"全部 Socket 实例（原始枚举）",
 		"socket-record-search",
 		"socket-record-prev",
-		"id=\"asset-history\"",
-		"设备 Socket 资产历史",
+		"本轮运行产物",
 		"renderSocketRecordsWithState",
 		"socket_record_summary",
 		"textContent",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("device-socket-assets.html missing interactive marker %q", want)
+		}
+	}
+}
+
+func TestDeviceSocketAssetHistoryIsAStandalonePage(t *testing.T) {
+	body := readUITemplate(t, "device-socket-asset-history.html")
+	for _, want := range []string{
+		"设备 Socket 资产历史",
+		"/device-socket-assets/runs",
+		"/device-socket-assets/snapshots",
+		"run-history",
+		"snapshot-history",
+		"/device-socket-assets?run=",
+		"/device-socket-assets?snapshot=",
+		"vulnfounder-workspace-nav",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("device-socket-asset-history.html missing marker %q", want)
+		}
+	}
+}
+
+func TestExposureLocatorProvidesAssetHistoryTargetPicker(t *testing.T) {
+	body := readUITemplate(t, "exposure-locator.html")
+	for _, want := range []string{
+		"从设备 Socket 资产历史选择目标",
+		"asset-target-list",
+		"asset-target-filter",
+		"asset-target-selection",
+		"asset-run-list",
+		"asset-run-status",
+		"/device-socket-assets/asset-options",
+		"/device-socket-assets/runs",
+		"刷新历史资产",
+		"继续手动输入",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposure-locator.html missing asset picker marker %q", want)
+		}
+	}
+}
+
+func TestExposureLocatorKeepsLiveLLMRoundsAndSelectsCurrentSession(t *testing.T) {
+	body := readUITemplate(t, "exposure-locator.html")
+	for _, want := range []string{
+		"upsertLocatorRound",
+		"state.locatorEvents.map(locatorRoundFromEvent)",
+		"id=\"locator-llm-round-limit\"",
+		"if(item.type === \"llm.search.round\")renderLocatorLLM()",
+		"function historyActive(item)",
+		"state.history.find(historyActive)",
+		"url.searchParams.set(\"locator_id\"",
+		"state.exposure={...state.exposure,state:item.state}",
+		"state.locator={...state.locator,state:item.state}",
+		"renderLocator(state.locator);}renderEvents(\"locator-events\",state.locatorEvents);",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposure-locator.html missing live-session audit marker %q", want)
+		}
+	}
+	if strings.Count(body, `id="locator-llm-rounds"`) != 1 {
+		t.Errorf("exposure-locator.html must have exactly one LLM round container id")
+	}
+}
+
+func TestExposureLocatorRendersReadableExposureArtifacts(t *testing.T) {
+	body := readUITemplate(t, "exposure-locator.html")
+	for _, want := range []string{
+		"阶段 1 产物与证据",
+		"查看易读摘要",
+		"查看原文",
+		"exposure_commands.jsonl",
+		"设备命令记录",
+		"设备证据条目",
+		"Agent 任务计划",
+		"function formatExposureArtifact",
+		"function parseArtifactContent",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposure-locator.html missing readable artifact marker %q", want)
 		}
 	}
 }
@@ -343,7 +482,7 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 		"name=\"repo\"",
 		"name=\"platform\"",
 		"name=\"level\"",
-		"name=\"llm_config\"",
+		"模型配置已集中到左侧“设置”页面",
 		"name=\"verify\"",
 		"name=\"no_context\"",
 		"name=\"no_enhance\"",
@@ -358,7 +497,6 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 		"name=\"limit\"",
 		"name=\"workers\"",
 		"name=\"backoff\"",
-		"name=\"dynamic_test\"",
 		"name=\"library_mode\"",
 		"name=\"llm_reachability\"",
 		"name=\"llm_reachability_max_code_bytes\"",
@@ -384,6 +522,9 @@ func TestWebRedesignKeepsCoreScanControlsAndResponsiveStates(t *testing.T) {
 
 	scan := readUITemplate(t, "scan.html")
 	for _, stage := range pipelineStepSpecs {
+		if stage.ID == "dynamic-test" {
+			continue
+		}
 		if !strings.Contains(scan, "id=\"step-"+stage.ID+"\"") {
 			t.Errorf("scan.html missing stage %q", stage.ID)
 		}
@@ -425,7 +566,6 @@ func TestHomeProvidesPhaseNavigation(t *testing.T) {
 		"href=\"/device-socket-assets\"",
 		"href=\"/exposure-locator\"",
 		"href=\"/source-locator\"",
-		"href=\"/socket-scope\"",
 		"href=\"#new-scan-title\"",
 		"href=\"#recent-title\"",
 		"initStageNav",
@@ -436,7 +576,7 @@ func TestHomeProvidesPhaseNavigation(t *testing.T) {
 		"nav.static.title",
 		"nav.analysis.title",
 		"nav.analysis.assets",
-		"/device-socket-assets#asset-history",
+		"/device-socket-assets/history",
 		"/dynamic-test",
 		"/dynamic-test-history",
 	} {
@@ -505,6 +645,77 @@ func TestScanPageProvidesAccessibleStageMenusAndArtifactFiltering(t *testing.T) 
 	} {
 		if !strings.Contains(scan, want) {
 			t.Errorf("scan.html missing stage-menu behavior %q", want)
+		}
+	}
+}
+
+func TestNewScanHidesUnsupportedScopeLevels(t *testing.T) {
+	index := readUITemplate(t, "index.html")
+	for _, option := range []string{
+		`<option value="codeql"`,
+		`<option value="exploitable"`,
+	} {
+		if strings.Contains(index, option) {
+			t.Errorf("index.html still exposes unsupported execution-level option %q", option)
+		}
+	}
+	if !strings.Contains(index, `<option value="reachable" selected`) || !strings.Contains(index, `<option value="all"`) {
+		t.Fatal("index.html must keep reachable and all as the visible scan levels")
+	}
+}
+
+func TestScanPageRendersReachabilityCollectionsAsCountsWithDetails(t *testing.T) {
+	scan := readUITemplate(t, "scan.html")
+	for _, marker := range []string{
+		"stageResultMetricCollectionInfo",
+		"semantic_seed_ids: ['个语义 BFS 种子'",
+		"reachable_only_ids: ['个 medium 直接保留单元'",
+		"details.metricItems",
+		"detailItems.slice(0, 40)",
+		"const showMetricDetails = metricKey !== 'semantic_seed_ids'",
+		"align-items: start",
+	} {
+		if !strings.Contains(scan, marker) {
+			t.Errorf("scan.html missing readable reachability metric marker %q", marker)
+		}
+	}
+}
+
+func TestScanPageEvidenceCardsDoNotStretchAcrossGridRows(t *testing.T) {
+	scan := readUITemplate(t, "scan.html")
+	for _, marker := range []string{
+		".stage-result-evidence-list {",
+		"align-items: start",
+		".stage-result-evidence-card {",
+		"align-self: start",
+		"height: max-content",
+		"cards now open exactly on the click that selects them",
+	} {
+		if !strings.Contains(scan, marker) {
+			t.Errorf("scan.html missing independent evidence-card layout marker %q", marker)
+		}
+	}
+}
+
+func TestSummaryAndDisclosureTemplatesUseReadableReportPresentation(t *testing.T) {
+	summary := readUITemplate(t, "summary.html")
+	for _, marker := range []string{
+		"removeChineseStageCostSection",
+		"[费用成本]",
+		"[阶段流水线管线]",
+	} {
+		if !strings.Contains(summary, marker) {
+			t.Errorf("summary.html missing cost-section presentation marker %q", marker)
+		}
+	}
+	disclosure := readUITemplate(t, "disclosure.html")
+	for _, marker := range []string{
+		"color: #ffffff !important",
+		"background: transparent !important",
+		".content pre code",
+	} {
+		if !strings.Contains(disclosure, marker) {
+			t.Errorf("disclosure.html missing readable code-block marker %q", marker)
 		}
 	}
 }
@@ -645,27 +856,29 @@ func TestScanPageLocalizesOpenHarmonySecurityContextSummaries(t *testing.T) {
 
 func TestScanPageProvidesClaudeCodeInteractiveWorkbench(t *testing.T) {
 	index := readUITemplate(t, "index.html")
-	for _, want := range []string{
+	for _, forbidden := range []string{
+		"name=\"dynamic_test\"",
 		"name=\"dynamic_test_mode\"",
-		"value=\"claude-code\"",
 		"syncDynamicTestMode",
 	} {
-		if !strings.Contains(index, want) {
-			t.Errorf("index.html missing Claude Code mode control %q", want)
+		if strings.Contains(index, forbidden) {
+			t.Errorf("index.html still exposes static-scan dynamic-test control %q", forbidden)
 		}
 	}
 	scan := readUITemplate(t, "scan.html")
-	for _, want := range []string{
+	for _, forbidden := range []string{
+		"id=\"step-dynamic-test\"",
 		"id=\"claude-workbench\"",
-		"/claude/events",
-		"/claude/message",
-		"/claude/files",
-		"/claude/file?path=",
-		"id=\"claude-transcript\"",
-		"id=\"claude-file-tree\"",
+		"data-stage-panel=\"dynamic-test\"",
 	} {
-		if !strings.Contains(scan, want) {
-			t.Errorf("scan.html missing Claude Code workbench behavior %q", want)
+		if strings.Contains(scan, forbidden) {
+			t.Errorf("scan.html still exposes static-scan dynamic-test content %q", forbidden)
+		}
+	}
+	dynamic := readUITemplate(t, "dynamic-test.html")
+	for _, want := range []string{"动态测试", "执行动态测试"} {
+		if !strings.Contains(dynamic, want) {
+			t.Errorf("dynamic-test.html missing standalone dynamic-test marker %q", want)
 		}
 	}
 }
@@ -693,7 +906,7 @@ func TestStandaloneArtifactViewerTemplateProvidesIndependentShell(t *testing.T) 
 		"id=\"structured-view\"",
 		"id=\"raw-view\"",
 		"window.close()",
-		"localStorage.setItem('vulnfounder.ui.language'",
+		"applyLanguage('zh-CN')",
 		"function fieldInfo(key)",
 		"function renderCollectionView(view)",
 		"中文字段表单",

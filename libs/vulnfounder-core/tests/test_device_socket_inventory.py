@@ -17,6 +17,7 @@ from core.device_socket_inventory import (
     _enrich_assets_from_evidence,
     _enumerate_socket_records,
     _mode_code_from_text,
+    _merge_observed_endpoint_assets,
     _normalise_assets,
     _normalise_task_findings,
     initial_socket_inventory_task_tree,
@@ -198,6 +199,103 @@ def test_enumerate_socket_records_keeps_all_unix_rows_and_merges_sources():
     assert by_inode["100"]["evidence_ids"] == ["DA-EV-0001", "DA-EV-0002"]
     assert len(by_inode["100"]["raw_lines"]) == 2
     assert by_inode["102"]["endpoint"] == "@abstract"
+
+
+def test_bound_endpoints_are_added_to_final_asset_view_from_observations():
+    assets = _normalise_assets(
+        [{
+            "socket_name": "/dev/unix/socket/listener",
+            "transport": "UNIX",
+            "address_family": "AF_UNIX",
+            "socket_type": "STREAM",
+            "runtime_state": "LISTENING",
+            "pid": "1",
+            "process": "init",
+            "uid": "0",
+            "process_selinux_domain": "u:r:init:s0",
+            "dac_permissions": "srw-rw---- (0660)",
+            "selinux_label": "u:object_r:init_socket:s0",
+            "evidence_ids": ["DA-EV-0001"],
+        }],
+        "serial-a",
+        16,
+    )
+    merged = _merge_observed_endpoint_assets(
+        assets,
+        [{"endpoint": "/dev/unix/socket/listener", "state": "LISTENING"}, {"endpoint": "/dev/unix/socket/bound", "state": "BOUND"}],
+        [{
+            "endpoint": "/dev/unix/socket/bound",
+            "socket_name": "/dev/unix/socket/bound",
+            "transport": "UNIX",
+            "address_family": "AF_UNIX",
+            "socket_type": "DGRAM",
+            "state": "BOUND",
+            "pid": "2",
+            "process": "hiview",
+            "uid": "1201",
+            "process_selinux_domain": "u:r:hiview:s0",
+            "dac_permissions": "srw-rw--w- (0662)",
+            "owner": "hiview",
+            "group": "system",
+            "selinux_label": "u:object_r:hisysevent_socket:s0",
+            "inode": "12",
+            "evidence_ids": ["DA-EV-0002"],
+        }],
+        [{"evidence_id": "DA-EV-0002", "excerpt": "/dev/unix/socket/bound", "command": "netstat -anp"}],
+        "serial-a",
+        16,
+    )
+    assert [item["socket_name"] for item in merged] == [
+        "/dev/unix/socket/listener",
+        "/dev/unix/socket/bound",
+    ]
+    assert merged[1]["runtime_state"] == "BOUND"
+    assert merged[1]["process"] == "hiview"
+
+
+def test_network_endpoints_are_added_when_model_omits_them():
+    """TCP/UDP 端点不能因模型只提交 Unix 资产而在最终视图中丢失。"""
+    records = [
+        {
+            "endpoint": "127.0.0.1:8284",
+            "socket_name": "127.0.0.1:8284",
+            "transport": "TCP",
+            "address_family": "AF_INET",
+            "socket_type": "STREAM",
+            "state": "LISTENING",
+            "pid": "9929",
+            "process": "SP_daemon",
+            "uid": "0",
+            "process_selinux_domain": "u:r:SP_daemon:s0",
+            "evidence_ids": ["DA-EV-0001"],
+        },
+        {
+            "endpoint": "127.0.0.1:8283",
+            "socket_name": "127.0.0.1:8283",
+            "transport": "UDP",
+            "address_family": "AF_INET",
+            "socket_type": "DGRAM",
+            "state": "BOUND",
+            "pid": "9929",
+            "process": "SP_daemon",
+            "uid": "0",
+            "process_selinux_domain": "u:r:SP_daemon:s0",
+            "evidence_ids": ["DA-EV-0001"],
+        },
+    ]
+    merged = _merge_observed_endpoint_assets(
+        [],
+        [{"endpoint": "127.0.0.1:8284", "state": "LISTENING"}, {"endpoint": "127.0.0.1:8283", "state": "BOUND"}],
+        records,
+        [{"evidence_id": "DA-EV-0001", "excerpt": "127.0.0.1:8284\n127.0.0.1:8283", "command": "netstat -anp"}],
+        "serial-a",
+        16,
+    )
+    assert [item["socket_name"] for item in merged] == ["127.0.0.1:8284", "127.0.0.1:8283"]
+    assert merged[0]["transport"] == "TCP"
+    assert merged[0]["runtime_state"] == "LISTENING"
+    assert merged[1]["transport"] == "UDP"
+    assert merged[1]["runtime_state"] == "BOUND"
 
 
 def test_enumerate_socket_records_parses_tcp_and_udp_proc_rows():

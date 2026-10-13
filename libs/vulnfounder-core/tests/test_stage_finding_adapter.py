@@ -16,8 +16,7 @@ if str(CORE) not in sys.path:
 adapter = importlib.import_module("utilities.openharmony_dynamic.stage_finding_adapter")
 
 REPO_ROOT = str(
-    CORE.parent.parent / "evaluation_dataset" / "vulnerability" / "service_scopes"
-    / "developtools_profiler_socket_scope"
+    CORE / "tests" / "fixtures" / "developtools_profiler_socket_scope"
 )
 
 DP02_STAGE = {

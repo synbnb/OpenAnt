@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/git"
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/output"
+	"vulnfounder/apps/vulnfounder-cli/internal/git"
+	"vulnfounder/apps/vulnfounder-cli/internal/output"
 )
 
 // diffOpts collects the diff-mode flags that scan/parse/diff all share.

@@ -624,10 +624,28 @@ def collect_device_fingerprint(
 ) -> DeviceFingerprint:
     """通过 HDC 只读采集设备指纹和目标服务状态。"""
     serial = str(getattr(hdc, "serial", "") or "unknown")
-    target_list = [normalize_endpoint(x) for x in (targets or []) if normalize_endpoint(x)]
+    # ``entry_hints`` may carry a transport label together with the endpoint,
+    # for example ``hap_udp 127.0.0.1:8283``.  Keep the label as evidence in
+    # the caller's finding, but do not turn it into a second device target:
+    # service health must match the concrete endpoint (or process) only.  The
+    # previous implementation retained the labelled string and consequently
+    # reported a healthy UDP socket as missing under the synthetic
+    # ``hap_udp ...`` target.
+    raw_targets = [str(x or "").strip() for x in (targets or []) if str(x or "").strip()]
+    target_processes, target_endpoints = extract_targets(raw_targets)
+    direct_targets = [
+        normalize_endpoint(value)
+        for value in raw_targets
+        if value.startswith(("/", "@")) or _IP_PORT_RE.fullmatch(value)
+    ]
+    target_list = list(dict.fromkeys([*target_endpoints, *direct_targets]))[:64]
     explicit_processes = [str(x).strip() for x in (process_names or []) if str(x).strip()]
-    process_names_from_targets, endpoints_from_targets = extract_targets([*target_list, *explicit_processes])
-    explicit_processes = list(dict.fromkeys([*explicit_processes, *process_names_from_targets]))[:32]
+    process_names_from_targets, endpoints_from_targets = extract_targets(
+        [*raw_targets, *explicit_processes]
+    )
+    explicit_processes = list(dict.fromkeys([
+        *explicit_processes, *target_processes, *process_names_from_targets,
+    ]))[:32]
     target_list = list(dict.fromkeys([*target_list, *endpoints_from_targets]))[:64]
     fp = DeviceFingerprint(
         serial=serial,

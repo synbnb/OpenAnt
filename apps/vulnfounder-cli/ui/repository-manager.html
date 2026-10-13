@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{.CSRF}}">
+  <title>VulnFounder · 仓库管理</title>
+  <link rel="stylesheet" href="/assets/vulnfounder-theme.css">
+  <script src="/assets/vulnfounder-navigation.js" defer></script>
+  <style>
+    body.repository-manager-page { background: var(--oa-canvas); }
+    .repository-manager-shell { width: min(1260px, 100%); margin: 0 auto; padding: 2.1rem clamp(1rem, 4vw, 3.25rem) 4rem; }
+    .repository-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 1.5rem; padding: 1.5rem 1.7rem; border: 1px solid #c6dfe1; border-radius: var(--oa-radius-md); background: linear-gradient(135deg, #f7fcfd, #e8f5f4); box-shadow: var(--oa-shadow); }
+    .repository-kicker { color: var(--oa-accent); font-size: .72rem; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
+    .repository-hero h1 { margin: .45rem 0 0; color: var(--oa-ink); font-size: clamp(1.7rem, 4vw, 2.65rem); letter-spacing: -.045em; }
+    .repository-hero p { max-width: 700px; margin: .65rem 0 0; color: var(--oa-ink-soft); font-size: .88rem; line-height: 1.7; }
+    .repository-count { flex: 0 0 auto; min-width: 122px; padding: .85rem 1rem; border: 1px solid #b7d7d9; border-radius: .7rem; background: rgba(255,255,255,.7); text-align: center; }
+    .repository-count strong { display: block; color: #155966; font-size: 1.8rem; line-height: 1; }
+    .repository-count span { display: block; margin-top: .35rem; color: var(--oa-ink-soft); font-size: .7rem; }
+    .repository-panel { margin-top: 1rem; border: 1px solid var(--oa-line); border-radius: var(--oa-radius-md); background: var(--oa-surface); box-shadow: var(--oa-shadow); }
+    .repository-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.25rem 1.35rem .95rem; border-bottom: 1px solid var(--oa-line); }
+    .repository-panel-head h2 { margin: 0; color: var(--oa-ink); font-size: 1.05rem; }
+    .repository-panel-head p { margin: .35rem 0 0; color: var(--oa-ink-soft); font-size: .77rem; line-height: 1.55; }
+    .repository-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; padding: 1rem 1.35rem; background: var(--oa-surface-soft); }
+    .repository-toolbar-copy { min-width: 0; color: var(--oa-ink-soft); font-size: .76rem; line-height: 1.6; }
+    .repository-toolbar-copy strong { display: block; color: var(--oa-ink); font-size: .8rem; }
+    .repository-upload { display: flex; align-items: center; justify-content: flex-end; gap: .55rem; flex-wrap: wrap; }
+    .repository-upload input[type="file"] { max-width: 260px; color: var(--oa-ink-soft); font-size: .72rem; }
+    .repository-upload-name { width: 190px; min-height: 36px; padding: .45rem .65rem; border: 1px solid var(--oa-line-strong); border-radius: .55rem; background: #fff; color: var(--oa-ink); font-size: .75rem; }
+    .repository-button { min-height: 36px; padding: .45rem .72rem; border: 1px solid #79aeb3; border-radius: .55rem; background: #fff; color: var(--oa-accent); font-size: .74rem; font-weight: 800; cursor: pointer; }
+    .repository-button.primary { border-color: var(--oa-accent); background: var(--oa-accent); color: #fff; }
+    .repository-button:hover { border-color: var(--oa-accent); background: var(--oa-accent-soft); }
+    .repository-button.primary:hover { background: var(--oa-accent-hover); color: #fff; }
+    .repository-button:disabled { cursor: wait; opacity: .6; }
+    .repository-status { min-height: 1.35rem; padding: .65rem 1.35rem 0; color: var(--oa-ink-soft); font-size: .76rem; }
+    .repository-status.is-error { color: var(--oa-danger); }.repository-status.is-success { color: var(--oa-success); }
+    .repository-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: .85rem; padding: 1rem 1.35rem 1.35rem; }
+    .repository-card { min-width: 0; padding: 1rem; border: 1px solid var(--oa-line); border-radius: .72rem; background: #fff; }
+    .repository-card:hover { border-color: #9bc3c7; box-shadow: 0 8px 22px rgba(25,65,74,.07); }
+    .repository-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
+    .status-chip { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 22px; padding: .2rem .5rem; border-radius: 999px; font-size: .64rem; font-weight: 850; white-space: nowrap; }
+    .status-chip-success { background: var(--oa-success-soft); color: var(--oa-success); }.status-chip-muted { background: var(--oa-surface-muted); color: var(--oa-ink-soft); }
+    .repository-card-title { min-width: 0; margin: 0; color: var(--oa-ink); font-size: .9rem; overflow-wrap: anywhere; }
+    .repository-card-path { margin-top: .26rem; color: var(--oa-ink-faint); font: .67rem/1.4 var(--oa-mono); overflow-wrap: anywhere; }
+    .repository-card-stats { display: flex; flex-wrap: wrap; gap: .35rem .8rem; margin-top: .85rem; color: var(--oa-ink-soft); font-size: .7rem; }
+    .repository-card-stats strong { color: var(--oa-ink); }
+    .repository-card details { margin-top: .8rem; padding-top: .7rem; border-top: 1px solid var(--oa-line); }
+    .repository-card summary { color: var(--oa-accent); font-size: .73rem; font-weight: 800; cursor: pointer; }
+    .repository-file-list { max-height: 170px; overflow: auto; margin: .55rem 0 0; padding-left: 1.1rem; color: var(--oa-ink-soft); font: .67rem/1.55 var(--oa-mono); }
+    .repository-card-actions { display: flex; justify-content: flex-end; margin-top: .8rem; }
+    .repository-empty { grid-column: 1 / -1; padding: 2rem 1rem; border: 1px dashed var(--oa-line-strong); border-radius: .65rem; color: var(--oa-ink-soft); font-size: .8rem; text-align: center; }
+    .repository-danger { border: 0; background: transparent; color: var(--oa-danger); font-size: .72rem; font-weight: 800; cursor: pointer; }
+    .repository-danger:hover { text-decoration: underline; }
+    @media (max-width: 760px) { .repository-hero, .repository-toolbar { align-items: stretch; flex-direction: column; } .repository-count { align-self: flex-start; } .repository-upload { justify-content: flex-start; } .repository-upload input[type="file"], .repository-upload-name, .repository-button { width: 100%; max-width: none; } }
+  </style>
+</head>
+<body class="repository-manager-page">
+  <vulnfounder-workspace-nav current="repository-manager"></vulnfounder-workspace-nav>
+  <header class="topbar"><div class="brand"><div class="brand-mark" aria-hidden="true">VF</div><div class="brand-copy"><h1>vulnfounder</h1><p>源码安全分析工作台</p></div></div><div class="topbar-actions"><span class="local-note">仅本机访问</span></div></header>
+  <main class="repository-manager-shell">
+    <section class="repository-hero" aria-labelledby="repository-manager-title">
+      <div><div class="repository-kicker">Stage 03 · Static scanning</div><h1 id="repository-manager-title">仓库管理</h1><p>集中管理项目 <code>source_code_base</code> 下的源码仓库。可以预览仓库规模与文件结构，也可以安全上传 ZIP；删除前会检查是否仍被正在运行的扫描使用。</p></div>
+      <div class="repository-count"><strong id="repository-count">—</strong><span>当前可管理仓库</span></div>
+    </section>
+    <section class="repository-panel" aria-labelledby="repository-list-title">
+      <div class="repository-panel-head"><div><h2 id="repository-list-title">源码仓库目录</h2><p>只展示 source_code_base 的一级子目录，不读取目录外文件；Git 仓库和上传仓库均可进入扫描目录。</p></div><button type="button" class="repository-button" id="repository-refresh-button">刷新列表</button></div>
+      <div class="repository-toolbar"><div class="repository-toolbar-copy"><strong>添加仓库</strong>上传 ZIP 后系统会校验路径、符号链接、文件数量和解压大小，并以原子方式写入目录；已有同名仓库不会覆盖。</div><div class="repository-upload"><label class="sr-only" for="repository-archive">仓库 ZIP 文件</label><input id="repository-archive" type="file" accept=".zip,application/zip"><label class="sr-only" for="repository-name">仓库名称（可选）</label><input id="repository-name" class="repository-upload-name" type="text" maxlength="128" placeholder="仓库名称（可选）"><button type="button" class="repository-button primary" id="repository-upload-button">上传 ZIP</button></div></div>
+      <div id="repository-manager-status" class="repository-status" role="status" aria-live="polite"></div>
+      <div id="repository-manager-list" class="repository-list" aria-live="polite"><div class="repository-empty">正在读取仓库列表…</div></div>
+    </section>
+  </main>
+  <script>
+  (() => {
+    const archive = document.getElementById('repository-archive');
+    const name = document.getElementById('repository-name');
+    const upload = document.getElementById('repository-upload-button');
+    const refresh = document.getElementById('repository-refresh-button');
+    const status = document.getElementById('repository-manager-status');
+    const list = document.getElementById('repository-manager-list');
+    const count = document.getElementById('repository-count');
+    const csrf = document.querySelector('meta[name="csrf"]')?.content || '';
+    const message = (text, kind = '') => { status.textContent = text || ''; status.className = 'repository-status' + (kind ? ' is-' + kind : ''); };
+    const bytes = value => { const n = Number(value) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MiB'; return (n / 1073741824).toFixed(2) + ' GiB'; };
+    async function json(response) { let payload = {}; try { payload = await response.json(); } catch (_) {} if (!response.ok) throw new Error(payload.error || ('HTTP ' + response.status)); return payload; }
+    function render(items) {
+      count.textContent = String(items.length);
+      list.replaceChildren();
+      if (!items.length) { const empty = document.createElement('div'); empty.className = 'repository-empty'; empty.textContent = 'source_code_base 下还没有可管理的仓库。'; list.appendChild(empty); return; }
+      items.forEach(item => {
+        const card = document.createElement('article'); card.className = 'repository-card';
+        const header = document.createElement('div'); header.className = 'repository-card-header';
+        const titleWrap = document.createElement('div'); const title = document.createElement('h3'); title.className = 'repository-card-title'; title.textContent = item.name || '';
+        const path = document.createElement('div'); path.className = 'repository-card-path'; path.textContent = item.relative_path || ''; titleWrap.append(title, path);
+        const state = document.createElement('span'); state.className = 'status-chip ' + (item.scan_available ? 'status-chip-success' : 'status-chip-muted'); state.textContent = item.scan_available ? '可用于扫描' : '待补充扫描标记'; header.append(titleWrap, state); card.appendChild(header);
+        const stats = document.createElement('div'); stats.className = 'repository-card-stats'; [[item.file_count || 0, '文件'], [bytes(item.total_bytes), '大小'], [item.modified_at || '-', '更新时间']].forEach(pair => { const span = document.createElement('span'); const strong = document.createElement('strong'); strong.textContent = pair[0]; span.append(strong, document.createTextNode(' ' + pair[1])); stats.appendChild(span); }); card.appendChild(stats);
+        const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = '文件预览（' + String(item.file_count || 0) + '）'; details.appendChild(summary); const files = document.createElement('ul'); files.className = 'repository-file-list'; (item.preview_files || []).forEach(file => { const li = document.createElement('li'); li.textContent = file; files.appendChild(li); }); if (!files.children.length) { const li = document.createElement('li'); li.textContent = '没有可展示的普通文件。'; files.appendChild(li); } details.appendChild(files); if (item.preview_limited) { const more = document.createElement('div'); more.className = 'repository-card-path'; more.textContent = '仅展示前 60 个文件'; details.appendChild(more); } card.appendChild(details);
+        const actions = document.createElement('div'); actions.className = 'repository-card-actions'; const del = document.createElement('button'); del.type = 'button'; del.className = 'repository-danger'; del.textContent = '删除仓库'; del.addEventListener('click', () => remove(item.name, del)); actions.appendChild(del); card.appendChild(actions); list.appendChild(card);
+      });
+    }
+    async function load() { list.innerHTML = '<div class="repository-empty">正在读取仓库列表…</div>'; try { const payload = await json(await fetch('/api/repositories', { headers: { Accept: 'application/json' }, cache: 'no-store' })); render(payload.repositories || []); message(''); } catch (error) { render([]); message('读取仓库列表失败：' + (error.message || error), 'error'); } }
+    async function add() { if (!archive.files?.[0]) { message('请选择要上传的 ZIP 文件。', 'error'); return; } const form = new FormData(); form.append('archive', archive.files[0]); if (name.value.trim()) form.append('name', name.value.trim()); upload.disabled = true; message('正在上传并安全解压…'); try { const payload = await json(await fetch('/api/repositories', { method: 'POST', body: form, headers: { 'X-CSRF-Token': csrf } })); archive.value = ''; name.value = ''; await load(); message('仓库“' + (payload.repository?.name || '') + '”已添加。', 'success'); } catch (error) { message('上传失败：' + (error.message || error), 'error'); } finally { upload.disabled = false; } }
+    async function remove(repoName, button) { if (!window.confirm('确定删除仓库“' + repoName + '”及其中全部源码吗？此操作不可恢复。')) return; button.disabled = true; try { await json(await fetch('/api/repositories/' + encodeURIComponent(repoName), { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } })); await load(); message('仓库“' + repoName + '”已删除。', 'success'); } catch (error) { button.disabled = false; message('删除失败：' + (error.message || error), 'error'); } }
+    upload.addEventListener('click', add); refresh.addEventListener('click', load); load();
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+{
+  "contract_id": "HV-05",
+  "finding_ids": ["HV-05"],
+  "unit_id": "hiviewdfx_hiview_hv05",
+  "vuln_class": "path_traversal",
+  "description": "FreezeManager::SaveFreezeExtInfoToFile 未校验 cpuFile 前缀，FREEZE_INFO_PATH 携带任意路径 → GetAppFreezeFile 读取并删除外部文件，内容写入 freeze_ext 输出面（freeze_manager.cpp:204-257）",
+  "entry": {
+    "kind": "unix_dgram",
+    "endpoint": "/dev/unix/socket/hisysevent",
+    "reachability_identity": "root_su",
+    "evidence": "probe11 真机全链路：MakeWatchPoint → GetAppFreezeFile(isRemove:1) → SaveFreezeExtInfoToFile success → 输出文件含预埋图案 → 源文件被删"
+  },
+  "identity": {
+    "execution_identity": "root_su",
+    "identity_ladder_fallback": "root_su",
+    "max_evidence_grade": "C"
+  },
+  "protocol": {
+    "descriptor_id": "hisysevent_eventraw",
+    "field_values": {
+      "domain": "GRAPHIC",
+      "stringid": "NO_DRAW",
+      "type": 1,
+      "PID": 1234,
+      "UID": 5523,
+      "PACKAGE_NAME": "com.example.victim",
+      "PROCESS_NAME": "com.example.victim",
+      "info_": "logPath:__STACK_FILE__",
+      "FREEZE_INFO_PATH": "__STACK_FILE__,__CPU_FILE__"
+    },
+    "param_space": {
+      "src_file_dir": "/data/log/eventlog",
+      "preplant": ["__STACK_FILE__"],
+      "effect_window_seconds": 15,
+      "note": "FREEZE_INFO_PATH 必须为逗号分隔双路径 stack,cpu（vendor.cpp:281 fileList.size()==2 才进入 SaveFreezeExtInfoToFile）；stack=信息文件（info_ logPath 引用，发送前必须已存在，否则 InitLogBody 失败中止链路——run7 实证），cpu=预埋图案文件（GetCpuInfo 读取+删除）。两文件均须位于 hiview 可读目录（/data/local/tmp 被 SELinux 阻读，实机验证）。effect_window=15s：实测 hiview MergeEventLog 延迟 ~9s，8s 缺省窗口会错过 SaveFreezeExtInfoToFile 日志"
+    },
+    "frame_sequence": [],
+    "inter_frame_delay_seconds": 0.3
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "FREEZE_INFO_PATH 指向 /data/log/eventlog/<run_dir>/src.txt（预埋图案文件）；board 版本无 FOUNDATION_UID 门（vendor.cpp:264 本地有、板上无）与无 EVENTLOG 前缀校验（实机证明）",
+    "evidence": "freeze_manager.cpp:177-202 GetAppFreezeFile 读取并 Remove；:204-257 SaveFreezeExtInfoToFile 写 freeze_ext；板上代码与本地源码存在偏差（P5a）",
+    "expected_guards": ["scm_credential_match", "total_length_check", "freeze_rule_window"]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "exfil",
+        "path": "__CPU_FILE__",
+        "content_contains": "__RUN_PATTERN__",
+        "output_surface": "/data/log/faultlog/freeze_ext",
+        "output_is_dir": true
+      },
+      {
+        "form": "delete",
+        "path": "__CPU_FILE__",
+        "content_contains": "",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [
+      {
+      "kind": "hilog_expectation",
+      "required": true,
+        "tag": "C02d01/FreezeDetector",
+        "pattern": "SaveFreezeExtInfoToFile: create freezeExt file=(\\S+) success",
+        "window": {"from": "send", "seconds": 20},
+        "min_count": 1,
+        "capture_groups": ["out"]
+      }
+    ],
+    "pattern_key": "run_pattern",
+    "refutation": ["run_pattern_bound", "baseline_absent", "source_file_planted_by_run"],
+    "evidence": "外泄+删除双形态；输出面文件内容含本轮随机图案排除历史文件"
+  },
+  "risk": {
+    "target_process": "hiview",
+    "risk_tier": "restartable_service",
+    "crash_oracle_allowed": false,
+    "restartable": true,
+    "rationale": "hiview 为关键系统服务：禁崩溃预言机，仅观测文件系统/hilog 面"
+  },
+  "cleanup": {
+    "remote_paths": ["__RUN_DIR__"],
+    "restore_actions": [],
+    "verify": []
+  }
+}

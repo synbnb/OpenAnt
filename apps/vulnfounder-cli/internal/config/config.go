@@ -222,23 +222,33 @@ func ProjectRoot() (string, error) {
 		return root, nil
 	}
 
-	executable, err := os.Executable()
-	if err != nil {
-		return "", nil
-	}
-	if resolved, evalErr := filepath.EvalSymlinks(executable); evalErr == nil {
-		executable = resolved
-	}
-	dir := filepath.Dir(executable)
-	for range 8 {
-		if isProjectRoot(dir) {
-			return dir, nil
+	// Resolve from the executable, not from the scanned repository's CWD. This
+	// prevents an untrusted checkout from becoming the runtime/config root. A
+	// source checkout should use the built bin/vulnfounder launcher (or set
+	// VULNFOUNDER_PROJECT_ROOT explicitly).
+	starts := make([]string, 0, 1)
+	if executable, execErr := os.Executable(); execErr == nil {
+		if resolved, evalErr := filepath.EvalSymlinks(executable); evalErr == nil {
+			executable = resolved
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
+		starts = append(starts, filepath.Dir(executable))
+	}
+	seen := make(map[string]struct{}, len(starts))
+	for _, start := range starts {
+		dir := filepath.Clean(start)
+		for {
+			if _, ok := seen[dir]; !ok {
+				seen[dir] = struct{}{}
+				if isProjectRoot(dir) {
+					return dir, nil
+				}
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
-		dir = parent
 	}
 	return "", nil
 }
@@ -675,31 +685,76 @@ func (c *Config) WriteLLMConfig(
 	}
 }
 
-// DataDir returns the VulnFounder data root. Fresh installs use
-// ~/.vulnfounder. When that directory does not yet exist but ~/.openant does,
-// the legacy directory remains active so historical scans stay visible.
+// SetDefaultLLM selects the configuration used by all stages when a caller
+// does not explicitly override it.  Built-in aliases are valid selections;
+// user-authored names must already exist so a typo cannot silently make every
+// subsequent scan fall back to an unexpected provider.
+func (c *Config) SetDefaultLLM(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("默认模型配置名不能为空")
+	}
+	if !IsBuiltinLLMConfigName(name) && !c.LLMConfigExists(name) {
+		return fmt.Errorf("模型配置 %q 不存在", name)
+	}
+	if c.raw == nil {
+		c.raw = map[string]any{}
+	}
+	c.raw["default_llm"] = name
+	return nil
+}
+
+// DeleteLLMConfig removes a user-authored configuration.  Provider entries
+// are intentionally retained because they may be shared by another config or
+// be referenced by a future phase.  Deleting the active config falls back to
+// the built-in configuration rather than leaving a dangling default_llm.
+func (c *Config) DeleteLLMConfig(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("模型配置名不能为空")
+	}
+	if IsBuiltinLLMConfigName(name) {
+		return fmt.Errorf("内置模型配置 %q 不可删除", name)
+	}
+	if c.raw == nil {
+		return fmt.Errorf("模型配置 %q 不存在", name)
+	}
+	llmConfigs, ok := c.raw["llm_configs"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("模型配置 %q 不存在", name)
+	}
+	if _, exists := llmConfigs[name]; !exists {
+		return fmt.Errorf("模型配置 %q 不存在", name)
+	}
+	delete(llmConfigs, name)
+	if c.DefaultLLMName() == name {
+		c.raw["default_llm"] = DefaultLLMConfigName
+	}
+	return nil
+}
+
+// DataDir returns the project-local VulnFounder data root.
+//
+// A checkout keeps every generated runtime artifact below <project>/result so
+// it can be moved as one directory and does not depend on the operator's home
+// directory. VULNFOUNDER_DATA_DIR remains an explicit escape hatch for an
+// externally managed deployment (for example a read-only checkout with a
+// writable volume). A user-home hidden directory is intentionally not used for
+// new runtime data.
 func DataDir() (string, error) {
 	if raw := strings.TrimSpace(os.Getenv(DataDirEnv)); raw != "" {
 		return absolutePath(raw)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	if root, err := ProjectRoot(); err != nil {
+		return "", err
+	} else if root != "" {
+		return filepath.Join(root, "result"), nil
 	}
-	primary := filepath.Join(home, ".vulnfounder")
-	legacy := filepath.Join(home, ".openant")
-	if regularDir(primary) {
-		return primary, nil
-	}
-	if regularDir(legacy) {
-		return legacy, nil
-	}
-	return primary, nil
-}
-
-func regularDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	// A globally installed binary has no trustworthy project root. Do not
+	// silently write runtime state to a machine-specific home directory: the
+	// deployment must either run the project-owned launcher or set the explicit
+	// data-root override.
+	return "", fmt.Errorf("cannot determine VulnFounder project data directory; run the project-owned binary or set %s", DataDirEnv)
 }
 
 // ProjectsDir returns <data-dir>/projects/.

@@ -41,6 +41,51 @@ FINDING_VERDICT_ORDER = (
 # / ``finding == "error"``). Not part of the ordered display list.
 ERROR_VERDICT = "error"
 
+
+def report_display_verdict(result: dict) -> str:
+    """Return the conservative verdict shown in human-facing reports.
+
+    ``results_verified.json`` intentionally keeps the original Stage-1 verdict
+    on a record when Stage 2 cannot finish (``verification.incomplete``).  That
+    field is useful for auditability, but it must not make an unfinished
+    candidate look like a confirmed vulnerability in the HTML report.  This
+    helper is the single display-policy boundary used by report-data; it does
+    not rewrite the persisted verification artifact or change dynamic-testing
+    eligibility.
+
+    The order is deliberate:
+
+    * an explicit verifier correction wins when it is complete;
+    * an incomplete/malformed verification of a risk candidate is displayed as
+      ``inconclusive``;
+    * otherwise the normalized Stage-1/final finding is preserved.
+    """
+    if not isinstance(result, dict):
+        return ERROR_VERDICT
+
+    if result.get("error"):
+        return ERROR_VERDICT
+
+    raw = str(result.get("finding") or result.get("verdict") or "").strip().lower()
+    raw_verification = result.get("verification")
+    verification_malformed = raw_verification is not None and not isinstance(raw_verification, dict)
+    verification = raw_verification
+    if not isinstance(verification, dict):
+        verification = {}
+
+    corrected = str(verification.get("correct_finding") or "").strip().lower()
+    known = set(FINDING_VERDICT_ORDER) | {ERROR_VERDICT, "bypassable"}
+    if corrected in known and not verification.get("incomplete"):
+        return corrected
+
+    incomplete = verification.get("incomplete", False)
+    if isinstance(incomplete, str):
+        incomplete = incomplete.strip().lower() == "true"
+    if (incomplete or verification_malformed) and raw in {"vulnerable", "bypassable", "inconclusive", ""}:
+        return "inconclusive"
+
+    return raw if raw in known else ERROR_VERDICT
+
 # --- Stage-2 verification verdicts -------------------------------------------
 # ``core/reporter.py`` maps the Stage-2 ``verification`` dict onto these.
 STAGE2_VERDICTS = frozenset({

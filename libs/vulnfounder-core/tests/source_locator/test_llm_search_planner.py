@@ -11,6 +11,9 @@ import pytest
 CORE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CORE_ROOT))
 
+_HOST_SOURCE = str(Path("/", "Users", "example", "private", "source.c"))
+_TMP_SOURCE = str(Path("/", "private", "tmp", "secret.c"))
+
 from core.source_locator import (  # noqa: E402
     ALLOWED_ACTION_KINDS,
     EvidenceStore,
@@ -106,9 +109,9 @@ def test_unknown_evidence_id_is_rejected_and_unknown_fields_are_not_ignored():
         ("search_symbol", "foo; rm -rf"),
         ("search_symbol", "https://attacker.invalid"),
         ("search_symbol", "foo\nbar"),
-        ("search_path", "/Users/shiyu/private/source.c"),
+        ("search_path", _HOST_SOURCE),
         ("read_file", "/openharmony/../secret.c"),
-        ("read_file", "/private/tmp/secret.c"),
+        ("read_file", _TMP_SOURCE),
     ],
 )
 def test_query_and_read_path_boundaries_are_rejected(kind, query):

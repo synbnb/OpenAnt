@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/synbnb/vulnfounder/apps/vulnfounder-cli/internal/config"
+	"vulnfounder/apps/vulnfounder-cli/internal/config"
 )
 
 // projectContext holds resolved paths from the active project.
 type projectContext struct {
 	Project  *config.Project
-	ScanDir  string // ~/.vulnfounder/projects/org/repo/scans/{sha}/
+	ScanDir  string // <data-dir>/projects/org/repo/scans/{sha}/
 	RepoPath string
 	Language string
 }

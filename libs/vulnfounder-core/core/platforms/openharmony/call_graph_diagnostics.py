@@ -118,17 +118,41 @@ def _callsite_candidate_ids(
     spelling = str(shape.get("callee_spelling") or "").strip()
     if not spelling:
         return []
+    # An explicitly qualified call such as ``Base::OnReadable()`` must not
+    # fall back to the unqualified leaf name.  If the base declaration is not
+    # indexed, resolving it by the leaf would incorrectly bind the call back
+    # to the overriding ``Derived::OnReadable`` and create a self edge.  Keep
+    # the qualified spelling as the primary lookup and only use owner/leaf
+    # fallbacks for genuinely unqualified calls.
+    explicitly_qualified = "::" in spelling
     names = [spelling]
     owner = str(function.get("class_name") or "").strip().rsplit("::", 1)[-1]
-    if owner and "::" not in spelling:
+    if owner and not explicitly_qualified:
         names.insert(0, f"{owner}::{spelling}")
     leaf = _leaf(spelling)
-    if leaf and leaf not in names:
+    if leaf and not explicitly_qualified and leaf not in names:
         names.append(leaf)
     candidates: set[str] = set()
     arity = shape.get("argument_count")
     for name in names:
         matches = list(name_index.get(name, []))
+        if not matches and explicitly_qualified:
+            # The extracted declaration may retain its full namespace while
+            # the call expression uses a shorter qualified spelling.  A
+            # suffix match is safe here because it preserves the complete
+            # owner qualification; unlike a leaf-name fallback it cannot
+            # turn ``Base::f`` into an unrelated ``Derived::f``.
+            suffix = f"::{spelling}"
+            matches = [
+                target
+                for target, candidate in functions.items()
+                if isinstance(candidate, Mapping)
+                and (
+                    str(candidate.get("name") or "") == spelling
+                    or str(candidate.get("name") or "").endswith(suffix)
+                    or str(target).rsplit(":", 1)[-1].endswith(suffix)
+                )
+            ]
         if not matches and name == leaf:
             matches = list(leaf_index.get(name, []))
         if isinstance(arity, int):
@@ -2770,12 +2794,47 @@ def build_call_graph_diagnostics(
             lambda_summary["field_alias_matches"] = len(field_alias_matches)
         summary["lambda_dispatch"] = lambda_summary
 
+    def _status_counts(key: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in call_sites:
+            value = str(record.get(key) or "unknown")
+            counts[value] = counts.get(value, 0) + 1
+        return dict(sorted(counts.items()))
+
+    # Keep the broad syntax inventory separate from the semantic recovery
+    # queue.  The latter applies its own admission policy; this diagnostic
+    # snapshot explains where the queue reduction came from without changing
+    # the long-standing ``summary`` schema consumed by existing callers.
+    recovery_input = {
+        "schema_version": 1,
+        "residual_sites": len(sites),
+        "lambda_residual_sites": len(lambda_sites),
+        "ledger_sites": len(call_sites),
+        "ledger_status_counts": _status_counts("graph_status"),
+        "ledger_binding_counts": _status_counts("binding_status"),
+        "ledger_dispatch_counts": _status_counts("dispatch_status"),
+        "ledger_edge_missing": sum(
+            record.get("graph_status") == "edge_missing"
+            for record in call_sites
+        ),
+        "ledger_candidate_or_dynamic": sum(
+            record.get("graph_status") == "candidate_or_dynamic"
+            for record in call_sites
+        ),
+        "ledger_ordinary_unlinked": sum(
+            record.get("graph_status") == "not_linked"
+            and not record.get("candidate_target_ids")
+            for record in call_sites
+        ),
+    }
+
     result = {
         "schema_version": SCHEMA_VERSION,
         "platform": "openharmony",
         "status": "complete",
         "repository": extract_result.get("repository", ""),
         "summary": summary,
+        "recovery_input": recovery_input,
         "call_sites": call_sites,
         "callsite_ledger": {
             **callsite_summary,

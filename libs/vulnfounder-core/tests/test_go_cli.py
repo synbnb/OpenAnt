@@ -207,7 +207,7 @@ class TestInit:
 
     @pytest.fixture
     def isolated_home(self, tmp_path):
-        """Override home so init writes into a tmp ~/.openant/."""
+        """Override the runtime root so init writes into a temporary result tree."""
         home = str(tmp_path / "fakehome")
         os.makedirs(home)
         # USERPROFILE for Windows, HOME for Unix.

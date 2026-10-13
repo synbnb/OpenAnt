@@ -65,6 +65,49 @@ def test_resolved_callsite_edge_missing_is_repaired_without_mutating_native():
     assert effective["summary"]["resolved_edge_missing_unrepaired"] == 0
 
 
+def test_stale_qualified_base_binding_cannot_create_a_derived_self_edge():
+    native = {
+        "functions": {
+            "caller": {"name": "Derived::Run", "code": "void Run() {}"},
+            "target": {"name": "Derived::Run", "code": "void Run() {}"},
+        },
+        "call_graph": {"caller": []},
+    }
+    ledger = {
+        "call_sites": [
+            {
+                "site_id": "base-call",
+                "caller_id": "caller",
+                "binding_status": "resolved",
+                "candidate_target_ids": ["caller"],
+                "candidate_completeness": "complete",
+                "binding_basis": "qualified_name_and_arity",
+                "binding_evidence": {
+                    "binding_rule": "qualified_name_and_arity",
+                    "qualified_callee": "Base::Run",
+                    "target_id": "caller",
+                    "signature_match": True,
+                },
+                "graph_status": "edge_missing",
+                "file": "listener.cpp",
+                "line_start": 10,
+                "expression": "Base::Run()",
+                "callee_spelling": "Base::Run",
+            }
+        ]
+    }
+
+    effective = build_effective_call_graph(native, ledger=ledger)
+
+    assert effective["call_graph"].get("caller", []) == []
+    assert effective["summary"]["confirmed_added"] == 0
+    assert effective["summary"]["resolved_edge_missing_repaired"] == 0
+    assert any(
+        exclusion["reason"] == "qualified_call_target_mismatch"
+        for exclusion in effective["exclusions"]
+    )
+
+
 def test_native_edge_is_enriched_with_matching_ledger_source_span():
     ledger = {
         "call_sites": [
@@ -151,6 +194,48 @@ def test_partial_and_unvalidated_overlay_stay_candidates():
     assert "other" not in effective["call_graph"].get("caller", [])
     assert effective["summary"]["candidate_edges"] >= 2
     assert effective["summary"]["resolved_edge_missing_unrepaired"] == 1
+
+
+def test_overlay_envelope_provenance_is_copied_to_each_edge_fact():
+    """Artifact-level identity must survive effective-graph ingestion."""
+    overlay = {
+        "source_revision": "revision-1",
+        "build_config_id": "config-1",
+        "edges": [
+            {
+                "source": "caller",
+                "target": "target",
+                "resolver": "semantic_overlay",
+                "evidence": [{"kind": "call_site", "text": "target()"}],
+                "attributes": {
+                    "reachability_tier": "strict",
+                    "evidence_quality": "relation_supported",
+                    "validation_record": {
+                        "id": "overlay:provenance",
+                        "status": "accepted",
+                        "validator": "test",
+                    },
+                },
+            }
+        ],
+    }
+
+    effective = build_effective_call_graph(
+        _native(),
+        semantic_overlays=[overlay],
+        source_revision="revision-1",
+        build_config_id="config-1",
+    )
+
+    assert effective["call_graph"]["caller"] == ["target"]
+    fact = next(
+        item
+        for item in effective["edge_facts"]
+        if item["caller_id"] == "caller" and item["callee_id"] == "target"
+    )
+    assert fact["resolver"] == "semantic_overlay"
+    assert fact["attributes"]["source_revision"] == "revision-1"
+    assert fact["attributes"]["build_config_id"] == "config-1"
 
 
 def test_refresh_writes_effective_graph_and_keeps_native_file(tmp_path):
@@ -444,6 +529,38 @@ def test_strict_overlay_revision_mismatch_is_not_admitted():
     assert "target" not in effective["call_graph"].get("caller", [])
     assert effective["candidate_facts"][0]["repair_reason"] == (
         "overlay_source_revision_mismatch"
+    )
+
+
+def test_explicit_unknown_overlay_revision_is_not_reported_as_mismatch():
+    overlay = {
+        "source_revision": "unknown",
+        "edges": [
+            {
+                "source": "caller",
+                "target": "target",
+                "resolver": "llm",
+                "evidence": [{"kind": "call_site", "text": "caller()"}],
+                "attributes": {
+                    "reachability_tier": "strict",
+                    "evidence_quality": "relation_supported",
+                    "validation_record": {
+                        "id": "llm:unknown-revision",
+                        "status": "accepted",
+                        "validator": "test",
+                    },
+                },
+            }
+        ],
+    }
+
+    effective = build_effective_call_graph(
+        _native(), semantic_overlays=[overlay], source_revision="current"
+    )
+
+    assert "target" not in effective["call_graph"].get("caller", [])
+    assert effective["candidate_facts"][0]["repair_reason"] == (
+        "overlay_source_revision_unknown"
     )
 
 

@@ -24,22 +24,33 @@ from core.platforms.graph import SemanticGraph
 from .llm_call_graph_projection import project_recovery_overlay
 from .llm_call_graph_recovery import (
     DEFAULT_MAX_CODE_BYTES,
+    DEFAULT_MAX_CANDIDATES_PER_REQUEST,
+    DEFAULT_MAX_PROMPT_CHARS,
+    DEFAULT_MAX_SITES_PER_REQUEST,
     DEFAULT_MAX_SHORTLIST,
     DEFAULT_REGISTRATION_CONTEXT_MAX_CHARS,
     DEFAULT_REGISTRATION_CONTEXT_MAX_FILE_BYTES,
     DEFAULT_REGISTRATION_CONTEXT_MAX_FILES,
+    _partition_worklist,
     build_recovery_worklist,
     run_recovery_review,
+    summarize_recovery_inputs,
 )
 from .reachability import build_semantic_reachability_overlay
 
 
 ROUND_SCHEMA_VERSION = 1
 ROUND_TASK = "openharmony_iterative_call_edge_recovery"
-DEFAULT_MAX_ROUNDS = 8
-DEFAULT_MAX_SITES = 200
+# The iterative recovery path is the high-recall pass.  The previous defaults
+# (8 rounds/32 model calls) stopped on medium-sized repositories before most
+# residual call sites had received even one review.  Keep the same admission
+# and projection gates, but give the scheduler enough room to finish a normal
+# residual worklist.  The per-request prompt and retry limits still bound each
+# individual request; these are only aggregate stage budgets.
+DEFAULT_MAX_ROUNDS = 32
+DEFAULT_MAX_SITES = 500
 DEFAULT_MAX_EDGES = 1_000
-DEFAULT_MAX_LLM_CALLS = 32
+DEFAULT_MAX_LLM_CALLS = 256
 
 
 def _text(value: Any) -> str:
@@ -171,6 +182,65 @@ def _empty_graph() -> dict[str, Any]:
     return SemanticGraph().to_dict()
 
 
+def _fit_selection_to_llm_budget(
+    items: Iterable[Mapping[str, Any]],
+    *,
+    remaining_calls: int,
+    max_retries: int,
+) -> tuple[list[Mapping[str, Any]], int, int]:
+    """Fit a round's sites into the remaining request/retry budget.
+
+    ``run_recovery_review`` splits one round into several requests when a
+    candidate table or prompt is large.  Previously the iterative scheduler
+    counted that whole invocation as one budget decision, so 50 selected
+    sites could expand to 47 requests and silently exceed the advertised
+    ``max_llm_calls``.  Greedily keep the largest useful subset whose actual
+    partition fits the worst-case retry budget; an oversized candidate table
+    does not starve smaller sites later in the same frontier.  Omitted sites
+    stay deferred and are reported as unreviewed rather than being marked
+    processed.
+    """
+    selected = list(items)
+    if remaining_calls < 0:
+        batches = _partition_worklist(
+            selected,
+            max_prompt_chars=DEFAULT_MAX_PROMPT_CHARS,
+            max_sites_per_request=DEFAULT_MAX_SITES_PER_REQUEST,
+            max_candidates_per_request=DEFAULT_MAX_CANDIDATES_PER_REQUEST,
+        )
+        return selected, len(batches), max(0, max_retries)
+    if remaining_calls <= 0:
+        return [], 0, 0
+
+    retry_budget = _bound_int(max_retries, 2)
+    retry_budget = min(retry_budget, max(0, remaining_calls - 1))
+    attempts_per_batch = 1 + retry_budget
+    max_batches = remaining_calls // attempts_per_batch
+    if max_batches <= 0:
+        return [], 0, retry_budget
+
+    fitted: list[Mapping[str, Any]] = []
+    for item in selected:
+        trial = [*fitted, item]
+        batches = _partition_worklist(
+            trial,
+            max_prompt_chars=DEFAULT_MAX_PROMPT_CHARS,
+            max_sites_per_request=DEFAULT_MAX_SITES_PER_REQUEST,
+            max_candidates_per_request=DEFAULT_MAX_CANDIDATES_PER_REQUEST,
+        )
+        if len(batches) <= max_batches:
+            fitted = trial
+    if fitted:
+        batches = _partition_worklist(
+            fitted,
+            max_prompt_chars=DEFAULT_MAX_PROMPT_CHARS,
+            max_sites_per_request=DEFAULT_MAX_SITES_PER_REQUEST,
+            max_candidates_per_request=DEFAULT_MAX_CANDIDATES_PER_REQUEST,
+        )
+        return fitted, len(batches), retry_budget
+    return [], 0, retry_budget
+
+
 def _round_summary(
     *,
     round_index: int,
@@ -273,6 +343,9 @@ def run_iterative_recovery_review(
         repository=repository,
         call_graph=call_graph,
     )
+    input_summary = summarize_recovery_inputs(
+        diagnostics, include_candidate_sites=include_candidate_sites
+    )
     adjacency = _edge_adjacency(call_graph, semantic_graph, known)
 
     def has_pending_work(function_id: str) -> bool:
@@ -318,6 +391,7 @@ def run_iterative_recovery_review(
         "rounds": [],
         "graph": _empty_graph(),
         "errors": [],
+        "input_summary": input_summary,
         "summary": {
             "entry_points": len(seeds),
             "candidate_seed_points": len(candidate_seeds),
@@ -411,9 +485,31 @@ def run_iterative_recovery_review(
         else:
             selected_limit = min(remaining_sites, per_round_budget)
         selected = eligible[:selected_limit]
+        used_calls = int(summary["llm_calls"])
+        remaining_calls = (
+            llm_budget - used_calls if llm_budget >= 0 else -1
+        )
+        retry_budget = _bound_int(max_retries, 2)
+        budget_limited = False
+        if selected and edge_budget != 0 and llm_budget != 0:
+            if remaining_calls == 0:
+                selected = []
+                budget_limited = True
+            else:
+                selected, _, retry_budget = _fit_selection_to_llm_budget(
+                    selected,
+                    remaining_calls=remaining_calls,
+                    max_retries=max_retries,
+                )
+                if not selected:
+                    budget_limited = True
         selected_ids = [_text(item.get("site_id")) for item in selected]
-        processed_sites.update(selected_ids)
-        deferred = eligible[len(selected):]
+        selected_id_set = set(selected_ids)
+        deferred = [
+            item
+            for item in eligible
+            if _text(item.get("site_id")) not in selected_id_set
+        ]
         deferred_callers = sorted(
             caller
             for item in deferred
@@ -428,14 +524,11 @@ def run_iterative_recovery_review(
         new_targets: set[str] = set()
 
         if selected and edge_budget != 0 and llm_budget != 0:
-            used_calls = int(summary["llm_calls"])
-            remaining_calls = (
-                llm_budget - used_calls if llm_budget >= 0 else -1
-            )
             if remaining_calls != 0:
-                retry_budget = _bound_int(max_retries, 2)
-                if remaining_calls > 0:
-                    retry_budget = min(retry_budget, max(0, remaining_calls - 1))
+                # Mark a site as processed only once a bounded review is
+                # actually dispatched.  A call-budget exhaustion must leave
+                # the site in ``unreviewed_sites`` for a later run.
+                processed_sites.update(selected_ids)
                 review = run_recovery_review(
                     diagnostics,
                     index,
@@ -559,6 +652,11 @@ def run_iterative_recovery_review(
         summary["sites_scheduled"] = len(processed_sites)
         summary["unreviewed_sites"] = max(0, len(all_worklist) - len(processed_sites))
         summary["projected_edges"] = len(projected_pairs)
+
+        if budget_limited:
+            summary["termination_reason"] = "max_llm_calls"
+            result["status"] = "partial"
+            break
 
         if site_budget >= 0 and len(processed_sites) >= site_budget:
             summary["termination_reason"] = "max_sites"

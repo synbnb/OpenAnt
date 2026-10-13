@@ -1,0 +1,6 @@
+{
+  "string": [
+    { "name": "app_name", "value": "VulnFounder DP01 PoC" },
+    { "name": "permission_internet_reason", "value": "Controlled local socket validation" }
+  ]
+}

