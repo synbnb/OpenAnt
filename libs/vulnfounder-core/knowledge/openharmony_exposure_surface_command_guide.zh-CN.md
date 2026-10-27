@@ -11,6 +11,9 @@
 - TCP/UDP 重点确认传输协议、地址族、本地地址、端口、状态、进程和 PID。
 - `ss`、`netstat`、`/proc`、`ps` 和 `ls` 的输出都可能为空、被截断或不可用；
   空结果只能说明“本次命令没有观测到”，不能直接证明不存在。
+- 开发板常使用精简 shell/toybox，不能假设 `ss`、`awk`、`tr` 等命令存在。命令返回
+  `not found`、`inaccessible` 或工具错误时，应将该动作记为失败并切换到尚未尝试的
+  `netstat`、`/proc/net/*`、`grep`、`cat` 或简单 shell 循环；不要只改管道写法重复同一查询。
 - 关联进程需要用网络状态中的 PID、进程列表和 `/proc/<pid>/status` 交叉确认；
   只要原始 socket 表行带有 PID，就应优先为该行补查 UID 和进程 SELinux 域，
   不要只为最终 LISTENING/BOUND 资产查询。
@@ -51,6 +54,10 @@ cat /proc/<pid>/status
 - `/proc/net/unix`：`STREAM`/`DGRAM`、状态以及路径；路径必须与目标逐字匹配。
 - `netstat -anp`：若镜像支持，会同时给出 `PID/进程名`；`netstat -an` 是
   没有进程列时的回退。目标行必须逐字包含 socket 路径。
+- 状态判定优先使用 `netstat` 的明确状态：`[ ACC ]`/`LISTENING` 是
+  `LISTENING`，`CONNECTED`/`ESTABLISHED` 不属于监听资产；有效命名 socket 行没有
+  状态词时可记为 `BOUND`。`/proc/net/unix` 中出现路径只能证明该次采样看到了该
+  socket 行，不能仅凭路径就推断它正在监听；应与同端点的状态行交叉核对。
 - `ps -A` 与 `/proc/<pid>/status`：进程名、PID、UID；名称匹配不能代替 PID 证据。
   同一轮如果得到多个 PID，可以合并成一条只读命令，例如
   `cat /proc/1/status; cat /proc/2/status`；解析时以每个 status 块内的
@@ -76,14 +83,14 @@ cat /proc/<pid>/status
 
 字段提示：
 
-- `ss -lntup` 或 `netstat -anp`：协议、监听地址、端口、状态和
+- `netstat -anp` 或设备已确认可用的 `ss -lntup`：协议、监听地址、端口、状态和
   `users:(('name',pid=...,fd=...))`/`pid/name` 信息。
 - `/proc/net/tcp*`、`/proc/net/udp*`：地址和端口是十六进制；TCP 状态码
   `0A` 表示 LISTENING。UDP 在不同镜像中可能没有显式状态，匹配本地端点
   只能标记为 BOUND。
 - `0.0.0.0` 或 `::` 表示绑定所有接口；`127.0.0.1` 或 `::1` 主要是本机
   暴露面。二者都是风险线索，不能单独判定漏洞。
-- 当 `ss` 不存在时，以 `netstat -anp` 的匹配行作为首选进程证据，再用
+- 当 `ss` 不存在或不可用时，以 `netstat -anp` 的匹配行作为首选进程证据，再用
   `/proc/net/*` 确认地址、端口、状态和 inode。若网络工具没有 PID，只有在
   设备允许且确有必要时，才按 inode 遍历 `/proc/<pid>/fd` 做交叉确认。
 

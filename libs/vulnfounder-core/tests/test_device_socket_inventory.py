@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from utilities.llm import CompletionResult, ToolUseBlock
+from utilities.llm import CompletionResult, Message, TextBlock, ToolUseBlock
 
 from core.device_socket_inventory import (
     DeviceSocketAssetStore,
@@ -16,6 +16,8 @@ from core.device_socket_inventory import (
     _compact_device_output,
     _enrich_assets_from_evidence,
     _enumerate_socket_records,
+    _extract_socket_permission_facts,
+    _extract_socket_process_facts,
     _mode_code_from_text,
     _merge_observed_endpoint_assets,
     _normalise_assets,
@@ -95,6 +97,405 @@ class _InventoryAdapter:
         )
 
 
+class _InventoryRepairAdapter:
+    """模拟模型先漏报端点、收到结构化修复任务后再补齐。"""
+
+    name = "offline-repair"
+    supports_tools = True
+
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, *, model, system, messages, max_tokens, tools=None):
+        self.calls.append({"model": model, "system": system, "messages": messages, "tools": tools})
+        if len(self.calls) == 1:
+            return CompletionResult(
+                content=[
+                    ToolUseBlock(
+                        id="observe",
+                        name="device_exec",
+                        input={"command": "netstat -anp; ps -A; ls -lZ /dev/unix/socket/demo", "purpose": "枚举端点及进程和权限证据"},
+                    ),
+                    ToolUseBlock(
+                        id="incomplete-finish",
+                        name="finish_inventory",
+                        input={"assets": [], "coverage": {"unix": "observed", "network": "not_observed"}},
+                    ),
+                ],
+                input_tokens=3,
+                output_tokens=4,
+                stop_reason="tool_use",
+            )
+        return CompletionResult(
+            content=[
+                ToolUseBlock(
+                    id="corrected-finish",
+                    name="finish_inventory",
+                    input={
+                        "assets": [
+                            {
+                                "socket_name": "/dev/unix/socket/demo",
+                                "transport": "UNIX",
+                                "address_family": "AF_UNIX",
+                                "socket_type": "STREAM",
+                                "runtime_state": "LISTENING",
+                                "pid": "1",
+                                "process": "demo",
+                                "uid": "0",
+                                "process_selinux_domain": "u:r:demo:s0",
+                                "dac_permissions": "srw-rw---- (0660)",
+                                "owner": "root",
+                                "group": "root",
+                                "selinux_label": "u:object_r:demo_socket:s0",
+                                "evidence_ids": ["DA-EV-0001"],
+                            }
+                        ],
+                        "coverage": {"unix": "observed", "network": "not_observed"},
+                    },
+                )
+            ],
+            input_tokens=5,
+            output_tokens=6,
+            stop_reason="tool_use",
+        )
+
+
+class _InventoryConversationWindowAdapter:
+    name = "offline-conversation-window"
+    supports_tools = True
+
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, *, model, system, messages, max_tokens, tools=None):
+        # Capture the request as sent; later turns must not mutate the prior
+        # request snapshots through a shared list reference.
+        self.calls.append({"system": system, "messages": list(messages), "tools": tools})
+        if len(self.calls) <= 2:
+            command = "getprop ro.build.version.release" if len(self.calls) == 1 else "getprop ro.build.version.security_patch"
+            return CompletionResult(
+                content=[ToolUseBlock(
+                    id=f"command-{len(self.calls)}",
+                    name="device_exec",
+                    input={"command": command, "purpose": f"读取设备属性 {len(self.calls)}"},
+                )],
+                input_tokens=2,
+                output_tokens=2,
+                stop_reason="tool_use",
+            )
+        return CompletionResult(
+            content=[ToolUseBlock(
+                id="finish",
+                name="finish_inventory",
+                input={
+                    "assets": [],
+                    "coverage": {"unix": "not_observed", "network": "not_observed"},
+                    "task_summary": "两项设备属性均已读取。",
+                    "task_findings": [{"title": "属性读取", "summary": "已完成", "status": "observed", "evidence_ids": ["DA-EV-0001", "DA-EV-0002"]}],
+                },
+            )],
+            input_tokens=2,
+            output_tokens=2,
+            stop_reason="tool_use",
+        )
+
+
+def test_finish_rejection_becomes_dynamic_repair_task_for_next_model_turn(tmp_path: Path):
+    adapter = _InventoryRepairAdapter()
+    binding = SimpleNamespace(adapter=adapter, model="offline-model", provider_name="offline")
+
+    def runner(argv, timeout):
+        return 0, (
+            "unix  2 [ ACC ] STREAM LISTENING 100 1/demo /dev/unix/socket/demo\n"
+            "PID USER CMD\n1 root demo\n"
+            "PID=1\nName:\tdemo\nUid:\t0\t0\t0\t0\nu:r:demo:s0\n"
+            "srw-rw---- 1 root root 0 2026-01-01 /dev/unix/socket/demo\n"
+            "u:object_r:demo_socket:s0 /dev/unix/socket/demo\n"
+        ), ""
+
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=runner),
+        output_dir=tmp_path / "repair-run",
+        binding=binding,
+        config=SocketInventoryConfig(max_rounds=2, max_commands=2, rag_mode="off"),
+    )
+    result = provider.run()
+
+    assert result["status"] == "complete"
+    assert result["asset_count"] == 1
+    repair_nodes = [node for node in result["task_tree"]["nodes"] if node.get("task_type") == "finish_repair"]
+    assert len(repair_nodes) == 1
+    assert repair_nodes[0]["status"] == "completed"
+    assert "/dev/unix/socket/demo" in repair_nodes[0]["title"]
+    assert "/dev/unix/socket/demo" in adapter.calls[1]["system"]
+    assert "修复任务" in adapter.calls[1]["system"]
+    assert "/dev/unix/socket/demo" in provider._rag_query(2)
+
+
+def test_device_exec_returns_compact_observed_socket_facts_with_evidence(tmp_path: Path):
+    adapter = _InventoryAdapter()
+    binding = SimpleNamespace(adapter=adapter, model="offline-model", provider_name="offline")
+    provider = SocketExposureProvider(
+        HDCClient(
+            "/opt/hdc",
+            "serial-1",
+            runner=lambda *_: (
+                0,
+                "unix  2 [ ACC ] STREAM LISTENING 100 1/demo /dev/unix/socket/demo\n"
+                "srw-rw---- 1 root root 0 2026-01-01 /dev/unix/socket/demo\n"
+                "u:object_r:demo_socket:s0 /dev/unix/socket/demo\n",
+                "",
+            ),
+        ),
+        output_dir=tmp_path / "facts-run",
+        binding=binding,
+        config=SocketInventoryConfig(max_rounds=2, max_commands=2, rag_mode="off"),
+    )
+
+    outcome = provider._execute_device(
+        {"command": "netstat -anp; ls -lZ /dev/unix/socket/demo", "purpose": "检查演示端点"}
+    )
+
+    assert outcome["status"] == "ok"
+    assert outcome["socket_observations"][0]["endpoint"] == "/dev/unix/socket/demo"
+    assert outcome["socket_observations"][0]["state"] == "LISTENING"
+    assert outcome["socket_observations"][0]["socket_type"] == "STREAM"
+    assert outcome["socket_observations"][0]["evidence_ids"] == ["DA-EV-0001"]
+    assert outcome["socket_observations"][0]["dac_permissions"] == "srw-rw---- (0660)"
+
+
+def test_endpoint_identity_prefers_full_path_over_model_short_name(tmp_path: Path):
+    adapter = _InventoryAdapter()
+    binding = SimpleNamespace(adapter=adapter, model="offline-model", provider_name="offline")
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=binding,
+        config=SocketInventoryConfig(max_rounds=1, max_commands=1),
+    )
+    provider.evidence = [{
+        "evidence_id": "DA-EV-0001",
+        "command": "netstat -anp; ps -A; cat /proc/1/status; ls -lZ /dev/unix/socket/demo",
+        "excerpt": (
+            "unix  2 [ ACC ] STREAM LISTENING 100 1/demo /dev/unix/socket/demo\n"
+            "PID USER CMD\n1 root demo\nPID=1\nUid:\t0\t0\t0\t0\nu:r:demo:s0\n"
+            "srw-rw---- 1 root root 0 2026-01-01 /dev/unix/socket/demo\n"
+            "u:object_r:demo_socket:s0 /dev/unix/socket/demo\n"
+        ),
+    }]
+    raw = {
+        "assets": [{
+            "socket_name": "demo",
+            "endpoint": "/dev/unix/socket/demo",
+            "runtime_state": "LISTENING",
+            "socket_type": "STREAM",
+            "transport": "UNIX",
+            "address_family": "AF_UNIX",
+            "pid": "1",
+            "process": "demo",
+            "uid": "0",
+            "process_selinux_domain": "u:r:demo:s0",
+            "dac_permissions": "srw-rw---- (0660)",
+            "owner": "root",
+            "group": "root",
+            "selinux_label": "u:object_r:demo_socket:s0",
+            "evidence_ids": ["DA-EV-0001"],
+        }]
+    }
+
+    outcome = provider._finish(raw)
+    normalized = _normalise_assets(raw["assets"], "serial-1", 8)
+
+    assert outcome["status"] == "complete", outcome
+    assert normalized[0]["socket_name"] == "/dev/unix/socket/demo"
+
+
+def test_root_task_cannot_be_marked_complete_before_validated_finish(tmp_path: Path):
+    adapter = _InventoryAdapter()
+    binding = SimpleNamespace(adapter=adapter, model="offline-model", provider_name="offline")
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=binding,
+        config=SocketInventoryConfig(max_rounds=1, max_commands=1),
+    )
+
+    outcome = provider._update_task_tree({
+        "updates": [{"task_id": "scan_all_socket_exposures", "status": "completed"}],
+        "summary": "模型认为任务已完成",
+    })
+
+    assert outcome["task_tree"]["nodes"][0]["status"] == "in_progress"
+    assert "finish_inventory" in outcome["task_tree"]["nodes"][0]["notes"]
+
+
+def test_agent_followup_uses_bounded_state_snapshot_instead_of_unbounded_history(tmp_path: Path):
+    adapter = _InventoryConversationWindowAdapter()
+    binding = SimpleNamespace(adapter=adapter, model="offline-model", provider_name="offline")
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda argv, timeout: (0, "OpenHarmony\n", "")),
+        output_dir=tmp_path / "bounded-context-run",
+        binding=binding,
+        config=SocketInventoryConfig(max_rounds=3, max_commands=3, rag_mode="off"),
+        task_goal="检查设备系统版本",
+    )
+
+    result = provider.run()
+
+    assert result["status"] == "complete"
+    assert len(adapter.calls[0]["messages"]) == 1
+    assert len(adapter.calls[1]["messages"]) == 1
+    assert len(adapter.calls[2]["messages"]) == 1
+    second_turn = adapter.calls[1]["messages"][0].content[0].text
+    third_turn = adapter.calls[2]["messages"][0].content[0].text
+    assert "DA-EV-0001" in second_turn
+    assert "DA-EV-0001" in third_turn and "DA-EV-0002" in third_turn
+    assert "getprop ro.build.version.release" in third_turn
+    assert len(third_turn) < 20000
+    requests = [row["details"] for row in result["trace"] if row.get("event") == "model.requested"]
+    assert [item["message_count"] for item in requests] == [1, 1, 1]
+
+
+def test_oversized_model_input_trace_is_marked_as_preview_not_empty():
+    messages = [
+        Message(role="user", content=[TextBlock(f"large context {index} " * 1200)])
+        for index in range(6)
+    ]
+
+    recorded = SocketExposureProvider._messages_for_trace(messages)
+
+    assert recorded
+    assert recorded[0]["role"] == "audit_preview"
+    assert recorded[0]["blocks"][0]["truncated"] is True
+    assert "不代表完整输入" in recorded[0]["blocks"][0]["text"]
+
+
+def test_finish_repairs_group_shared_field_gaps_by_required_field(tmp_path: Path):
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=SimpleNamespace(adapter=_InventoryAdapter(), model="offline-model", provider_name="offline"),
+        config=SocketInventoryConfig(max_rounds=2, max_commands=2, rag_mode="off"),
+    )
+    outcome = provider._schedule_finish_repairs({
+        "status": "rejected",
+        "reason": "missing process domains",
+        "missing_fields": [
+            {"endpoint": "/dev/unix/socket/a", "missing": ["process_selinux_domain"]},
+            {"endpoint": "/dev/unix/socket/b", "missing": ["process_selinux_domain"]},
+        ],
+    })
+
+    assert outcome["repair_status"] == "scheduled"
+    assert len(outcome["repair_tasks"]) == 1
+    assert outcome["repair_tasks"][0]["endpoints"] == ["/dev/unix/socket/a", "/dev/unix/socket/b"]
+    repair_nodes = [node for node in provider.task_tree["nodes"] if node.get("task_type") == "finish_repair"]
+    assert len(repair_nodes) == 1
+
+
+def test_model_cannot_mark_repair_task_complete_without_validated_finish(tmp_path: Path):
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=SimpleNamespace(adapter=_InventoryAdapter(), model="offline-model", provider_name="offline"),
+        config=SocketInventoryConfig(max_rounds=2, max_commands=2, rag_mode="off"),
+    )
+    provider._schedule_finish_repairs({
+        "status": "rejected",
+        "reason": "missing process domain",
+        "missing_fields": [{"endpoint": "/dev/unix/socket/a", "missing": ["process_selinux_domain"]}],
+    })
+    repair_node = next(node for node in provider.task_tree["nodes"] if node.get("task_type") == "finish_repair")
+    provider._update_task_tree({
+        "updates": [{"task_id": repair_node["task_id"], "status": "completed"}],
+        "summary": "模型声称已修复",
+    })
+
+    assert repair_node["status"] == "in_progress"
+    assert "整体快照通过校验" in repair_node["notes"]
+
+
+def test_finish_fills_fields_from_same_cited_device_evidence_before_rejecting(tmp_path: Path):
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=SimpleNamespace(adapter=_InventoryAdapter(), model="offline-model", provider_name="offline"),
+        config=SocketInventoryConfig(max_rounds=2, max_commands=4, rag_mode="off"),
+    )
+    netstat = "netstat -anp"
+    proc = "cat /proc/187/status; cat /proc/187/attr/current"
+    ls_long = "ls -lZ /dev/unix/socket/demo"
+    provider.evidence = [
+        {"evidence_id": "DA-EV-0001", "command": netstat, "excerpt": "unix 2 [ ACC ] STREAM LISTENING 555 187/hilogd /dev/unix/socket/demo"},
+        {"evidence_id": "DA-EV-0002", "command": proc, "excerpt": "Name:\thilogd\nPid:\t187\nUid:\t1036\t1036\t1036\t1036\nu:r:hilogd:s0"},
+        {"evidence_id": "DA-EV-0003", "command": ls_long, "excerpt": "s-w--w--w- 1 logd log u:object_r:hilog_input_socket:s0 0 2021-01-01 /dev/unix/socket/demo"},
+    ]
+    provider.commands = [
+        {"probe_kind": "agent_command", "argv": ["hdc", "shell", netstat], "stdout": provider.evidence[0]["excerpt"]},
+        {"probe_kind": "agent_command", "argv": ["hdc", "shell", proc], "stdout": provider.evidence[1]["excerpt"]},
+        {"probe_kind": "agent_command", "argv": ["hdc", "shell", ls_long], "stdout": provider.evidence[2]["excerpt"]},
+    ]
+
+    outcome = provider._finish({
+        "assets": [{
+            "socket_name": "/dev/unix/socket/demo",
+            "runtime_state": "LISTENING",
+            "transport": "UNIX",
+            "address_family": "AF_UNIX",
+            "evidence_ids": ["DA-EV-0001", "DA-EV-0002", "DA-EV-0003"],
+        }],
+        "coverage": {"unix": "observed", "network": "not_observed"},
+    })
+
+    assert outcome["status"] == "complete", outcome
+    asset = provider.finish_payload["assets"][0]
+    assert asset["pid"] == "187"
+    assert asset["process"] == "hilogd"
+    assert asset["uid"] == "1036"
+    assert asset["process_selinux_domain"] == "u:r:hilogd:s0"
+    assert asset["dac_permissions"] == "s-w--w--w- (0222)"
+    assert asset["selinux_label"] == "u:object_r:hilog_input_socket:s0"
+
+
+def test_connected_datagram_from_netstat_suppresses_proc_state_03_candidate(tmp_path: Path):
+    provider = SocketExposureProvider(
+        HDCClient("/opt/hdc", "serial-1", runner=lambda *_: (0, "", "")),
+        output_dir=tmp_path,
+        binding=SimpleNamespace(adapter=_InventoryAdapter(), model="offline-model", provider_name="offline"),
+        config=SocketInventoryConfig(max_rounds=1, max_commands=2, rag_mode="off"),
+    )
+    provider.evidence = [
+        {"evidence_id": "DA-EV-0001", "command": "netstat -anp", "excerpt": "unix 146 [ ] DGRAM CONNECTED 10540 188/hilogd /dev/unix/socket/hilogInput"},
+        {"evidence_id": "DA-EV-0002", "command": "cat /proc/net/unix", "excerpt": "ffff: 00000092 00000000 00000000 0002 03 10540 /dev/unix/socket/hilogInput"},
+    ]
+
+    assert provider._observed_endpoint_candidates() == []
+
+
+def test_process_metadata_parser_accepts_ptg_pid_and_domain_markers():
+    command = "for p in 1 187; do echo ===STATUS $p===; cat /proc/$p/status; echo ===DOMAIN $p===; cat /proc/$p/attr/current; done"
+    facts = _extract_socket_process_facts(
+        [{
+            "probe_kind": "agent_command",
+            "argv": ["hdc", "shell", command],
+            "stdout": "===STATUS 1===\nName:\tinit\nPid:\t1\nUid:\t0\t0\t0\t0\n===DOMAIN 1===\nu:r:init:s0\x00\n"
+                     "===STATUS 187===\nName:\thilogd\nPid:\t187\nUid:\t1036\t1036\t1036\t1036\n===DOMAIN 187===\nu:r:hilogd:s0\x00\n",
+        }, {
+            "probe_kind": "agent_command",
+            "argv": ["hdc", "shell", "printf 'SOCKET_PID=188 DOMAIN=u:r:hiview:s0\\n'"] ,
+            "stdout": "SOCKET_PID=188 DOMAIN=u:r:hiview:s0\x00\n",
+        }],
+        [
+            {"evidence_id": "DA-EV-0001", "command": command},
+            {"evidence_id": "DA-EV-0002", "command": "printf 'SOCKET_PID=188 DOMAIN=u:r:hiview:s0\\n'"},
+        ],
+    )
+
+    assert facts["1"]["process_selinux_domain"] == "u:r:init:s0"
+    assert facts["187"]["process_selinux_domain"] == "u:r:hilogd:s0"
+    assert facts["188"]["process_selinux_domain"] == "u:r:hiview:s0"
+
+
 def test_inventory_task_tree_starts_with_single_root():
     tree = initial_socket_inventory_task_tree()
     assert [node["task_id"] for node in tree["nodes"]] == [
@@ -158,6 +559,48 @@ def test_compaction_keeps_late_named_endpoint_and_permission_records():
     assert "/dev/unix/socket/hilogInput" in compact
     assert "srw-rw-rw-" in compact
     assert "u:object_r:dev_unix_file:s0 /dev/unix/socket/hilogInput" in compact
+
+
+def test_compaction_deduplicates_repeated_connected_paths_and_keeps_listener_rows():
+    connected = "\n".join(
+        f"unix  3 [ ] STREAM CONNECTED {10000 + i} 1/init /dev/unix/socket/paramservice"
+        for i in range(500)
+    )
+    proc_connected = "\n".join(
+        f"ffffff{i:08x}: 00000003 00000000 00000000 0001 03 {20000 + i} /dev/unix/socket/paramservice"
+        for i in range(500)
+    )
+    listeners = "\n".join([
+        "unix  2 [ ACC ] STREAM LISTENING 4242 1/init /dev/unix/socket/paramservice",
+        "unix  2 [ ACC ] SEQPACKET LISTENING 4243 2/hilogd /dev/unix/socket/hilogControl",
+        "unix  2 [ ACC ] STREAM LISTENING 4244 3/daemon @service-control",
+    ])
+    compact = _compact_device_output(connected + "\n" + proc_connected + "\n" + listeners, 1800)
+
+    assert "LISTENING 4242 1/init /dev/unix/socket/paramservice" in compact
+    assert "LISTENING 4243 2/hilogd /dev/unix/socket/hilogControl" in compact
+    assert "LISTENING 4244 3/daemon @service-control" in compact
+    assert compact.count("/dev/unix/socket/paramservice") <= 3
+
+
+def test_proc_unix_columns_are_not_misread_as_dac_permission_facts():
+    proc_evidence = [{
+        "evidence_id": "DA-EV-0001",
+        "command": "cat /proc/net/unix",
+        "excerpt": "ffffff8003e38a80: 00000002 00000000 00010000 0001 01 10480 /dev/unix/socket/demo",
+    }]
+    assert _extract_socket_permission_facts(proc_evidence) == {}
+
+    ls_evidence = [{
+        "evidence_id": "DA-EV-0002",
+        "command": "ls -ldZ /dev/unix/socket/demo",
+        "excerpt": "srw-rw-rw- 1 root root u:object_r:paramservice_socket:s0 0 2021-01-01 /dev/unix/socket/demo",
+    }]
+    facts = _extract_socket_permission_facts(ls_evidence)
+    assert _mode_code_from_text(facts["/dev/unix/socket/demo"]["dac_permissions"]) == "0666"
+    assert facts["/dev/unix/socket/demo"]["owner"] == "root"
+    assert facts["/dev/unix/socket/demo"]["group"] == "root"
+    assert facts["/dev/unix/socket/demo"]["selinux_label"] == "u:object_r:paramservice_socket:s0"
 
 
 def test_enumerate_socket_records_keeps_all_unix_rows_and_merges_sources():
@@ -506,6 +949,8 @@ def test_socket_exposure_provider_uses_dynamic_commands_and_persists_artifacts(t
         "observe_unix_endpoints",
     ]
     assert result["task_tree"]["nodes"][0]["status"] == "completed"
+    assert result["task_tree"]["nodes"][1]["status"] == "completed"
+    assert "最终资产快照通过" in result["task_tree"]["nodes"][1]["notes"]
     assert result["evidence"][0]["evidence_id"] == "DA-EV-0001"
     assert calls[0][0][-1] == "netstat -anp; ps -A; ls -l /dev/unix/socket/demo; ls -Z /dev/unix/socket/demo"
     assert [tool.name for tool in adapter.calls[0]["tools"]] == [
