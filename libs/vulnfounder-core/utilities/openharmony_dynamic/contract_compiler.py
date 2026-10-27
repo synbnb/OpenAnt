@@ -388,6 +388,18 @@ def _run_legal_protocol_self_test(
         if probe_result is not None:
             probe_result.update({"status": "BLOCKED", "reason": "descriptor_snapshot_missing"})
         return ["描述符没有快照，无法执行设备侧合法报文自证"]
+    entry_kind = str(getattr(contract.entry, "kind", "hap_udp") or "hap_udp")
+    # HAP 编译器属于本机前置条件。先检查工具链再运行任何设备探测，避免
+    # 把“找不到 hvigor/Node”误记为协议不合法并启动多轮 fresh-session 重试。
+    if entry_kind in {"hap_udp", "hap_tcp"}:
+        from .toolchain import build_tools_root, hap_build_toolchain_issues  # noqa: PLC0415
+
+        toolchain_issues = hap_build_toolchain_issues(build_tools_root())
+        if toolchain_issues:
+            message = "；".join(toolchain_issues)
+            if probe_result is not None:
+                probe_result.update({"status": "BLOCKED_TOOLCHAIN", "reason": message})
+            return [f"[TOOLCHAIN_UNAVAILABLE] HAP 构建工具链未就绪：{message}"]
     try:
         probe = _legal_probe_values(snapshot)
     except ValueError as exc:
@@ -510,10 +522,14 @@ def _run_legal_protocol_self_test(
             probe_result.update({"status": "PASSED", "expected_evidence": expected})
         return []
     except Exception as exc:  # noqa: BLE001 — 自证失败必须显式阻断，不伪造成功
+        is_toolchain_error = type(exc).__name__ == "ToolchainUnavailable"
         if probe_result is not None:
             probe_result.update({
-                "status": "ERROR", "reason": f"{type(exc).__name__}: {str(exc)[:240]}"
+                "status": "BLOCKED_TOOLCHAIN" if is_toolchain_error else "ERROR",
+                "reason": f"{type(exc).__name__}: {str(exc)[:240]}"
             })
+        if is_toolchain_error:
+            return [f"[TOOLCHAIN_UNAVAILABLE] {str(exc)[:240]}"]
         return [f"设备侧合法报文自证异常: {type(exc).__name__}: {str(exc)[:240]}"]
     finally:
         try:
@@ -1453,6 +1469,17 @@ def compile_contract(finding: FindingInput, *, hdc=None,
             contract, hdc, notes, probe_result=probe_result,
         )
         if self_test_errors:
+            toolchain_errors = [
+                error for error in self_test_errors
+                if error.startswith("[TOOLCHAIN_UNAVAILABLE]")
+            ]
+            if toolchain_errors:
+                message = toolchain_errors[0].partition("]")[2].strip()
+                return _result(
+                    contract=contract, compile_status="TOOLCHAIN_UNAVAILABLE",
+                    errors=[message], descriptor_hit=descriptor_id, llm_used=llm_used,
+                    notes=notes, entry_discovery=entry_discovery_data,
+                )
             apply_compile_gate(contract, [f"协议描述符设备侧自证未通过: {e}" for e in self_test_errors])
             return _result(
                 contract=contract, compile_status=contract.compile_status,

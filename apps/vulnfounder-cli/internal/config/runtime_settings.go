@@ -22,7 +22,7 @@ func defaultSourceLocatorSettings() SourceLocatorSettings {
 	return SourceLocatorSettings{
 		Enabled:        true,
 		TargetRevision: "OpenHarmony-7.0-Release",
-		Project:        "openharmony",
+		Project:        "*",
 		APIPrefix:      "/api/v1",
 		TimeoutSeconds: 20,
 		MaxRetries:     1,

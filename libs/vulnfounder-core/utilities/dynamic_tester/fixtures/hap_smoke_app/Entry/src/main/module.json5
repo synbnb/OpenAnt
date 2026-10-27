@@ -19,6 +19,20 @@
         "startWindowBackground": "$color:start_window_background"
       }
     ],
+    "extensionAbilities": [
+      {
+        "name": "VfSmokeFormExtension",
+        "srcEntry": "./ets/formextension/VfSmokeFormExtension.ets",
+        "type": "form",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
+          }
+        ]
+      }
+    ],
     "requestPermissions": []
   }
 }

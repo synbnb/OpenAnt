@@ -63,6 +63,29 @@ def test_search_builds_api_query_and_normalizes_hits():
     assert hit.raw_line.endswith("\r")
 
 
+def test_all_project_sentinel_omits_projects_filter():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        return _response(
+            request,
+            200,
+            json={"time": 1, "resultCount": 0, "startDocument": 0, "endDocument": -1, "results": {}},
+        )
+
+    with OpenGrokClient(
+        "https://grok.test/source",
+        project="*",
+        transport=httpx.MockTransport(handler),
+        retry_backoff_seconds=0,
+    ) as client:
+        client.search(full="sp_thread_socket")
+
+    assert seen[0].url.path == "/source/api/v1/search"
+    assert "projects" not in seen[0].url.params
+
+
 def test_read_source_falls_back_to_raw_after_auth_failure_and_keeps_attempts():
     seen: list[httpx.Request] = []
 

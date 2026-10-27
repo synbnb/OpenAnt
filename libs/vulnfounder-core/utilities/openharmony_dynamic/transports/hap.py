@@ -16,11 +16,12 @@ import shutil
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
-from .base import INPUT_DELIVERED, INPUT_NOT_SENT, SendResult, TransportError
-from ..toolchain import toolchain_root
+from .base import INPUT_DELIVERED, INPUT_NOT_SENT, SendResult, ToolchainUnavailable, TransportError
+from ..toolchain import build_tools_root, hap_build_toolchain_issues, toolchain_root
 
 if TYPE_CHECKING:
     from ..hdc_client import HDCClient
@@ -35,13 +36,14 @@ _TEMPLATE_INDEX = _SUITE_DIR / "HAP_INDEX.ets.in"
 # which made a copied checkout unusable on another machine and risked leaking
 # a private signing location into reports.
 _TOOLCHAIN_ROOT = toolchain_root()
-_HVIGORW = _TOOLCHAIN_ROOT / "hvigor/bin/hvigorw"
-_NODE = _TOOLCHAIN_ROOT / "tool/node"
+_BUILD_TOOLS_ROOT = build_tools_root()
+_HVIGORW = _BUILD_TOOLS_ROOT / "hvigor/bin/hvigorw"
+_NODE = _BUILD_TOOLS_ROOT / "tool/node"
 _SIGN_JAR = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar"
 _HDC = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/hdc"
 _SDK_SIGNING_LIB = _TOOLCHAIN_ROOT / "sdk/default/openharmony/toolchains/lib"
 _SDK_SIGNING_P12 = _SDK_SIGNING_LIB / "OpenHarmony.p12"
-_SDK_PROFILE_ROOT_CERT = _SDK_SIGNING_LIB / "OpenHarmonyProfileDebug.pem"
+_SDK_PROFILE_DEBUG_CERT_CHAIN = _SDK_SIGNING_LIB / "OpenHarmonyProfileDebug.pem"
 _JAVA = os.environ.get("VULNFOUNDER_JAVA", "").strip() or shutil.which("java") or "java"
 _KEYTOOL = os.environ.get("VULNFOUNDER_KEYTOOL", "").strip() or shutil.which("keytool") or "keytool"
 _SDK_SIGNING_PASSWORD = "123456"
@@ -143,29 +145,364 @@ def _run_keytool(arguments: list[str], *, timeout: int = 60) -> str:
     return output
 
 
+def _require_successful_process(completed: Any, stage: str) -> None:
+    """Do not treat a partial output from a failed tool process as success."""
+
+    return_code = int(getattr(completed, "returncode", 1))
+    if return_code == 0:
+        return
+    output = getattr(completed, "stdout", b"") or getattr(completed, "stderr", b"") or ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    raise TransportError(
+        f"{stage}失败（exit code {return_code}），日志尾部：\n{str(output)[-1800:]}"
+    )
+
+
+
+def _configure_project_skip_internal_signing(project: Path) -> None:
+    """让 Hvigor 只生成 unsigned HAP，签名由后续受控步骤单独完成。"""
+
+    profile_path = project / "build-profile.json5"
+    if not profile_path.is_file():
+        raise TransportError("HAP 工程缺少 build-profile.json5，无法配置 unsigned 构建")
+    profile = profile_path.read_text(encoding="utf-8")
+    # 只修改隔离副本。assembleApp 会因该选项跳过模块 HAP 签名；同时移除
+    # 产品对 signingConfig 的引用，避免应用级 SignApp 仍要求 Hvigor 自己的
+    # 加密签名材料。unsigned HAP 随后由同一工具链的 hap-sign-tool 单独签名。
+    if re.search(r'(["\']?buildOption["\']?\s*:)', profile):
+        raise TransportError(
+            "HAP 模板已声明 buildOption；请显式合并 product.buildOption.packOptions.buildAppSkipSignHap，"
+            "避免覆盖现有构建设置"
+        )
+    app_match = re.search(r'(?P<indent>[ \t]*)["\']?app["\']?\s*:\s*\{', profile)
+    if app_match is None:
+        raise TransportError("HAP 工程 build-profile.json5 缺少 app 配置对象")
+    products_match = re.search(
+        r'["\']?products["\']?\s*:\s*\[', profile[app_match.end():]
+    )
+    if products_match is None:
+        raise TransportError("HAP 工程 app 配置缺少 products 数组")
+    products_array_end = app_match.end() + products_match.end()
+    product_open = profile.find("{", products_array_end)
+    if product_open < 0:
+        raise TransportError("HAP 工程 app.products 中没有产品配置对象")
+    product_line_start = profile.rfind("\n", 0, product_open) + 1
+    product_indent = re.match(r"[ \t]*", profile[product_line_start:product_open])
+    indent = product_indent.group(0) if product_indent else ""
+    inserted = (
+        f'\n{indent}  "buildOption": {{\n'
+        f'{indent}    "packOptions": {{ "buildAppSkipSignHap": true }}\n'
+        f'{indent}  }},'
+    )
+    profile = profile[:product_open + 1] + inserted + profile[product_open + 1:]
+    profile = re.sub(
+        r'(["\']?signingConfig["\']?\s*:\s*)(?:"[^"]*"|\'[^\']*\')\s*,?',
+        "",
+        profile,
+    )
+    profile_path.write_text(profile, encoding="utf-8")
+
+
 def _safe_signing_alias(prefix: str, contract_id: str) -> str:
     digest = hashlib.sha256(str(contract_id).encode("utf-8", errors="replace")).hexdigest()[:12]
     return f"vf-{prefix}-{digest}"
 
 
+def _current_device_udid(hdc: "HDCClient") -> str:
+    """从当前已选中的设备读取用于 debug profile 绑定的 UDID。
+
+    HDC serial 是连接标识，不等同于 OpenHarmony Provision Profile 中的
+    UDID。profile 模板的 ``device-id-type`` 为 ``udid``，因此不能直接把
+    ``hdc list targets`` 返回的 serial 写入 ``device-ids``。
+    """
+
+    try:
+        record = hdc.shell(["bm", "get", "-u"], purpose="读取 HAP debug profile 所需的设备 UDID")
+    except Exception as exc:  # noqa: BLE001 — 保留设备侧查询失败原因
+        raise TransportError(f"无法读取当前开发板 UDID：{exc}") from exc
+    if int(getattr(record, "returncode", 1)) != 0:
+        detail = str(getattr(record, "stderr", "") or getattr(record, "stdout", "")).strip()
+        raise TransportError("开发板 bm get -u 执行失败" + (f"：{detail[-500:]}" if detail else ""))
+    output = str(getattr(record, "stdout", "") or "")
+    match = re.search(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{64})(?![0-9A-Fa-f])", output)
+    if not match:
+        raise TransportError("开发板 bm get -u 未返回有效的 64 位十六进制 UDID")
+    return match.group(1).upper()
+
+
+def _installed_sdk_api_version() -> int:
+    """读取当前 command-line-tools 实际安装的 OpenHarmony SDK API 版本。"""
+
+    sdk = _TOOLCHAIN_ROOT / "sdk"
+    sdk_pkg = sdk / "default" / "sdk-pkg.json"
+    if sdk_pkg.is_file():
+        try:
+            metadata = json.loads(sdk_pkg.read_text(encoding="utf-8"))
+            raw_version = str(metadata.get("data", {}).get("apiVersion", "")).strip()
+            if re.fullmatch(r"[1-9][0-9]*", raw_version):
+                return int(raw_version)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+
+    versions: set[str] = set()
+    for component_root in (sdk / "default" / "openharmony", sdk / "openharmony"):
+        if not component_root.is_dir():
+            continue
+        for manifest_path in component_root.rglob("oh-uni-package.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            value = str(manifest.get("apiVersion", "")).strip()
+            if re.fullmatch(r"[1-9][0-9]*", value):
+                versions.add(value)
+        if versions:
+            break
+    if len(versions) == 1:
+        return int(versions.pop())
+    raise TransportError(
+        "无法从已安装 OpenHarmony SDK 元数据确定有效 API 版本；"
+        "请检查 sdk/default/sdk-pkg.json 或组件清单"
+    )
+
+
+def _installed_sdk_platform_version(api_version: int) -> str:
+    """读取 API 26+ 构建配置要求的点分平台版本字符串。"""
+
+    sdk = _TOOLCHAIN_ROOT / "sdk"
+    sdk_pkg = sdk / "default" / "sdk-pkg.json"
+    if sdk_pkg.is_file():
+        try:
+            metadata = json.loads(sdk_pkg.read_text(encoding="utf-8"))
+            data = metadata.get("data", {})
+            if int(str(data.get("apiVersion", ""))) == api_version:
+                value = str(data.get("platformVersion", "")).strip()
+                if re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", value):
+                    return value
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            pass
+
+    versions: set[str] = set()
+    for component_root in (sdk / "default" / "openharmony", sdk / "openharmony"):
+        if not component_root.is_dir():
+            continue
+        for manifest_path in component_root.rglob("oh-uni-package.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if str(manifest.get("apiVersion", "")).strip() != str(api_version):
+                continue
+            value = str(manifest.get("platformVersion", "")).strip()
+            if re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", value):
+                versions.add(value)
+        if versions:
+            break
+    if len(versions) == 1:
+        return versions.pop()
+    raise TransportError(
+        f"SDK API {api_version} 缺少唯一、有效的 platformVersion 元数据"
+    )
+
+
+def _configure_project_compile_sdk(project: Path) -> int:
+    """只在隔离 HAP 工程中将 compileSdkVersion 对齐本机 SDK。"""
+
+    profile_path = project / "build-profile.json5"
+    if not profile_path.is_file():
+        return _installed_sdk_api_version()
+    api_version = _installed_sdk_api_version()
+    # Hvigor 6.26+ 对 API 26 改用点分版本字符串，旧 API 则要求数字。
+    # 三个字段必须遵循同一 SDK schema；仅更新 compileSdkVersion 会被
+    # Hvigor 的配置校验拒绝。
+    sdk_value = (
+        json.dumps(_installed_sdk_platform_version(api_version))
+        if api_version >= 26
+        else str(api_version)
+    )
+    profile_text = profile_path.read_text(encoding="utf-8")
+    compile_pattern = r'(["\']?compileSdkVersion["\']?\s*:\s*)(?:"[^"]*"|\'[^\']*\'|\d+)'
+    profile_text, compile_count = re.subn(
+        compile_pattern, lambda match: match.group(1) + sdk_value, profile_text
+    )
+    if compile_count == 0:
+        raise TransportError(
+            "HAP 工程 build-profile.json5 未声明 compileSdkVersion，"
+            "无法与已安装 SDK 自动匹配"
+        )
+    for field in ("compatibleSdkVersion", "targetSdkVersion"):
+        pattern = rf'(["\']?{field}["\']?\s*:\s*)(?:"[^"]*"|\'[^\']*\'|\d+)'
+        profile_text = re.sub(
+            pattern, lambda match: match.group(1) + sdk_value, profile_text
+        )
+    profile_path.write_text(profile_text, encoding="utf-8")
+
+    if api_version >= 26:
+        # API 26 的点分版本 schema 要求新的工程模型版本。更新隔离副本中
+        # 的项目级 Hvigor 配置和 package manifests；模板仓库保持不变。
+        manifests = [project / "hvigor" / "hvigor-config.json5"]
+        manifests.extend(sorted(project.rglob("oh-package.json5")))
+        for manifest_path in dict.fromkeys(manifests):
+            if not manifest_path.is_file():
+                continue
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            manifest_text, count = re.subn(
+                r'(["\']?modelVersion["\']?\s*:\s*)(?:"[^"\\]*"|\'[^\'\\]*\')',
+                lambda match: match.group(1) + '"6.0.0"',
+                manifest_text,
+            )
+            if count == 0 and manifest_path in (
+                project / "hvigor" / "hvigor-config.json5",
+                project / "oh-package.json5",
+            ):
+                raise TransportError(
+                    f"{manifest_path.name} 未声明 modelVersion，无法与 API 26 SDK 匹配"
+                )
+            if count:
+                manifest_path.write_text(manifest_text, encoding="utf-8")
+    return api_version
+
+
+@contextmanager
+def _temporary_ascii_sdk_alias() -> Iterator[Path]:
+    """为 Hvigor 提供纯 ASCII 且符合 API 版本目录约定的临时 SDK 视图。
+
+    当前 macOS command-line-tools 对 ``local.properties`` 中的 SDK 路径做
+    了字符集校验；如果项目位于非 ASCII 用户目录（例如中文路径），直接写
+    工具链原路径会在 Hvigor 初始化阶段失败。另外，Command Line Tools
+    将组件放在 ``sdk/default/openharmony``，而 Hvigor 按 API 版本从
+    ``sdk/<apiVersion>/<component>`` 查找。这里仅在系统临时目录构造一层
+    纯 ASCII 的兼容视图和组件符号链接，不复制或改写 SDK；构建完成后清理。
+    """
+
+    sdk = _TOOLCHAIN_ROOT / "sdk"
+    sdk_default = sdk / "default"
+    sdk_pkg = sdk_default / "sdk-pkg.json"
+    if not sdk.is_dir():
+        raise TransportError(f"OpenHarmony SDK 目录不存在：{sdk}")
+
+    api_version = ""
+    if sdk_pkg.is_file():
+        try:
+            metadata = json.loads(sdk_pkg.read_text(encoding="utf-8"))
+            api_version = str(metadata.get("data", {}).get("apiVersion", "")).strip()
+        except (OSError, json.JSONDecodeError, AttributeError):
+            api_version = ""
+
+    # SDK 包元数据并非所有发行形态都提供；组件清单是安全的回退来源。
+    component_roots = (
+        sdk / api_version if api_version else None,
+        sdk_default / "openharmony",
+        sdk / "openharmony",
+    )
+    manifests: list[tuple[Path, dict[str, Any]]] = []
+    for component_root in component_roots:
+        if component_root is None or not component_root.is_dir():
+            continue
+        for manifest_path in component_root.rglob("oh-uni-package.json"):
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            manifests.append((manifest_path, data))
+        if manifests:
+            break
+
+    if not api_version:
+        api_versions = {
+            str(data.get("apiVersion", "")).strip()
+            for _, data in manifests
+            if str(data.get("apiVersion", "")).strip()
+        }
+        if len(api_versions) == 1:
+            api_version = api_versions.pop()
+    if not re.fullmatch(r"[1-9][0-9]*", api_version):
+        raise TransportError(
+            "无法从已安装 OpenHarmony SDK 元数据确定有效 API 版本；"
+            "请检查 sdk/default/sdk-pkg.json 或组件清单"
+        )
+    if int(api_version) != _installed_sdk_api_version():
+        raise TransportError(
+            "SDK 包元数据与组件清单的 API 版本不一致，拒绝生成不确定的 Hvigor SDK 视图"
+        )
+    layout_version = (
+        _installed_sdk_platform_version(int(api_version))
+        if int(api_version) >= 26
+        else api_version
+    )
+    if not manifests:
+        raise TransportError(
+            f"SDK API {api_version} 下未找到 oh-uni-package.json 组件清单"
+        )
+
+    candidates = (Path(tempfile.gettempdir()), Path("/tmp"), Path("/private/tmp"))
+    temp_root = next(
+        (candidate for candidate in candidates
+         if candidate.is_dir() and str(candidate).isascii()),
+        None,
+    )
+    if temp_root is None:
+        raise TransportError("找不到可用的 ASCII 临时目录，无法为 Hvigor 构造 SDK 路径")
+
+    alias_root = Path(tempfile.mkdtemp(prefix="vf-oh-sdk-", dir=str(temp_root)))
+    alias = alias_root / "sdk"
+    try:
+        alias.mkdir()
+        # 保留 SDK 包管理元数据的默认位置，Hvigor 的其他 SDK 查询仍可读取；
+        # 它是目录链接，组件扫描器不会把其中的组件误认成 API 目录组件。
+        if sdk_default.is_dir():
+            (alias / "default").symlink_to(sdk_default, target_is_directory=True)
+        api_root = alias / layout_version
+        api_root.mkdir()
+        for manifest_path, data in manifests:
+            component_path = str(data.get("path", "")).strip()
+            if not component_path or Path(component_path).is_absolute():
+                continue
+            normalized = Path(component_path.replace(",", os.sep))
+            if any(part in ("", ".", "..") for part in normalized.parts):
+                continue
+            link = api_root / normalized
+            link.parent.mkdir(parents=True, exist_ok=True)
+            source_dir = manifest_path.parent
+            if link.exists() or link.is_symlink():
+                # 多个清单映射到同一目标时保留首个有效目录，避免覆盖链接。
+                continue
+            link.symlink_to(source_dir, target_is_directory=True)
+    except OSError as exc:
+        shutil.rmtree(alias_root, ignore_errors=True)
+        raise TransportError(f"无法为 Hvigor 创建临时 SDK 路径：{exc}") from exc
+
+    if not any((alias / layout_version / Path(str(data.get("path", "")).replace(",", os.sep))).is_dir()
+               for _, data in manifests if str(data.get("path", "")).strip()):
+        shutil.rmtree(alias_root, ignore_errors=True)
+        raise TransportError(f"无法为 Hvigor 映射 SDK API {layout_version} 的组件目录")
+
+    try:
+        yield alias
+    finally:
+        shutil.rmtree(alias_root, ignore_errors=True)
+
+
 def _generate_sdk_debug_signing_material(
     out_dir: Path,
     *,
-    device_serial: str,
+    device_udid: str,
     contract_id: str,
 ) -> tuple[Path, Path, Path, str, str, str]:
-    """用工具链随附的测试根密钥为当前设备生成一次性 debug 签名材料。
+    """使用 SDK 配套的 debug Profile 签名链，为当前设备生成一次性签名材料。
 
-    OpenHarmony debug profile 含设备 ID，不能把某台开发板的 p7b 固定放进
-    项目。SDK 自带的 ``OpenHarmony.p12`` 是公开测试材料；这里复制到本次
-    隔离目录，生成新的 app/profile 链和绑定当前 serial 的 profile，完成后
-    随契约临时目录清理。生产/用户证书仍优先走 ``_select_signing_material``。
+    debug profile 含设备 UDID，不能把某台开发板的 p7b 固定放进项目。此处
+    只为本次应用生成新的 app 证书，并用设备 UDID 生成 profile 内容；Profile
+    本身必须使用 SDK 配套的 ``OpenHarmonyProfileDebug.pem`` 和
+    ``openharmony application profile debug`` 密钥签名，不能另造 Profile
+    签名链。所有临时私钥和 profile 随契约目录清理。
     """
 
-    serial = str(device_serial or "").strip()
-    if not serial:
-        raise TransportError("无法自动生成 HAP profile：HDC 设备 serial 为空")
-    required = (_SIGN_JAR, _SDK_SIGNING_P12, _SDK_PROFILE_ROOT_CERT)
+    udid = str(device_udid or "").strip().upper()
+    if not re.fullmatch(r"[0-9A-F]{64}", udid):
+        raise TransportError("无法自动生成 HAP profile：设备 UDID 必须为 64 位十六进制字符串")
+    required = (_SIGN_JAR, _SDK_SIGNING_P12, _SDK_PROFILE_DEBUG_CERT_CHAIN)
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise TransportError("项目内 SDK 测试签名材料不完整：" + ", ".join(missing))
@@ -183,50 +520,12 @@ def _generate_sdk_debug_signing_material(
 
     password = _SDK_SIGNING_PASSWORD
     app_alias = _safe_signing_alias("app", contract_id)
-    profile_ca_alias = _safe_signing_alias("profile-ca", contract_id)
-    profile_alias = _safe_signing_alias("profile", contract_id)
+    profile_alias = "openharmony application profile debug"
     common = ["-keystoreFile", str(keystore), "-keystorePwd", password]
     _run_sign_tool([
         "generate-keypair", "-keyAlias", app_alias, "-keyPwd", password,
         "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
     ])
-    _run_sign_tool([
-        "generate-cert", "-keyAlias", app_alias, "-keyPwd", password,
-        "-issuer", "C=CN,O=OpenHarmony,OU=OpenHarmony Team,CN=OpenHarmony Application CA",
-        "-issuerKeyAlias", "openharmony application ca", "-issuerKeyPwd", password,
-        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder App Debug",
-        "-validity", "3650", "-keyUsage", "digitalSignature", "-extKeyUsage", "codeSignature",
-        "-signAlg", "SHA256withECDSA", *common, "-issuerKeystoreFile", str(keystore),
-        "-issuerKeystorePwd", password, "-outFile", str(generated / "app-cert.cer"),
-    ])
-    _run_sign_tool([
-        "generate-keypair", "-keyAlias", profile_ca_alias, "-keyPwd", password,
-        "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
-    ])
-    _run_sign_tool([
-        "generate-ca", "-keyAlias", profile_ca_alias, "-keyPwd", password,
-        "-keyAlg", "ECC", "-keySize", "NIST-P-256",
-        "-issuer", "C=CN,O=OpenHarmony,OU=OpenHarmony Team,CN=OpenHarmony Application Root CA",
-        "-issuerKeyAlias", "openharmony application root ca", "-issuerKeyPwd", password,
-        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile CA",
-        "-validity", "3650", "-signAlg", "SHA384withECDSA", "-basicConstraintsPathLen", "1",
-        *common, "-issuerKeystoreFile", str(keystore), "-issuerKeystorePwd", password,
-        "-outFile", str(generated / "profile-ca.cer"),
-    ])
-    _run_sign_tool([
-        "generate-keypair", "-keyAlias", profile_alias, "-keyPwd", password,
-        "-keyAlg", "ECC", "-keySize", "NIST-P-256", *common,
-    ])
-    _run_sign_tool([
-        "generate-cert", "-keyAlias", profile_alias, "-keyPwd", password,
-        "-issuer", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile CA",
-        "-issuerKeyAlias", profile_ca_alias, "-issuerKeyPwd", password,
-        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder Profile Debug",
-        "-validity", "3650", "-keyUsage", "digitalSignature", "-extKeyUsage", "codeSignature",
-        "-signAlg", "SHA256withECDSA", *common, "-issuerKeystoreFile", str(keystore),
-        "-issuerKeystorePwd", password, "-outFile", str(generated / "profile-cert.cer"),
-    ])
-
     root_cert = generated / "root.cer"
     app_ca_cert = generated / "app-ca.cer"
     _run_keytool([
@@ -237,20 +536,17 @@ def _generate_sdk_debug_signing_material(
         "-exportcert", "-rfc", "-keystore", str(keystore), "-storetype", "PKCS12",
         "-storepass", password, "-alias", "openharmony application ca", "-file", str(app_ca_cert),
     ])
-    app_chain = generated / "app-chain.cer"
-    profile_chain = generated / "profile-chain.cer"
-    app_chain.write_text(
-        (generated / "app-cert.cer").read_text(encoding="utf-8")
-        + app_ca_cert.read_text(encoding="utf-8")
-        + root_cert.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    profile_chain.write_text(
-        (generated / "profile-cert.cer").read_text(encoding="utf-8")
-        + (generated / "profile-ca.cer").read_text(encoding="utf-8")
-        + root_cert.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    app_chain = generated / "app-cert.cer"
+    _run_sign_tool([
+        "generate-app-cert", "-keyAlias", app_alias, "-keyPwd", password,
+        "-issuer", "C=CN,O=OpenHarmony,OU=OpenHarmony Team,CN=OpenHarmony Application CA",
+        "-issuerKeyAlias", "openharmony application ca", "-issuerKeyPwd", password,
+        "-subject", "C=CN,O=VulnFounder,OU=Research,CN=VulnFounder App Debug",
+        "-validity", "3650", "-signAlg", "SHA256withECDSA", *common,
+        "-issuerKeystoreFile", str(keystore), "-issuerKeystorePwd", password,
+        "-outForm", "certChain", "-rootCaCertFile", str(root_cert),
+        "-subCaCertFile", str(app_ca_cert), "-outFile", str(app_chain),
+    ])
 
     template = _SDK_SIGNING_LIB / "UnsgnedDebugProfileTemplate.json"
     if not template.is_file():
@@ -263,13 +559,13 @@ def _generate_sdk_debug_signing_material(
     }
     profile_data.setdefault("bundle-info", {})["bundle-name"] = BUNDLE_NAME
     profile_data["bundle-info"]["development-certificate"] = app_chain.read_text(encoding="utf-8")
-    profile_data.setdefault("debug-info", {})["device-ids"] = [serial]
+    profile_data.setdefault("debug-info", {})["device-ids"] = [udid]
     profile_json.write_text(json.dumps(profile_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     signed_profile = generated / "debug-profile.p7b"
     _run_sign_tool([
         "sign-profile", "-mode", "localSign", "-keyAlias", profile_alias,
-        "-keyPwd", password, "-profileCertFile", str(profile_chain),
+        "-keyPwd", password, "-profileCertFile", str(_SDK_PROFILE_DEBUG_CERT_CHAIN),
         "-inFile", str(profile_json), "-signAlg", "SHA256withECDSA",
         *common, "-outFile", str(signed_profile),
     ])
@@ -319,6 +615,13 @@ class HapTransport:
         for required in ("mode", "host", "port", "target"):
             if not str(field_values.get(required, "") or "").strip():
                 raise TransportError(f"HAP 传输缺少 field_values[{required!r}]")
+        toolchain_issues = hap_build_toolchain_issues(_BUILD_TOOLS_ROOT)
+        if toolchain_issues:
+            raise ToolchainUnavailable("HAP 构建工具链未就绪：" + "；".join(toolchain_issues))
+        if not _SIGN_JAR.is_file():
+            raise TransportError(f"HAP 签名工具不存在：{_SIGN_JAR}")
+        if not (Path(_JAVA).is_file() or shutil.which(_JAVA)):
+            raise TransportError(f"Java 运行时不存在：{_JAVA}")
         if not _TEMPLATE_PROJECT.exists() or not _TEMPLATE_INDEX.exists():
             raise TransportError(f"HAP 模板缺失: {_TEMPLATE_PROJECT}")
         out_dir = self.work_root / f"vf-hap-{contract_id}"
@@ -333,7 +636,7 @@ class HapTransport:
             try:
                 signing_material = _generate_sdk_debug_signing_material(
                     out_dir,
-                    device_serial=str(getattr(self.hdc, "serial", "") or ""),
+                    device_udid=_current_device_udid(self.hdc),
                     contract_id=contract_id,
                 )
             except TransportError as auto_error:
@@ -351,29 +654,13 @@ class HapTransport:
                 ) from auto_error
         app_cert, profile, keystore, key_alias, key_pwd, _profile_name = signing_material
         project = out_dir / "project"
-        # 排除历史构建产物（build*.log / build 目录）与签名物，但保留 build-profile.json5
+        # 排除历史构建产物、签名物和模板自带的 node_modules。后者可能是
+        # 旧工具链/不完整安装，会遮蔽本次选择的离线 Hvigor 依赖。
         shutil.copytree(_TEMPLATE_PROJECT, project,
-                        ignore=shutil.ignore_patterns(".hvigor", "build", "signing", "*.log"))
-        # Hvigor 的 OpenHarmony signingConfigs 仍需要看到 profile 和
-        # keystore。签名材料只复制到本次隔离构建目录，构建完成后随临时
-        # 工作目录一起清理；不会把私钥写入模板或报告。
-        signing_dir = project / "signing"
-        signing_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(app_cert, signing_dir / "app-cert.pem")
-        shutil.copy2(profile, signing_dir / "debug-profile.p7b")
-        shutil.copy2(keystore, signing_dir / "debug.p12")
-
-        # 模板默认使用 SDK 调试材料的 alias/password。导入正式材料后，
-        # Hvigor 仍会先读取 build-profile.json5；如果不随材料更新，
-        # 外部 sign-app 参数虽然正确，Hvigor 仍可能在构建阶段先失败。
-        # 只修改本次隔离工程，不触碰项目模板和用户证书目录。
+                        ignore=shutil.ignore_patterns(
+                            ".hvigor", "build", "signing", "node_modules", "*.log"
+                        ))
         profile_path = project / "build-profile.json5"
-        if profile_path.is_file():
-            profile_text = profile_path.read_text(encoding="utf-8")
-            profile_text = profile_text.replace('"keyAlias": "debugKey"', f'"keyAlias": {key_alias!r}')
-            profile_text = profile_text.replace('"keyPassword": "00000000000000000000000000000000"', f'"keyPassword": {key_pwd!r}')
-            profile_text = profile_text.replace('"storePassword": "00000000000000000000000000000000"', f'"storePassword": {key_pwd!r}')
-            profile_path.write_text(profile_text, encoding="utf-8")
 
         index_src = _TEMPLATE_INDEX.read_text(encoding="utf-8")
         for placeholder, key in _PLACEHOLDER_MAP.items():
@@ -401,40 +688,53 @@ class HapTransport:
         index_path = project / "Entry/src/main/ets/pages/Index.ets"
         index_path.write_text(index_src, encoding="utf-8")
 
-        (project / "local.properties").write_text(
-            f"sdk.dir={_TOOLCHAIN_ROOT / 'sdk'}\nnodejs.dir={_NODE}\n", encoding="utf-8"
-        )
-
         # Hvigor 默认把全局缓存写到 ``$HOME/.hvigor``。在 Web/批量运行中，
         # 该目录可能属于另一个用户、被系统策略设为只读，或者被多个并发
         # 构建共享，最终表现为 HAP 尚未开始编译就因 EPERM 失败。把缓存
-        # 绑定到本次契约的隔离工作目录：
-        #   * 不修改宿主机用户目录；
-        #   * 不让不同样本共享项目缓存；
-        #   * build log 中可以根据 out_dir 复现同一份输入。
-        # Hvigor 6.23 的官方入口是 HVIGOR_USER_HOME，而不是仅设置 HOME。
+        # 绑定到本次契约的隔离工作目录；同时用 ASCII 临时符号链接给 Hvigor
+        # 暴露 SDK，避免中文项目/工具链路径被 SDK 路径校验拒绝。
         hvigor_user_home = out_dir / ".hvigor-user"
         hvigor_user_home.mkdir(parents=True, exist_ok=True)
-        self._stage_offline_hvigor_dependencies(project, hvigor_user_home)
-        env = {
-            **dict(os.environ),
-            "NODE_HOME": str(_NODE),
-            "HVIGOR_USER_HOME": str(hvigor_user_home),
-        }
-        build = subprocess.run(
-            [str(_HVIGORW), "assembleApp", "--no-daemon"],
-            cwd=str(project),
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
-            timeout=600,
-            check=False,
-        )
+        try:
+            if profile_path.is_file():
+                _configure_project_compile_sdk(project)
+                _configure_project_skip_internal_signing(project)
+            with _temporary_ascii_sdk_alias() as sdk_alias:
+                (project / "local.properties").write_text(
+                    f"sdk.dir={sdk_alias}\nnodejs.dir={_NODE}\n", encoding="utf-8"
+                )
+                self._stage_offline_hvigor_dependencies(project, hvigor_user_home)
+                env = {
+                    **dict(os.environ),
+                    "NODE_HOME": str(_NODE),
+                    "HVIGOR_USER_HOME": str(hvigor_user_home),
+                }
+                build = subprocess.run(
+                    [str(_HVIGORW), "assembleApp", "--no-daemon"],
+                    cwd=str(project),
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    shell=False,
+                    timeout=600,
+                    check=False,
+                )
+        except Exception:
+            if _profile_name == "sdk-generated-debug":
+                shutil.rmtree(out_dir / "sdk-debug-signing", ignore_errors=True)
+            raise
         (out_dir / "hvigor-build.log").write_bytes(build.stdout)
+        try:
+            _require_successful_process(build, "Hvigor 构建")
+        except TransportError:
+            if _profile_name == "sdk-generated-debug":
+                shutil.rmtree(out_dir / "sdk-debug-signing", ignore_errors=True)
+            raise
         unsigned = sorted(project.rglob("entry-default-unsigned.hap"))
         if not unsigned:
+            if _profile_name == "sdk-generated-debug":
+                shutil.rmtree(out_dir / "sdk-debug-signing", ignore_errors=True)
             raise TransportError(
                 "hvigor 未产出 unsigned HAP，日志尾部:\n"
                 + build.stdout.decode("utf-8", errors="replace")[-1500:]
@@ -454,23 +754,22 @@ class HapTransport:
             "-keystorePwd", key_pwd,
             "-outFile", str(signed),
             "-compatibleVersion", "23",
-            "-signCode", "0",
+            "-signCode", "1",
         ]
         sign = subprocess.run(sign_cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, shell=False, timeout=300, check=False)
         (out_dir / "sign.log").write_bytes(sign.stdout)
-        if not signed.exists():
+        if sign.returncode != 0 or not signed.exists():
+            if _profile_name == "sdk-generated-debug":
+                shutil.rmtree(out_dir / "sdk-debug-signing", ignore_errors=True)
             raise TransportError(
-                "签名未产出，日志尾部:\n" + sign.stdout.decode("utf-8", errors="replace")[-1500:]
+                f"签名失败（exit code {sign.returncode}），日志尾部:\n"
+                + sign.stdout.decode("utf-8", errors="replace")[-1500:]
             )
-        # Hvigor/签名完成后，隔离工程里的私钥副本不再需要。尤其是 SDK
-        # 自动生成的 P12 含有本轮临时私钥，不能跟着阶段产物长期保留；用户
-        # 导入的正式 P12 也只在 CERT_DIR 原位置保留，绝不从那里删除。
-        for private_copy in (project / "signing" / "debug.p12", keystore):
-            try:
-                private_copy.unlink(missing_ok=True)
-            except OSError:
-                pass
+        # 临时生成的私钥仅用于本轮外部签名，成功后删除；用户导入的正式
+        # P12 保留在 CERT_DIR 原位置，不从那里删除。
+        if _profile_name == "sdk-generated-debug":
+            shutil.rmtree(out_dir / "sdk-debug-signing", ignore_errors=True)
         return signed
 
     @staticmethod
@@ -484,8 +783,8 @@ class HapTransport:
         pnpm wrapper 放到本次运行自己的缓存目录。项目若声明了额外依赖，
         仍由 Hvigor 正常报告其缺失，不会伪造安装结果。
         """
-        hvigor_pkg = _TOOLCHAIN_ROOT / "hvigor/hvigor"
-        plugin_pkg = _TOOLCHAIN_ROOT / "hvigor/hvigor-ohos-plugin"
+        hvigor_pkg = _BUILD_TOOLS_ROOT / "hvigor/hvigor"
+        plugin_pkg = _BUILD_TOOLS_ROOT / "hvigor/hvigor-ohos-plugin"
         if not (hvigor_pkg.is_dir() and plugin_pkg.is_dir()):
             return
 
@@ -509,7 +808,36 @@ class HapTransport:
         if not pnpm_bin:
             return
 
-        wrapper_tools = hvigor_user_home / "wrapper/tools"
+        # Hvigor resolves its pnpm wrapper from a versioned directory.  Putting
+        # it directly under ``wrapper/tools`` looks plausible but is ignored;
+        # Hvigor then runs ``npm install pnpm`` and fails on offline machines.
+        # Read the required version from the installed Hvigor package instead
+        # of pinning a version in VulnFounder.
+        pnpm_constants = hvigor_pkg / "src/common/const/path-const.js"
+        try:
+            constants_text = pnpm_constants.read_text(encoding="utf-8")
+        except OSError:
+            return
+        version_match = re.search(r"PNPM_VERSION\s*=\s*['\"]([^'\"]+)['\"]", constants_text)
+        if not version_match:
+            return
+        required_pnpm_version = version_match.group(1)
+
+        try:
+            version_result = subprocess.run(
+                [pnpm_bin, "--version"], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                shell=False, timeout=15, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if version_result.returncode != 0:
+            return
+        available_pnpm_version = version_result.stdout.decode("utf-8", errors="replace").strip()
+        if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", available_pnpm_version):
+            return
+
+        wrapper_tools = hvigor_user_home / "wrapper/tools" / required_pnpm_version
         wrapper_bin = wrapper_tools / "node_modules/.bin"
         wrapper_bin.mkdir(parents=True, exist_ok=True)
         pnpm_pkg = wrapper_tools / "node_modules/pnpm"
@@ -517,7 +845,11 @@ class HapTransport:
         # hvigor 只用 require.resolve 判断 wrapper 是否已准备好；实际执行
         # 仍通过 .bin/pnpm 指向当前主机已有的 pnpm，避免伪造命令输出。
         (pnpm_pkg / "package.json").write_text(
-            '{"name":"pnpm","version":"10.33.2","main":"package.json"}\n',
+            json.dumps({
+                "name": "pnpm",
+                "version": available_pnpm_version,
+                "main": "package.json",
+            }) + "\n",
             encoding="utf-8",
         )
         pnpm_link = wrapper_bin / "pnpm"
@@ -534,8 +866,39 @@ class HapTransport:
     # ------------------------------------------------------------------
     def install_and_start(self, hap: Path) -> SendResult:
         rec = self.hdc.run(["install", "-r", str(hap)], purpose="hap:install", timeout_seconds=120)
-        if rec.returncode != 0 or "successfully" not in (rec.stdout + rec.stderr).lower():
-            raise TransportError(f"HAP 安装失败: {rec.stdout} {rec.stderr}")
+        install_output = rec.stdout + rec.stderr
+        install_ok = rec.returncode == 0 and "successfully" in install_output.lower()
+        if not install_ok and any(
+            message in install_output.lower()
+            for message in ("sign info inconsistent", "inconsistent signature")
+        ):
+            # SDK debug signing creates a fresh ephemeral app certificate per
+            # build. If an earlier run left our reserved carrier bundle on the
+            # board, `install -r` correctly rejects the new signer. Only remove
+            # the package after verifying its bundle/vendor identity; never
+            # uninstall an unrelated app in response to a generic install error.
+            if self._is_vulnfounder_carrier_installed():
+                removed = self.hdc.run(
+                    ["uninstall", BUNDLE_NAME],
+                    purpose="hap:remove-stale-carrier-signature",
+                    timeout_seconds=120,
+                )
+                removed_output = removed.stdout + removed.stderr
+                if removed.returncode == 0 and "successfully" in removed_output.lower():
+                    rec = self.hdc.run(
+                        ["install", str(hap)],
+                        purpose="hap:install-after-signature-reset",
+                        timeout_seconds=120,
+                    )
+                    install_output = rec.stdout + rec.stderr
+                    install_ok = rec.returncode == 0 and "successfully" in install_output.lower()
+                else:
+                    install_output += (
+                        "\n检测到旧测试包，但安全卸载失败："
+                        + removed_output[-500:]
+                    )
+        if not install_ok:
+            raise TransportError(f"HAP 安装失败: {install_output}")
         self._installed_bundle = BUNDLE_NAME
         self.hdc.run(
             ["shell", "aa", "force-stop", BUNDLE_NAME],
@@ -551,6 +914,38 @@ class HapTransport:
             reachability=INPUT_DELIVERED,
             detail=f"hap installed and started, bundle={BUNDLE_NAME}",
             transport={"kind": self.transport_id, "bundle": BUNDLE_NAME, "hap": str(hap)},
+        )
+
+    def _is_vulnfounder_carrier_installed(self) -> bool:
+        """检查固定测试包身份，避免签名恢复时误卸载设备上的其他应用。"""
+
+        try:
+            record = self.hdc.run(
+                ["shell", "bm", "dump", "-n", BUNDLE_NAME],
+                purpose="hap:inspect-existing-carrier",
+                timeout_seconds=30,
+            )
+        except Exception:  # noqa: BLE001 — 检查失败时必须按不安全处理
+            return False
+        if int(getattr(record, "returncode", 1)) != 0:
+            return False
+        output = str(getattr(record, "stdout", "") or "")
+        start = output.find("{")
+        if start < 0:
+            return False
+        try:
+            # HDC may append its own channel warning after the otherwise valid
+            # JSON response. Decode one JSON value and intentionally ignore
+            # trailing transport diagnostics.
+            bundle_info, _ = json.JSONDecoder().raw_decode(output[start:])
+        except json.JSONDecodeError:
+            return False
+        app_info = bundle_info.get("applicationInfo")
+        return (
+            isinstance(bundle_info, dict)
+            and bundle_info.get("bundleName") == BUNDLE_NAME
+            and isinstance(app_info, dict)
+            and app_info.get("vendor") == "security_research"
         )
 
     def wait_completion(

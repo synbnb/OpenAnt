@@ -230,6 +230,8 @@ def _build_hap(source: str, *, contract_id: str, out_root: Path | None = None) -
     """载体 Index.ets → hvigor 构建 → 签名。返回 (signed_hap | None, log_tail)。"""
     from .transports.hap import (
         HapTransport,
+        _configure_project_compile_sdk,
+        _temporary_ascii_sdk_alias,
         _HVIGORW, _NODE, _SIGN_JAR, _TEMPLATE_PROJECT, CERT_DIR, KEY_ALIAS, KEY_PWD,
     )
 
@@ -246,30 +248,30 @@ def _build_hap(source: str, *, contract_id: str, out_root: Path | None = None) -
     project = out_dir / "project"
     shutil.copytree(template_project, project,
                     ignore=shutil.ignore_patterns(".hvigor", "build", "signing", "*.log"))
+    _configure_project_compile_sdk(project)
     index_path = project / "Entry/src/main/ets/pages/Index.ets"
     index_path.write_text(source, encoding="utf-8")
-    (project / "local.properties").write_text(
-        f"sdk.dir={_TOOLCHAIN_ROOT / 'sdk'}\nnodejs.dir={_NODE}\n", encoding="utf-8")
-
     # 载体合成和普通 HAP 传输必须使用同一套隔离构建环境。否则普通
     # 探针已经能离线构建，但 L2 自定义 Index.ets 又会落回宿主机
     # ~/.hvigor，并在权限或联网受限时失败。
     hvigor_user_home = out_dir / ".hvigor-user"
     hvigor_user_home.mkdir(parents=True, exist_ok=True)
-    HapTransport._stage_offline_hvigor_dependencies(project, hvigor_user_home)
-
     import os
 
-    env = {
-        **dict(os.environ),
-        "NODE_HOME": str(_NODE),
-        "HVIGOR_USER_HOME": str(hvigor_user_home),
-    }
-    build = subprocess.run(
-        [str(_HVIGORW), "assembleApp", "--no-daemon"], cwd=str(project), env=env,
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        shell=False, timeout=600, check=False,
-    )
+    with _temporary_ascii_sdk_alias() as sdk_alias:
+        (project / "local.properties").write_text(
+            f"sdk.dir={sdk_alias}\nnodejs.dir={_NODE}\n", encoding="utf-8")
+        HapTransport._stage_offline_hvigor_dependencies(project, hvigor_user_home)
+        env = {
+            **dict(os.environ),
+            "NODE_HOME": str(_NODE),
+            "HVIGOR_USER_HOME": str(hvigor_user_home),
+        }
+        build = subprocess.run(
+            [str(_HVIGORW), "assembleApp", "--no-daemon"], cwd=str(project), env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            shell=False, timeout=600, check=False,
+        )
     log = build.stdout.decode("utf-8", errors="replace")
     unsigned = sorted(project.rglob("entry-default-unsigned.hap"))
     if not unsigned:

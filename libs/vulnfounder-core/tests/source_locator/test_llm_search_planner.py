@@ -161,20 +161,67 @@ def test_invalid_model_output_gets_one_format_repair_and_does_not_store_raw_resp
     assert "不可信数据" in prompts[1]
 
 
-def test_second_invalid_format_enters_needs_review_and_repair_is_not_retried():
-    context, _ = _context()
-    responses = ["bad", "still bad"]
-    planner = LLMSearchPlanner(model_call=lambda prompt: responses.pop(0))
+def test_each_planning_action_gets_two_independent_repairs():
+    context, evidence_id = _context()
+    responses = [
+        "bad",
+        _action("E-invalid-first-repair"),
+        _action(evidence_id, query="FIRST_SYMBOL"),
+        "also bad",
+        _action("E-invalid-second-action"),
+        _action(evidence_id, query="SECOND_SYMBOL"),
+    ]
+    planner = LLMSearchPlanner(
+        model_call=lambda prompt: responses.pop(0),
+        budget=PlannerBudget(max_model_calls=8),
+    )
 
     first = planner.suggest(context)
     second = planner.suggest(context)
 
-    assert first.status == "NEEDS_REVIEW"
+    assert first.status == "READY"
+    assert first.action is not None and first.action.query == "FIRST_SYMBOL"
     assert first.repair_attempted is True
-    assert first.reason_code == "SCHEMA_INVALID_AFTER_REPAIR"
-    assert second.status == "PARTIAL"
-    assert second.reason_code == "MODEL_UNAVAILABLE"
-    assert planner.model_calls == 2
+    assert first.model_calls == 3
+    assert second.status == "READY"
+    assert second.action is not None and second.action.query == "SECOND_SYMBOL"
+    assert second.repair_attempted is True
+    assert second.model_calls == 6
+    assert planner.repair_attempts == 4
+
+
+def test_global_model_call_budget_still_caps_per_action_repairs():
+    context, _ = _context()
+    responses = ["bad", "still bad"]
+    planner = LLMSearchPlanner(
+        model_call=lambda prompt: responses.pop(0),
+        budget=PlannerBudget(max_model_calls=2),
+    )
+
+    result = planner.suggest(context)
+
+    assert result.status == "NEEDS_REVIEW"
+    assert result.reason_code == "SCHEMA_REPAIR_UNAVAILABLE"
+    assert result.repair_attempted is True
+    assert result.model_calls == 2
+    assert planner.repair_attempts == 1
+
+
+def test_zero_repair_quota_preserves_initial_validation_failure():
+    context, _ = _context()
+    calls = []
+    planner = LLMSearchPlanner(
+        model_call=lambda prompt: calls.append(prompt) or "bad",
+        budget=PlannerBudget(max_repair_attempts=0, max_model_calls=3),
+    )
+
+    result = planner.suggest(context)
+
+    assert result.status == "NEEDS_REVIEW"
+    assert result.reason_code == "SCHEMA_INVALID"
+    assert result.repair_attempted is False
+    assert result.model_calls == 1
+    assert len(calls) == 1
 
 
 def test_repeated_action_is_stopped_before_execution_and_context_history_is_honored():
@@ -284,8 +331,9 @@ def test_repair_prompt_respects_the_same_prompt_budget():
 
 
 def test_budget_and_context_validation_are_typed():
+    assert PlannerBudget(max_repair_attempts=2).max_repair_attempts == 2
     with pytest.raises(LLMSearchPlannerError):
-        PlannerBudget(max_repair_attempts=2)
+        PlannerBudget(max_repair_attempts=3)
     with pytest.raises(LLMSearchPlannerError):
         LLMSearchPlannerContext(evidence_ids=("not-an-evidence-id",))
     with pytest.raises(LLMSearchPlannerError):

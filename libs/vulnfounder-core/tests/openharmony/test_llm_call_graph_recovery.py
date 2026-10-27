@@ -23,6 +23,7 @@ from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     summarize_recovery_inputs,
     validate_recovery_proposals,
 )
+from core.platforms.openharmony import llm_call_graph_recovery as recovery_module  # noqa: E402
 from core.platforms.openharmony.llm_call_graph_recovery import (  # noqa: E402
     _partition_worklist,
 )
@@ -151,6 +152,44 @@ def test_worklist_focuses_on_candidate_less_sites_and_prioritizes_boundaries():
         item["site_id"] and item["source"] in {"native", "lambda"}
         for item in worklist
     )
+
+
+def test_worklist_builds_expensive_registration_context_only_for_selected_sites(
+    monkeypatch,
+):
+    diagnostics = _diagnostics()
+    functions = _functions()
+    all_sites = build_recovery_worklist(
+        diagnostics, functions, max_sites=-1
+    )
+    selected_site_id = all_sites[0]["site_id"]
+    built_contexts = []
+    shortlisted_sites = []
+
+    def build_context(item, *_args, **_kwargs):
+        built_contexts.append(item["site_id"])
+        return {"site_id": item["site_id"]}
+
+    original_shortlist = recovery_module._shortlist_functions
+
+    def build_shortlist(raw_site, *args, **kwargs):
+        shortlisted_sites.append(raw_site.get("site_id"))
+        return original_shortlist(raw_site, *args, **kwargs)
+
+    monkeypatch.setattr(recovery_module, "build_registration_context", build_context)
+    monkeypatch.setattr(recovery_module, "_shortlist_functions", build_shortlist)
+
+    worklist = build_recovery_worklist(
+        diagnostics,
+        functions,
+        max_sites=-1,
+        include_registration_context=True,
+        site_ids={selected_site_id},
+    )
+
+    assert [item["site_id"] for item in worklist] == [selected_site_id]
+    assert built_contexts == [selected_site_id]
+    assert len(shortlisted_sites) == 1
 
     diagnostics["lambda_dispatch"]["call_sites"][0]["caller_id"] = BACKGROUND
     filtered = build_recovery_worklist(

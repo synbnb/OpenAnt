@@ -919,6 +919,7 @@ def build_recovery_worklist(
     reverse_call_graph: Mapping[str, Any] | None = None,
     graph_context_neighbors: int = DEFAULT_GRAPH_CONTEXT_NEIGHBORS,
     graph_context_code_bytes: int = DEFAULT_GRAPH_CONTEXT_CODE_BYTES,
+    site_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build a bounded, prioritized list of residual sites for an LLM.
 
@@ -939,6 +940,11 @@ def build_recovery_worklist(
     index = _normalize_functions(functions)
     entry_ids = {_text(item) for item in (entry_point_ids or []) if _text(item)}
     source_root = repository if repository is not None else diagnostics.get("repository")
+    selected_site_ids = (
+        {_text(site_id) for site_id in site_ids if _text(site_id)}
+        if site_ids is not None
+        else None
+    )
     grouped: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     for source, raw_site in _raw_sites(
         diagnostics, include_candidate_sites=include_candidate_sites
@@ -1086,6 +1092,20 @@ def build_recovery_worklist(
         if not caller_ids:
             continue
         caller_id = caller_ids[0]
+        if item["ledger_site_ids"]:
+            site_id = sorted(item["ledger_site_ids"])[0]
+        elif item["site_ids"]:
+            site_id = sorted(item["site_ids"])[0]
+        else:
+            site_id = _site_id(
+                item["source"],
+                caller_id,
+                item["line"],
+                item["expression"],
+                file_path=item["file"],
+            )
+        if selected_site_ids is not None and site_id not in selected_site_ids:
+            continue
         caller = item["callers"][caller_id]
         classification = item["classification"]
         if classification.get("analysis_route") == "external_boundary":
@@ -1106,19 +1126,7 @@ def build_recovery_worklist(
         raw_site["symbols"] = item["symbols"]
         raw_site["candidate_target_ids"] = item["candidate_target_ids"]
         work_item = {
-            "site_id": (
-                sorted(item["ledger_site_ids"])[0]
-                if item["ledger_site_ids"]
-                else sorted(item["site_ids"])[0]
-                if item["site_ids"]
-                else _site_id(
-                    item["source"],
-                    caller_id,
-                    item["line"],
-                    item["expression"],
-                    file_path=item["file"],
-                )
-            ),
+            "site_id": site_id,
             "source": item["source"],
             "caller_id": caller_id,
             "caller_ids": caller_ids,
@@ -1181,15 +1189,6 @@ def build_recovery_worklist(
                 ) or item["candidate_completeness"] != "complete",
             ),
         }
-        if include_registration_context:
-            work_item["registration_context"] = build_registration_context(
-                work_item,
-                index,
-                repository=source_root,
-                max_files=registration_context_max_files,
-                max_file_bytes=registration_context_max_file_bytes,
-                max_context_chars=registration_context_max_chars,
-            )
         worklist.append(work_item)
     worklist.sort(
         key=lambda item: (
@@ -1200,9 +1199,23 @@ def build_recovery_worklist(
             item["site_id"],
         )
     )
-    if max_sites < 0:
-        return worklist
-    return worklist[:max_sites]
+    if max_sites >= 0:
+        worklist = worklist[:max_sites]
+    if include_registration_context:
+        # Registration context may recursively enumerate and read source files.
+        # Build it only after the site filter and budget are applied; otherwise
+        # iterative recovery pays that repository-wide cost for every residual
+        # site before the scheduler selects its small request batch.
+        for work_item in worklist:
+            work_item["registration_context"] = build_registration_context(
+                work_item,
+                index,
+                repository=source_root,
+                max_files=registration_context_max_files,
+                max_file_bytes=registration_context_max_file_bytes,
+                max_context_chars=registration_context_max_chars,
+            )
+    return worklist
 
 
 def build_recovery_prompt(
@@ -1958,6 +1971,7 @@ def run_recovery_review(
             reverse_call_graph=reverse_call_graph,
             graph_context_neighbors=graph_context_neighbors,
             graph_context_code_bytes=graph_context_code_bytes,
+            site_ids=site_ids,
         )
     else:
         # Recursive batches must reuse the already bounded prompt items.  A

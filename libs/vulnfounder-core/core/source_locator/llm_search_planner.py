@@ -218,7 +218,9 @@ class PlannerBudget:
     max_query_length: int = 512
     max_evidence_ids: int = 16
     max_prompt_chars: int = 12_000
-    max_repair_attempts: int = 1
+    # 每个规划动作（一次 suggest）最多允许的纠正调用数；总调用仍受
+    # max_model_calls 的 session 级硬上限约束。
+    max_repair_attempts: int = 2
     max_model_calls: int = LLM_SEARCH_DIRECT_DEFAULT_MODEL_CALLS
 
     def __post_init__(self) -> None:
@@ -227,7 +229,7 @@ class PlannerBudget:
             ("max_query_length", self.max_query_length, 1, 4096),
             ("max_evidence_ids", self.max_evidence_ids, 1, 64),
             ("max_prompt_chars", self.max_prompt_chars, 512, 128_000),
-            ("max_repair_attempts", self.max_repair_attempts, 0, 1),
+            ("max_repair_attempts", self.max_repair_attempts, 0, 2),
             ("max_model_calls", self.max_model_calls, 0, LLM_SEARCH_MAX_MODEL_CALLS),
         )
         for name, value, lower, upper in integer_fields:
@@ -720,7 +722,11 @@ class LLMSearchPlanner:
         *,
         repair_response: Any | None = None,
     ) -> LLMSearchPlanResult:
-        """验证响应；repair_response 最多被消费一次。"""
+        """验证一个规划动作，可选消费调用方提供的一次纠正响应。
+
+        此方法不执行模型调用。自动纠正循环由 :meth:`suggest` 负责，并按
+        单次规划动作独立计算额度。
+        """
 
         if not isinstance(context, LLMSearchPlannerContext):
             raise LLMSearchPlannerError("context 必须是 LLMSearchPlannerContext")
@@ -740,7 +746,7 @@ class LLMSearchPlanner:
         try:
             action = self.parse_action(response, context=context, budget=self.budget)
         except LLMSearchPlannerError as first_error:
-            if repair_response is None or self._repair_attempts >= self.budget.max_repair_attempts:
+            if repair_response is None or self.budget.max_repair_attempts <= 0:
                 return self._result(
                     "NEEDS_REVIEW",
                     reason_code="SCHEMA_INVALID",
@@ -791,7 +797,7 @@ class LLMSearchPlanner:
         model_call: ModelCall | None = None,
         repair_call: ModelCall | None = None,
     ) -> LLMSearchPlanResult:
-        """调用一次模型并在需要时进行唯一一次格式修复。"""
+        """规划一个动作；初始响应无效时，最多按单动作额度纠正两次。"""
 
         if not isinstance(context, LLMSearchPlannerContext):
             raise LLMSearchPlannerError("context 必须是 LLMSearchPlannerContext")
@@ -822,29 +828,49 @@ class LLMSearchPlanner:
         first_result = self.validate_response(first_response, context)
         if first_result.status != "NEEDS_REVIEW":
             return first_result
-        if self._repair_attempts >= self.budget.max_repair_attempts:
+        if self.budget.max_repair_attempts == 0:
             return first_result
         repair_provider = repair_call or self.repair_call or provider
-        try:
-            repair_prompt = self._build_repair_prompt(
-                context,
-                validation_error=first_result.reason,
-            )
-        except LLMSearchPlannerError as exc:
-            return self._result("NEEDS_REVIEW", reason_code="PROMPT_TOO_LARGE", reason=str(exc))
-        self._repair_attempts += 1
-        repaired_response, call_error = self._invoke(repair_provider, repair_prompt)
-        if call_error is not None:
-            return self._result(
-                "NEEDS_REVIEW",
-                reason_code="SCHEMA_REPAIR_UNAVAILABLE",
-                reason=call_error,
-                repair_attempted=True,
-            )
-        repaired_result = self.validate_response(repaired_response, context, repair_response=None)
-        if repaired_result.status == "NEEDS_REVIEW":
-            repaired_result = replace(repaired_result, reason_code="SCHEMA_INVALID_AFTER_REPAIR")
-        return replace(repaired_result, repair_attempted=True)
+        action_repair_attempts = 0
+        last_result = first_result
+        while action_repair_attempts < self.budget.max_repair_attempts:
+            try:
+                repair_prompt = self._build_repair_prompt(
+                    context,
+                    validation_error=last_result.reason,
+                )
+            except LLMSearchPlannerError as exc:
+                return self._result(
+                    "NEEDS_REVIEW",
+                    reason_code="PROMPT_TOO_LARGE",
+                    reason=str(exc),
+                    repair_attempted=action_repair_attempts > 0,
+                )
+            calls_before = self._model_calls
+            repaired_response, call_error = self._invoke(repair_provider, repair_prompt)
+            if self._model_calls > calls_before:
+                action_repair_attempts += 1
+                self._repair_attempts += 1
+            if call_error is not None:
+                return self._result(
+                    "NEEDS_REVIEW",
+                    reason_code="SCHEMA_REPAIR_UNAVAILABLE",
+                    reason=call_error,
+                    repair_attempted=action_repair_attempts > 0,
+                )
+            repaired_result = self.validate_response(repaired_response, context)
+            if repaired_result.status != "NEEDS_REVIEW":
+                return replace(
+                    repaired_result,
+                    repair_attempted=action_repair_attempts > 0,
+                )
+            last_result = repaired_result
+
+        return replace(
+            last_result,
+            reason_code="SCHEMA_INVALID_AFTER_REPAIR",
+            repair_attempted=action_repair_attempts > 0,
+        )
 
     def plan(
         self,

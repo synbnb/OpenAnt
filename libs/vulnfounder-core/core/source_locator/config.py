@@ -231,7 +231,11 @@ class OpenGrokConfig:
     """Validated connection and request limits for one OpenGrok instance."""
 
     base_url: str
-    project: str = "openharmony"
+    # ``*`` means all projects exposed by the OpenGrok index.  OpenHarmony
+    # 7.0 indexes are commonly grouped by top-level directories (base,
+    # foundation, developtools, ...), rather than a single ``openharmony``
+    # project.
+    project: str = "*"
     api_prefix: str = "/api/v1"
     timeout_seconds: float = 15.0
     max_retries: int = 1
@@ -309,7 +313,7 @@ class OpenGrokConfig:
         data = _mapping(raw, name="source_locator.opengrok")
         _reject_unknown(data, _OPENGROK_KEYS, name="source_locator.opengrok")
         base_url = _required_string(data, "base_url", name="source_locator.opengrok")
-        project = data.get("project", "openharmony")
+        project = data.get("project", "*")
         if not isinstance(project, str) or not project.strip():
             raise SourceLocatorConfigError("source_locator.opengrok.project 必须是非空字符串")
         api_prefix = data.get("api_prefix", "/api/v1")

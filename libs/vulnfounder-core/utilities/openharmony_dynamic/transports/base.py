@@ -38,3 +38,7 @@ class SendResult:
 
 class TransportError(RuntimeError):
     """传输层基础设施错误（构建失败、推送失败等）。区别于 INPUT_REJECTED。"""
+
+
+class ToolchainUnavailable(TransportError):
+    """本机缺少构建/签名所需工具；这是环境阻断，不是协议证据失败。"""

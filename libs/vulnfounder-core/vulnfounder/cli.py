@@ -1193,9 +1193,8 @@ def _source_locator_llm_planner(args):
             max_actions = configured_rounds
 
         # The worker applies the per-session ``max_llm_actions`` cap.  The
-        # planner receives the selected round budget and a separate 48-call budget
-        # so duplicate proposals, transient failures and the one schema-repair
-        # request do not silently truncate the effective action loop.
+        # planner has a separate hard 48-call session budget; duplicate proposals,
+        # transient failures and per-action schema repairs all consume that budget.
         return LLMSearchPlanner(
             model_call=call,
             budget=PlannerBudget(

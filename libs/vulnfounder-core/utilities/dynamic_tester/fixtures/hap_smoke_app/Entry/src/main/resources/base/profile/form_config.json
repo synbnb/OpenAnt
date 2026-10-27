@@ -1,0 +1,21 @@
+{
+  "forms": [
+    {
+      "colorMode": "auto",
+      "defaultDimension": "2*2",
+      "description": "$string:form_desc",
+      "formConfigAbility": "ability://EntryAbility",
+      "formVisibleNotify": false,
+      "isDefault": true,
+      "name": "VfSmokeForm",
+      "src": "./ets/pages/VfSmokeForm.ets",
+      "supportDimensions": ["2*2"],
+      "uiSyntax": "arkts",
+      "updateEnabled": false,
+      "window": {
+        "autoDesignWidth": true,
+        "designWidth": 720
+      }
+    }
+  ]
+}

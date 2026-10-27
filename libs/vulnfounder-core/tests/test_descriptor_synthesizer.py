@@ -457,7 +457,7 @@ def test_device_self_test_uses_only_descriptor_probe(monkeypatch):
     contract = type("C", (), {
         "contract_id": "GEN-auto-demo",
         "entry": type("E", (), {"endpoint": "127.0.0.1:8283"})(),
-        "protocol": type("P", (), {"descriptor_snapshot": {
+            "protocol": type("P", (), {"descriptor_id": "auto_demo", "descriptor_snapshot": {
             "descriptor_id": "auto_demo",
             "legal_probe": {
                 "mode": "udp", "host": "127.0.0.1", "port": 8283,
@@ -471,6 +471,43 @@ def test_device_self_test_uses_only_descriptor_probe(monkeypatch):
     assert calls and calls[0][0]["first"] == "command=ping"
     assert all("echo" not in str(v) for v in calls[0][0].values())
     assert any("自证通过" in note for note in notes)
+
+
+def test_device_self_test_reports_missing_hap_toolchain_before_device_commands(monkeypatch, tmp_path):
+    import utilities.openharmony_dynamic.toolchain as toolchain
+
+    class FakeHdc:
+        def __init__(self):
+            self.commands = []
+
+        def shell(self, argv, *, purpose="", timeout_seconds=None):
+            self.commands.append((list(argv), purpose))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(toolchain, "build_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        toolchain, "hap_build_toolchain_issues",
+        lambda _root: ["Hvigor 启动器不存在：hvigor/bin/hvigorw", "Node.js 不存在：tool/node/bin/node"],
+    )
+    contract = type("C", (), {
+        "contract_id": "GEN-auto-missing-tools",
+        "entry": type("E", (), {"kind": "hap_udp", "endpoint": "127.0.0.1:8283"})(),
+        "protocol": type("P", (), {"descriptor_id": "auto_demo", "descriptor_snapshot": {
+            "descriptor_id": "auto_demo",
+            "legal_probe": {
+                "mode": "udp", "host": "127.0.0.1", "port": 8283,
+                "first": "command=ping", "second": "", "third": "",
+            },
+        }})(),
+    })()
+    hdc = FakeHdc()
+    probe_result = {}
+
+    errors = cc._run_legal_protocol_self_test(contract, hdc, [], probe_result=probe_result)
+
+    assert errors and errors[0].startswith("[TOOLCHAIN_UNAVAILABLE]")
+    assert probe_result["status"] == "BLOCKED_TOOLCHAIN"
+    assert hdc.commands == []
 
 
 def test_hap_transport_waits_for_real_send_signal_not_fixed_sleep():

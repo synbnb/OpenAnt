@@ -6,6 +6,7 @@
     { "name": "service_label", "value": "TriggerService" },
     { "name": "service_desc", "value": "Trigger Background Service" },
     { "name": "module_desc", "value": "Security Research Trigger" },
-    { "name": "permission_internet_reason", "value": "Network access for testing" }
+    { "name": "permission_internet_reason", "value": "Network access for testing" },
+    { "name": "form_desc", "value": "Private smoke-test form" }
   ]
 }

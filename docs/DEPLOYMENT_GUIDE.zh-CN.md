@@ -105,6 +105,11 @@ Python 安装路径不同，建议按上面的手动步骤重新创建虚拟环�
    页面不会回显密钥。
 2. 在“OpenHarmony 源码定位设置”中填写 OpenGrok HTTPS 地址、项目名、目标版本、
    超时、重试和认证环境变量名。页面不接受 URL 中的用户名、密码或令牌。
+
+项目名填写 `*` 时表示查询 OpenGrok 索引中的全部项目；如果索引按多个顶层目录
+（例如 `base`、`foundation`、`developtools`）组织，建议使用 `*`，不要填写
+`openharmony` 这类并不存在于索引中的根目录名。也可以填写单个项目名或逗号分隔的
+项目名来缩小检索范围。
 3. 在“运行环境诊断”中确认 HDC、Hvigor、Node、HAP 签名工具和主机依赖均为可用。
 
 OpenGrok 配置保存在 `config/vulnfounder/config.json` 的 `source_locator` 中；

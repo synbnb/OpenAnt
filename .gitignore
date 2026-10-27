@@ -18,6 +18,7 @@ _docs/
 !/docs/VULNFOUNDER_PROJECT_WORKFLOW.zh-CN.md
 !/docs/VULNFOUNDER_DEVELOPER_ARCHITECTURE.zh-CN.md
 !/docs/VULNFOUNDER_SOURCE_LEVEL_END_TO_END.zh-CN.md
+!/docs/CTF_2026_DYNAMIC_TEST_BOARD_BASELINE_AND_SERVICE_RESEARCH.zh-CN.md
 .worktrees/
 
 # Local-only scratch and generated artifacts (not part of the codebase)

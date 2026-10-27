@@ -6235,6 +6235,7 @@ class SourceLocatorWorker:
                 "planner_budget": {
                     "max_actions": planner.budget.max_actions,
                     "max_model_calls": planner.budget.max_model_calls,
+                    "max_repair_attempts": planner.budget.max_repair_attempts,
                     "max_prompt_chars": planner.budget.max_prompt_chars,
                     "max_query_length": planner.budget.max_query_length,
                     "max_evidence_ids": planner.budget.max_evidence_ids,

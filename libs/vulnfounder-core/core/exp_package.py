@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import stat
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,46 @@ _SOURCE_SKIP_DIRS = frozenset({".hvigor", "build", "signing", "node_modules", ".
 _SOURCE_SKIP_FILES = frozenset({"local.properties", "hvigor-build.log", "sign.log"})
 _SOURCE_MAX_FILES = 512
 _SOURCE_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _hvigor_path_is_supported(path: Path) -> bool:
+    """Hvigor 26 rejects project paths containing non-ASCII/special characters."""
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._() @-/")
+    return all(char in allowed for char in str(path))
+
+
+def _create_hvigor_safe_tempdir() -> tempfile.TemporaryDirectory:
+    """Create an ASCII-only HAP build root, independent of the repository/run path.
+
+    The web UI stores runs under the user's project directory, which may contain
+    CJK characters. Hvigor validates the *whole* project path, so placing an
+    Exp project below that run directory fails before compilation. Prefer the
+    configured system temp directory, then POSIX /tmp; reject unsafe candidates.
+    """
+    candidates = (Path(tempfile.gettempdir()), Path("/tmp"))
+    for candidate in candidates:
+        try:
+            base = candidate.resolve()
+        except OSError:
+            continue
+        if not _hvigor_path_is_supported(base) or not base.is_dir():
+            continue
+        temp = tempfile.TemporaryDirectory(prefix="vulnfounder-exp-", dir=str(base))
+        if _hvigor_path_is_supported(Path(temp.name).resolve()):
+            return temp
+        temp.cleanup()
+    raise RuntimeError("找不到 Hvigor 可接受的 ASCII 临时目录（已检查系统临时目录和 /tmp）")
+
+
+def _preserve_hvigor_build_log(build_root: Path, run_dir: Path) -> None:
+    """Keep the failed Hvigor log with the run artifacts before temp cleanup."""
+    for source in build_root.glob("vf-hap-*/hvigor-build.log"):
+        target = run_dir / "hap_build" / source.parent.name / source.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(source, target)
+        except OSError:
+            continue
 
 # ---------------------------------------------------------------------------
 # P2 动态 victim 探测（全自动化收敛）：静态兜底候选清单 → 设备动态探测。
@@ -685,6 +726,7 @@ def build_deliverables(
     progress_emit=None,                    # 进度事件回调（复用 recon/runner 通道）
 ) -> ExpPackage:
     """CONFIRMED 后打包 PoC+Exp 交付物；任何失败返回 skipped/failed 而不抛出。"""
+    build_temp: tempfile.TemporaryDirectory | None = None
     try:
         out_dir = run_dir / "deliverables"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -801,8 +843,22 @@ def build_deliverables(
         field_values["first"] = first_tpl.replace("__MARKER_PATH__", dst)
         field_values["second"] = second_tpl
         field_values["target"] = poc_contract.get("contract_id", "")
-        hap = HapTransport(hdc, work_root=Path(run_dir / "hap_build"))
-        exp_hap_path = hap.build(field_values, contract_id=exp_contract["contract_id"])
+        # 不能把 Hvigor 工程放在 run_dir 下：项目路径可能继承仓库目录中的
+        # 中文字符，Hvigor 会以 00306003 拒绝整个工程。系统临时目录与结果
+        # 目录解耦；构建成功后在本函数返回前把 HAP/源码快照复制到 deliverables。
+        build_temp = _create_hvigor_safe_tempdir()
+        hap = HapTransport(hdc, work_root=Path(build_temp.name))
+        try:
+            exp_hap_path = hap.build(field_values, contract_id=exp_contract["contract_id"])
+        except Exception as exc:  # noqa: BLE001 — Exp 失败不能抹掉已确认的 PoC
+            _preserve_hvigor_build_log(Path(build_temp.name), run_dir)
+            emit(f"Exp HAP 构建失败，仍保留 PoC 与源码交付：{exc}")
+            return _package_poc_only(
+                out_dir=out_dir,
+                poc_contract=poc_contract,
+                poc_hap=poc_hap,
+                reason=f"Exp HAP 构建失败；PoC 源码仍已单独打包：{exc}",
+            )
         emit("exp.hap 构建完成，板卡执行验证中…")
         # 4. 板卡执行验证（install/start → 效果窗口 → oracle 快照），走 HapTransport 全管线
         send = hap.install_and_start(exp_hap_path)
@@ -879,6 +935,9 @@ def build_deliverables(
     except Exception as exc:  # noqa: BLE001
         return ExpPackage(status="failed", reason=f"{type(exc).__name__}: {exc}",
                           deliverables_dir=str(run_dir / "deliverables"))
+    finally:
+        if build_temp is not None:
+            build_temp.cleanup()
 
 
 def _build_path_traversal_exp(*, poc_contract: dict[str, Any], finding: Any,

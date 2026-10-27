@@ -1322,10 +1322,13 @@ def run_dynamic_from_scan(
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
-        result.status = "BLOCKED_PROTOCOL"
+        toolchain_blocked = compile_result.compile_status == "TOOLCHAIN_UNAVAILABLE"
+        result.status = "BLOCKED_TOOLCHAIN" if toolchain_blocked else "BLOCKED_PROTOCOL"
         _persist_standard_artifacts(
             result, progress_path, phase="compile",
-            reason=("契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
+            reason=("本机 HAP 构建工具链不完整，尚未发送设备输入。"
+                    if toolchain_blocked else
+                    "契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
                     "该状态不等同于漏洞不存在。"),
         )
         raise ScanBridgeError(
@@ -1553,10 +1556,13 @@ def run_dynamic_from_webui(
     _write_run_snapshot(progress_path, "compile_summary.json", compile_result.to_dict())
     _emit_compile_diagnostics(emit, compile_result)
     if compile_result.compile_status != "ELIGIBLE" or compile_result.contract is None:
-        result.status = "BLOCKED_PROTOCOL"
+        toolchain_blocked = compile_result.compile_status == "TOOLCHAIN_UNAVAILABLE"
+        result.status = "BLOCKED_TOOLCHAIN" if toolchain_blocked else "BLOCKED_PROTOCOL"
         _persist_standard_artifacts(
             result, progress_path, phase="compile",
-            reason=("契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
+            reason=("本机 HAP 构建工具链不完整，尚未发送设备输入。"
+                    if toolchain_blocked else
+                    "契约编译未达到 ELIGIBLE；协议、设备自证或预言机条件尚未满足，"
                     "该状态不等同于漏洞不存在。"),
         )
         raise ScanBridgeError(

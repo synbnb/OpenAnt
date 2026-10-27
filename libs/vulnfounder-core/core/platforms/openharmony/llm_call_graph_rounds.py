@@ -336,7 +336,10 @@ def run_iterative_recovery_review(
         max_code_bytes=max_code_bytes,
         include_candidate_sites=include_candidate_sites,
         security_relevant_only=security_relevant_only,
-        include_registration_context=include_registration_context,
+        # The initial worklist is only used for frontier scheduling.  Source
+        # registration context is expensive and is rebuilt for the bounded
+        # site_ids selected in each round by run_recovery_review().
+        include_registration_context=False,
         registration_context_max_files=registration_context_max_files,
         registration_context_max_file_bytes=registration_context_max_file_bytes,
         registration_context_max_chars=registration_context_max_chars,

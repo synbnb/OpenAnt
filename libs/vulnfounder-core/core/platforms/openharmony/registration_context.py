@@ -16,6 +16,7 @@ never converted into a guessed edge.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,24 @@ _REGISTRATION_MARKERS = (
     "constructor",
     "emplace",
     "try_emplace",
+)
+_IGNORED_SOURCE_DIRS = frozenset(
+    {
+        ".git",
+        "build",
+        "out",
+        "node_modules",
+        "third_party",
+        "test",
+        "tests",
+        "unittest",
+        "benchmark",
+        "benchmarks",
+        "example",
+        "examples",
+        "fuzz",
+        "fuzztest",
+    }
 )
 _GENERIC_NAME_PARTS = frozenset(
     {
@@ -154,6 +173,33 @@ def _is_source_file(path: Path) -> bool:
     return path.suffix.lower() in _SOURCE_EXTENSIONS
 
 
+@lru_cache(maxsize=8)
+def _source_file_inventory(root: Path) -> tuple[Path, ...]:
+    """List eligible source files once per immutable scan repository root.
+
+    Iterative call-graph recovery asks for registration context in bounded
+    batches.  Rewalking the same repository for every site turns those batches
+    into repeated full-tree traversals, so cache the path inventory for the
+    lifetime of the scanning process.  Source contents are still read fresh by
+    ``_read_lines``; only file names are cached.
+    """
+    discovered: list[Path] = []
+    try:
+        for path in root.rglob("*"):
+            if path.is_symlink() or not path.is_file() or not _is_source_file(path):
+                continue
+            try:
+                relative_parts = path.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part in _IGNORED_SOURCE_DIRS for part in relative_parts):
+                continue
+            discovered.append(path)
+    except (OSError, RuntimeError):
+        return ()
+    return tuple(sorted(discovered, key=lambda item: item.as_posix()))
+
+
 def _candidate_files(
     root: Path,
     prioritized: list[Path],
@@ -184,37 +230,10 @@ def _candidate_files(
     for path in prioritized:
         add(path, True)
 
-    # The scanner's default production scope skips tests/examples.  Excluding
-    # those directories here prevents common names such as ``Instance`` from
-    # consuming the bounded context before a production registration header is
-    # reached.  Caller and candidate files are still added first even if a
-    # caller explicitly points into one of these directories.
-    ignored = {
-        ".git",
-        "build",
-        "out",
-        "node_modules",
-        "third_party",
-        "test",
-        "tests",
-        "unittest",
-        "benchmark",
-        "benchmarks",
-        "example",
-        "examples",
-        "fuzz",
-        "fuzztest",
-    }
-    discovered: list[Path] = []
-    try:
-        for path in root.rglob("*"):
-            if path.is_symlink() or not path.is_file() or not _is_source_file(path):
-                continue
-            if any(part in ignored for part in path.relative_to(root).parts):
-                continue
-            discovered.append(path)
-    except (OSError, RuntimeError):
-        discovered = []
+    # The inventory skips tests/examples, matching the scanner's default
+    # production scope. Caller/candidate paths are still added first above,
+    # even when a caller explicitly points into one of these directories.
+    discovered = _source_file_inventory(root)
     normalized_terms = tuple(
         term.lower().replace("::", "_").replace("-", "_")
         for term in priority_terms

@@ -23,7 +23,7 @@
     "target_revision": "OpenHarmony-7.0-Release",
     "opengrok": {
       "base_url": "https://u375886-9ad1-ba9448df.westc.seetacloud.com:8443/source",
-      "project": "openharmony",
+      "project": "*",
       "api_prefix": "/api/v1",
       "timeout_seconds": 20,
       "max_retries": 1,

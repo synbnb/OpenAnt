@@ -145,6 +145,119 @@ def test_build_rejects_missing_target_before_creating_hap(tmp_path):
         )
 
 
+def test_sdk_debug_profile_uses_device_udid_not_hdc_serial():
+    """profile 的设备绑定值来自 bm get -u，而不是 HDC 连接 serial。"""
+
+    from types import SimpleNamespace
+
+    from utilities.openharmony_dynamic.transports.hap import _current_device_udid
+
+    expected_udid = "55014CF4ECE2D820D8AE5DF49436C6558E62857ACC3A2F9A0DCA6B28873DB7E4"
+
+    class FakeHDC:
+        serial = "150100424a5444345209d945be14b900"
+
+        def __init__(self):
+            self.calls = []
+
+        def shell(self, argv, *, purpose="", timeout_seconds=None):
+            self.calls.append((argv, purpose))
+            return SimpleNamespace(
+                returncode=0,
+                stdout=f"udid of current device is :\n{expected_udid}\n",
+                stderr="",
+            )
+
+    hdc = FakeHDC()
+    assert _current_device_udid(hdc) == expected_udid
+    assert hdc.calls == [(["bm", "get", "-u"], "读取 HAP debug profile 所需的设备 UDID")]
+
+
+def test_sdk_debug_profile_rejects_missing_or_malformed_udid():
+    """不能把空值、HDC serial 或任意输出误写成 profile 设备身份。"""
+
+    from types import SimpleNamespace
+
+    from utilities.openharmony_dynamic.transports.base import TransportError
+    from utilities.openharmony_dynamic.transports.hap import _current_device_udid
+
+    class FakeHDC:
+        serial = "150100424a5444345209d945be14b900"
+
+        def __init__(self, output):
+            self.output = output
+
+        def shell(self, *_args, **_kwargs):
+            return SimpleNamespace(returncode=0, stdout=self.output, stderr="")
+
+    with pytest.raises(TransportError, match="未返回有效的 64 位"):
+        _current_device_udid(FakeHDC(""))
+    with pytest.raises(TransportError, match="未返回有效的 64 位"):
+        _current_device_udid(FakeHDC("udid: 150100424a5444345209d945be14b900"))
+
+
+def test_install_retries_after_removing_only_owned_bundle_with_stale_signature(tmp_path):
+    """临时签名轮换后，仅清理并重装本工具自己的旧测试包。"""
+
+    import json
+    from types import SimpleNamespace
+
+    from utilities.openharmony_dynamic.transports import hap
+
+    class FakeHDC:
+        serial = "device-1"
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, argv, *, purpose="", timeout_seconds=None):
+            self.calls.append((argv, purpose))
+            if argv[:2] == ["install", "-r"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="error: install sign info inconsistent.",
+                    stderr="",
+                )
+            if argv == ["shell", "bm", "dump", "-n", hap.BUNDLE_NAME]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        f"{hap.BUNDLE_NAME}:\n"
+                        + json.dumps({
+                            "bundleName": hap.BUNDLE_NAME,
+                            "applicationInfo": {"vendor": "security_research"},
+                        })
+                        + "\n[W] FreeChannelContinue handle->data is nullptr\n"
+                    ),
+                    stderr="",
+                )
+            if argv == ["uninstall", hap.BUNDLE_NAME]:
+                return SimpleNamespace(
+                    returncode=0, stdout="uninstall bundle successfully", stderr=""
+                )
+            if argv == ["install", str(tmp_path / "carrier.hap")]:
+                return SimpleNamespace(
+                    returncode=0, stdout="install bundle successfully", stderr=""
+                )
+            if argv[:3] == ["shell", "aa", "force-stop"]:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if argv[:3] == ["shell", "aa", "start"]:
+                return SimpleNamespace(returncode=0, stdout="start ability successfully", stderr="")
+            raise AssertionError(f"unexpected HDC command: {argv!r}")
+
+    hdc = FakeHDC()
+    transport = hap.HapTransport(hdc, work_root=tmp_path)
+    result = transport.install_and_start(tmp_path / "carrier.hap")
+
+    assert result.transport["bundle"] == hap.BUNDLE_NAME
+    assert [call[0] for call in hdc.calls[:4]] == [
+        ["install", "-r", str(tmp_path / "carrier.hap")],
+        ["shell", "bm", "dump", "-n", hap.BUNDLE_NAME],
+        ["uninstall", hap.BUNDLE_NAME],
+        ["install", str(tmp_path / "carrier.hap")],
+    ]
+
+
 def test_build_escapes_shell_payload_before_arkts_render(monkeypatch, tmp_path):
     """模型生成的 shell 字符串不能破坏 HAP 模板的 ArkTS 字符串语法。"""
 

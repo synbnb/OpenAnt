@@ -422,6 +422,18 @@ class OpenGrokClient:
             raise OpenGrokPathError("OpenGrok API resource contains an unsafe component")
         return f"{self.api_prefix}/{value}"
 
+    @staticmethod
+    def _is_all_projects(value: str) -> bool:
+        """Return whether a project selector requests the whole index.
+
+        OpenGrok treats an omitted ``projects`` query parameter as "all
+        indexed projects".  Passing a literal ``*`` is not equivalent (it is
+        interpreted as a project name), so the client translates the explicit
+        configuration sentinel here instead of leaking it to the server.
+        """
+
+        return value.strip().lower() in {"*", "all", "__all__"}
+
     def _get(
         self,
         endpoint: str,
@@ -540,9 +552,10 @@ class OpenGrokClient:
             raise ValueError("projects must be a string or a list of strings")
         if not project_value:
             raise ValueError("projects must not be empty")
+        if not self._is_all_projects(project_value):
+            params["projects"] = project_value
         params.update(
             {
-                "projects": project_value,
                 "maxresults": max_results,
                 "start": start,
                 "maxhitsperfile": max_hits_per_file,
@@ -703,11 +716,14 @@ class OpenGrokClient:
         capabilities["suggest_config"] = self._capability("suggest_config", suggest_result)
 
         search_endpoint = self._api_endpoint("search")
-        search_result = self._get(
-            search_endpoint,
-            params={"full": "__openant_probe__", "projects": self.project, "maxresults": 1, "maxhitsperfile": 1},
-            source="search_probe",
-        )
+        search_params: dict[str, Any] = {
+            "full": "__openant_probe__",
+            "maxresults": 1,
+            "maxhitsperfile": 1,
+        }
+        if not self._is_all_projects(self.project):
+            search_params["projects"] = self.project
+        search_result = self._get(search_endpoint, params=search_params, source="search_probe")
         capabilities["search"] = self._capability("search", search_result)
         if search_result.response is not None and search_result.response.status_code == 200:
             try:

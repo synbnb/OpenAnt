@@ -8,6 +8,7 @@ REQUIRES_HUMAN_APPROVAL / APPROVED）、族级模板入库同 id 不覆盖。
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,25 @@ if str(CORE) not in sys.path:
     sys.path.insert(0, str(CORE))
 
 cs = importlib.import_module("utilities.openharmony_dynamic.carrier_synthesizer")
+
+
+def _populate_fake_sdk(sdk: Path, api_version: str = "26") -> None:
+    default = sdk / "default"
+    (default / "sdk-pkg.json").parent.mkdir(parents=True, exist_ok=True)
+    (default / "sdk-pkg.json").write_text(
+        json.dumps({"data": {"apiVersion": api_version,
+                              "platformVersion": f"{api_version}.0.0"}}),
+        encoding="utf-8",
+    )
+    for component in ("ets", "js", "native", "previewer", "toolchains"):
+        component_dir = default / "openharmony" / component
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "oh-uni-package.json").write_text(
+            json.dumps({"path": component, "apiVersion": api_version,
+                        "platformVersion": f"{api_version}.0.0", "version": "26.0.0.1",
+                        "displayName": component}),
+            encoding="utf-8",
+        )
 
 
 # --- L2 validate_hap_carrier -------------------------------------------------
@@ -170,9 +190,21 @@ def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
     template = tmp_path / "template"
     (template / "Entry/src/main/ets/pages").mkdir(parents=True)
     (template / "Entry/src/main/ets/pages/Index.ets").write_text("old", encoding="utf-8")
+    (template / "build-profile.json5").write_text(
+        '{"app":{"products":[{"compileSdkVersion":23,'
+        '"compatibleSdkVersion":23,"targetSdkVersion":23}]}}',
+        encoding="utf-8",
+    )
+    (template / "oh-package.json5").write_text(
+        '{"modelVersion":"5.0.0"}', encoding="utf-8"
+    )
+    (template / "hvigor/hvigor-config.json5").parent.mkdir(parents=True)
+    (template / "hvigor/hvigor-config.json5").write_text(
+        '{"modelVersion":"5.0.0"}', encoding="utf-8"
+    )
     monkeypatch.setattr(cs, "_HAP_PROJECT", template)
 
-    toolchain = tmp_path / "toolchain"
+    toolchain = tmp_path / "工具链目录"
     hvigorw = toolchain / "hvigor/bin/hvigorw"
     node = toolchain / "node"
     sign_jar = toolchain / "hap-sign-tool.jar"
@@ -181,6 +213,7 @@ def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
     sdk.mkdir()
+    _populate_fake_sdk(sdk)
     cert_dir = tmp_path / "cert"
     cert_dir.mkdir()
     for name in ("oh_release_chain.cer", "oh_profile8.p7b", "oh_release.p12"):
@@ -199,11 +232,32 @@ def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
         staticmethod(lambda project, home: staged.append((project, home))),
     )
     calls = []
+    sdk_aliases = []
 
     def fake_run(argv, **kwargs):
         calls.append((list(argv), kwargs))
         if argv[0] == str(hvigorw):
-            (Path(kwargs["cwd"]) / "entry-default-unsigned.hap").write_bytes(b"unsigned")
+            project = Path(kwargs["cwd"])
+            properties = dict(
+                line.split("=", 1)
+                for line in (project / "local.properties").read_text(encoding="utf-8").splitlines()
+                if "=" in line
+            )
+            sdk_alias = Path(properties["sdk.dir"])
+            assert str(sdk_alias).isascii()
+            assert sdk_alias.is_dir() and not sdk_alias.is_symlink()
+            assert (sdk_alias / "26.0.0" / "ets").is_dir()
+            assert (project / "build-profile.json5").read_text(encoding="utf-8").find(
+                '"compileSdkVersion":"26.0.0"'
+            ) >= 0
+            assert '"modelVersion":"6.0.0"' in (
+                project / "hvigor/hvigor-config.json5"
+            ).read_text(encoding="utf-8")
+            assert '"modelVersion":"6.0.0"' in (
+                project / "oh-package.json5"
+            ).read_text(encoding="utf-8")
+            sdk_aliases.append(sdk_alias)
+            (project / "entry-default-unsigned.hap").write_bytes(b"unsigned")
         else:
             out_file = Path(argv[argv.index("-outFile") + 1])
             out_file.write_bytes(b"signed")
@@ -216,3 +270,4 @@ def test_build_hap_reuses_isolated_hvigor_home(tmp_path, monkeypatch):
     assert staged and staged[0][1].name == ".hvigor-user"
     assert calls[0][1]["env"]["HVIGOR_USER_HOME"] == str(staged[0][1])
     assert calls[0][1]["env"]["NODE_HOME"] == str(node)
+    assert sdk_aliases and not sdk_aliases[0].exists()

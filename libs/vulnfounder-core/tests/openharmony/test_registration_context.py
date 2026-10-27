@@ -13,6 +13,7 @@ if str(CORE_ROOT) not in sys.path:
 from core.platforms.openharmony.registration_context import (  # noqa: E402
     build_registration_context,
 )
+from core.platforms.openharmony import registration_context as registration_module  # noqa: E402
 
 
 def _site(*, caller_id: str, caller_file: str, dispatch_table: str, targets: list[str]):
@@ -165,3 +166,37 @@ def test_missing_or_out_of_root_source_is_safe(tmp_path: Path):
 
     assert result["status"] == "source_unavailable"
     assert result["snippets"] == []
+
+
+def test_repository_source_inventory_is_reused_across_sites(tmp_path: Path, monkeypatch):
+    source = tmp_path / "services" / "parser.cpp"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "void Parser::Process() {\n    table_.find(value);\n}\n",
+        encoding="utf-8",
+    )
+    caller_id = "services/parser.cpp:Parser::Process"
+    functions = {caller_id: _function("Parser::Process", "services/parser.cpp")}
+    site = _site(
+        caller_id=caller_id,
+        caller_file="services/parser.cpp",
+        dispatch_table="table_",
+        targets=[],
+    )
+    calls = []
+    original_rglob = Path.rglob
+
+    def count_rglob(path: Path, pattern: str):
+        if path == tmp_path.resolve():
+            calls.append(pattern)
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", count_rglob)
+    registration_module._source_file_inventory.cache_clear()
+    try:
+        build_registration_context(site, functions, repository=tmp_path)
+        build_registration_context(site, functions, repository=tmp_path)
+    finally:
+        registration_module._source_file_inventory.cache_clear()
+
+    assert calls == ["*"]
